@@ -630,8 +630,8 @@ unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
 }
 
 /**
- * Set the calling CPU up for a thread about to return to user mode: its debugging state loaded, and its process's
- * counter reads trapped or not.
+ * Set the calling CPU up for a thread about to return to user mode: its debugging state loaded, its process's counter
+ * reads trapped or not, and its process's pointer authentication key the one it returns with.
  *
  * @param thread The thread.
  */
@@ -650,4 +650,8 @@ prepare_return :: fn(thread: ptr[mut Thread]) {
     }
     traps :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) } else { 0 }
     arch.set_counter_trap(traps & slop_os.TRAP_COUNTER != 0)
+    // Its process's pointer authentication key, which return_to_user loads (decisions/0186)
+    if owner != 0 {
+        arch.set_user_pointer_key(process.pointer_key)
+    }
 }

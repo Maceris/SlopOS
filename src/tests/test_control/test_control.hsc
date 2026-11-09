@@ -74,6 +74,15 @@ FAULTING_WATCH_KEY : u64 : 25
 FAULTING_END_NANOSECONDS : u64 : 5_000_000_000
 /** What D tells C, in the first message on its peer channel: read the counter once told, store it, and spin until killed. */
 ROLE_COUNTING : u64 : 4
+/**
+ * What D tells P, in the first message on its peer channel: tamper with a return address, on a thread of its own whose
+ * entry test_kit.tamper_with_return is, which then returns through it (decisions/0186).
+ */
+ROLE_TAMPERING : u64 : 5
+/** The key P's faults are reported under. */
+TAMPERING_FAULTS_KEY : u64 : 26
+/** The key D's watch for P's end queues under. */
+TAMPERING_WATCH_KEY : u64 : 27
 /** What D puts in C's register in place of the counter it read. */
 GIVEN_COUNTER : u64 : 0x1234_5678_9abc
 /** The slot of a copy's page, a u64 by index, D writes to start it. */
@@ -218,6 +227,14 @@ run_copy :: fn(peer: slop_os.Channel) -> int {
     }
     if role == ROLE_FAULTING {
         intrinsics.volatile_store_u64(cast[ptr[mut u64]](FAULTING_ADDRESS), 1)
+        slop_os.process_exit(0)
+    }
+    if role == ROLE_TAMPERING {
+        // A thread whose entry it is, so it's never inlined, and returns through its own frame
+        thread :: runtime.thread_create(test_kit.tamper_with_return)
+        if runtime.thread_start(thread) {
+            runtime.thread_join(thread)
+        }
         slop_os.process_exit(0)
     }
     if role == ROLE_EXITING {
@@ -585,6 +602,53 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t: ptr[mut t
         _ = slop_os.handle_close(handle)
     }
     testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 1_000_000_000), "F's budget is back to nothing once it has ended")
+    _ = slop_os.handle_close(cast[slop_os.Handle](copy.launched.budget))
+    return .Ok
+}
+
+/**
+ * Check that a tampered return address is caught (decisions/0186): P, a copy, changes its own on a thread of its own and
+ * returns through it, which stops it at a fault: on AArch64 with pointer authentication, its authentication failing.
+ * Where the CPU has none of it, the test is skipped.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the port, P or its
+ *     faults' intercept couldn't be had.
+ */
+a_tampered_return_is_caught #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    given :: test_kit.given(t, Given)?
+    block :: slop_os.startup_block()
+    expected := cast[u32](0)
+    #if TARGET_ARCH == .arm64 {
+        if slop_os.has_feature(&block.cpu_features, .Aarch64PointerAuthentication) {
+            expected = slop_os.FAULT_AUTHENTICATION
+        }
+    }
+    if expected == 0 {
+        return testing.skip(t, "no pointer authentication or shadow stack on this CPU, to refuse a tampered return")
+    }
+    manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
+    program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
+    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
+    defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
+    port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for P's stops and end")?
+    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = TAMPERING_WATCH_KEY},
+        faults = os.LaunchFaults.{port = port, key = TAMPERING_FAULTS_KEY}}
+    copy :: testing.require_some(t, launch_copy(given.log, manager, manager_port, program, "test_control P", ROLE_TAMPERING, options),
+        "P is launched with its faults intercepted, and told its role")?
+    faults :: testing.require_some(t, copy.launched.faults, "the launch gives P's faults' intercept")?
+    stop := slop_os.StopInfo.{}
+    next_stop(port, faults.intercept, &stop)
+    testing.expect_eq(t, stop.point, slop_os.StopPoint.Fault, "P stops at a fault")
+    testing.expect_eq(t, stop.number, expected, "its tampered return is refused, as the hardware refuses it")
+    // Not let go: P ends within the limit
+    _ = slop_os.process_kill(copy.launched.process)
+    for handle in slop_os.Handle.[cast[slop_os.Handle](faults.intercept), cast[slop_os.Handle](faults.space),
+        cast[slop_os.Handle](copy.launched.process), cast[slop_os.Handle](copy.end), cast[slop_os.Handle](copy.port),
+        cast[slop_os.Handle](port)] {
+        _ = slop_os.handle_close(handle)
+    }
+    testing.expect(t, test_kit.wait_for_budget(copy.launched.budget, 0, 1_000_000_000), "P's budget is back to nothing once it has ended")
     _ = slop_os.handle_close(cast[slop_os.Handle](copy.launched.budget))
     return .Ok
 }

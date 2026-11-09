@@ -38,6 +38,12 @@ ESR_CLASS_SOFTWARE_STEP_LOWER : u64 : 0x32
 ESR_CLASS_SOFTWARE_STEP : u64 : 0x33
 /** ESR_EL1.EC 0x30: a hardware breakpoint from a lower exception level; decoded as Breakpoint. */
 ESR_CLASS_HARDWARE_BREAKPOINT_LOWER : u64 : 0x30
+/** ESR_EL1.EC 0x0d: a branch to no landing pad on a guarded page (FEAT_BTI); decoded as ControlFlow(LandingPad). */
+ESR_CLASS_BRANCH_TARGET : u64 : 0x0d
+/** ESR_EL1.EC 0x1c: a pointer that failed authentication (FEAT_FPAC); decoded as ControlFlow(Authentication). */
+ESR_CLASS_AUTHENTICATION : u64 : 0x1c
+/** ESR_EL1.EC 0x2d: a Guarded Control Stack fault (FEAT_GCS); decoded as ControlFlow(ShadowStack). */
+ESR_CLASS_CONTROL_STACK : u64 : 0x2d
 /** ESR_EL1.EC 0x34: a watchpoint from a lower exception level; decoded as Watchpoint at FAR_EL1. */
 ESR_CLASS_WATCHPOINT_LOWER : u64 : 0x34
 // An abort's fault status code (ISS bits 0 to 5): permission faults at levels 0 to 3, and alignment
@@ -245,6 +251,9 @@ decode_fault :: fn(class: u64, syndrome: u64, address: u64) -> arch_interface.Fa
         case ESR_CLASS_SP_ALIGNMENT => .Alignment
         case ESR_CLASS_FP_ACCESS => .FloatingPoint
         case ESR_CLASS_FP_EXCEPTION => .FloatingPoint
+        case ESR_CLASS_BRANCH_TARGET => .ControlFlow(.LandingPad)
+        case ESR_CLASS_AUTHENTICATION => .ControlFlow(.Authentication)
+        case ESR_CLASS_CONTROL_STACK => .ControlFlow(.ShadowStack)
         // Illegal execution state, trapped system instructions, and the classes nothing here raises
         case _ => .Protection
     }

@@ -205,7 +205,7 @@ note_lockup :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu], pc: u64, frame_poin
             break
         }
         record :: cast[ptr[u64[2]]](cast[rawptr](frame))
-        return_address :: intrinsics.volatile_load_u64(&record^[1])
+        return_address :: without_authentication(intrinsics.volatile_load_u64(&record^[1]))
         if return_address == 0 {
             break
         }

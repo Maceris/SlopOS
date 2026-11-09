@@ -33,6 +33,8 @@ ArchCpu :: struct #align(64) {
      * entries from there run on an empty stack.
      */
     kernel_stack_top : u64,
+    /** The pointer authentication key return_to_user loads, the thread's process's (set_user_pointer_key). */
+    user_key : u64[2],
     /** The early console's registers, a virtual address through the direct map, or 0 without one (misc.hsc). */
     console : u64,
     /** The ArchSystem, as an address: L2 owns it, and it outlives every CPU (current_system). */
@@ -70,6 +72,8 @@ MAX_DEVICE_BLOCKS :: 16
 ArchSystem :: struct {
     /** The vector table every CPU's VBAR_EL1 points at (entries.hsc), a kernel virtual address. */
     vectors : u64,
+    /** The kernel's pointer authentication key (set_kernel_pointer_key), which idle loads. */
+    kernel_key : u64[2],
     /** The early console's registers, through the direct map, or 0 without one. */
     console : u64,
     /** Whether the CPU has 16-bit ASIDs, which init_cpu turns on; 8-bit ones otherwise. */

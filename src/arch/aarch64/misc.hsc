@@ -302,6 +302,15 @@ idle :: fn() #never_returns {
     frame : aarch64.RegisterFrame
     frame.elr = cast[u64](idle_wait)
     frame.spsr = SPSR_EL1H | SPSR_PAN
+    // The kernel's key, with pointer authentication on from the first idle
+    key :: current_system().kernel_key
+    if has_pointer_authentication() {
+        // APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1), then SCTLR_EL1.EnIA, here, where no frame below returns
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 0, key[0])
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 1, key[1])
+        aarch64.write_system_register(.SCTLR_EL1, aarch64.read_system_register(.SCTLR_EL1) | SCTLR_ENABLE_IA)
+        aarch64.isb()
+    }
     unmask_for_return()
     aarch64.return_to_user(&frame, cast[rawptr](cpu.kernel_stack_top))
 }

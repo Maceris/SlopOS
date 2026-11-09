@@ -192,3 +192,20 @@ line_text :: fn(line: ptr[LogLine], empty: string) -> string {
     }
     return string_of(&line.bytes[0], line.count)
 }
+
+/**
+ * Give the kernel's pointer authentication key (arch_interface.set_kernel_pointer_key): x86-64 has none, so nothing.
+ *
+ * @param system Unused.
+ * @param key Unused.
+ */
+set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {}
+
+/**
+ * Say which key the calling CPU returns to user mode with (arch_interface.set_user_pointer_key): x86-64 has none, so
+ * nothing.
+ *
+ * @param key Unused.
+ */
+set_user_pointer_key :: fn(key: u64[2]) {}
+

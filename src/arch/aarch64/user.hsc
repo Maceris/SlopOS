@@ -170,11 +170,20 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
  * Return to user mode with registers, by eret, on the calling CPU's active page table (arch_interface.return_to_user).
  *
  * SP_EL1 is set to the kernel stack's top, so the next entry from user mode starts there; every interrupt's priority is
- * let through again (unmask_for_return).
+ * let through again (unmask_for_return); and the thread's process's pointer authentication key is loaded, here, where
+ * no frame below returns (set_user_pointer_key, decisions/0186).
  *
  * @param registers The thread's registers, restored whole.
  */
 return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
+    key :: current_cpu().user_key
+    if has_pointer_authentication() {
+        // APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1), then SCTLR_EL1.EnIA, here, where no frame below returns
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 0, key[0])
+        aarch64.write_system_register_encoded(3, 0, 2, 1, 1, key[1])
+        aarch64.write_system_register(.SCTLR_EL1, aarch64.read_system_register(.SCTLR_EL1) | SCTLR_ENABLE_IA)
+        aarch64.isb()
+    }
     unmask_for_return()
     aarch64.return_to_user(&registers.frame, cast[rawptr](current_cpu().kernel_stack_top))
 }

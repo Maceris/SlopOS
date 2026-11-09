@@ -285,3 +285,38 @@ bytes_at :: fn(address: u64, count: usize) -> mut u8[] #no_context {
 handle_at :: fn[H](word: u64) -> H #no_context {
     return cast[H](cast[slop_os.Handle](cast[u32](word)))
 }
+
+/** How many words tamper_with_return looks through, up from a local, for its saved return address. */
+TAMPERING_REACH :: 64
+
+/**
+ * Change this function's own saved return address, where its frame keeps it, and return through it, which the
+ * hardware's control-flow integrity refuses (decisions/0186). On AArch64 a bit of its pointer authentication code is
+ * flipped, so it fails to authenticate; on x86-64 the address is moved on by one, which the shadow stack doesn't hold.
+ * Its return address is found with capture_stack_trace, which gives it without its authentication code, and its saved
+ * copy by looking up from a local for the word whose address bits match.
+ *
+ * @param data Nothing.
+ */
+tamper_with_return : runtime.ThreadFunction : fn(data #escaping : any) {
+    addresses : rawptr[1]
+    if intrinsics.capture_stack_trace(addresses) == 0 {
+        return void
+    }
+    target :: cast[u64](cast[uintptr](addresses[0]))
+    local : u64 = 0
+    from :: cast[u64](cast[uintptr](&local))
+    for i in cast[u64](0)..<TAMPERING_REACH {
+        slot :: cast[ptr[mut u64]](cast[rawptr](cast[uintptr](from + i * 8)))
+        value :: intrinsics.volatile_load_u64(slot)
+        if value & 0x0000ffffffffffff == target {
+            #if TARGET_ARCH == .arm64 {
+                intrinsics.volatile_store_u64(slot, value ~ (cast[u64](1) << 53))
+            }
+            #else {
+                intrinsics.volatile_store_u64(slot, value + 1)
+            }
+            return void
+        }
+    }
+}

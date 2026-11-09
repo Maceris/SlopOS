@@ -2,6 +2,22 @@ package kernel
 
 import intrinsics from "base"
 
+/**
+ * A return address read from a frame, without the authentication code AArch64's pointer authentication signed it with
+ * (decisions/0186), as XPACI gives it, for a 48-bit address space: the bits above 47 set for an address in the upper
+ * half, which bit 55 says, and cleared for one in the lower. An address that wasn't signed is the same, as every
+ * x86-64 one is.
+ *
+ * @param address The address as the frame holds it.
+ * @return The address of the code it returns to.
+ */
+without_authentication :: fn(address: u64) -> u64 {
+    if (address >> 55) & 1 != 0 {
+        return address | 0xffff000000000000
+    }
+    return address & 0x0000ffffffffffff
+}
+
 /** The most frames a stack trace shows; deeper frames are left out. */
 STACK_TRACE_FRAMES :: 32
 

@@ -116,6 +116,10 @@ AARCH64_CRASH_LINE = "error: test_shell_calls crashed: breakpoint; crashes shows
 CRASH_REPORT_LINE = "test_shell_calls: invalid instruction"
 AARCH64_CRASH_REPORT_LINE = "test_shell_calls: breakpoint"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
+# test_control's tests (decisions/0186): a tampered return is refused on AArch64, with pointer authentication, and skipped
+# on x86-64 under TCG, with no shadow stacks
+X86_CONTROL_TESTS = "6 tests: 5 passed, 0 failed, 1 skipped"
+AARCH64_CONTROL_TESTS = "6 tests: 6 passed, 0 failed"
 # What QEMU's max CPU has against exploits (decisions/0186): TCG gives x86-64 no CET, and AArch64 all three
 X86_HARDENING_LINE = "[boot] cpu: control-flow integrity: shadow stacks no, indirect branch tracking no"
 AARCH64_HARDENING_LINE = ("[boot] cpu: control-flow integrity: branch target identification yes, pointer authentication yes, "
@@ -1389,7 +1393,7 @@ TESTS = [
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
     program_test("controls a process from a debugger in user mode, with breakpoints, steps and watchpoints, and a launch's intercept of its faults",
-                 "test_control", 5),
+                 "test_control", X86_CONTROL_TESTS),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     # A CPU spinning with interrupts off is caught by another's tick, and the kernel stops with Lockup (decisions/0183)
     ("catches a CPU that stops making progress", 8, ["--command-line=test_exit test_lockup",
@@ -1430,6 +1434,7 @@ def aarch64_tests(tests: list) -> list:
              f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}",
              f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
              f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={AARCH64_HARDENING_LINE}",
+             f"--expect-line=[user] test_control: {X86_CONTROL_TESTS}": f"--expect-line=[user] test_control: {AARCH64_CONTROL_TESTS}",
              f"--expect-console-line={CRASH_LINE}": f"--expect-console-line={AARCH64_CRASH_LINE}",
              f"--expect-console-line={CRASH_REPORT_LINE}": f"--expect-console-line={AARCH64_CRASH_REPORT_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])

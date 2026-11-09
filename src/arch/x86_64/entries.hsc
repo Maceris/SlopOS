@@ -148,8 +148,9 @@ decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
         case 16 => .FloatingPoint
         case 17 => .Alignment
         case 19 => .FloatingPoint
-        // Bound range, the segment and protection faults, virtualization and control protection,
-        // and the vectors the CPU doesn't raise
+        // Control protection: a missing endbr64 (3), or the shadow stack's (a return, 1 or 2, and the rest)
+        case 21 => .ControlFlow(if error_code & 0x7fff == 3 { .LandingPad } else { .ShadowStack })
+        // Bound range, the segment and protection faults, virtualization, and the vectors the CPU doesn't raise
         case _ => .Protection
     }
 }

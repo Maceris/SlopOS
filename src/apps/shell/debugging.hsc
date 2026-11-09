@@ -1080,7 +1080,7 @@ say_fibers :: fn(session: ptr[mut Debugging]) {
                 if frame == 0 {
                     break
                 }
-                pc = remote_word(session, frame + 8) or_else 0
+                pc = crash_reports.without_authentication(remote_word(session, frame + 8) or_else 0)
                 frame = remote_word(session, frame) or_else 0
             }
         }

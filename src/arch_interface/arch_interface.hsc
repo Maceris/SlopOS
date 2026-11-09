@@ -932,6 +932,18 @@ Fault :: union {
     Protection,
     /** A floating-point or vector exception that's unmasked. */
     FloatingPoint,
+    /** Hardware control-flow integrity refused a branch or a return (decisions/0186). */
+    ControlFlow(ControlFlowFault),
+}
+
+/** What hardware control-flow integrity refused (decisions/0186). */
+ControlFlowFault :: enum {
+    /** A return the shadow stack didn't match: x86-64's control protection exception, or AArch64's GCS. */
+    ShadowStack,
+    /** An indirect branch to no landing pad: indirect branch tracking or branch target identification. */
+    LandingPad,
+    /** A signed pointer that failed authentication. */
+    Authentication,
 }
 
 /** Stop the calling CPU for good, with interrupts disabled. */
@@ -1071,6 +1083,25 @@ nmi_register_name : fn(index: usize) -> string : ---
  * @param features The boot CPU's features, from detect_features.
  */
 log_hardening : fn(features: ptr[slop_os.CpuFeatures]) : ---
+
+/**
+ * Give the kernel's pointer authentication key, once at boot, after init_system (decisions/0186): each CPU loads it,
+ * and turns pointer authentication on, as it first goes idle, where no frame signed before returns. Ignored where the
+ * architecture has none.
+ *
+ * @param system The shared state.
+ * @param key The key's 128 bits, random.
+ */
+set_kernel_pointer_key : fn(system: ptr[mut ArchSystem], key: u64[2]) : ---
+
+/**
+ * Say which pointer authentication key the calling CPU returns to user mode with, the thread's process's
+ * (decisions/0186): loaded as return_to_user leaves, where no frame signed before returns. Ignored where the
+ * architecture has none.
+ *
+ * @param key The key's 128 bits.
+ */
+set_user_pointer_key : fn(key: u64[2]) : ---
 
 /** A device the emulator always has that raises a wired interrupt: its controller, and its line there. */
 TestDevice :: struct {

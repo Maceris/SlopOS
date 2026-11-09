@@ -1,6 +1,7 @@
 package arch_aarch64
 
 import runtime from "base"
+import aarch64 from "base/intrinsics"
 import slop_os from "std/os"
 
 /*
@@ -98,4 +99,38 @@ line_text :: fn(line: ptr[LogLine], empty: string) -> string {
         return empty
     }
     return string_of(&line.bytes[0], line.count)
+}
+
+// Pointer authentication (decisions/0186): the A instruction key, APIAKeyLo_EL1 and APIAKeyHi_EL1, and SCTLR_EL1.EnIA
+/** SCTLR_EL1.EnIA (bit 31): PACIA and AUTIA, and PACIASP and AUTIASP, sign and authenticate with the A key. */
+SCTLR_ENABLE_IA : u64 : 1 << 31
+
+/**
+ * Give the kernel's pointer authentication key (arch_interface.set_kernel_pointer_key): kept for idle to load.
+ *
+ * @param system The shared state, whose kernel_key is set.
+ * @param key The key's 128 bits, random.
+ */
+set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {
+    system.kernel_key = key
+}
+
+/**
+ * Say which key the calling CPU returns to user mode with (arch_interface.set_user_pointer_key).
+ *
+ * @param key The thread's process's key's 128 bits, kept in the CPU's ArchCpu for return_to_user.
+ */
+set_user_pointer_key :: fn(key: u64[2]) {
+    current_cpu().user_key = key
+}
+
+/**
+ * Tell whether the calling CPU has pointer authentication, whose keys idle and return_to_user load (decisions/0186).
+ * They load them in their own bodies, which never return, rather than here: a function that returns signed its return
+ * address with the key or the setting before, and would fail to authenticate it once they're changed.
+ *
+ * @return True where ID_AA64ISAR1_EL1 has an address authentication algorithm, APA or API.
+ */
+has_pointer_authentication :: fn() -> bool {
+    return aarch64.read_system_register(.ID_AA64ISAR1_EL1) & 0xff0 != 0
 }

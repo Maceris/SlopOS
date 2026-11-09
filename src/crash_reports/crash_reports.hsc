@@ -112,6 +112,18 @@ take :: fn(process: slop_os.Process, faults: os.LaunchedFaults, image: u64, prog
 }
 
 /**
+ * A return address read from a user-mode frame, without the authentication code AArch64's pointer authentication
+ * signed it with (decisions/0186): its bits above 47 cleared, as a user-mode address has none. An address that wasn't
+ * signed is the same, as every x86-64 one is.
+ *
+ * @param address The address as the frame holds it.
+ * @return The address of the code it returns to.
+ */
+without_authentication :: fn(address: u64) -> u64 {
+    return address & 0x0000ffffffffffff
+}
+
+/**
  * Make a report of a thread stopped by a fault: its registers read, its stack walked through frame pointers.
  *
  * @param process The thread's process, with RIGHT_PROCESS_INSPECT and RIGHT_PROCESS_READ_MEMORY.
@@ -144,7 +156,7 @@ make :: fn(process: slop_os.Process, space: slop_os.AddressSpace, image: u64, pr
             case Error(error) => break
         }
         caller :: word_at(record, 0)
-        returned :: word_at(record, 8)
+        returned :: without_authentication(word_at(record, 8))
         if returned == 0 || cast[usize](depth) >= report.frames.count {
             break
         }

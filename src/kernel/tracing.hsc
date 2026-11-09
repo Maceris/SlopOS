@@ -189,7 +189,7 @@ take_sample :: fn(kernel: ptr[mut Kernel]) {
         if frame == 0 || frame & 7 != 0 || !copy_from_user(kernel, thread.space, frame, cast[u64](&record[0]), 16) || record[1] == 0 {
             break
         }
-        sample.frames[depth] = record[1]
+        sample.frames[depth] = without_authentication(record[1])
         sample.count = cast[u32](depth) + 1
         if record[0] <= frame {
             break

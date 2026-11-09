@@ -122,6 +122,13 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
         }
         case Protection => access = cast[u64](slop_os.FAULT_PROTECTION)
         case FloatingPoint => access = cast[u64](slop_os.FAULT_FLOATING_POINT)
+        case ControlFlow(violation) => {
+            match violation {
+                case .ShadowStack => access = cast[u64](slop_os.FAULT_SHADOW_STACK)
+                case .LandingPad => access = cast[u64](slop_os.FAULT_LANDING_PAD)
+                case .Authentication => access = cast[u64](slop_os.FAULT_AUTHENTICATION)
+            }
+        }
     }
     // Waiting for its pager: it runs again, touching the page again, once it's supplied
     if outcome == .Blocked {

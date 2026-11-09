@@ -175,6 +175,11 @@ append_fault :: fn(line: ptr[mut text_buffer.TextBuffer], fault: arch_interface.
         }
         case Protection => text_buffer.append(line, "protection fault")
         case FloatingPoint => text_buffer.append(line, "floating-point error")
+        case ControlFlow(violation) => text_buffer.append(line, match violation {
+            case .ShadowStack => "shadow stack fault"
+            case .LandingPad => "branch to no landing pad"
+            case .Authentication => "failed authentication"
+        })
     }
 }
 

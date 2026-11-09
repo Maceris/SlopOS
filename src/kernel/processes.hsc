@@ -41,6 +41,8 @@ Process :: struct #align(16) {
     debug_lock : concurrency.SpinLock,
     /** The CPU time its threads have run, in counter ticks (decisions/0185, 12h). Added to atomically. */
     run_time : u64,
+    /** Its pointer authentication key, random, which its threads return to user mode with (decisions/0186). */
+    pointer_key : u64[2],
     /** Held, at rank Watchers, while watchers is read or changed. */
     watch_lock : concurrency.SpinLock,
     /** Bindings watching for it to end, raised with SIGNAL_TERMINATED and its exit code; empty slots are 0. */
@@ -79,6 +81,7 @@ Process :: struct #align(16) {
 create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made #unrestricted : Result[ptr[mut Process], ObjectError]) {
     object :: new_object(kernel, .Process, budget, 0)?
     cast[ptr[mut Process]](object).table.account = object
+    cast[ptr[mut Process]](object).pointer_key = u64.[random_bits(kernel), random_bits(kernel)]
     match adopt(owner, object) {
         case Ok => {}
         case Error(error) => {
