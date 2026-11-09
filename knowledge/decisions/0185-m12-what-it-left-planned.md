@@ -261,7 +261,7 @@ In four stages, each with an as-built record here:
   so what it runs for hello isn't another's: the lending test checks echo's budget, which is its own.
 - **Not built: a child CPU budget for each shell job.** Session programs have no CPU budget handle of their own (they
   run on the session manager's), so the shell has none to split; each job's own time is counted per process anyway.
-  It waits for session programs to get CPU budgets.
+  It waits for session programs to get CPU budgets, which the roadmap's Before M13 stage plans (C1).
 - **Lockups:** the NMI keeps the stuck CPU's registers and the return addresses its frame pointers chain, walked only
   within its kernel stack, each further up; the reporting CPU logs them as fatal lines, which the panic record keeps.
   On AArch64 the kernel masks interrupts with GICv3's priority mask: `0x80` in the kernel, with PSTATE's I clear, which

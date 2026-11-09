@@ -251,8 +251,9 @@ pages (`0056`) and the per-thread page shared with the kernel (`0041`); in P, AC
 
 Planned 2026-10-29 (`decisions/0096`): error paths run, by machinery compiled in only under `robustness=on`. Done: **R1**
 fault injection swept by `boot_tests.py` (`0104`), **R2** counters started near their wrap (`0105`), **R3** lock ranks
-(`0106`), **R4** storage faults, with 9c (`0112`). Still to come: **R5** chaos, after 10a (random services killed,
-budgets checked); **R6** schedule exploration for lock-free code, when Hemera's atomics can be intercepted.
+(`0106`), **R4** storage faults, with 9c (`0112`), and **R5** chaos, random services killed and budgets checked (`0181`'s F6).
+Still to come: **R6** schedule exploration for lock-free code, when Hemera's atomics can be intercepted, planned for
+Before M13 (its C2 and C3).
 
 Specs: none; prior art in Linux's `failslab`, `INITIAL_JIFFIES` and `lockdep`, `loom` and CHESS.
 Stresses: compile-time settings read by target code, `Allocator` wrappers, per-CPU state checked on every lock.
@@ -423,7 +424,7 @@ and the debugger's lines and values; 12f, process-wide breakpoints, fibers liste
 12g, recordings as files, received handles replayed, `trace` and `crashes system` through elevation, and budgets from
 the configuration; 12h, the per-thread page, attribution in `processes`, and a lockup's registers and stack, with
 pseudo-NMIs on AArch64 (`decisions/0185`'s as-built records). M12 is done, but a child CPU budget for each shell job,
-which waits for session programs to get CPU budgets.
+which waits for session programs to get CPU budgets (Before M13's C1).
 
 Specs: DWARF 5.
 Stresses: the compiler's debug information, reflection over arbitrary values, fibers seen from outside.
@@ -440,6 +441,41 @@ Stresses: the compiler's debug information, reflection over arbitrary values, fi
 
 Stresses: the compiler emitting `endbr64`/`bti` and shadow-stack-aware fiber switches in freestanding code.
 Any time after M11.
+
+## Before M13 — What Was Promised and Not Built
+
+A catch-up stage, in three parts: what earlier plans promised and nothing yet schedules.
+
+**C1, sessions' CPU budgets.** What `design/services.md`, `design/scheduling.md` and `0011` promised and M9 built only
+for services. The scheduler service splits the root CPU budget for services and drivers, but not for sessions: every
+session program runs on the session manager's budget, so no user's work is bounded or scheduled apart from another's,
+and the shell has no budget to split for its jobs (`decisions/0185`'s 12h).
+
+- **The scheduler gives the session manager a budget it can split**: a share for sessions in `system_config`, with
+  the right to make children, rather than a bind-only copy.
+- **Each session gets a child of it**, and its programs run on that session's budget, or on children of it: the
+  session's share configurable, as its events budget is (`SessionSettings`), with a default.
+- **The shell gets its session's budget, or a child of it, to split**, and each job runs on a child of the shell's,
+  as 12h planned; `processes` shows what each job and each session ran.
+- **Tests:** two sessions' programs, each spinning, get their shares; a job's time shows on its own budget.
+
+**C2, Hemera's atomics intercepted** (planned in Hemera, with its owner). R6 needs a test build in which every
+atomic operation is a point where a test can choose which thread runs next, which `0096` left to propose to Hemera.
+To plan:
+- A compile-time setting under which each atomic intrinsic (loads, stores, exchanges, compare-exchanges, read-modify-
+  writes and fences), `spin_hint`, and `wait_on_value` and the wakes call a scheduling hook first, with the
+  operation, its address and its memory order; compiled out entirely otherwise, so other builds are unchanged.
+- A model checker in `std/testing` on that hook: a test's threads run as fibers on one carrier, switched only at
+  those points, the interleavings chosen systematically with a bound on preemptions (CHESS), or at random with a
+  seed for longer runs, a failing one replayed from its schedule. What the memory orders allow beyond interleavings
+  (weak memory, as `loom` models) is decided in the plan, not assumed.
+- Hosted tests of `std`'s own lock-free code first (`SpinLock`, the fiber pool's queues, `SharedPtr`), which find
+  what the checker misses before SlopOS relies on it.
+
+**C3, R6: schedule exploration** (`0096`), on C2's checker. Hosted tests of the kernel's lock-free code: the frame
+caches, the slab magazines and the shootdown's handshake, each built hosted with the setting on, with what they find
+fixed and kept as regular tests, as R1 to R5's findings were. Then the rest of the kernel's atomics-only protocols
+worth the time (run-queue stealing, quiescent states, the events and trace rings), chosen in C3's plan.
 
 ## M13 — Networking (L3, L4)
 
@@ -524,11 +560,12 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M9 | done 2026-10-31 (`decisions/0092` to `0126`): the scheduler, clock and events services, the bundle store and paged memory, the config store, generations and updates, installations, shared libraries and substitution, and 9f's follow-ups |
 | Catch-up | done 2026-10-30, in four parts (`decisions/0098` to `0101`): what M5 to M9 planned and hadn't built, the house-rule checks, and deferred items done or placed in M10, M12 and P |
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
-| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 done 2026-11-07 (`0181`'s F6); R6 not started |
+| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 done 2026-11-07 (`0181`'s F6); R6 not started, planned for Before M13 (C2, Hemera's atomics intercepted, then C3) |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
 | M10 | done 2026-11-02 (`decisions/0136` to `0161`): the terminal and input services and the trusted path, accounts, login and sessions, the powerbox and sharing |
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
 | Before P | done 2026-11-07 (`decisions/0181`), in seven parts, F1 to F7: what M10, M11, R and B left, with what the chaos tests found fixed |
 | P | done 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: turning off and restarting, AML, the ACPI service and the power button, a graceful shutdown, the hardware watchdog |
-| M12 | done 2026-11-09: 12a to 12d (`decisions/0183`), and 12e to 12h, what they left (`decisions/0185`); a child CPU budget for each shell job waits for session programs to get CPU budgets |
+| M12 | done 2026-11-09: 12a to 12d (`decisions/0183`), and 12e to 12h, what they left (`decisions/0185`); a child CPU budget for each shell job waits for session programs to get CPU budgets (Before M13's C1) |
+| Before M13 | planned 2026-11-09, in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it |
 | M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
