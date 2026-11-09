@@ -4,7 +4,8 @@ below with tools/boot.py and checks the code it stops with (src/kernel/stop.hsc,
 of growing stacks get a second kernel, built with morestack (the build package's stack_check), and the
 AArch64 tests kernels built for AArch64 (its arch setting), the same two ways.
 Exits 0 if every test passed. SLOPOS_BOOT_TESTS, names separated by commas, runs only the tests whose names have one of
-them in them.
+them in them. SLOPOS_KVM_HOST, user@address of a Linux machine with KVM and a CPU with CET, adds the tests that boot
+there (KVM_TESTS, boot.py --kvm).
 
 The tests boot in parallel, --jobs of them at once (or SLOPOS_BOOT_JOBS; half the CPUs, at most 8, by default), the
 slowest of the last run first; each QEMU has 512 MiB. A test that fails among the others is booted again alone: if it
@@ -115,6 +116,10 @@ AARCH64_CRASH_LINE = "error: test_shell_calls crashed: breakpoint; crashes shows
 CRASH_REPORT_LINE = "test_shell_calls: invalid instruction"
 AARCH64_CRASH_REPORT_LINE = "test_shell_calls: breakpoint"
 AARCH64_CLOCK_LINE = "[user] platform: the real-time clock (Pl031) claimed"
+# What QEMU's max CPU has against exploits (decisions/0186): TCG gives x86-64 no CET, and AArch64 all three
+X86_HARDENING_LINE = "[boot] cpu: control-flow integrity: shadow stacks no, indirect branch tracking no"
+AARCH64_HARDENING_LINE = ("[boot] cpu: control-flow integrity: branch target identification yes, pointer authentication yes, "
+                          "guarded control stack yes")
 # The host bridge's windows from its _CRS, which the ACPI service gives (decisions/0182, P3); AArch64's are the device
 # tree's ranges, which say nothing, so its test only sees the platform service serve
 X86_WINDOWS_LINE = "[user] platform: the host bridge's 3 windows from its _CRS"
@@ -209,7 +214,7 @@ def with_before_qemu(arguments: list[str], more: list[str]) -> list[str]:
 
 
 TESTS = [
-    ("boots and halts", 0, ["--expect-line=[info] boot memory reclaimed"]),
+    ("boots and halts", 0, ["--expect-line=[info] boot memory reclaimed", f"--expect-line={X86_HARDENING_LINE}"]),
     # Hemera's UEFI target (roadmap B1, decisions/0132): a program the firmware runs, which turns the machine off
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
@@ -1424,6 +1429,7 @@ def aarch64_tests(tests: list) -> list:
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
              f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}",
              f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
+             f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={AARCH64_HARDENING_LINE}",
              f"--expect-console-line={CRASH_LINE}": f"--expect-console-line={AARCH64_CRASH_LINE}",
              f"--expect-console-line={CRASH_REPORT_LINE}": f"--expect-console-line={AARCH64_CRASH_REPORT_LINE}"}
     adapted = [(f"AArch64: {AARCH64_NAMES.get(name, name)}", expected, [lines.get(argument, argument) for argument in arguments])
@@ -1432,6 +1438,14 @@ def aarch64_tests(tests: list) -> list:
 
 
 AARCH64_TESTS = aarch64_tests(TESTS)
+
+# x86-64 through KVM on SLOPOS_KVM_HOST's Linux machine (user@address), with its CPU, which gives CET's shadow stacks
+# where TCG gives none (boot.py --kvm, decisions/0186); left out without one. Its machine is this project's: VMware gives
+# it shadow stacks and not IBT
+KVM_HOST = os.environ.get("SLOPOS_KVM_HOST")
+KVM_TESTS = [
+    ("KVM: has CET's shadow stacks", 0, ["--expect-line=[boot] cpu: control-flow integrity: shadow stacks yes, indirect branch tracking no"]),
+]
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS)[:-1]
 
@@ -1520,8 +1534,12 @@ def main() -> int:
                 + boot_jobs(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
                 + boot_jobs(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
                 + address_jobs(aarch64_kernel, ["--arch=aarch64"], "AArch64: "))
+        kvm_tests = KVM_TESTS if KVM_HOST else []
+        if not KVM_HOST:
+            print("the KVM tests are left out: SLOPOS_KVM_HOST isn't set")
+        jobs += boot_jobs(kernel, kvm_tests, [f"--kvm={KVM_HOST}"])
         failed = run_jobs(jobs)
-        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)
+        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)             + len(kvm_tests)
         print_timings(time.monotonic() - suite_started, built)
         if FLAKY:
             print(f"{len(FLAKY)} flaky, failing among the others and passing alone: " + "; ".join(FLAKY))

@@ -399,6 +399,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
     intrinsics.set_carrier(&cpu.carrier)
     arch.init_system(&kernel.arch, &info.firmware_tables, info.direct_map_offset)
     arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
+    arch.log_hardening(&features)
     runtime.log_info("boot CPU set up: its entries and its own state")
     start_address_space(kernel, info)
     start_framebuffer_console(kernel, info)

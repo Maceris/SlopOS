@@ -18,6 +18,12 @@ for what any later architecture note needs to cover.
   execute or casually read user memory), FSGSBASE, x2APIC, RDRAND, AES-NI + PCLMULQDQ + VAES (reported in
   `CpuFeatures`, `../decisions/0019`), 5-level paging (later),
   IOMMU (Intel VT-d / AMD-Vi) — required before untrusted drivers get DMA.
+- **Transient execution** (`../decisions/0013`, `0186`): the kernel logs at boot which issues apply, from
+  `IA32_ARCH_CAPABILITIES` (every one taken as applying without it), and turns on only enhanced IBRS, set once in
+  `IA32_SPEC_CTRL` on each CPU where `IBRS_ALL` says it's there, which costs close to nothing. No KPTI, no per-entry
+  IBRS or buffer clearing.
+- **Control-flow integrity** (`../decisions/0186`): CET's shadow stacks and IBT, detected with `CPUID` leaf 7.
+  QEMU's TCG emulates neither; shadow stacks are boot-tested through KVM (`tools/boot.py --kvm`).
 
 ## Boot Path
 

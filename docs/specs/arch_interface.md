@@ -636,6 +636,10 @@ send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
 // Name a register of those the NMI entry passes kernel_entry.nmi, for a lockup's report (0185); "?" past them.
 nmi_register_name : fn(index: usize) -> string : ---
 
+// Log, once at boot, the CPU's control-flow integrity mechanisms, the transient-execution issues that apply to it,
+// and the mitigations on (0186, 0097).
+log_hardening : fn(features: ptr[slop_os.CpuFeatures]) : ---
+
 // A device the emulator always has that raises a wired interrupt: its controller, and its line there.
 TestDevice :: struct {
     kind : ControllerKind,
@@ -750,6 +754,7 @@ How `arch/x86_64` meets the interface (`../../knowledge/design/arch-x86-64.md`):
 | `power_off` | None: `can_power_off` is false, and L2 writes ACPI's PM1 control registers with `\_S5`'s sleep types, as `power_set_off` gave them |
 | `test_nmi` | An NMI IPI to the CPU's own x2APIC ID |
 | `send_nmi` | An NMI IPI to the CPU's x2APIC ID |
+| `log_hardening` | Shadow stacks and IBT (CPUID leaf 7); the issues `IA32_ARCH_CAPABILITIES` says don't apply, every one taken as applying without it; SMEP, SMAP, and enhanced IBRS, which `init_cpu` sets in `IA32_SPEC_CTRL` where `IBRS_ALL` says it's there |
 | `nmi_register_name` | `rax`, `rbx`, `rcx`, `rdx`, `rsi`, `rdi`, `rbp`, `rsp`, `r8` to `r15`, `rip` and `rflags` |
 | `test_device` | QEMU's I/O APIC at `0xfec00000` (the MP specification's default) and its PIT, ISA IRQ 0, on line 2, edge triggered and active high, as QEMU's MADT says; `test_device_interrupts` runs PIT channel 0 at about 1 kHz, or stops it |
 
@@ -788,6 +793,7 @@ virtual timer's interrupt and the PL011.
 | MSIs | Through the GICv3's ITS, found in the device tree (`arm,gic-v3-its`): `init_msi` gives it flat device and collection tables and a command queue, and every redistributor the one LPI property table and a pending table of its own, with LPIs on; each redistributor is a collection. `add_msi_device` maps a device's translation table (`MAPD`); `route_msi` gives the event an LPI of its own (8192 of them, from 8192), enabled, mapped to the CPU's collection (`MAPTI`, `INV`), and routes it to the kernel's ID as an SPI is. The message is the event's number, to `GITS_TRANSLATER` |
 | Interrupt masking | In the kernel, `ICC_PMR_EL1` at `0x80` with PSTATE's I clear, so only the pseudo-NMI's priority (`0x20`) passes; in user mode and idle, `0xf0`, letting every interrupt's (`0xa0`) through. Each exception takes an IRQ's ID from `ICC_IAR1_EL1` first, which the kernel's mask would hide, then sets that mask and clears I; every `eret` to user mode or idle sets I and the mask back to `0xf0` first (`0185`) |
 | `send_nmi` | SGI 4, the pseudo-NMI, at priority `0x20`; its entry returns to what it interrupted, kernel code included, the interrupted mask restored |
+| `log_hardening` | BTI, PAC and GCS (`ID_AA64PFR1_EL1`, `ID_AA64ISAR1_EL1`); Spectre v2 and Meltdown not applying by `CSV2` and `CSV3`; PAN, and whether there's SSBS |
 | `nmi_register_name` | `x0` to `x30`, `sp`, `pc` and `pstate` |
 | Not yet | `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
 

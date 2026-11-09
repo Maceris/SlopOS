@@ -1,6 +1,6 @@
 # 0186: H, Hardening, Planned
 
-Status: accepted, chosen with the project's owner
+Status: accepted, chosen with the project's owner; built, Ha
 Date: 2026-11-09
 Related: `0003` (the CPU baseline), `0013` (the threat model), `0019` (AES detected at boot), `0023` (cheap threads,
 user space owns stacks), `0096` (robustness), `0097` (lessons adopted: the transient-execution boot log), `0088` and
@@ -129,4 +129,25 @@ So, chosen with the owner:
 - **x86-64's IBT is built, and not boot-tested**: Hemera emits `endbr64` (a no-op without IBT), and SlopOS detects IBT
   and enables it where it's there, sharing BTI's design, which is boot-tested on AArch64. A bare-metal check on a
   machine with IBT is left for later, recorded in the as-built record.
+
+## As Built: Ha
+- **The test path** is the one found above. `boot.py --kvm user@address` boots x86-64 in QEMU with KVM there, with
+  `-cpu host`: the image, and every local file a QEMU argument names, copied up, and disks and the serial output
+  copied back; a boot that needs the console's sockets is refused. `boot_tests.py` runs `KVM_TESTS` through it when
+  `SLOPOS_KVM_HOST` is set, and says it left them out otherwise. A kernel boots there in about two seconds.
+- **The features**: `X86ShadowStack` (44) and `X86Ibt` (45) from CPUID leaf 7, `Aarch64Gcs` (85) from
+  `ID_AA64PFR1_EL1`.
+- **The boot log** (`arch_interface.log_hardening`, on the boot CPU after `init_cpu`): the control-flow integrity
+  mechanisms, the transient-execution issues that apply and those that don't, and the mitigations on. On x86-64 the
+  issues are `IA32_ARCH_CAPABILITIES`' (every one taken as applying without it, as under TCG); on AArch64, Spectre v2
+  and Meltdown by `CSV2` and `CSV3`. Enhanced IBRS is set by `init_cpu` on each CPU where `IBRS_ALL` says it's there,
+  recorded in `../design/arch-x86-64.md`.
+- **What the three machines say**: TCG's x86-64 has no CET, and no `IA32_ARCH_CAPABILITIES`; QEMU's AArch64 `max` has
+  BTI, PAC and GCS, and neither issue; KVM on the i9-12900K has shadow stacks and not IBT, is affected by speculative
+  store bypass, TAA, MMIO stale data, BHI and PBRSB, not by Meltdown, MDS, GDS and RFDS, and runs with enhanced IBRS.
+- **Tests:** "boots and halts" checks each architecture's control-flow line under TCG; "KVM: has CET's shadow stacks"
+  checks a KVM guest's.
+- **Found on the way:** "AArch64: catches a CPU that stops making progress" timed out once among the other tests and
+  passed alone; it's timing-sensitive under TCG's load, and was kept as flaky. Hemera's `Hosted.DescribesWhileInserting`
+  failed once while the boot tests loaded the machine, and passed alone and in a full run after.
 

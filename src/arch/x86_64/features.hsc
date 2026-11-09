@@ -71,6 +71,8 @@ FEATURE_BITS :: FeatureBit.[
     .{.X86Vaes, 7, 0, .Ecx, 9},
     .{.X86Vpclmulqdq, 7, 0, .Ecx, 10},
     .{.X86FiveLevelPaging, 7, 0, .Ecx, 16},
+    .{.X86ShadowStack, 7, 0, .Ecx, 7},
+    .{.X86Ibt, 7, 0, .Edx, 20},
     .{.X86Xsaveopt, 0xd, 1, .Eax, 0},
     .{.X86Xsavec, 0xd, 1, .Eax, 1},
     .{.X86LahfSahf, 0x80000001, 0, .Ecx, 0},

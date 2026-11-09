@@ -7,7 +7,7 @@ import slop_os from "std/os"
 IdRegister :: enum {
     /** ID_AA64PFR0_EL1, processor features 0: FP, AdvSIMD, SVE. */
     Pfr0,
-    /** ID_AA64PFR1_EL1, processor features 1: BTI. */
+    /** ID_AA64PFR1_EL1, processor features 1: BTI and GCS. */
     Pfr1,
     /** ID_AA64ISAR0_EL1, instruction set attributes 0: the crypto, CRC32, atomic, RDM, dot product and RNG ones. */
     Isar0,
@@ -51,6 +51,7 @@ FEATURE_FIELDS :: FeatureField.[
     .{.Aarch64Fp16, .Pfr0, 16, 1},
     .{.Aarch64Sve, .Pfr0, 32, 1},
     .{.Aarch64Bti, .Pfr1, 0, 1},
+    .{.Aarch64Gcs, .Pfr1, 44, 1},
     .{.Aarch64Aes, .Isar0, 4, 1},
     .{.Aarch64Pmull, .Isar0, 4, 2},
     .{.Aarch64Sha1, .Isar0, 8, 1},

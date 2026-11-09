@@ -138,7 +138,7 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
  * Set up the calling CPU.
  *
  * In order: its GDT and TSS with the stacks entries use, the IDT, no-execute, user-access protection, the x87, SSE and
- * AVX state, address-space tags, SYSCALL, the gs base for entries, and its local APIC in x2APIC mode. It runs once on
+ * AVX state, enhanced IBRS where it's there (hardening.hsc), address-space tags, SYSCALL, the gs base for entries, and its local APIC in x2APIC mode. It runs once on
  * each CPU, at ring 0 with interrupts disabled, after init_system.
  *
  * @param system The shared state init_system set up, whose IDT this CPU loads.
@@ -159,6 +159,7 @@ init_cpu :: fn(
     record_stacks(cpu, stacks)
     load_descriptor_tables(system, cpu)
     enable_cpu_features()
+    enable_speculation_controls()
     cpu.xcr0 = XCR0_BASE
     features :: detect_features()
     cpu.xsaveopt = has(&features, .X86Xsaveopt)

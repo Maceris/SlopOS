@@ -1064,6 +1064,14 @@ send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
  */
 nmi_register_name : fn(index: usize) -> string : ---
 
+/**
+ * Log, once at boot, what the CPU has against exploits and transient execution (decisions/0186, 0097): its
+ * control-flow integrity mechanisms, the transient-execution issues that apply to it, and the mitigations on.
+ *
+ * @param features The boot CPU's features, from detect_features.
+ */
+log_hardening : fn(features: ptr[slop_os.CpuFeatures]) : ---
+
 /** A device the emulator always has that raises a wired interrupt: its controller, and its line there. */
 TestDevice :: struct {
     /** The kind of controller its line is on. */

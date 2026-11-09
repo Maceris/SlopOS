@@ -163,6 +163,10 @@ def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_build
 def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str],
         keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
     """Boots the image, or with none the disk in extra, by UEFI, and gives the code the kernel wrote to the debug exit device."""
+    if KVM_HOST is not None:
+        if keys is not None:
+            sys.exit("boot.py: --kvm can't hold a key down as the machine starts")
+        return run_kvm(KVM_HOST, image, serial, timeout, extra, reboot)
     boot = ["-cdrom", str(image)] if image is not None else []
     command = [
         str(qemu), "-M", "q35", "-m", "512M", "-cpu", cpu, *boot,
@@ -182,6 +186,70 @@ def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, 
             keys.thread.join(timeout=5)
     # An odd code came from the debug exit device; anything else is QEMU's own (a reset, a crash)
     return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
+
+
+# --kvm's Linux machine, user@address, when x86-64 boots there instead of here (decisions/0186)
+KVM_HOST: str | None = None
+# Its firmware, as Debian's ovmf package puts it
+KVM_FIRMWARE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+
+
+def run_kvm(host: str, image: Path | None, serial: Path, timeout: float, extra: list[str], reboot: bool) -> int:
+    """
+    Boots as run does, but in QEMU with KVM on host, a Linux machine, with the host's CPU, so a guest gets what the host
+    gives it, as CET's shadow stacks (decisions/0186). The image, and every local file a QEMU argument names (file=...),
+    are copied there first, and those files and the serial output copied back after, so a disk keeps what the boot
+    wrote. Sockets the console uses aren't reachable there: a boot with them is refused.
+    """
+    key = os.environ.get("SLOPOS_KVM_KEY", str(Path.home() / ".ssh" / "hemera_linux_vm"))
+    ssh = ["ssh", "-i", key, "-o", "BatchMode=yes", host]
+    folder = f"/tmp/slopos-kvm-{os.getpid()}-{int(time.monotonic() * 1000)}"
+    if any("socket," in argument for argument in extra):
+        sys.exit("boot.py: --kvm can't take the console's input or read its screen")
+    if subprocess.run(ssh + [f"mkdir -p {folder}"]).returncode != 0:
+        sys.exit(f"boot.py: can't reach {host} for --kvm")
+    copied: list[tuple[Path, str]] = []
+
+    def remote(local: Path) -> str:
+        """Copies a local file there once, giving its path there."""
+        for already, there in copied:
+            if already == local:
+                return there
+        there = f"{folder}/{len(copied)}-{local.name}"
+        if subprocess.run(["scp", "-q", "-i", key, str(local), f"{host}:{there}"]).returncode != 0:
+            sys.exit(f"boot.py: can't copy {local} to {host}")
+        copied.append((local, there))
+        return there
+
+    def moved(argument: str) -> str:
+        """The argument with each local file it names as file=... replaced by its copy there."""
+        def replace(match: "re.Match[str]") -> str:
+            local = Path(match.group(1))
+            return f"file={remote(local)}" if local.is_file() else match.group(0)
+        return re.sub(r"file=([^,]+)", replace, argument)
+
+    boot = ["-cdrom", remote(image)] if image is not None else []
+    there = [moved(argument) for argument in extra]
+    # An IOMMU with interrupt remapping needs KVM's interrupt controller split
+    machine = "q35,kernel-irqchip=split" if any("intel-iommu" in argument for argument in there) else "q35"
+    command = [
+        "qemu-system-x86_64", "-accel", "kvm", "-M", machine, "-m", "512M", "-cpu", "host", *boot,
+        "-serial", f"file:{folder}/serial.txt", "-display", "none", *([] if reboot else ["-no-reboot"]),
+        "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-drive", f"if=pflash,format=raw,readonly=on,file={KVM_FIRMWARE}",
+        *there,
+    ]
+    quoted = " ".join(f"'{part}'" for part in command)
+    result = subprocess.run(ssh + [f"timeout {int(timeout)} {quoted} < /dev/null; echo \"exit $?\""], capture_output=True, text=True)
+    subprocess.run(["scp", "-q", "-i", key, f"{host}:{folder}/serial.txt", str(serial)], capture_output=True)
+    for local, there_path in copied:
+        if local != image:
+            subprocess.run(["scp", "-q", "-i", key, f"{host}:{there_path}", str(local)])
+    subprocess.run(ssh + [f"rm -rf {folder}"])
+    ended = re.search(r"exit (\d+)", result.stdout)
+    code = int(ended.group(1)) if ended else -1
+    if code == 124:
+        return TIMED_OUT
+    return code >> 1 if code % 2 == 1 else NO_EXIT_CODE
 
 
 def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str], iommu: bool,
@@ -926,6 +994,10 @@ def main() -> int:
     parser.add_argument("--linker-script", type=Path, help="the linker script, with --package")
     parser.add_argument("--command-line", default="test_exit", help="the kernel's command line")
     parser.add_argument("--cpu", default=DEFAULT_CPU, help="QEMU's CPU model")
+    parser.add_argument("--kvm", metavar="USER@ADDRESS",
+                        help="boot x86-64 in QEMU with KVM on this Linux machine, with its CPU (-cpu host) rather than --cpu, as CET's "
+                             "boot tests do (decisions/0186); SLOPOS_KVM_KEY is the SSH key (default ~/.ssh/hemera_linux_vm), and the "
+                             "machine needs qemu-system-x86_64 and Debian's ovmf")
     parser.add_argument("--expect", type=int, help="the exit code the kernel should write; exits 0 if it does")
     parser.add_argument("--expect-line", action="append", default=[],
                         help="a line the serial output should contain, with --expect; may be repeated")
@@ -1017,6 +1089,10 @@ def main() -> int:
                              "exit code 0 (roadmap B1, decisions/0132)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
+    global KVM_HOST
+    KVM_HOST = arguments.kvm
+    if KVM_HOST is not None and arguments.arch == "aarch64":
+        sys.exit("boot.py: --kvm boots x86-64 only")
 
     qemu = find_tool("QEMU", ["qemu-system-x86_64.exe", "qemu-system-x86_64"], [Path(r"C:\Program Files\qemu")])
     aarch64 = arguments.arch == "aarch64"
