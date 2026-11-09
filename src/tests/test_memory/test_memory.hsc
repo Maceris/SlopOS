@@ -326,6 +326,10 @@ memory_held_by_a_process_is_let_go_with_it #test :: fn(t: ptr[mut testing.T]) ->
  * Check that 4 MiB mapped on a 2 MiB boundary is mapped with large pages, so touching it takes at least two pages less
  * in page tables than mapped a page off one. What each took is logged if it didn't.
  *
+ * What touching takes is read from the budget, which memory let go of earlier, as by the process the test before ends,
+ * can lower while it's read, after its grace period: a cost can read low, never high. So it's measured up to
+ * TABLE_ATTEMPTS times, and fails only if large pages never save anything.
+ *
  * @param t The test's state.
  * @return Ok once it's run; Error if the memory couldn't be made or mapped.
  */
@@ -333,7 +337,13 @@ memory_on_a_large_page_boundary_maps_with_large_pages #test :: fn(t: ptr[mut tes
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     // 4 MiB mapped 2 MiB-aligned takes two large pages, so none of the tables of 4 KiB pages it takes mapped a page off
-    costs :: testing.require_some(t, page_tables_touching(block), "two objects of 4 MiB are made and mapped")?
+    costs := TableCosts.{}
+    for attempt in 0..<TABLE_ATTEMPTS {
+        costs = testing.require_some(t, page_tables_touching(block), "two objects of 4 MiB are made and mapped")?
+        if costs.aligned + 2 * PAGE <= costs.unaligned {
+            break
+        }
+    }
     saved :: testing.expect_le(t, costs.aligned + 2 * PAGE, costs.unaligned, "4 MiB mapped 2 MiB-aligned takes large pages, not the tables of 4 KiB pages it takes mapped a page off")
     if !saved {
         log_line.write(given.log, "%: 4 MiB took % bytes of page tables mapped 2 MiB-aligned, and % mapped a page off", NAME, costs.aligned,
@@ -341,6 +351,9 @@ memory_on_a_large_page_boundary_maps_with_large_pages #test :: fn(t: ptr[mut tes
     }
     return .Ok
 }
+
+/** How many times memory_on_a_large_page_boundary_maps_with_large_pages measures, at most. */
+TABLE_ATTEMPTS :: 3
 
 /**
  * Check that a write where only reading is mapped stops the thread making it and ends its process, killed, the memory

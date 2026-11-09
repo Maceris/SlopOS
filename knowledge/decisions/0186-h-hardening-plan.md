@@ -179,3 +179,21 @@ So, chosen with the owner:
   entry and the fiber switches) and `Freestanding.NotesControlFlowIntegrity` (a SlopOS program's note). With nothing
   turned on until Hc, SlopOS's suites check the code still runs, the new AArch64 frame layout included.
 
+## Found Before Hc: AArch64's Timeouts
+After Ha and Hb, AArch64 tests timed out now and then among the others and passed alone. With the owner, they were
+looked into with less load, and `boot.py` now asks QEMU where each CPU was when a boot times out (`info registers -a`
+through its machine protocol), which caught one:
+- **About one AArch64 boot in 512 had no console, and went nowhere.** The bootloader put the direct map a random number
+  of GiB up, and when that was the last GiB of a 512 GiB region, QEMU's `virt` UART and GIC, below RAM, fell under an
+  empty top-level page-table entry, which the kernel's `map_early_device` can't map through, so it went without its
+  console, and the boot idled for good. Pinning the offset there failed every time. The bootloader now never puts the
+  direct map within 4 GiB below a 512 GiB boundary (`direct_map_offset`). Some 125 AArch64 boots a suite made it show
+  in about one run in five, as if it were load.
+- **A stray IRQ in AArch64's kernel code was taken as if from idle**, which never returns, abandoning what it
+  interrupted. Under 12h's priority mask, only the NMI is meant to reach the kernel, but a signal raised just before the
+  mask, or withdrawn before it's taken, can come anyway, as Linux expects. The entry now looks at what's pending
+  (`ICC_HPPIR1_EL1`) and takes only the NMI there, leaving anything else pending. Nothing was seen to fail this way.
+- **`test_memory`'s large pages read their saving from the budget**, which memory freed by the test before can lower
+  while it's read. It measures up to three times now, failing only if large pages never save anything.
+- The earlier note that the lockup test is timing-sensitive is withdrawn: with these, the suites ran without a flaky test.
+

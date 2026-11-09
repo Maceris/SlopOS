@@ -725,12 +725,21 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
 }
 
 /**
- * Choose the direct map's offset: the bottom of the higher half, a random number of GiB up, within its first 32 TiB.
+ * Choose the direct map's offset: the bottom of the higher half, a random number of GiB up, within its first 32 TiB, and
+ * never within 4 GiB below a 512 GiB boundary. So the first 4 GiB of physical addresses are under one top-level entry of
+ * the page tables, and devices below RAM, as QEMU's virt machine has its UART and GIC, are under the entry the RAM
+ * above them fills, which the kernel maps them through before its own tables exist (map_early_device). Once in 512
+ * boots, a direct map in the last GiB left them under an empty entry, and the kernel without a console or interrupts.
  *
  * @param random Whether KASLR is on; without it the offset is HIGHER_HALF itself.
  * @return The virtual address physical address 0 is mapped at, 1 GiB-aligned, from HIGHER_HALF up to HIGHER_HALF plus
- *     32 TiB less 1 GiB.
+ *     32 TiB less 4 GiB, with HIGHER_HALF plus the first 4 GiB above it under one 512 GiB entry.
  */
 direct_map_offset :: fn(random: ptr[Random]) -> u64 {
-    return HIGHER_HALF + (random_u64(random) % 32768) * GIGABYTE
+    index := random_u64(random) % 32768
+    // Moved down out of the last 3 GiB of its 512 GiB, a little more often in the 4 GiB below them
+    if index % 512 > 508 {
+        index -= 4
+    }
+    return HIGHER_HALF + index * GIGABYTE
 }

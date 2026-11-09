@@ -264,6 +264,15 @@ take_interrupt #no_context :: fn() -> u32 {
 }
 
 /**
+ * Look at the highest-priority interrupt pending for the calling CPU, without taking it, from ICC_HPPIR1_EL1.
+ *
+ * @return Its interrupt ID; a special one (1020 to 1023) if there's none.
+ */
+pending_interrupt #no_context :: fn() -> u32 {
+    return cast[u32](aarch64.read_system_register_encoded(3, 0, 12, 12, 2) & 0xffffff)
+}
+
+/**
  * Say what raised an IRQ the calling CPU took (take_interrupt).
  *
  * The timer, IPIs and interrupts with no route are acknowledged here; a routed device interrupt is the kernel's to

@@ -160,6 +160,52 @@ def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_build
     return image
 
 
+# Where each CPU was when a boot timed out, from QEMU (run_watched), printed with the failure: one entry a timeout
+CPU_STATES: list[str] = []
+
+
+def run_watched(command: list[str], timeout: float) -> int | None:
+    """
+    Runs QEMU until it ends or timeout passes, with a machine protocol socket of its own on the loopback. On a timeout
+    every CPU's registers are asked for through it (info registers -a), kept in CPU_STATES, before QEMU is killed, so a
+    hang says where each CPU was. Gives QEMU's exit code, or None for a timeout.
+    """
+    port = free_port()
+    process = subprocess.Popen(command + ["-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"])
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        CPU_STATES.append(cpu_states(port))
+        process.kill()
+        process.wait()
+        return None
+
+
+def cpu_states(port: int) -> str:
+    """Every CPU's registers, as QEMU's monitor shows them, through the machine protocol on port; why not, if it can't."""
+    monitor = Keyboard()
+    monitor.port = port
+    try:
+        if not monitor.connect():
+            return "QEMU's machine protocol didn't answer"
+        message = {"execute": "human-monitor-command", "arguments": {"command-line": "info registers -a"}}
+        monitor.connection.sendall(json.dumps(message).encode() + b"\n")
+        while True:
+            while b"\n" not in monitor.replies:
+                data = monitor.connection.recv(65536)
+                if not data:
+                    return "QEMU's machine protocol closed"
+                monitor.replies += data
+            line, _, monitor.replies = monitor.replies.partition(b"\n")
+            reply = json.loads(line)
+            if "return" in reply:
+                return str(reply["return"])
+            if "error" in reply:
+                return f"QEMU's monitor refused: {reply['error']}"
+    except (OSError, ValueError) as error:
+        return f"QEMU's machine protocol failed: {error}"
+
+
 def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str],
         keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
     """Boots the image, or with none the disk in extra, by UEFI, and gives the code the kernel wrote to the debug exit device."""
@@ -178,14 +224,14 @@ def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, 
     if keys is not None:
         keys.thread.start()
     try:
-        result = subprocess.run(command + extra, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return TIMED_OUT
+        returncode = run_watched(command + extra, timeout)
     finally:
         if keys is not None:
             keys.thread.join(timeout=5)
+    if returncode is None:
+        return TIMED_OUT
     # An odd code came from the debug exit device; anything else is QEMU's own (a reset, a crash)
-    return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
+    return returncode >> 1 if returncode % 2 == 1 else NO_EXIT_CODE
 
 
 # --kvm's Linux machine, user@address, when x86-64 boots there instead of here (decisions/0186)
@@ -271,14 +317,14 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     if keys is not None:
         keys.thread.start()
     try:
-        result = subprocess.run(command + extra, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return TIMED_OUT
+        returncode = run_watched(command + extra, timeout)
     finally:
         if keys is not None:
             keys.thread.join(timeout=5)
+    if returncode is None:
+        return TIMED_OUT
     # As with the debug exit device, the kernel's test_exit ends QEMU with (code << 1) | 1
-    return result.returncode >> 1 if result.returncode % 2 == 1 else NO_EXIT_CODE
+    return returncode >> 1 if returncode % 2 == 1 else NO_EXIT_CODE
 
 
 def serial_arguments(serial: Path, keys: "SerialKeys | None") -> list[str]:
@@ -1225,6 +1271,9 @@ def main() -> int:
                 print(f"[console] {line}")
     description = {TIMED_OUT: "timed out", NO_EXIT_CODE: "ended without an exit code"}.get(code, f"exited with {code}")
     print(f"boot.py: the kernel {description}", file=sys.stderr)
+    for states in CPU_STATES:
+        print("boot.py: where each CPU was when it timed out:", file=sys.stderr)
+        sys.stderr.write(states.replace("\r\n", "\n"))
     print("boot.py: took " + ", ".join(f"{seconds:.1f} s {phase}" for phase, seconds in phases), file=sys.stderr)
     if arguments.expect is not None:
         lines = output.splitlines()

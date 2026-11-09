@@ -51,8 +51,9 @@ DATA_ABORT_WRITE : u64 : 1 << 6
 /**
  * Take every exception: the one entry function the vector table's generated code calls.
  *
- * Only a pseudo-NMI returns, to whatever it interrupted, kernel code included (decisions/0185, 12h): faults in the
- * kernel stop it, and the rest come from user mode or idle, which L2 never goes back to directly. An IRQ's ID is
+ * Only a pseudo-NMI returns, to whatever it interrupted, kernel code included (decisions/0185, 12h), and so does any
+ * other IRQ that reaches kernel code, without being taken: faults in the kernel stop it, and the rest come from user
+ * mode or idle, which L2 never goes back to directly. An IRQ's ID is
  * taken first; then the kernel's priority mask is set and IRQs unmasked in PSTATE, so only SGI_NMI reaches the kernel
  * from here on. Interrupts are acknowledged as interrupt_source says (gic.hsc). Runs at EL1 on SP_EL1, with the CPU's
  * carrier block and context set up here from its ArchCpu, and its stack limit set to the kernel stack's.
@@ -63,11 +64,19 @@ DATA_ABORT_WRITE : u64 : 1 << 6
 exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.RegisterFrame]) {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](aarch64.read_system_register(.TPIDR_EL1))
     kind :: frame.vector & 3
+    interrupted_mask :: aarch64.read_system_register(.ICC_PMR_EL1)
     interrupt := NO_INTERRUPT
     if kind == cast[u64](aarch64.ExceptionKind.Irq) || kind == cast[u64](aarch64.ExceptionKind.Fiq) {
+        /*
+         * Kernel code, under the kernel's mask, is meant to be interrupted only by the NMI. Anything else that comes
+         * anyway, as a signal raised just before the mask was, or withdrawn before it's taken, isn't taken: it stays
+         * pending until the kernel lets it through, and the kernel goes on where it was, rather than as if from idle.
+         */
+        if interrupted_mask == KERNEL_PRIORITY_MASK && pending_interrupt() != SGI_NMI {
+            return void
+        }
         interrupt = take_interrupt()
     }
-    interrupted_mask :: aarch64.read_system_register(.ICC_PMR_EL1)
     mask_for_kernel()
     cpu.carrier.stack_limit = cpu.kernel_stack_limit
     intrinsics.set_carrier(cpu.carrier)
