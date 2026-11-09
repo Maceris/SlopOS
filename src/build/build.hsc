@@ -233,6 +233,8 @@ add_kernel :: fn() {
     kernel.target_options.os = .None
     kernel.target_options.startup_code = false
     kernel.target_options.red_zone = false
+    // Landing pads and signed returns, which the kernel turns on where the CPU has them (decisions/0186)
+    kernel.target_options.control_flow_integrity = true
     kernel.target_options.stack_check_failure = .Trap
     if compiler.target_setting("stack_check", default = "trap") == "morestack" {
         kernel.target_options.stack_check_failure = .Morestack
@@ -281,6 +283,8 @@ add_programs :: fn(folder: string) {
         }
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
+        // Landing pads, signed returns and the ELF note saying so, as every SlopOS program has (decisions/0186)
+        program.target_options.control_flow_integrity = true
         /*
          * Every program has debug info, which Hemera puts in <name>.debug beside it rather than in the program, for the
          * debugger and crash reports (decisions/0185, 12e); the program itself is built as it was
@@ -356,6 +360,7 @@ add_libraries :: fn(folder: string) {
             library.target_options.cpu = ""
         }
         library.target_options.relocation_model = .Default
+        library.target_options.control_flow_integrity = true
         library.target_options.output_type = .DynamicLibrary
         target :: compiler.add_target(library)
         // service_kit's second build, with one export more, for substitution's test (decisions/0122)

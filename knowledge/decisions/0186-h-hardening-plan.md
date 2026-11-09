@@ -1,6 +1,6 @@
 # 0186: H, Hardening, Planned
 
-Status: accepted, chosen with the project's owner; built, Ha
+Status: accepted, chosen with the project's owner; built, Ha and Hb
 Date: 2026-11-09
 Related: `0003` (the CPU baseline), `0013` (the threat model), `0019` (AES detected at boot), `0023` (cheap threads,
 user space owns stacks), `0096` (robustness), `0097` (lessons adopted: the transient-execution boot log), `0088` and
@@ -150,4 +150,32 @@ So, chosen with the owner:
 - **Found on the way:** "AArch64: catches a CPU that stops making progress" timed out once among the other tests and
   passed alone; it's timing-sensitive under TCG's load, and was kept as flaky. Hemera's `Hosted.DescribesWhileInserting`
   failed once while the boot tests loaded the machine, and passed alone and in a full run after.
+
+## As Built: Hb
+- **The option** is `TargetOptions.control_flow_integrity` (`--control-flow-integrity`), on ELF targets for x86-64
+  and AArch64. SlopOS's build turns it on for the kernel, the programs and the libraries. It sets LLVM's module flags,
+  which also write the ELF's `.note.gnu.property` (x86-64's `IBT` and `SHSTK`; AArch64's `BTI`, `PAC` and `GCS`),
+  and on AArch64 each function's attributes: `branch-target-enforcement`, `sign-return-address=non-leaf` with the A
+  key.
+- **The resume loop's problem, solved in LLVM.** A re-entered frame returns through the loop, so on AArch64 the loop
+  has to sign its own return address as the frame's prologue signed the one it replaces: with the stack pointer at the
+  frame's entry. Outside Darwin, LLVM puts the frame record below the other callee-saved registers, so that stack pointer
+  isn't at a fixed distance from the frame pointer. Hemera's LLVM patch 0004 (`"frame-record-at-top"`) gives Hemera
+  functions Darwin's order, which puts it at the top: the entry stack pointer is always the frame pointer plus 16. The
+  hand-written frames follow the same rule: morestack's now keeps its saved limit, segment, `x19` and `x20` below its
+  frame record, and the stack check's small frame signs its return address too (patch 0006, on 0003). So
+  `fiber_reenter` signs with `frame + 16` (`PACIA1716`), and the loop authenticates each continuation against the frame
+  that returned (`AUTIA1716`); both are hints, which do nothing without pointer authentication.
+- **Landing pads after calls**, where the loop's indirect branch lands, came from nowhere: Hemera's docs said the
+  compiler put `endbr64` there, but nothing did. Patch 0005 (`"landing-pads-after-calls"`) puts `endbr64` or `bti j`
+  after every call, and makes an address-taken block `bti jc`, since morestack calls a function's body with `blr`.
+  The hand-written sequences have theirs: the fiber switches, morestack, the foreign shims, and on x86-64 each
+  interrupt's stub and SYSCALL's entry.
+- **The Guarded Control Stack** in the fiber switches: `CHKFEAT` (a hint) says whether the thread has one; if so, its
+  pointer is kept when the scheduler switches in, and the fiber's entries above it are popped with `GCSPOPM` when it
+  switches out.
+- **Stack walks** (`capture_stack_trace`) strip return addresses' authentication codes, for a 48-bit address space.
+- **Tests:** Hemera's `Freestanding.BuildsKernelWithControlFlowIntegrity` (`endbr64` at the interrupt stubs, SYSCALL's
+  entry and the fiber switches) and `Freestanding.NotesControlFlowIntegrity` (a SlopOS program's note). With nothing
+  turned on until Hc, SlopOS's suites check the code still runs, the new AArch64 frame layout included.
 
