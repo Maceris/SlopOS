@@ -39,9 +39,11 @@ enter_elevation :: fn(service: ptr[mut Service]) {
     service.elevating = true
     kind :: view(service).ask.kind
     runtime.log_info("elevation: % asks %", bytes_text(first_of(view(service).ask.requester[0..<view(service).ask.requester.count],
-        view(service).ask.requester_count)), if kind == .ShutDown { "to shut down" } else if kind == .Restart { "to restart" } else { "for an account" })
+        view(service).ask.requester_count)), if kind == .ShutDown { "to shut down" } else if kind == .Restart { "to restart" }
+        else if is_debug(kind) { "to debug a program" } else { "for an account" })
     say(service, "")
-    setup_step(service, .AdminName)
+    // The user's own program needs only their say; anything else, the administrator's
+    setup_step(service, if kind == .Debug { SetupStep.Confirm } else { SetupStep.AdminName })
     update_status(service)
 }
 
@@ -52,7 +54,28 @@ enter_elevation :: fn(service: ptr[mut Service]) {
  * @return True for an account, a shutdown and a restart.
  */
 is_elevation :: fn(kind: prompt.Kind) -> bool {
-    return kind == .Account || is_power(kind)
+    return kind == .Account || is_power(kind) || is_debug(kind)
+}
+
+/**
+ * Tell whether a request's kind is debugging a program (decisions/0185).
+ *
+ * @param kind The kind.
+ * @return True for Debug and DebugOther.
+ */
+is_debug :: fn(kind: prompt.Kind) -> bool {
+    return kind == .Debug || kind == .DebugOther
+}
+
+/**
+ * Tell whether a request's kind needs only the administrator's name and password, nothing more: a shutdown, a restart,
+ * or debugging another user's program.
+ *
+ * @param kind The kind.
+ * @return True for those.
+ */
+is_administrators :: fn(kind: prompt.Kind) -> bool {
+    return is_power(kind) || kind == .DebugOther
 }
 
 /**
@@ -127,7 +150,7 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
     shown :: view(service)
     out := os.Outgoing.{}
     response :: os.begin[prompt.Response](&out)
-    if made && is_power(shown.ask.kind) {
+    if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind)) {
         response^ = .Allowed
     }
     else if made && service.name_count <= service.name.count {
@@ -224,14 +247,33 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
-    screen.write_at(panel, 1, 2, if restart { "Restart the system" } else { "Shut the system down" }, bold)
+    debugging :: is_debug(asked.kind)
+    screen.write_at(panel, 1, 2, if debugging { "Debug a program" } else if restart { "Restart the system" } else { "Shut the system down" }, bold)
     storage : u8[200]
     line := text_buffer.make(storage)
     text_buffer.append(&line, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
-    text_buffer.append(&line, if restart { " asks to restart the system, " } else { " asks to shut the system down, " })
+    if debugging {
+        // The program to debug, which it can then read and change
+        text_buffer.append(&line, " asks to debug ")
+        text_buffer.append(&line, bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count)))
+        text_buffer.append(&line, if asked.kind == .DebugOther { ", another user's program, " } else { ", " })
+    }
+    else {
+        text_buffer.append(&line, if restart { " asks to restart the system, " } else { " asks to shut the system down, " })
+    }
     text_buffer.append(&line, bytes_text(first_of(asked.purpose[0..<asked.purpose.count], asked.purpose_count)))
     text_buffer.append(&line, ".")
     screen.write_at(panel, 3, 2, text_buffer.as_string(&line), plain)
+    if asked.kind == .Debug {
+        screen.write_at(panel, 4, 2, "It could read and change everything the program has. Enter allows it, Esc refuses.", plain)
+        if whole {
+            redraw(service)
+        }
+        else {
+            redraw_rows(service, SETUP_FIELDS_ROW, SETUP_FIELDS_ROW + cast[u16](ELEVATION_FIELDS) + 4)
+        }
+        return void
+    }
     screen.write_at(panel, 4, 2, "The administrator's name and password allow it. Esc refuses.", plain)
     top :: SETUP_FIELDS_ROW
     column : u16 = 18
@@ -289,7 +331,7 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
-    if is_power(asked.kind) {
+    if is_power(asked.kind) || is_debug(asked.kind) {
         draw_power_elevation(service, whole, asked.kind == .Restart)
         return void
     }

@@ -2746,6 +2746,42 @@ sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id
     if !arch.set_debug(&found.debug, &found.registers, given.step, given.slots) {
         return .Error(.BadRegisters)
     }
+    found.stepping = given.step
+    return .Ok
+}
+
+/**
+ * Set a process's breakpoints and watchpoints, which every thread of its, now and later, loads as it returns to user
+ * mode, unless it's single-stepping (thread_set_debug), when it loads its own.
+ *
+ * @param thread The calling thread.
+ * @param process The process, with RIGHT_PROCESS_WRITE_STATE.
+ * @param debug A slop_os.ThreadDebug in the caller's memory: its slots, which replace the process's; step must be false.
+ * @error BadBuffer debug isn't memory the caller can read.
+ * @error BadRegisters step is set, or a slot the architecture can't set.
+ */
+sys_process_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, debug: u64) -> Result[void, slop_os.ControlError] {
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
+    given := slop_os.ThreadDebug.{}
+    if !copy_from_user(per_cpu().kernel, thread.space, debug, cast[u64](&given), cast[u64](size_of(slop_os.ThreadDebug))) {
+        return .Error(.BadBuffer)
+    }
+    // Made apart from any thread's registers, which a process's slots don't step
+    made := arch.DebugRegisters.{}
+    scratch := arch.UserRegisters.{}
+    if given.step || !arch.set_debug(&made, &scratch, false, given.slots) {
+        return .Error(.BadRegisters)
+    }
+    any := false
+    for slot in given.slots {
+        if slot.kind != .Off {
+            any = true
+        }
+    }
+    lock_at(&target.debug_lock, .ProcessDebug)
+    target.debug = made
+    intrinsics.atomic_store_u32_release(&target.debugging, if any { 1 } else { 0 })
+    unlock_at(&target.debug_lock, .ProcessDebug)
     return .Ok
 }
 

@@ -1,6 +1,6 @@
 # 0185: What M12 Left, Planned
 
-Status: accepted, chosen with the project's owner; built, 12e
+Status: accepted, chosen with the project's owner; built, 12e and 12f
 Date: 2026-11-08
 Related: `0011` (memory budgets), `0017` and `0056` (process control and intercepts), `0026` (the carrier register),
 `0037` (scheduling and lending), `0041` (the per-thread page), `0134` (the panic record), `0160` (elevation), `0182`
@@ -164,4 +164,37 @@ In four stages, each with an as-built record here:
   volatile loads so they're all in memory at the line it breaks at: a breakpoint by file and line, its stack with
   lines, its struct, optional, union and view printed, a name that isn't a local, and a crash's report naming its line.
   On both architectures. `boot.py` gains `--expect-console-end`, for a line whose start changes.
+
+## As Built: 12f
+- **Process-wide slots.** `process_set_debug` (89) sets a process's breakpoints and watchpoints, under a lock of its own
+  (`LockRank.ProcessDebug`) and a flag read first, so a process that isn't debugged costs nothing returning to user
+  mode. Every thread of it loads them as it returns, those started later too, unless it's single-stepping
+  (`thread_set_debug` with step), when it loads its own state, so a step past a breakpoint doesn't stop at it again. The
+  debugger sets its slots on the process, and a thread's own state only to step.
+- **Fibers.** `std`'s fiber pool keeps every fiber spawned that hasn't finished on one list, under a lock apart from
+  the shared queue's, through two links base's `Fiber` gained. The debug table names the runtime's types by
+  `package.name` after its functions (`runtime.CarrierBlock`, `runtime.Fiber`, `fiber.FiberPool`,
+  `fiber.PoolCarrier`), and the debugger's `fibers` reads the stopped thread's carrier register (r14, x28), its carrier
+  block's scheduler data, the pool and its list, each laid out by those schemas, nothing of `std`'s in the ABI. A
+  suspended fiber's stack is walked from where `fiber_suspend` left it (the continuation and the top frame, at fixed
+  offsets from `saved_sp`), and named through `symbols`.
+- **Attaching.** `debug attach name`: the shell asks its session's powerbox (`RequestDebug`, with a copy of its port).
+  The powerbox asks the session manager where the program runs (`Locate`), then the user on the trusted path, or for
+  another user's session's program the administrator, through elevation (prompt kinds `Debug` and `DebugOther`; the
+  elevation screen's new `Confirm` step takes Enter for the user's own). Once it's allowed, the powerbox asks the
+  session manager to attach (`Attach`), on a programs connection the session manager gives it at launch, the only one
+  `Locate` and `Attach` are taken on. The session manager closes its own fault intercept on the program, as a process
+  has one, attaches one on the shell's port, and gives back the process (inspect and write state), the intercept, the
+  address space and the image, which the powerbox passes on. The shell suspends the program's threads; `quit` clears
+  its slots, resumes them and closes the intercept, letting it run on, unintercepted from then. The administrator's
+  path is built but not boot-tested: it would take a second user's session at once.
+- **Found on the way.** A thread a SlopOS program starts began with its stack pointer 16-byte aligned, where x86-64
+  expects it 8 below, as after a call: its frames were 8 bytes off, and an aligned store faulted, as `test_debug`'s
+  fiber pool's did. Base's `slop_os_start_thread` gives the top less 8 on x86-64 now. And a launch kept the program's
+  address space with no rights, so it couldn't be moved on to a debugger; it has `RIGHT_TRANSFER` now. The debugger's
+  `threads` said `thread %`: a format with two placeholders written together.
+- **Tests.** A breakpoint set by function before `test_debug 2` starts its second thread is hit there; that thread
+  carries a fiber pool, whose two fibers are listed, the waiting one suspended in `test_debug.wait_for_done`. The
+  debugger attaches to `counter`, the system's installation, once the user allows it on the trusted path: its threads
+  suspended, listed and walked, and let go; asked again, Escape refuses it. On both architectures.
 

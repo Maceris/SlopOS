@@ -5,6 +5,7 @@ import os from "std"
 import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import programs from "../../protocols/programs"
+import powerbox from "../../protocols/powerbox"
 import config from "../../protocols/config"
 import session from "../../protocols/session"
 import system_records from "../../system_records"
@@ -461,7 +462,7 @@ text_from :: fn(bytes: u8[]) -> string {
  * @param number The session's number.
  * @param end The connection's end, which moves to the session manager; closed if there's no room, or it can't be bound.
  */
-add_finder :: fn(sessions: ptr[mut Manager], number: u32, end: slop_os.Channel) {
+add_finder :: fn(sessions: ptr[mut Manager], number: u32, end: slop_os.Channel, powerbox: bool = false) {
     for &finder, i in sessions.finders {
         if finder.in_use {
             continue
@@ -470,7 +471,7 @@ add_finder :: fn(sessions: ptr[mut Manager], number: u32, end: slop_os.Channel) 
         if slop_os.port_bind(sessions.port, cast[slop_os.Handle](end), signals, FINDER_KEY + cast[u64](i), .Persistent) is_error {
             break
         }
-        finder^ = Finder.{in_use = true, session = number, end = end}
+        finder^ = Finder.{in_use = true, session = number, end = end, powerbox = powerbox}
         return void
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -529,6 +530,11 @@ serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                     continue
                 }
                 case Powerbox(name) => response^ = powerbox_answer(sessions, sessions.finders[i].session, text_from(os.items(into, name)))
+                case Locate(name) => response^ = if sessions.finders[i].powerbox {
+                    programs.Response.Located(locate_program(sessions, sessions.finders[i].session, text_from(os.items(into, name))))
+                } else { programs.Response.Refused(.NotAllowed) }
+                case Attach(attaching) => response^ = attach_program(sessions, sessions.finders[i].session, sessions.finders[i].powerbox,
+                    text_from(os.items(into, attaching.name)), attaching.port, attaching.key, attaching.elevated, &out)
                 case _ => response^ = .Unsupported
             }
             _ = programs.send_response(end, sessions.port, &out)
@@ -610,3 +616,110 @@ powerbox_answer :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> 
         case None => programs.Response.Refused(.Failed)
     }
 }
+
+/**
+ * Attach a debugger to a program a session runs, for its powerbox once the user's allowed it (decisions/0185, 12f).
+ *
+ * The program's own session's programs are looked at first, then, if elevated, every other session's. Its faults'
+ * intercept, the session manager's, is closed, as a process has one intercept, and one of its faults is attached on
+ * the debugger's port in its place: while it's debugged, the debugger is its exception port, and once the debugger
+ * lets go it runs unintercepted.
+ *
+ * @param sessions The session manager.
+ * @param number The asking session's number.
+ * @param from_powerbox Whether it's asked on the session's powerbox's connection; otherwise it's refused.
+ * @param name The program's name, as its session runs it.
+ * @param port The debugger's port, which the intercept is attached on; closed if it's refused.
+ * @param key The key its stops come under.
+ * @param elevated Whether the administrator allowed it, so another user's program may be attached.
+ * @param out The message the answer's items go in.
+ * @return Attached, with the program's process, intercept, address space, image and program name, each handle the
+ *     powerbox's; or Refused.
+ */
+attach_program :: fn(sessions: ptr[mut Manager], number: u32, from_powerbox: bool, name: string, port: slop_os.Port, key: u64,
+    elevated: bool, out: ptr[mut os.Outgoing]) -> programs.Response {
+    if !from_powerbox {
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        return .Refused(.NotAllowed)
+    }
+    found : usize? = null
+    elsewhere := false
+    for &program, i in sessions.programs {
+        if i >= sessions.count || !program.running || cast[usize](program.name_bytes) > program.name.count {
+            continue
+        }
+        if string_of(&program.name[0], cast[usize](program.name_bytes)) != name {
+            continue
+        }
+        if program.session == number {
+            found = i
+            break
+        }
+        elsewhere = true
+        if elevated && found == null {
+            found = i
+        }
+    }
+    index :: found or_else sessions.programs.count
+    if index >= sessions.programs.count {
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        return .Refused(if elsewhere { programs.InstallProblem.NeedsAdministrator } else { programs.InstallProblem.NotRunning })
+    }
+    program :: &sessions.programs[index]
+    // Its faults' intercept let go, so the debugger's can be attached
+    space := cast[slop_os.AddressSpace](slop_os.NO_HANDLE)
+    match program.faults {
+        case Some(faults) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
+            space = faults.space
+            program.faults = null
+        }
+        case None => {}
+    }
+    intercept :: match slop_os.intercept_attach(program.process, port, key, 0, slop_os.STOP_FAULT) {
+        case Ok(made) => made
+        case Error(error) => {
+            runtime.log_info("couldn't attach a debugger to %: %", name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](port))
+            if cast[slop_os.Handle](space) != slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](space))
+            }
+            return .Refused(.Failed)
+        }
+    }
+    // The port's bound by the intercept now, so the session manager's handle to it can go
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT) | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    process :: slop_os.handle_duplicate(cast[slop_os.Handle](program.process), rights) or_else slop_os.NO_HANDLE
+    runtime.log_info("attached a debugger to %", name)
+    program_name :: if cast[usize](program.program_bytes) <= program.program_name.count && program.program_bytes > 0 {
+        program.program_name[0..<cast[usize](program.program_bytes)] } else { program.name[0..<0] }
+    return .Attached(powerbox.Attached.{process = cast[slop_os.Process](process), intercept = intercept, space = space,
+        image = program.image, program = os.append(out, program_name)})
+}
+
+/**
+ * Find where a program runs, by name, for the powerbox, before it asks whom to (decisions/0185, 12f).
+ *
+ * @param sessions The session manager.
+ * @param number The asking session's number.
+ * @param name The program's name, as its session runs it.
+ * @return Here if the asking session runs it, Elsewhere if only another session does, Nowhere if none does.
+ */
+locate_program :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> programs.Location {
+    found := programs.Location.Nowhere
+    for &program, i in sessions.programs {
+        if i >= sessions.count || !program.running || cast[usize](program.name_bytes) > program.name.count {
+            continue
+        }
+        if string_of(&program.name[0], cast[usize](program.name_bytes)) != name {
+            continue
+        }
+        if program.session == number {
+            return .Here
+        }
+        found = .Elsewhere
+    }
+    return found
+}
+

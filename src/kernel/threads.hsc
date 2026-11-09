@@ -112,6 +112,11 @@ Thread :: struct #align(16) {
     /** Its debugging state, which a debugger sets (thread_set_debug) and returning to user mode loads; none at first. */
     debug : arch.DebugRegisters,
     /**
+     * Whether it single-steps (thread_set_debug), when its own debugging state is loaded rather than its process's, so
+     * a step past a breakpoint doesn't stop at it again.
+     */
+    stepping : bool,
+    /**
      * The timer that ends its process if it stays stopped at a fault past FAULT_STOP_LIMIT, under an intercept with
      * STOP_FAULT_LIMITED (intercepts.hsc).
      */

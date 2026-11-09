@@ -104,6 +104,38 @@ PowerRequest :: struct {
     restart : bool,
 }
 
+/** A program to debug (decisions/0185, 12f), as RequestDebug asks for it. */
+DebugRequest :: struct {
+    /** The program's name, as the session runs it: an installation's, or "powerbox"; up to NAME_BYTES, as UTF-8. */
+    name : slop_os.Relative[u8],
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the user. */
+    purpose : slop_os.Relative[u8],
+    /**
+     * The debugger's port, which the program's stops are to come to, as Stop packets under key; it moves to the
+     * powerbox, and on to the session manager, which attaches the intercept to it.
+     */
+    port : slop_os.Port,
+    /** The key the stops come under. */
+    key : u64,
+}
+
+/** A program attached to a debugger: what the debugger controls it with. Every handle moves to the debugger. */
+Attached :: struct {
+    /**
+     * The program's process, with RIGHT_PROCESS_INSPECT and RIGHT_PROCESS_WRITE_STATE: its threads read, suspended,
+     * resumed and set to debug, and its end watched.
+     */
+    process : slop_os.Process,
+    /** The intercept of its faults, on the debugger's port; closing it lets the program run on unintercepted. */
+    intercept : slop_os.Intercept,
+    /** Its address space, rightless, as process_read_memory takes it. */
+    space : slop_os.AddressSpace,
+    /** Where its image is in its address space. */
+    image : u64,
+    /** The name of the program it runs, as Find takes it, for its files: an installation's program, not its name. */
+    program : slop_os.Relative[u8],
+}
+
 /** A program of the session's, to serve on its end under its name. */
 Served :: struct {
     /** The program's name, as the session manager gave it, as UTF-8; the powerbox keeps up to NAME_BYTES of it. */
@@ -139,6 +171,12 @@ Request :: union {
      */
     RequestPower(PowerRequest),
     /**
+     * Ask to debug a program of the session's, which the user allows on the trusted path, each time, or, for another
+     * user's program, the administrator (decisions/0185, 12f). Answered with Attached, once it's allowed and attached;
+     * or Refused, the port closed; at once with Busy.
+     */
+    RequestDebug(DebugRequest),
+    /**
      * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
      * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
      */
@@ -165,6 +203,8 @@ Response :: union {
     AccountMade(slop_os.Relative[u8]),
     /** RequestPower's answer: the administrator allowed it, and it's under way. */
     Allowed,
+    /** RequestDebug's answer: the program, attached to the debugger's port. */
+    Attached(Attached),
     /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
     Unsupported,
 }
@@ -184,6 +224,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Reopen(_) => true
         case RequestAccount(_) => false
         case RequestPower(_) => false
+        case RequestDebug(_) => false
         case Serve(_) => false
     }
 }

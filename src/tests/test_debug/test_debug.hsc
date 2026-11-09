@@ -2,10 +2,11 @@
  * test_debug (decisions/0185, 12e): a program for the debugger's lines and values. It makes a struct, an optional, a
  * union and a view, reads each through a volatile load so the optimizer keeps them in memory where the DWARF says,
  * and then adds what it read, on the line the boot test breaks at by its file and line, and prints them from there.
- * Given a crash, it writes through a bad pointer instead, for a crash report with lines.
+ * Given 1, it writes through a bad pointer instead, for a crash report with lines; given 2, a thread it starts
+ * carries a fiber pool of two fibers, for a breakpoint set before the thread was, and the fibers listed (12f).
  */
 package test_debug
-
+import fiber from "std"
 import intrinsics from "base"
 import runtime from "base"
 
@@ -32,12 +33,12 @@ Shape :: union {
 /**
  * Make the values, keep them in memory, and end with 0.
  *
- * @param crash Any number to crash instead, writing through a bad pointer; none to make the values.
+ * @param crash 1 to crash, writing through a bad pointer; 2 for a thread carrying fibers; none to make the values.
  * @return 0, or 1 if what was read was nothing, which can't be.
  */
 main :: fn(crash: u64?) -> int {
     if crash is_some {
-        write_through(cast[ptr[u64]](cast[uintptr](8)))
+        return if (crash or_else 0) == 2 { threads_and_fibers() } else { write_through(cast[ptr[u64]](cast[uintptr](8))) }
     }
     point := Point.{x = 3, y = -4, label = "corner"}
     maybe : u32? = 7
@@ -80,6 +81,70 @@ words_of :: fn(first: ptr[u64], count: usize) -> u64 {
  *
  * @param target Where it writes: a bad address, for a crash.
  */
-write_through :: fn(target: ptr[u64]) {
+write_through :: fn(target: ptr[u64]) -> int {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](target), 1) // TEST_DEBUG_CRASH_LINE in boot_tests.py
+    return 1
+}
+
+/** What the fibers share: whether in_fiber has run, which wait_for_done yields until. */
+Shared :: struct {
+    /** 1 once in_fiber has run. */
+    done : u64,
+}
+
+/**
+ * Start a thread that carries a fiber pool, and wait for it.
+ *
+ * @return 0 once its fibers have finished; 2 if it couldn't be started.
+ */
+threads_and_fibers :: fn() -> int {
+    shared :: runtime.new(Shared)
+    node := runtime.extension_node(cast[ptr[Shared]](shared))
+    push_context with_shared (extensions = &node) {
+        thread :: runtime.thread_create(carry)
+        if !runtime.thread_start(thread) {
+            return 2
+        }
+        runtime.thread_join(thread)
+    }
+    return 0
+}
+
+/**
+ * Carry a fiber pool of two fibers until both have finished: wait_for_done, which yields until in_fiber has run.
+ *
+ * @param data Nothing: what the fibers share is the context's extension.
+ */
+carry : runtime.ThreadFunction : fn(data #escaping : any) {
+    pool :: fiber.create_fiber_pool()
+    _, first :: fiber.spawn(pool, wait_for_done)
+    _, second :: fiber.spawn(pool, in_fiber)
+    fiber.close_pool(pool)
+    fiber.run_carrier(pool)
+    fiber.destroy_fiber_pool(pool)
+}
+
+/**
+ * Yield until in_fiber has run, suspended meanwhile, as the debugger lists it.
+ *
+ * @param data Nothing.
+ */
+wait_for_done : runtime.ThreadFunction : fn(data #escaping : any) {
+    found :: runtime.get_extension(Shared) or_return void
+    shared :: cast[ptr[mut Shared]](found)
+    loop {
+        runtime.fiber_yield()
+    }
+    while intrinsics.volatile_load_u64(&shared.done) == 0
+}
+
+/**
+ * Say it's run: where the boot test's breakpoint is, by function, on the thread started after it was set.
+ *
+ * @param data Nothing.
+ */
+in_fiber : runtime.ThreadFunction : fn(data #escaping : any) {
+    found :: runtime.get_extension(Shared) or_return void
+    shared :: cast[ptr[mut Shared]](found)
+    intrinsics.volatile_store_u64(&shared.done, 1)
 }

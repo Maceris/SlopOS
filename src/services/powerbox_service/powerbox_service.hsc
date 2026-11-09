@@ -24,6 +24,7 @@ import dir from "std/os/slop_os"
 import files from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
 import powerbox from "../../protocols/powerbox"
+import programs from "../../protocols/programs"
 import prompt from "../../protocols/prompt"
 import service_kit from "../../libraries/service_kit"
 
@@ -58,6 +59,16 @@ Waiting :: struct {
     key : u8[powerbox.KEY_BYTES],
     /** How many of key's bytes are the key: 0 if it didn't ask to keep it. */
     key_count : usize,
+    /** For a debugger (Debug or DebugOther): the program's name, the first name_count bytes. */
+    name : u8[powerbox.NAME_BYTES],
+    name_count : usize,
+    /** For a debugger: its port, the powerbox's to give the session manager, or close if it's refused. */
+    port : slop_os.Port,
+    /** For a debugger: the key its stops come under. */
+    stop_key : u64,
+    /** For a debugger: why it asks, the first purpose_count bytes, asked again of the administrator if need be. */
+    purpose : u8[powerbox.PURPOSE_BYTES],
+    purpose_count : usize,
 }
 
 /** The powerbox's state: its connections, its clients, and the request waiting for the user. */
@@ -80,6 +91,10 @@ Box :: struct {
     waiting : Waiting,
     /** Whether a request is waiting for the user; while one is, others are answered Busy. */
     has_waiting : bool,
+    /** The powerbox's programs connection to the session manager, for Attach (decisions/0185); NONE without one. */
+    programs_end : slop_os.Channel,
+    /** A port bound to programs_end, waited on for its answers. */
+    programs_port : slop_os.Port,
 }
 
 /**
@@ -96,13 +111,24 @@ Box :: struct {
  *     If it goes, the request waiting is refused, and so is every request after it.
  * @param manager The session manager's connection, on which it sends Serve with each of the session's programs'
  *     connections and names.
+ * @param programs A programs connection of the powerbox's own, on which it asks the session manager to attach a
+ *     debugger the user's allowed (decisions/0185); without it, every RequestDebug is refused.
  * @return 0 when it's asked to stop; 1 if its port couldn't be made; 2 if a port for the home or the prompt
  *     connection couldn't be made or bound; 3 if the manager's connection couldn't be served.
  */
-main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manager: os.Channel[powerbox.Powerbox]) -> int {
+main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manager: os.Channel[powerbox.Powerbox],
+    programs: os.Channel[programs.Programs]?) -> int {
     block :: slop_os.startup_block()
     box := runtime.new(Box)
     box.port = slop_os.port_create(block.budget) or_return 1
+    box.programs_end = NONE
+    match programs {
+        case Some(connection) => {
+            box.programs_end = connection.end
+            box.programs_port = os.port_for(block.budget, connection.end) or_return 2
+        }
+        case None => {}
+    }
     box.home_end = NONE
     match home {
         case Some(root) => {
@@ -202,6 +228,12 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
             case Reopen(reopening) => response^ = reopen(box, index, os.items(into, reopening.key), reopening.kind, reopening.write)
             case RequestAccount(asked) => {
                 match ask(box, index, .Account, false, os.items(into, asked.purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
+            case RequestDebug(asked) => {
+                match ask_debug(box, index, os.items(into, asked.name), os.items(into, asked.purpose), asked.port, asked.key) {
                     case Some(answer) => response^ = answer
                     case None => continue
                 }
@@ -306,6 +338,7 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     who :: name_of(box, index)
     runtime.log_info("% asks for a %", if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
         if kind == .Account { "new account" } else if kind == .ShutDown { "shutdown" } else if kind == .Restart { "restart" }
+        else if kind == .Debug || kind == .DebugOther { "debugger" }
         else if kind == .File { if write { "file to write" } else { "file to read" } }
         else { if write { "directory to write in" } else { "directory to read" } })
     return null
@@ -337,6 +370,10 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
     }
     match os.message_of[prompt.Response](into)^ {
         case Allowed => {
+            if box.waiting.kind == .Debug || box.waiting.kind == .DebugOther {
+                attach_allowed(box, into)
+                return void
+            }
             runtime.log_info("the administrator allowed a %", if box.waiting.kind == .Restart { "restart" } else { "shutdown" })
             answer(box, .Allowed)
         }
@@ -361,8 +398,144 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
         }
         case _ => {
             runtime.log_info("the user refused")
+            refuse_debug_port(box)
             answer(box, .Refused)
         }
+    }
+}
+
+/**
+ * Ask the user whether a program may debug another of the session's (decisions/0185, 12f), keeping what the session
+ * manager needs to attach it once they've allowed it.
+ *
+ * @param box The powerbox.
+ * @param index The asking client's index.
+ * @param name The program to debug, by the name its session runs it under.
+ * @param purpose Why it asks.
+ * @param port The debugger's port, which the powerbox now holds; closed if it's refused.
+ * @param key The key its stops come under.
+ * @return An answer now, Busy or Refused, the port closed for Refused; null once it's asked, answered when the user has.
+ */
+ask_debug :: fn(box: ptr[mut Box], index: usize, name: u8[], purpose: u8[], port: slop_os.Port, key: u64) -> powerbox.Response? {
+    if box.has_waiting {
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        return .Busy
+    }
+    if box.programs_end == NONE || name.count == 0 || name.count > powerbox.NAME_BYTES {
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        return .Refused
+    }
+    // The user is asked for their own session's program, the administrator for another user's
+    kind :: match locate(box, name) {
+        case .Here => prompt.Kind.Debug
+        case .Elsewhere => prompt.Kind.DebugOther
+        case _ => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](port))
+            return .Refused
+        }
+    }
+    asked :: ask(box, index, kind, false, purpose, name, u8.[])
+    if asked is_some {
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        return asked
+    }
+    for byte, i in name {
+        if i < box.waiting.name.count {
+            box.waiting.name[i] = byte
+            box.waiting.name_count = i + 1
+        }
+    }
+    for byte, i in purpose {
+        if i < box.waiting.purpose.count {
+            box.waiting.purpose[i] = byte
+            box.waiting.purpose_count = i + 1
+        }
+    }
+    box.waiting.port = port
+    box.waiting.stop_key = key
+    return null
+}
+
+/**
+ * The user, or for another user's program the administrator, allowed a debugger: ask the session manager to attach
+ * it, and answer the program with what it gives. A program only another user's session runs is asked of the
+ * administrator first, once.
+ *
+ * @param box The powerbox, whose waiting request is a debugger's.
+ * @param into Where the session manager's answer is received.
+ */
+attach_allowed :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
+    elevated :: box.waiting.kind == .DebugOther
+    count :: box.waiting.name_count
+    if count == 0 || count > box.waiting.name.count {
+        refuse_debug_port(box)
+        answer(box, .Refused)
+        return void
+    }
+    name :: box.waiting.name[0..<count]
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Attach(programs.Attaching.{name = os.append(&out, name), port = box.waiting.port, key = box.waiting.stop_key,
+        elevated = elevated})
+    // The port moves with the request, sent or not
+    box.waiting.port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    if programs.send_request(box.programs_end, box.programs_port, &out) != null {
+        answer(box, .Refused)
+        return void
+    }
+    match programs.receive_response(box.programs_end, box.programs_port, into, true) {
+        case Received => {}
+        case _ => {
+            answer(box, .Refused)
+            return void
+        }
+    }
+    match os.message_of[programs.Response](into)^ {
+        case Attached(attached) => {
+            runtime.log_info("attached a debugger to %", as_text(name))
+            answer_attached(box, attached, os.items(into, attached.program))
+        }
+        case Refused(problem) => {
+            runtime.log_info("couldn't attach a debugger to %: %", as_text(name), problem)
+            answer(box, .Refused)
+        }
+        case _ => answer(box, .Refused)
+    }
+}
+
+/**
+ * Answer the waiting debugger's request with the program attached; its handles move to the debugger.
+ *
+ * @param box The powerbox.
+ * @param attached What the session manager gave.
+ * @param program The program's name, attached.program's bytes.
+ */
+answer_attached :: fn(box: ptr[mut Box], attached: powerbox.Attached, program: u8[]) {
+    box.has_waiting = false
+    index :: box.waiting.client
+    if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
+        for handle in slop_os.Handle.[cast[slop_os.Handle](attached.process), cast[slop_os.Handle](attached.intercept),
+            cast[slop_os.Handle](attached.space)] {
+            _ = slop_os.handle_close(handle)
+        }
+        return void
+    }
+    out := os.Outgoing.{}
+    response :: os.begin[powerbox.Response](&out)
+    response^ = .Attached(powerbox.Attached.{process = attached.process, intercept = attached.intercept, space = attached.space,
+        image = attached.image, program = os.append(&out, program)})
+    _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
+}
+
+/**
+ * Close a refused debugger's port, if the waiting request is a debugger's.
+ *
+ * @param box The powerbox.
+ */
+refuse_debug_port :: fn(box: ptr[mut Box]) {
+    if (box.waiting.kind == .Debug || box.waiting.kind == .DebugOther) && cast[slop_os.Handle](box.waiting.port) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](box.waiting.port))
+        box.waiting.port = cast[slop_os.Port](slop_os.NO_HANDLE)
     }
 }
 
@@ -683,3 +856,29 @@ connection_to :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel
     }
     return pair.b
 }
+
+/**
+ * Ask the session manager where a program runs.
+ *
+ * @param box The powerbox, whose programs connection is asked, waiting for the answer.
+ * @param name The program's name.
+ * @return Where it runs; Nowhere if the session manager couldn't be asked.
+ */
+locate :: fn(box: ptr[mut Box], name: u8[]) -> programs.Location {
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Locate(os.append(&out, name))
+    if programs.send_request(box.programs_end, box.programs_port, &out) != null {
+        return .Nowhere
+    }
+    into := os.Incoming.{}
+    match programs.receive_response(box.programs_end, box.programs_port, &into, true) {
+        case Received => {}
+        case _ => return .Nowhere
+    }
+    return match os.message_of[programs.Response](&into)^ {
+        case Located(location) => location
+        case _ => programs.Location.Nowhere
+    }
+}
+

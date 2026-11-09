@@ -152,6 +152,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 86 | `trace_read` | log, events (a slice) | how many of the trace's events not yet taken were written, each CPU's in turn; needs `RIGHT_DEBUG_LOG_TRACE` |
 | 87 | `intercept_sample` | intercept, on | nothing: the intercept's subtree sampled at each tick of its user code, or not: the thread, its program counter and its frame pointers' chain (`Sample`), the last `SAMPLES` kept (`0183`) |
 | 88 | `intercept_samples` | intercept, samples (a slice) | how many of the intercept's samples not yet taken were written, oldest first |
+| 89 | `process_set_debug` | process, debug (a `ThreadDebug`) | nothing: the process's hardware breakpoints and watchpoints set to debug's slots, which every thread of its, now and later, has returning to user mode, unless it single-steps (`thread_set_debug`), when it has its own; step must be false (`BadRegisters`). Needs `RIGHT_PROCESS_WRITE_STATE` (`0185`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

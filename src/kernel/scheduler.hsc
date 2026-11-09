@@ -625,8 +625,18 @@ unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
  * @param thread The thread.
  */
 prepare_return :: fn(thread: ptr[mut Thread]) {
-    arch.debug_on(&thread.debug, &thread.registers)
     owner :: thread.header.owner
+    // Its process's breakpoints and watchpoints, unless it's stepping, when its own are
+    process :: cast[ptr[mut Process]](owner)
+    if owner != 0 && !thread.stepping && intrinsics.atomic_load_u32_acquire(&process.debugging) != 0 {
+        lock_at(&process.debug_lock, .ProcessDebug)
+        loaded := process.debug
+        unlock_at(&process.debug_lock, .ProcessDebug)
+        arch.debug_on(&loaded, &thread.registers)
+    }
+    else {
+        arch.debug_on(&thread.debug, &thread.registers)
+    }
     traps :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) } else { 0 }
     arch.set_counter_trap(traps & slop_os.TRAP_COUNTER != 0)
 }

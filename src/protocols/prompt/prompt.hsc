@@ -36,6 +36,13 @@ Kind :: enum #backed_by(u32) {
     ShutDown = 4,
     /** The system restarted, which elevation allows. */
     Restart = 5,
+    /**
+     * A program of the session's debugged, named by suggested (decisions/0185, 12f): the user allows it, with no
+     * password, as it's their own program.
+     */
+    Debug = 6,
+    /** A program of another user's session debugged, named by suggested, which elevation allows. */
+    DebugOther = 7,
 }
 
 /** A request of one of the session's programs, for the user to answer. */

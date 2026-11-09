@@ -953,6 +953,9 @@ def main() -> int:
     parser.add_argument("--expect-console-end", action="append", default=[],
                         help="the end of a line the virtio console should show, for a line whose start changes from boot to "
                         "boot, with --expect; may be repeated, and isn't waited for")
+    parser.add_argument("--expect-console-contains", action="append", default=[],
+                        help="text a line the virtio console shows should have somewhere in it, with --expect; may be "
+                        "repeated, and isn't waited for")
     parser.add_argument("--refuse-console-line", action="append", default=[],
                         help="a line the virtio console mustn't show, with --expect; may be repeated")
     parser.add_argument("--shut-down-when-done", action="store_true",
@@ -1091,7 +1094,7 @@ def main() -> int:
             # virt has no display of its own; AAVMF gives a framebuffer on QEMU's ramfb
             extra += ["-device", "ramfb"]
         if arguments.console_input or arguments.expect_console_line or arguments.keyboard_input or arguments.refuse_console_line \
-                or arguments.expect_console_start or arguments.expect_console_end \
+                or arguments.expect_console_start or arguments.expect_console_end or arguments.expect_console_contains \
                 or arguments.screen_after:
             console = ConsoleLink(arguments.console_input, arguments.keyboard_input, keyboard, arguments.screen_after, screenshot,
                               arguments.console_input_after,
@@ -1167,6 +1170,10 @@ def main() -> int:
             if not any(line.endswith(end) for line in shown):
                 print(f"boot.py: the virtio console showed no line ending {end!r}", file=sys.stderr)
                 missing_shown.append(end)
+        for part in arguments.expect_console_contains:
+            if not any(part in line for line in shown):
+                print(f"boot.py: the virtio console showed no line with {part!r}", file=sys.stderr)
+                missing_shown.append(part)
         if screen_wrong is not None:
             print(f"boot.py: the framebuffer: {screen_wrong}", file=sys.stderr)
             missing_shown.append(screen_wrong)

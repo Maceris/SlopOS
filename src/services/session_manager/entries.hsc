@@ -96,10 +96,11 @@ entry_plan :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> Result
  * @param number The session's number, whose apps directory holds its data, and whose user owns its settings.
  * @param name The installation's name.
  * @param plan Its plan, whose program moves to the launch, or is closed if it doesn't start.
+ * @param program The name of the program it runs, kept for a debugger's files.
  * @return Whether it started; not without a data directory it asks for, or room for another program, or if the launch
  *     failed. Each is logged.
  */
-launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string, plan #escaping : EntryPlan) -> bool {
+launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string, plan #escaping : EntryPlan, program: string) -> bool {
     grants : os.NamedGrant[..]
     defer runtime.array_free(&grants)
     if plan.data.count > 0 {
@@ -135,7 +136,7 @@ launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string,
     }
     no_values : os.NamedValue[1]
     return placed(sessions, number, name, prepared, os.launch_named(sessions.manager, sessions.manager_port, name, plan.program,
-        INSTALLATION_BUDGET, grants[0..<grants.count], no_values[0..<0], prepared.options), true)
+        INSTALLATION_BUDGET, grants[0..<grants.count], no_values[0..<0], prepared.options), true, program)
 }
 
 /**

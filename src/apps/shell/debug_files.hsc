@@ -28,6 +28,16 @@ DebugFile :: struct {
     schemas : u8[..][],
     /** Its table's locals. */
     locals : DebugLocal[..],
+    /** Its table's named types: the runtime's, which memory is laid out by, like "runtime.CarrierBlock". */
+    named : DebugNamed[..],
+}
+
+/** A type the debug table names, for laying out the runtime's memory. */
+DebugNamed :: struct {
+    /** Its name, as package.name, a view of the mapped file. */
+    name : string,
+    /** Its schema, as a place among the table's schemas. */
+    schema : usize,
 }
 
 /** A local the debug table names. */
@@ -132,6 +142,7 @@ find_debug_file :: fn(shell: ptr[mut Shell], name: string) -> DebugFile? {
 free_debug_file :: fn(file: ptr[mut DebugFile]) {
     runtime.array_free(&file.schemas)
     runtime.array_free(&file.locals)
+    runtime.array_free(&file.named)
     _ = slop_os.memory_unmap(slop_os.startup_block().space, file.address)
     _ = slop_os.handle_close(cast[slop_os.Handle](file.memory))
 }
@@ -180,6 +191,40 @@ read_debug_table :: fn(file: ptr[mut DebugFile]) {
             runtime.array_add(&file.locals, DebugLocal.{function = function, name = name, line = line, schema = cast[usize](place)})
         }
     }
+    named_count :: table_number(bytes, &at, 4)
+    for i in cast[u64](0)..<named_count {
+        name :: table_name(bytes, &at) or_return void
+        place :: table_number(bytes, &at, 4)
+        runtime.array_add(&file.named, DebugNamed.{name = name, schema = cast[usize](place)})
+    }
+}
+
+/**
+ * Find a named type's member's offset, by the type's schema in a debug file's table.
+ *
+ * @param file The file.
+ * @param type The type's name, like "runtime.CarrierBlock".
+ * @param member The member's name.
+ * @return Its offset in bytes; null if the file hasn't the type, or the type hasn't the member.
+ */
+member_offset :: fn(file: ptr[DebugFile], type: string, member: string) -> u64? {
+    for named in file.named {
+        if named.name != type || named.schema >= file.schemas.count {
+            continue
+        }
+        types := schema.parse(file.schemas[named.schema]) or_return null
+        defer schema.free(&types)
+        if types.types.count == 0 {
+            return null
+        }
+        for each in types.types[0].members {
+            if each.name == member {
+                return each.offset
+            }
+        }
+        return null
+    }
+    return null
 }
 
 /**

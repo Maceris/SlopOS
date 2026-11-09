@@ -113,6 +113,40 @@ Request :: union {
      * Missing, as for Find, and for a program whose bundle has none. A finding connection may ask too.
      */
     Debug(slop_os.Relative[u8]),
+    /**
+     * The session's powerbox's only, on the connection the session manager gave it (decisions/0185, 12f): attach a
+     * debugger to a program the session runs, by name, the user having allowed it. Answered with Attached, or
+     * Refused: NotRunning for no program of that name, NeedsAdministrator for one only another user's session runs
+     * unless elevated, NotAllowed from any other connection. The port is closed when it's refused.
+     */
+    Attach(Attaching),
+    /**
+     * The session's powerbox's only: where a program runs, by name, so it knows whom to ask before Attach. Answered
+     * with Located, or Refused(NotAllowed) from any other connection.
+     */
+    Locate(slop_os.Relative[u8]),
+}
+
+/** Where Locate finds a program. */
+Location :: enum #backed_by(u8) {
+    /** No session runs a program of that name. */
+    Nowhere = 0,
+    /** The asking session runs it. */
+    Here = 1,
+    /** Only another user's session runs it. */
+    Elsewhere = 2,
+}
+
+/** A program to attach a debugger to, as the powerbox asks for it. */
+Attaching :: struct {
+    /** The program's name, as its session runs it, as UTF-8, up to MAX_NAME. */
+    name : slop_os.Relative[u8],
+    /** The debugger's port, which moves here, then to the intercept. */
+    port : slop_os.Port,
+    /** The key its stops come under. */
+    key : u64,
+    /** Whether the administrator allowed it, so another user's session's program may be attached. */
+    elevated : bool,
 }
 
 /** A program's documentation, as the bundle store keeps it. */
@@ -188,6 +222,12 @@ InstallProblem :: enum #backed_by(u8) {
     Systems = 8,
     /** The config store or the home couldn't be reached, or refused. */
     Failed = 9,
+    /** Attach: no program of that name is running. */
+    NotRunning = 10,
+    /** Attach: only another user's session runs it, which takes the administrator. */
+    NeedsAdministrator = 11,
+    /** Attach: asked on a connection that isn't the session's powerbox's. */
+    NotAllowed = 12,
 }
 
 /** What the session manager answers. */
@@ -213,6 +253,10 @@ Response :: union {
      * its size.
      */
     DebugFile(ProgramDocumentation),
+    /** The answer to Attach: the program, attached, every handle moving to the powerbox. */
+    Attached(powerbox.Attached),
+    /** The answer to Locate. */
+    Located(Location),
     /** The answer to Running: the session's programs, at most MAX_RUNNING. */
     RunningPrograms(slop_os.Relative[RunningProgram]),
     /** The answer to EndInstallation, Install and Uninstall once it's done. */

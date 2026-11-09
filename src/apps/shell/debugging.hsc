@@ -14,7 +14,8 @@ import crash_reports from "../../crash_reports"
  * The debugger (decisions/0183, 12b): debug name arguments runs a program as a call would, under an intercept of its
  * faults and system calls (os.LaunchFaults.debugging), so it stops at its first call, before its main runs. Then lines
  * read at the "(debug) " prompt control it: breakpoints by function (break), found through the symbols program, and
- * watchpoints by address (watch), set in the stopped thread's debug registers (thread_set_debug); step, continue,
+ * watchpoints by address (watch), set for every thread of the program's (process_set_debug, decisions/0185, 12f), and
+ * those it starts later; step, continue,
  * where, registers, threads, print and quit. A stop at a breakpoint or watchpoint is stepped past, its slots off for
  * the one instruction, before it goes on.
  *
@@ -48,12 +49,20 @@ Debugging :: struct #scoped {
     ended : bool,
     /** The code it ended with, once it has. */
     code : u64,
-    /** The breakpoints and watchpoints set, which each stopped thread is given as it goes on. */
+    /** The breakpoints and watchpoints set, the process's (process_set_debug); step is never set here. */
     debug : slop_os.ThreadDebug,
     /** Whether it's gone on since its first stop, so the intercept stops only at faults. */
     going : bool,
     /** The program's debug file, mapped, debug_program's; none for a system built without them. */
     file : ptr[DebugFile]?,
+    /** Whether it was attached to (debug attach), not started: quit lets it go rather than ending it. */
+    attached : bool,
+    /** Whether an attached program's threads are suspended by the debugger, thread among them. */
+    suspended : bool,
+    /** Whether thread is stopped at the intercept, rather than suspended. */
+    at_stop : bool,
+    /** Whether the debugger let it go (quit, attached), rather than its ending. */
+    let_go : bool,
 }
 
 /**
@@ -67,6 +76,9 @@ Debugging :: struct #scoped {
 debug_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count == 0 || tree.children[0].kind != .Word {
         return error_at(tree.at, "debug needs a program and its arguments: debug name arguments")
+    }
+    if tree.children[0].text == "attach" {
+        return attach_debugged(shell, tree)
     }
     named :: tree.children[0]
     inner := runtime.new(Node)
@@ -182,6 +194,7 @@ wait_debugged :: fn(session: ptr[mut Debugging]) -> bool {
         if slop_os.intercept_next(session.faults.intercept, &stop) is_ok {
             session.thread = stop.thread
             session.stop = stop
+            session.at_stop = true
             return true
         }
         packets : slop_os.Packet[4]
@@ -218,7 +231,7 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
     command :: words[0]
     shell :: session.shell
     if command == "help" {
-        say(shell, "break function or file:line, watch address [size], delete n, step, continue, where, registers, threads, print address or local, quit")
+        say(shell, "break function or file:line, watch address [size], delete n, step, continue, where, registers, threads, fibers, print address or local, quit")
     }
     else if command == "break" && count == 2 {
         set_breakpoint(session, words[1])
@@ -231,6 +244,7 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
         slot :: number_of(words[1]) or_else 0
         if slot >= 1 && slot <= cast[u64](slop_os.DEBUG_SLOTS) && cast[usize](slot - 1) < session.debug.slots.count {
             session.debug.slots[cast[usize](slot - 1)] = slop_os.DebugSlot.{}
+            set_slots(session)
             say(shell, message("deleted %", slot))
         }
         else {
@@ -255,6 +269,9 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
     }
     else if command == "threads" {
         say_threads(session)
+    }
+    else if command == "fibers" {
+        say_fibers(session)
     }
     else if command == "print" && count == 2 {
         match number_of(words[1]) {
@@ -288,7 +305,30 @@ go_on :: fn(session: ptr[mut Debugging], step: bool) -> bool {
         _ = slop_os.intercept_set(session.faults.intercept, 0, slop_os.STOP_FAULT)
         session.going = true
     }
+    // An attached program's threads suspended, the one looked at not stopped at the intercept: stepped or resumed
+    if session.suspended && !session.at_stop {
+        if step {
+            stepping := slop_os.ThreadDebug.{step = true}
+            _ = slop_os.thread_set_debug(process, session.thread, &stepping)
+            _ = slop_os.thread_resume(process, session.thread)
+            if !wait_debugged(session) {
+                return false
+            }
+            none := slop_os.ThreadDebug.{}
+            _ = slop_os.thread_set_debug(process, session.thread, &none)
+            return true
+        }
+        resume_all(session)
+        session.thread = 0
+        return wait_debugged(session)
+    }
+    // The others suspended go on too, as the stopped one does
+    if session.suspended && !step {
+        resume_all(session)
+    }
     at_slot :: session.stop.point == .Fault && (session.stop.number == slop_os.FAULT_BREAKPOINT || session.stop.number == slop_os.FAULT_WATCHPOINT)
+    // Its own state is only for stepping: while it steps, the process's slots are off for it
+    not_stepping := slop_os.ThreadDebug.{}
     if at_slot || step {
         // One instruction, its slots off, so a breakpoint where it is doesn't stop it again
         stepping := slop_os.ThreadDebug.{step = true}
@@ -298,12 +338,13 @@ go_on :: fn(session: ptr[mut Debugging], step: bool) -> bool {
             return false
         }
         if step || session.stop.number != slop_os.FAULT_SINGLE_STEP {
-            _ = slop_os.thread_set_debug(process, session.thread, &session.debug)
+            _ = slop_os.thread_set_debug(process, session.thread, &not_stepping)
             return true
         }
     }
-    _ = slop_os.thread_set_debug(process, session.thread, &session.debug)
+    _ = slop_os.thread_set_debug(process, session.thread, &not_stepping)
     _ = slop_os.intercept_resume(session.faults.intercept, session.thread, .Continue)
+    session.at_stop = false
     session.thread = 0
     return wait_debugged(session)
 }
@@ -384,6 +425,7 @@ set_breakpoint :: fn(session: ptr[mut Debugging], name: string) {
         return void
     }
     session.debug.slots[slot] = slop_os.DebugSlot.{address = session.call.launched.image + found, kind = .Execute}
+    set_slots(session)
     say(session.shell, message("breakpoint % at %", slot + 1, name))
 }
 
@@ -404,6 +446,7 @@ set_watchpoint :: fn(session: ptr[mut Debugging], address: u64, size: u64) {
         return void
     }
     session.debug.slots[slot] = slop_os.DebugSlot.{address = address, kind = .Write, size = cast[u8](size)}
+    set_slots(session)
     say(session.shell, message("watchpoint % at %{#x}", slot + 1, address))
 }
 
@@ -494,7 +537,7 @@ say_threads :: fn(session: ptr[mut Debugging]) {
         if cast[u32](i) >= count {
             break
         }
-        say(session.shell, message("thread %%", id, if id == session.thread { ", stopped" } else { "" }))
+        say(session.shell, if id == session.thread { message("thread %, stopped", id) } else { message("thread %", id) })
     }
 }
 
@@ -520,6 +563,11 @@ say_memory :: fn(session: ptr[mut Debugging], address: u64) {
  */
 end_debugged :: fn(session: ptr[mut Debugging]) {
     if session.ended {
+        return void
+    }
+    // An attached program goes on, let go
+    if session.attached {
+        let_go(session)
         return void
     }
     _ = slop_os.process_kill(session.call.launched.process)
@@ -938,4 +986,150 @@ index_of_byte :: fn(text: string, byte: u8) -> usize? {
         }
     }
     return null
+}
+
+/**
+ * Give the debugged program's process the session's breakpoints and watchpoints, for every thread of its.
+ *
+ * @param session The session, whose debug state is set.
+ */
+set_slots :: fn(session: ptr[mut Debugging]) {
+    if slop_os.process_set_debug(session.call.launched.process, &session.debug) is_error {
+        say(session.shell, "the breakpoints and watchpoints couldn't be set")
+    }
+}
+
+/** The most fibers fibers lists; past it, it says how many more. */
+MAX_FIBERS_SHOWN :: 16
+/** The most frames of each suspended fiber's stack said. */
+FIBER_FRAMES :: 4
+
+/**
+ * Say the fibers of the pool the stopped thread is a carrier of (decisions/0185, 12f): each one, running, suspended
+ * or not started, and a suspended one's stack, its frames named. The pool is found from the thread's carrier register
+ * (r14, x28), whose carrier block's scheduler data is the pool's part for that carrier, laid out by the named types'
+ * schemas in the debug file; the pool keeps every fiber that hasn't finished on one list.
+ *
+ * @param session The session, stopped.
+ */
+say_fibers :: fn(session: ptr[mut Debugging]) {
+    shell :: session.shell
+    file :: session.file or_return say(shell, "there's no debug file for the program, so its fibers can't be found")
+    registers : u64[slop_os.THREAD_REGISTERS]
+    process :: session.call.launched.process
+    if session.thread == 0 || !(slop_os.thread_read_registers(process, session.thread, registers) is_ok) {
+        say(shell, "nothing's stopped")
+        return void
+    }
+    carrier_index : usize = if crash_reports.PC_REGISTER == 32 { 28 } else { 14 }
+    carrier :: if carrier_index < registers.count { registers[carrier_index] } else { 0 }
+    scheduler_at :: member_offset(file, "runtime.CarrierBlock", "scheduler_data") or_return say(shell, "the debug file hasn't the carrier block's type")
+    current_at :: member_offset(file, "runtime.CarrierBlock", "current_fiber") or_else 0
+    pool_at :: member_offset(file, "fiber.PoolCarrier", "pool") or_return say(shell, "the program has no fiber pool")
+    all_at :: member_offset(file, "fiber.FiberPool", "all") or_return say(shell, "the program has no fiber pool")
+    next_at :: member_offset(file, "runtime.Fiber", "all_next") or_return say(shell, "the debug file hasn't the fiber's type")
+    state_at :: member_offset(file, "runtime.Fiber", "state") or_else 0
+    resume_at :: member_offset(file, "runtime.Fiber", "resume") or_else 0
+    part :: remote_word(session, carrier + scheduler_at) or_else 0
+    if carrier == 0 || part == 0 {
+        say(shell, "the stopped thread isn't running a fiber pool")
+        return void
+    }
+    current :: remote_word(session, carrier + current_at) or_else 0
+    pool :: remote_word(session, part + pool_at) or_return say(shell, "the pool can't be read")
+    // Each fiber, and where its frames are, named together by the symbols program
+    fibers : u64[MAX_FIBERS_SHOWN]
+    states : u8[MAX_FIBERS_SHOWN]
+    offsets : u64[MAX_FIBERS_SHOWN * FIBER_FRAMES]
+    counts : usize[MAX_FIBERS_SHOWN]
+    shown : usize = 0
+    more : usize = 0
+    image :: session.call.launched.image
+    fiber := remote_word(session, pool + all_at) or_else 0
+    loop {
+        if fiber == 0 {
+            break
+        }
+        if shown >= fibers.count {
+            more += 1
+            if more > 1000 {
+                break
+            }
+            fiber = remote_word(session, fiber + next_at) or_else 0
+            continue
+        }
+        fibers[shown] = fiber
+        state_bytes : u8[1]
+        _ = slop_os.process_read_memory(process, session.faults.space, fiber + state_at, state_bytes)
+        states[shown] = state_bytes[0]
+        counts[shown] = 0
+        // A suspended one's frames: where it continues, then its frame pointers' chain
+        if state_bytes[0] == 2 && fiber != current {
+            saved :: remote_word(session, fiber + resume_at) or_else 0
+            continuation :: if crash_reports.PC_REGISTER == 32 { cast[u64](96) } else { cast[u64](72) }
+            top :: if crash_reports.PC_REGISTER == 32 { cast[u64](0) } else { cast[u64](16) }
+            pc := remote_word(session, saved + continuation) or_else 0
+            frame := remote_word(session, saved + top) or_else 0
+            for j in cast[usize](0)..<FIBER_FRAMES {
+                at :: shown * FIBER_FRAMES + j
+                if pc < image || at >= offsets.count {
+                    break
+                }
+                offsets[at] = if j > 0 { pc - image - 1 } else { pc - image }
+                counts[shown] += 1
+                if frame == 0 {
+                    break
+                }
+                pc = remote_word(session, frame + 8) or_else 0
+                frame = remote_word(session, frame) or_else 0
+            }
+        }
+        shown += 1
+        fiber = remote_word(session, fiber + next_at) or_else 0
+    }
+    // The frames named, in one ask, each fiber's in turn
+    asked : u64[MAX_FIBERS_SHOWN * FIBER_FRAMES]
+    asked_count : usize = 0
+    for i in cast[usize](0)..<shown {
+        for j in cast[usize](0)..<counts[i % counts.count] {
+            from :: i * FIBER_FRAMES + j
+            if from < offsets.count && asked_count < asked.count {
+                asked[asked_count] = offsets[from]
+                asked_count += 1
+            }
+        }
+    }
+    answer : u8[DEBUG_ANSWER_BYTES]
+    named :: if asked_count > 0 { ask_symbols(shell, symbols_source(session), view_of(&asked[0], asked_count), null, null, answer) } else { 0 }
+    at : usize = 0
+    say(shell, message("% fibers", shown + more))
+    for i in cast[usize](0)..<shown {
+        state :: states[i % states.count]
+        address :: fibers[i % fibers.count]
+        what :: if address == current { "running on this thread" } else if state == 0 { "not started" } else if state == 1 { "running" }
+            else if state == 2 { "suspended" } else { "finished" }
+        say(shell, message("  fiber %{#x}: %", address, what))
+        for j in cast[usize](0)..<counts[i % counts.count] {
+            name :: next_line(answer, named, &at)
+            say(shell, message("    #% %", j, if name == "" { "?" } else { name }))
+        }
+    }
+    if more > 0 {
+        say(shell, message("  and % more", more))
+    }
+}
+
+/**
+ * Read a word from the debugged program's memory.
+ *
+ * @param session The session.
+ * @param address Where.
+ * @return The word; null if it can't be read.
+ */
+remote_word :: fn(session: ptr[Debugging], address: u64) -> u64? {
+    bytes : u8[8]
+    if address == 0 || !(slop_os.process_read_memory(session.call.launched.process, session.faults.space, address, bytes) is_ok) {
+        return null
+    }
+    return crash_reports.word_at(bytes, 0)
 }

@@ -4,6 +4,12 @@ import intrinsics from "base"
 import concurrency from "std"
 import runtime from "base"
 import slop_os from "std/os"
+#if TARGET_ARCH == .x86_64 {
+    import arch from "../arch/x86_64"
+}
+#else_if TARGET_ARCH == .arm64 {
+    import arch from "../arch/aarch64"
+}
 
 /*
  * Processes (roadmap M5, decisions/0008, 0034): nodes of the ownership tree. A process, a job and a
@@ -24,6 +30,15 @@ Process :: struct #align(16) {
     intercept : u64,
     /** What its threads trap on, slop_os.TRAP_ bits (process_set_traps); 0 at first. Read and written atomically. */
     traps : u32,
+    /**
+     * Its breakpoints and watchpoints (process_set_debug), which every thread of its loads returning to user mode
+     * unless it's single-stepping; guarded by debug_lock. None at first.
+     */
+    debug : arch.DebugRegisters,
+    /** Whether debug has any slot set, read without the lock first, so a process that isn't debugged pays nothing. */
+    debugging : u32,
+    /** Held, at rank ProcessDebug, while debug is read or changed. */
+    debug_lock : concurrency.SpinLock,
     /** Held, at rank Watchers, while watchers is read or changed. */
     watch_lock : concurrency.SpinLock,
     /** Bindings watching for it to end, raised with SIGNAL_TERMINATED and its exit code; empty slots are 0. */

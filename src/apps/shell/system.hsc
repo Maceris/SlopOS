@@ -368,6 +368,9 @@ install_problem :: fn(problem: programs.InstallProblem) -> string {
         case .NotInstalled => "there's no installation of yours by that name running or installed"
         case .Systems => "that's the system's installation, which only the administrator can remove"
         case .Failed => "it couldn't be done: the settings or the home couldn't be written"
+        case .NotRunning => "there's no program of that name running"
+        case .NeedsAdministrator => "only another user's session runs that, which takes the administrator"
+        case .NotAllowed => "only the session's powerbox can ask that"
     }
 }
 

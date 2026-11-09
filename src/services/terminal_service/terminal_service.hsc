@@ -174,6 +174,8 @@ SetupStep :: enum {
     ShareMember,
     /** Sharing a volume: the account service sharing it; keys are ignored. */
     Sharing,
+    /** Debugging a program of the user's own session (decisions/0185): Enter allows it, Escape refuses. */
+    Confirm,
 }
 
 /** The panel row of setup's first field: the name, the password, it again, then a blank row and its message. */
@@ -2239,6 +2241,10 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 if service.elevating && is_power(view(service).ask.kind) {
                     power_allowed(service)
                 }
+                else if service.elevating && view(service).ask.kind == .DebugOther {
+                    runtime.log_info("elevation: the administrator allowed a debugger")
+                    end_elevation(service, true)
+                }
             }
             case Created(shown) => {
                 service.code = shown.text
@@ -2685,6 +2691,12 @@ setup_enter :: fn(service: ptr[mut Service]) {
                 leave_setup(service)
             }
         }
+        case .Confirm => {
+            if service.elevating {
+                runtime.log_info("elevation: the user allowed a debugger")
+                end_elevation(service, true)
+            }
+        }
         case .AdminName => {
             if typed.count == 0 || typed.count > service.admin.count {
                 return void
@@ -2709,8 +2721,8 @@ setup_enter :: fn(service: ptr[mut Service]) {
             }
             service.admin_password_count = typed.count
             say(service, "")
-            // Shutting down or restarting needs nothing more than the administrator's say (decisions/0182)
-            if service.elevating && is_power(view(service).ask.kind) {
+            // Shutting down, restarting or debugging another's program needs nothing more than the administrator's say
+            if service.elevating && is_administrators(view(service).ask.kind) {
                 check_administrator(service)
                 return void
             }

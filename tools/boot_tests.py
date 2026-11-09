@@ -167,9 +167,9 @@ BOOT_DISK_BASE = [
     "2",
 ]
 # The line of test_debug.hsc whose write crashes it, which a crash report with lines names
-TEST_DEBUG_CRASH_LINE = 84
+TEST_DEBUG_CRASH_LINE = 85
 # The line of test_debug.hsc the debugger breaks at, where its values are all made and kept in memory
-TEST_DEBUG_BREAK_LINE = 60
+TEST_DEBUG_BREAK_LINE = 61
 # BOOT_DISK_BASE with the programs' debug files in the store (decisions/0185), on a disk boot.py makes bigger for them
 WITH_DEBUG_FILES = [argument.replace("serving 206848 blocks", "serving 305152 blocks")
                     .replace("partitions on a disk of 206848 blocks", "partitions on a disk of 305152 blocks")
@@ -707,6 +707,45 @@ TESTS = [
         "--expect-console-line=test_debug ended with 0",
         # A crash's report, its frame's line from the debug file: the write through a bad pointer
         f"--expect-console-end=at test_debug.hsc:{TEST_DEBUG_CRASH_LINE}",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # The debugger's reach (decisions/0185, 12f): a breakpoint set before test_debug starts its second thread is hit by
+    # it, as a process's breakpoints are every thread's; the thread carries a fiber pool, whose fibers are listed, the
+    # one waiting suspended with its stack
+    ("debugs a program's other threads and lists its fibers", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wdebug test_debug 2\\r\\p\\pbreak test_debug.in_fiber\\r\\p\\pcontinue\\r\\p\\pthreads\\r\\p\\pfibers\\r\\p\\p"
+        "delete 1\\r\\p\\pcontinue\\r\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-line=breakpoint 1 at test_debug.in_fiber",
+        "--expect-console-line=stopped at test_debug.in_fiber+0x0: breakpoint",
+        "--expect-console-contains=, stopped",
+        "--expect-console-line=2 fibers",
+        "--expect-console-contains=: running on this thread", "--expect-console-contains=: suspended",
+        "--expect-console-contains=test_debug.wait_for_done+0x",
+        "--expect-console-line=test_debug ended with 0",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # Attaching (decisions/0185, 12f): the debugger attached to counter, the system's installation, which the shell
+    # didn't start: the powerbox asks, the secure attention key's screen shows it, Enter allows it; its threads are
+    # suspended, listed and walked, and quit lets it go. Asked again, Escape refuses it
+    ("attaches the debugger to a program the shell didn't start, as the user allows", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wdebug attach counter\\r\\p\\p\\e[3;7~\\p\\p\\r\\p\\p\\pthreads\\r\\p\\pwhere\\r\\p\\pquit\\r\\p\\p"
+        "debug attach counter\\r\\p\\p\\e[3;7~\\p\\p\\e\\p\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-line=[user] shell: reading commands",
+        "--expect-console-line=Press Ctrl+Alt+Delete to allow the shell to debug counter.",
+        "--expect-line=[user] sessions: attached a debugger to counter",
+        "--expect-console-start=attached to counter, its ",
+        "--expect-console-contains=, stopped", "--expect-console-start=  #0 ",
+        "--expect-console-line=let counter go",
+        "--expect-console-line=error: debugging counter was refused, or it isn't running",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Record and replay (decisions/0183, 12c): test_replay's threads, recorded one at a time, replayed exactly from
     # the recording with its seeds; and replayed with another count, which diverges, where it's said

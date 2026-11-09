@@ -185,6 +185,12 @@ such a program has no table of functions' names, which kept every function alive
 twice their size. MLIR's debug attributes have no enumerators and no vendor attributes, so enums are their backing
 integers by name and the table is keyed by linkage name, local name and line. Optimized code puts locals in pieces
 (`DW_OP_piece`) unless all of a value is read through memory, so the test reads each value through volatile loads.
+Then for 12f (2026-11-08, `0185`): `std/os/slop_os`'s `process_set_debug` (89); base's `Fiber` gained `all_next` and
+`all_previous`, and `std`'s `FiberPool` a list of every live fiber through them, for a debugger; the debug table names the
+runtime's types after its functions. Two bugs found: base's `slop_os_start_thread` gave x86-64 threads a 16-byte aligned
+stack pointer at their entry, 8 off what a called function expects, so an aligned store in a thread's frame faulted
+(nothing had made one before a fiber pool on a second thread did); and `std`'s launch kept the address space rightless,
+so it couldn't be passed on; it has `RIGHT_TRANSFER` now.
 
 ## 4. Features That Look Like a Strong Fit
 

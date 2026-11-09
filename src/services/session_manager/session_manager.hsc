@@ -157,6 +157,11 @@ PowerboxGrants :: struct {
     prompts : os.Channel[prompt.Prompt],
     /** The powerbox's end of its connection to the session manager, which sends it Serve for each program. */
     manager : os.Channel[powerbox.Powerbox],
+    /**
+     * A programs connection of the powerbox's own (decisions/0185, 12f), the only one Attach is taken on, to attach a
+     * debugger once the user's allowed it; null if it couldn't be made.
+     */
+    programs : os.Channel[programs.Programs]?,
 }
 
 /** A session: whether it's one now, and its user's name, empty for a boot with no accounts. */
@@ -218,6 +223,10 @@ Program :: struct {
     faults : os.LaunchedFaults?,
     /** Where its image is in its address space, for its crash reports. */
     image : u64,
+    /** The name of the program it runs, the first program_bytes of it: an installation's program, not its name. */
+    program_name : u8[session.NAME_BYTES],
+    /** How many bytes program_name has. */
+    program_bytes : u8,
 }
 
 /**
@@ -266,6 +275,8 @@ Finder :: struct {
     session : u32,
     /** The session manager's end, bound to its port under FINDER_KEY and the finder's index. */
     end : slop_os.Channel,
+    /** Whether it's the session's powerbox's, the only connection Attach is taken on (decisions/0185). */
+    powerbox : bool,
 }
 
 /** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
@@ -1047,6 +1058,14 @@ launch_powerbox :: fn(sessions: ptr[mut Manager], number: u32, home: os.Channel[
         }
         case None => {}
     }
+    // Its programs connection, for Attach, served as a finder marked as the powerbox's
+    match os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) {
+        case Ok(ends) => {
+            grants.programs = os.Channel[programs.Programs].{end = ends.a}
+            add_finder(sessions, number, ends.b, true)
+        }
+        case Error(error) => {}
+    }
     prepared :: prepare(sessions, number, "powerbox") or_return false
     if !placed(sessions, number, "powerbox", prepared, os.launch(sessions.manager, sessions.manager_port, "powerbox", program, POWERBOX_BUDGET,
         powerbox_service.main, grants, prepared.options), false) {
@@ -1178,7 +1197,7 @@ prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared
  * @return Whether it started and was kept.
  */
 placed :: fn(sessions: ptr[mut Manager], number: u32, name: string, prepared: Prepared, result: Result[os.Launched, os.LaunchError],
-    installation: bool) -> bool {
+    installation: bool, program_name: string = "") -> bool {
     match result {
         case Ok(launched) => {
             program := Program.{session = number, process = launched.process, budget = launched.budget, lifecycle = prepared.lifecycle,
@@ -1187,6 +1206,12 @@ placed :: fn(sessions: ptr[mut Manager], number: u32, name: string, prepared: Pr
                 if i < program.name.count {
                     program.name[i] = byte
                     program.name_bytes += 1
+                }
+            }
+            for byte, i in string_bytes(if program_name.count > 0 { program_name } else { name }) {
+                if i < program.program_name.count {
+                    program.program_name[i] = byte
+                    program.program_bytes += 1
                 }
             }
             if prepared.index >= sessions.programs.count {
@@ -1648,7 +1673,7 @@ start_installation :: fn(sessions: ptr[mut Manager], number: u32, entry: system_
             return false
         }
     }
-    return launch_installation(sessions, number, name, plan)
+    return launch_installation(sessions, number, name, plan, system_records.text_of(&entry.program))
 }
 
 /**
