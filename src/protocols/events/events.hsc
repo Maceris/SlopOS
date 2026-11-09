@@ -94,7 +94,20 @@ Found :: struct {
     stored : bool,
     /** The record, rendered as text, as UTF-8. */
     text : slop_os.Relative[u8],
+    /**
+     * Its first argument's schema hash (decisions/0185, 12g), so a reader can tell a typed record it knows, like a crash
+     * report; all zeros for a record without one.
+     */
+    argument_hash : u8[32],
+    /**
+     * That argument's value, as schema_write_value wrote it, which schema.read_value reads; empty without one, or for one
+     * bigger than ARGUMENT_LIMIT.
+     */
+    argument : slop_os.Relative[u8],
 }
+
+/** The most bytes of a record's first argument Found gives; a bigger one is left out. */
+ARGUMENT_LIMIT :: 2048
 
 /** What a client asks the events service. */
 Request :: union {

@@ -84,6 +84,12 @@ CallShape :: struct {
     answered : bool,
     /** Whether it never returns, so it has no exit stop. */
     never_returns : bool,
+    /** Which argument words are handles, a bit each (decisions/0185, 12g). */
+    handle_words : u32,
+    /** Which of its outputs are buffers of handles, a bit each by their place among outputs. */
+    handle_outputs : u32,
+    /** Whether what it gives back is a handle, its result's first value word. */
+    returns_handle : bool,
 }
 
 /**
@@ -104,13 +110,20 @@ call_shapes :: fn() -> CallShape[] {
         }
         function :: cast[ptr[compiler.TypeInfoFunction]](member.member_type)
         shape := CallShape.{name = member.name, never_returns = function.never_returns, answered = is_answered(member.name)}
+        shape.returns_handle = function.output.count > 0 && gives_handle(function.output[0].type)
         word : u32 = 0
         for input in function.input {
+            if is_handle(input.type) && word < 32 {
+                shape.handle_words |= cast[u32](1) << word
+            }
             base :: underlying(input.type)
             if base.variant == .ARRAY {
                 array :: cast[ptr[compiler.TypeInfoArray]](base)
                 buffer :: Buffer.{word = word, count_word = word + 1, element = cast[u64](array.base_type.size)}
                 if array.dimensions.count > 0 && array.dimensions[0].is_mutable {
+                    if is_handle(array.base_type) && shape.outputs_count < 32 {
+                        shape.handle_outputs |= cast[u32](1) << shape.outputs_count
+                    }
                     add_buffer(&shape.outputs, &shape.outputs_count, buffer)
                 }
                 else {
@@ -148,10 +161,56 @@ call_shapes :: fn() -> CallShape[] {
  * @return True if it's answered; false if it runs again.
  */
 is_answered :: fn(name: string) -> bool {
-    if name == "channel_create" || name == "port_create" {
+    /*
+     * Those that make them run again; so does staging handles to send, which moves them out of the program's table as it
+     * did when recorded, so the handles it's given later are numbered as they were. Nothing staged goes anywhere without
+     * the write, which is answered
+     */
+    if name == "channel_create" || name == "port_create" || name == "channel_send_handles" {
         return false
     }
     return starts_with(name, "channel_") || starts_with(name, "port_") || starts_with(name, "clock_") || name == "debug_log_write"
+}
+
+/**
+ * Tell whether a type is one of slop_os's handle types: Handle, or an alias of it through any number of aliases.
+ *
+ * @param type The type.
+ * @return True for a handle.
+ */
+is_handle :: fn(type: ptr[compiler.TypeInfo]) -> bool {
+    at := type
+    for i in 0..<16 {
+        if at.variant != .ALIAS {
+            return false
+        }
+        alias :: cast[ptr[compiler.TypeInfoAlias]](at)
+        if alias.name == "Handle" {
+            return true
+        }
+        at = alias.base_type
+    }
+    return false
+}
+
+/**
+ * Tell whether a call's result gives a handle: a Result whose Ok holds one.
+ *
+ * @param type The result's type.
+ * @return True if its Ok's value is a handle.
+ */
+gives_handle :: fn(type: ptr[compiler.TypeInfo]) -> bool {
+    base :: underlying(type)
+    if base.variant != .UNION {
+        return false
+    }
+    union_info :: cast[ptr[compiler.TypeInfoUnion]](base)
+    for variant in union_info.variants {
+        if variant.name == "Ok" && variant.types.count == 1 {
+            return is_handle(variant.types[0])
+        }
+    }
+    return false
 }
 
 /**
@@ -241,6 +300,67 @@ Event :: struct {
     bytes_at : usize,
     /** How many bytes it has. */
     bytes_count : usize,
+}
+
+/**
+ * A recording kept as a typed file (decisions/0185, 12g): what was run, the build it was, and the recording. A replay
+ * from it runs the program it names with the arguments it keeps, refusing a program whose hash isn't this one.
+ */
+RecordingFile :: struct {
+    /** The program's name, as the shell runs it. */
+    program : slop_os.Relative[u8],
+    /** Its arguments, as typed, each ending in a newline. */
+    arguments : slop_os.Relative[u8],
+    /** The BLAKE3-256 hash of the program's file, the build that was recorded. */
+    program_hash : u8[32],
+    /** The seeds it was built with. */
+    seeds : u8[64],
+    /** How many threads it had. */
+    threads : u32,
+    /** How many calls it made. */
+    calls : u64,
+    /** The events, in the order they happened, as plain data. */
+    events : slop_os.Relative[StoredEvent],
+    /** The bytes the events' buffers had. */
+    bytes : slop_os.Relative[u8],
+}
+
+/** An event as a file keeps it: plain data, its kind a number, as a typed file's lists can only hold. */
+StoredEvent :: struct {
+    /** Its kind, EventKind's value. */
+    kind : u32,
+    thread : u32,
+    number : u32,
+    words : u64[6],
+    results : u64[3],
+    value : u64,
+    bytes_at : u64,
+    bytes_count : u64,
+}
+
+/**
+ * An event, as a file keeps it.
+ *
+ * @param event The event.
+ * @return It, as plain data.
+ */
+stored_of :: fn(event: Event) -> StoredEvent {
+    return StoredEvent.{kind = cast[u32](event.kind), thread = event.thread, number = event.number, words = event.words,
+        results = event.results, value = event.value, bytes_at = cast[u64](event.bytes_at), bytes_count = cast[u64](event.bytes_count)}
+}
+
+/**
+ * An event a file kept.
+ *
+ * @param stored The event, as the file kept it.
+ * @return It; null for a kind that isn't one.
+ */
+event_of :: fn(stored: StoredEvent) -> Event? {
+    if stored.kind > cast[u32](EventKind.End) {
+        return null
+    }
+    return Event.{kind = cast[EventKind](stored.kind), thread = stored.thread, number = stored.number, words = stored.words,
+        results = stored.results, value = stored.value, bytes_at = cast[usize](stored.bytes_at), bytes_count = cast[usize](stored.bytes_count)}
 }
 
 /** A recording: its events, their bytes, and what the program was started with. */
@@ -566,6 +686,9 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
     count : u32 = 0
     stops : slop_os.StopInfo[..]
     defer runtime.array_free(&stops)
+    // Handles the program was given from the recording, which it doesn't have: calls on them are answered from it too
+    received : u32[..]
+    defer runtime.array_free(&received)
     result := Replayed.{}
     for event, n in recording.events {
         index :: cast[usize](event.thread)
@@ -609,9 +732,9 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
                 }
                 followed.number = number
                 followed.words = words
-                followed.answered = shape.answered
+                followed.answered = shape.answered || takes_received(shape, words, received[0..<received.count])
                 result.calls += 1
-                if !shape.answered {
+                if !followed.answered {
                     _ = slop_os.intercept_resume(program.intercept, stop.thread, .Continue)
                 }
             }
@@ -631,6 +754,10 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
                         }
                     }
                     _ = slop_os.thread_write_registers(program.process, followed.id, registers)
+                    if !keep_received(program, recording, event, shape, followed.words, &received) {
+                        return diverged(program, result, sentence("thread %'s call (%) was given handles the replay couldn't hold as recorded",
+                            event.thread, shape.name))
+                    }
                 }
                 else {
                     stop :: wait_for(program, &stops, followed.id, false, .SyscallExit) or_return diverged(program, result,
@@ -911,3 +1038,103 @@ sentence :: fn(format: string, values: any...) -> string {
     }
     return string_of(&copy[0], copy.count)
 }
+
+/**
+ * Whether a call takes a handle the program was given from the recording, so it's answered from the recording, but for
+ * the handle_ calls, which run again on the placeholder the program holds in its place.
+ *
+ * @param shape The call's shape, whose handle_words say which words are handles.
+ * @param words Its argument words.
+ * @param received The handles given from the recording.
+ * @return True if one of its handle words is one of them.
+ */
+takes_received :: fn(shape: ptr[CallShape], words: u64[6], received: u32[]) -> bool {
+    // A placeholder is a real handle: what changes the handle table alone runs again on it, as it did when recorded
+    if starts_with(shape.name, "handle_") {
+        return false
+    }
+    for word, i in words {
+        if i >= 32 || shape.handle_words & (cast[u32](1) << cast[u32](i)) == 0 {
+            continue
+        }
+        for each in received {
+            if cast[u64](each) == word {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/**
+ * Keep the handles an answered call gave the program from the recording: those its handle buffers were written with,
+ * and its result, if it gives a handle and succeeded. The program is given a placeholder for each, a port of its own,
+ * so its handle table has what the recording's had, and the handles it makes later are numbered as they were.
+ *
+ * @param program The program, given the placeholders.
+ * @param recording The recording.
+ * @param event The call's Leave, whose bytes are its outputs' one after another.
+ * @param shape The call's shape.
+ * @param words Its argument words, which give its outputs' sizes.
+ * @param received The handles kept, added to.
+ * @return True once each is held; false if a placeholder couldn't be made, or was numbered other than recorded.
+ */
+keep_received :: fn(program: Program, recording: ptr[Recording], event: Event, shape: ptr[CallShape], words: u64[6],
+    received: ptr[mut u32[..]]) -> bool {
+    if shape.returns_handle && event.results[0] == 0 && event.results[1] != 0 {
+        if !hold_placeholder(program, cast[u32](event.results[1])) {
+            return false
+        }
+        runtime.array_add(received, cast[u32](event.results[1]))
+    }
+    at := event.bytes_at
+    for buffer, i in shape.outputs {
+        if cast[u32](i) >= shape.outputs_count {
+            break
+        }
+        size :: cast[usize](size_of_buffer(buffer, words))
+        if i < 32 && shape.handle_outputs & (cast[u32](1) << cast[u32](i)) != 0 {
+            handles :: size / 4
+            for h in cast[usize](0)..<handles {
+                place :: at + h * 4
+                if place + 4 > recording.bytes.count || place >= recording.bytes.count {
+                    break
+                }
+                value := cast[u32](0)
+                for b in cast[usize](0)..<4 {
+                    index :: place + b
+                    if index < recording.bytes.count {
+                        value |= cast[u32](recording.bytes[index]) << cast[u32](8 * b)
+                    }
+                }
+                if value != 0 {
+                    if !hold_placeholder(program, value) {
+                        return false
+                    }
+                    runtime.array_add(received, value)
+                }
+            }
+        }
+        at += size
+    }
+    return true
+}
+
+/**
+ * Give the program a placeholder handle where the recording gave it one: a port of the replayer's, moved to it.
+ *
+ * @param program The program.
+ * @param value The handle the recording gave it.
+ * @return True if the placeholder's numbered value; false if it couldn't be made or given, or was numbered otherwise.
+ */
+hold_placeholder :: fn(program: Program, value: u32) -> bool {
+    placeholder :: slop_os.port_create(slop_os.startup_block().budget) or_return false
+    handles :: slop_os.Handle.[cast[slop_os.Handle](placeholder)]
+    given : slop_os.Handle[1]
+    if slop_os.process_give_handles(program.process, handles, given) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](placeholder))
+        return false
+    }
+    return cast[u32](given[0]) == value
+}
+

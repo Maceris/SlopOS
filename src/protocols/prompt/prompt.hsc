@@ -2,6 +2,8 @@ package prompt
 
 import os from "std"
 import slop_os from "std/os"
+import trace from "../trace"
+import events from "../events"
 import read_only_dir from "std/os/slop_os"
 
 /**
@@ -43,6 +45,10 @@ Kind :: enum #backed_by(u32) {
     Debug = 6,
     /** A program of another user's session debugged, named by suggested, which elevation allows. */
     DebugOther = 7,
+    /** The whole system traced (decisions/0185, 12g), which elevation allows: a trace connection to the supervisor. */
+    Trace = 8,
+    /** The system's log read (decisions/0185, 12g), which elevation allows: an events connection. */
+    SystemLog = 9,
 }
 
 /** A request of one of the session's programs, for the user to answer. */
@@ -98,6 +104,10 @@ Response :: union {
     Allowed,
     /** Ask's answer when the user refused, or the account couldn't be made. */
     Refused,
+    /** Ask's answer for a trace: the administrator allowed it, and this is a trace connection to the supervisor. */
+    TraceGranted(os.Channel[trace.Trace]),
+    /** Ask's answer for the system's log: the administrator allowed it, and this is an events connection. */
+    LogGranted(os.Channel[events.Events]),
     /** The answer to a request the trusted path doesn't know, as from a newer powerbox; every protocol has it. */
     Unsupported,
 }

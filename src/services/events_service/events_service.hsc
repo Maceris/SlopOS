@@ -1551,8 +1551,15 @@ send_found :: fn(service: ptr[mut Service], end: slop_os.Channel, bytes #escapin
     out := os.Outgoing.{}
     response :: os.begin[events.Response](&out)
     shown :: part(text, 0, count)
-    response^ = .Found(events.Found.{number = scan.number - 1, time = record.time, level = level, stored = stored,
-        text = os.append(&out, shown)})
+    found := events.Found.{number = scan.number - 1, time = record.time, level = level, stored = stored,
+        text = os.append(&out, shown)}
+    // Its first argument, typed, past the format string when that's an argument
+    argument :: first_argument(bytes, at)
+    if argument.count > 0 && argument.count <= events.ARGUMENT_LIMIT && argument.at + argument.count <= bytes.count {
+        found.argument_hash = argument.hash
+        found.argument = os.append(&out, part(bytes, argument.at, argument.count))
+    }
+    response^ = .Found(found)
     _ = events.send_response(end, service.port, &out)
 }
 
@@ -1591,3 +1598,52 @@ read_file :: fn(service: ptr[mut Service], source: ptr[Source], extension: strin
         }
     }
 }
+
+/** A record's argument, where its value is among the entries' bytes. */
+ArgumentAt :: struct {
+    /** Its type's schema hash. */
+    hash : u8[32],
+    /** Where its value starts. */
+    at : usize,
+    /** How many bytes its value has; 0 for none. */
+    count : usize,
+}
+
+/**
+ * Find a record's first argument that isn't its format string (decisions/0185, 12g).
+ *
+ * @param bytes The entries the record is in.
+ * @param at Where the record's entry starts.
+ * @return The argument; a count of 0 if it has none, or its entry doesn't hold it whole.
+ */
+first_argument :: fn(bytes: u8[], at: usize) -> ArgumentAt {
+    none :: ArgumentAt.{}
+    size :: entry_size_at(bytes, at)
+    if size < size_of(runtime.SlopOsEventsRecord) {
+        return none
+    }
+    record :: cast[ptr[runtime.SlopOsEventsRecord]](address_in(bytes, at))
+    // The format string's the first argument unless it's named
+    skip : usize = if record.named == 0 { 1 } else { 0 }
+    if cast[usize](record.argument_count) <= skip {
+        return none
+    }
+    cursor := at + size_of(runtime.SlopOsEventsRecord)
+    for i in cast[usize](0)..<cast[usize](record.argument_count) {
+        if cursor + size_of(runtime.SlopOsEventsArgument) > at + size {
+            return none
+        }
+        argument :: cast[ptr[runtime.SlopOsEventsArgument]](address_in(bytes, cursor))
+        value :: cursor + size_of(runtime.SlopOsEventsArgument)
+        count :: cast[usize](argument.count)
+        if value + count > at + size {
+            return none
+        }
+        if i == skip {
+            return ArgumentAt.{hash = argument.hash, at = value, count = count}
+        }
+        cursor = value + ((count + 7) & ~cast[usize](7))
+    }
+    return none
+}
+

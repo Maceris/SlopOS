@@ -1,6 +1,6 @@
 # 0185: What M12 Left, Planned
 
-Status: accepted, chosen with the project's owner; built, 12e and 12f
+Status: accepted, chosen with the project's owner; built, 12e to 12g
 Date: 2026-11-08
 Related: `0011` (memory budgets), `0017` and `0056` (process control and intercepts), `0026` (the carrier register),
 `0037` (scheduling and lending), `0041` (the per-thread page), `0134` (the panic record), `0160` (elevation), `0182`
@@ -197,4 +197,46 @@ In four stages, each with an as-built record here:
   carries a fiber pool, whose two fibers are listed, the waiting one suspended in `test_debug.wait_for_done`. The
   debugger attaches to `counter`, the system's installation, once the user allows it on the trusted path: its threads
   suspended, listed and walked, and let go; asked again, Escape refuses it. On both architectures.
+
+## As Built: 12g
+- **Recordings as files.** `record name arguments to path` keeps the recording as a typed file, `recording.RecordingFile`:
+  the program's name, its arguments as typed, the BLAKE3 hash of its file, the seeds, and the events and their bytes.
+  A protocol message is at most 4 KiB and a recording is far more, so the shell lays the file's value out itself, on the
+  heap, as a message's is; and a typed file's lists hold only plain data, so each event is kept as a `StoredEvent`, its
+  kind a number checked as it's read back. `replay from path` runs the program it names with its arguments, refusing
+  another build of it.
+- **Received handles.** Each call's shape now says which argument words are handles, which written buffers hold them,
+  and whether it gives one back. A replay keeps the handles an answered call gave the program from the recording, and
+  gives the program a placeholder for each, a port of its own, in the same place in its handle table, checking the
+  number: without one, every handle made after would be numbered otherwise, and the replay would diverge. A call taking
+  a received handle is answered from the recording too, but for the `handle_` calls, which run again on the
+  placeholder. And `channel_send_handles` runs again rather than being answered, as it moves the handles out of the
+  program's table, as it did when recorded; nothing it stages goes anywhere without the write, which is answered.
+- **`trace seconds`.** The shell asks the powerbox (`RequestTrace`), the trusted path asks the administrator (prompt kind
+  `Trace`), and once they're right the terminal service asks the supervisor for a trace connection (power's
+  `TraceConnection`), the new `trace` protocol, which goes back to the shell. The supervisor traces for as long as it's
+  asked, draining the kernel's rings into each thread's counts as its loop goes round, its loop's deadline the trace's
+  end, and answers with each service's switches and wakes, the busiest first, threads of no service as "others".
+- **`crashes system`.** Likewise for the system's log (prompt kind `SystemLog`, power's `EventsConnection`): the
+  supervisor gives the events service another client's end (`Connect`), whose other end goes to the shell. The events
+  service's `Found` now gives a record's first argument's schema hash and value, as written, so the shell reads the
+  supervisor's and session manager's reports back as `CrashReport`s, asking for errors only, and names their frames
+  through the programs' files, with lines from their debug files. The supervisor's reports went nowhere before: it
+  starts before the events service, so its logger had no ring. Base's new `slop_os_adopt_events_ring` takes a ring
+  given later, and the supervisor opens its own source, "supervisor", once it's started the events service.
+- **Budgets from the configuration.** A service's `events_budget` in `system_config` (its record's, 0 for the default),
+  which the supervisor sets as it opens the service's ring; and a user's `events_budget` in their `SessionSettings`,
+  which the session manager reads as their session starts, for each of its programs. `hello` has 2 MiB, which a boot
+  test sees set. There's no shell command to set a user's settings yet, so the user's isn't boot-tested.
+- **Found on the way.** The trace connection's port key was the supervisor's `CRASH_KEY` already; an administrator's
+  connections need 8 KiB rings, as a channel's message is at most half its ring, and a record with its argument or a
+  trace's rows are bigger than 512 bytes. A shell build once stopped in the compiler's JIT, a relocation out of range
+  in `RuntimeDyld`, and didn't again. And the shell twice trapped on AArch64 printing a local, in a full run, not caught
+  again: `symbols` ran on 8 MiB plus twice its file, split off the shell's 16 MiB, and wasn't waited for, so two asks
+  close together could leave the shell short. It's given 2 MiB plus twice its file now, and `ask_symbols` waits for it
+  to end, so its budget's back before the next.
+- **Tests.** `test_replay 5 1` passes itself a channel end, writes on and closes what it receives, and is recorded to a
+  file and replayed from it exactly; a file that isn't there is refused. A trace through elevation lists services'
+  switches. `crashes system`, once the administrator allows it, shows the update service's crash that `test_crash`
+  caused, its frames named. On both architectures.
 

@@ -6,6 +6,8 @@ import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
+import trace from "../trace"
+import events from "../events"
 
 /**
  * What a session's programs ask of its powerbox (decisions/0018, 0156, design/console-and-sessions.md §5). Each program
@@ -177,6 +179,16 @@ Request :: union {
      */
     RequestDebug(DebugRequest),
     /**
+     * Ask to trace the whole system, which the administrator allows on the trusted path (decisions/0185, 12g), with why,
+     * as UTF-8, up to PURPOSE_BYTES. Answered with TraceGranted, or Refused; at once with Busy.
+     */
+    RequestTrace(slop_os.Relative[u8]),
+    /**
+     * Ask to read the system's log, every service's records, which the administrator allows on the trusted path
+     * (decisions/0185, 12g), with why. Answered with LogGranted, or Refused; at once with Busy.
+     */
+    RequestSystemLog(slop_os.Relative[u8]),
+    /**
      * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
      * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
      */
@@ -205,6 +217,10 @@ Response :: union {
     Allowed,
     /** RequestDebug's answer: the program, attached to the debugger's port. */
     Attached(Attached),
+    /** RequestTrace's answer: a trace connection to the supervisor, which moves to the program. */
+    TraceGranted(os.Channel[trace.Trace]),
+    /** RequestSystemLog's answer: a connection to the events service, which moves to the program. */
+    LogGranted(os.Channel[events.Events]),
     /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
     Unsupported,
 }
@@ -225,6 +241,8 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case RequestAccount(_) => false
         case RequestPower(_) => false
         case RequestDebug(_) => false
+        case RequestTrace(_) => false
+        case RequestSystemLog(_) => false
         case Serve(_) => false
     }
 }

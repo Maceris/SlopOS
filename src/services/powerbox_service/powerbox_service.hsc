@@ -232,6 +232,18 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                     case None => continue
                 }
             }
+            case RequestSystemLog(purpose) => {
+                match ask(box, index, .SystemLog, false, os.items(into, purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
+            case RequestTrace(purpose) => {
+                match ask(box, index, .Trace, false, os.items(into, purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
             case RequestDebug(asked) => {
                 match ask_debug(box, index, os.items(into, asked.name), os.items(into, asked.purpose), asked.port, asked.key) {
                     case Some(answer) => response^ = answer
@@ -339,6 +351,7 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     runtime.log_info("% asks for a %", if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
         if kind == .Account { "new account" } else if kind == .ShutDown { "shutdown" } else if kind == .Restart { "restart" }
         else if kind == .Debug || kind == .DebugOther { "debugger" }
+        else if kind == .Trace { "trace" } else if kind == .SystemLog { "read of the system's log" }
         else if kind == .File { if write { "file to write" } else { "file to read" } }
         else { if write { "directory to write in" } else { "directory to read" } })
     return null
@@ -376,6 +389,14 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
             }
             runtime.log_info("the administrator allowed a %", if box.waiting.kind == .Restart { "restart" } else { "shutdown" })
             answer(box, .Allowed)
+        }
+        case LogGranted(given) => {
+            runtime.log_info("the administrator allowed reading the system's log")
+            answer(box, .LogGranted(given))
+        }
+        case TraceGranted(given) => {
+            runtime.log_info("the administrator allowed a trace")
+            answer(box, .TraceGranted(given))
         }
         case AccountMade(made) => {
             name :: os.items(into, made)

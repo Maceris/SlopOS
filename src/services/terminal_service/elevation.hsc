@@ -16,6 +16,9 @@ import terminal from "std/os/slop_os"
 import time from "std"
 import accounts from "../../protocols/accounts"
 import prompt from "../../protocols/prompt"
+import power_protocol from "../../protocols/power"
+import trace from "../../protocols/trace"
+import events from "../../protocols/events"
 import screen from "../../screen"
 
 /** The status line's text while the elevation screen is up. */
@@ -40,7 +43,8 @@ enter_elevation :: fn(service: ptr[mut Service]) {
     kind :: view(service).ask.kind
     runtime.log_info("elevation: % asks %", bytes_text(first_of(view(service).ask.requester[0..<view(service).ask.requester.count],
         view(service).ask.requester_count)), if kind == .ShutDown { "to shut down" } else if kind == .Restart { "to restart" }
-        else if is_debug(kind) { "to debug a program" } else { "for an account" })
+        else if is_debug(kind) { "to debug a program" } else if kind == .Trace { "to trace the system" }
+        else if kind == .SystemLog { "to read the system's log" } else { "for an account" })
     say(service, "")
     // The user's own program needs only their say; anything else, the administrator's
     setup_step(service, if kind == .Debug { SetupStep.Confirm } else { SetupStep.AdminName })
@@ -54,7 +58,7 @@ enter_elevation :: fn(service: ptr[mut Service]) {
  * @return True for an account, a shutdown and a restart.
  */
 is_elevation :: fn(kind: prompt.Kind) -> bool {
-    return kind == .Account || is_power(kind) || is_debug(kind)
+    return kind == .Account || is_power(kind) || is_debug(kind) || kind == .Trace || kind == .SystemLog
 }
 
 /**
@@ -75,7 +79,62 @@ is_debug :: fn(kind: prompt.Kind) -> bool {
  * @return True for those.
  */
 is_administrators :: fn(kind: prompt.Kind) -> bool {
-    return is_power(kind) || kind == .DebugOther
+    return is_power(kind) || kind == .DebugOther || kind == .Trace || kind == .SystemLog
+}
+
+/**
+ * Ask the supervisor for a connection to the events service (power's EventsConnection, decisions/0185), once the
+ * administrator's allowed reading the system's log, waiting for its answer.
+ *
+ * @param service The service, whose power connection is asked.
+ * @return The connection; null without a power connection, or if the supervisor refused.
+ */
+events_connection :: fn(service: ptr[mut Service]) -> os.Channel[events.Events]? {
+    connection :: service.power or_return null
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    os.begin[power_protocol.Request](&out)^ = .EventsConnection
+    if power_protocol.send_request(connection.end, port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    match power_protocol.receive_response(connection.end, port, &into, true) {
+        case Received => {}
+        case _ => return null
+    }
+    return match os.message_of[power_protocol.Response](&into)^ {
+        case EventsConnection(given) => given
+        case _ => null
+    }
+}
+
+/**
+ * Ask the supervisor for a trace connection (power's TraceConnection, decisions/0185), once the administrator's allowed
+ * a trace, waiting for its answer.
+ *
+ * @param service The service, whose power connection is asked.
+ * @return The connection, for the program that asked; null without a power connection, or if the supervisor refused.
+ */
+trace_connection :: fn(service: ptr[mut Service]) -> os.Channel[trace.Trace]? {
+    connection :: service.power or_return log_none("no power connection")
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return log_none("no port")
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    os.begin[power_protocol.Request](&out)^ = .TraceConnection
+    if power_protocol.send_request(connection.end, port, &out) is_some {
+        return log_none("not sent")
+    }
+    into := os.Incoming.{}
+    match power_protocol.receive_response(connection.end, port, &into, true) {
+        case Received => {}
+        case Failed(error) => return log_none(message_of_error(error))
+        case _ => return log_none("no answer")
+    }
+    return match os.message_of[power_protocol.Response](&into)^ {
+        case TraceConnection(given) => given
+        case _ => log_none("the supervisor refused")
+    }
 }
 
 /**
@@ -150,7 +209,26 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
     shown :: view(service)
     out := os.Outgoing.{}
     response :: os.begin[prompt.Response](&out)
-    if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind)) {
+    if made && shown.ask.kind == .SystemLog {
+        match events_connection(service) {
+            case Some(connection) => {
+                response^ = .LogGranted(connection)
+                runtime.log_info("elevation: the administrator allowed reading the system's log")
+            }
+            case None => response^ = .Refused
+        }
+    }
+    else if made && shown.ask.kind == .Trace {
+        // The administrator's allowed it: a trace connection from the supervisor, for the program that asked
+        match trace_connection(service) {
+            case Some(connection) => {
+                response^ = .TraceGranted(connection)
+                runtime.log_info("elevation: the administrator allowed a trace")
+            }
+            case None => response^ = .Refused
+        }
+    }
+    else if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind)) {
         response^ = .Allowed
     }
     else if made && service.name_count <= service.name.count {
@@ -248,7 +326,9 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
     plain :: terminal.Style.{}
     asked :: &view(service).ask
     debugging :: is_debug(asked.kind)
-    screen.write_at(panel, 1, 2, if debugging { "Debug a program" } else if restart { "Restart the system" } else { "Shut the system down" }, bold)
+    screen.write_at(panel, 1, 2, if debugging { "Debug a program" } else if asked.kind == .Trace { "Trace the system" }
+        else if asked.kind == .SystemLog { "Read the system's log" }
+        else if restart { "Restart the system" } else { "Shut the system down" }, bold)
     storage : u8[200]
     line := text_buffer.make(storage)
     text_buffer.append(&line, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
@@ -257,6 +337,13 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
         text_buffer.append(&line, " asks to debug ")
         text_buffer.append(&line, bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count)))
         text_buffer.append(&line, if asked.kind == .DebugOther { ", another user's program, " } else { ", " })
+    }
+    else if asked.kind == .Trace {
+        // Every process's scheduling, other users' sessions' too
+        text_buffer.append(&line, " asks to trace the whole system, every user's programs, ")
+    }
+    else if asked.kind == .SystemLog {
+        text_buffer.append(&line, " asks to read the system's log, every service's records, ")
     }
     else {
         text_buffer.append(&line, if restart { " asks to restart the system, " } else { " asks to shut the system down, " })
@@ -331,7 +418,7 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
-    if is_power(asked.kind) || is_debug(asked.kind) {
+    if is_power(asked.kind) || is_debug(asked.kind) || asked.kind == .Trace || asked.kind == .SystemLog {
         draw_power_elevation(service, whole, asked.kind == .Restart)
         return void
     }
@@ -409,4 +496,16 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     else {
         redraw_rows(service, SETUP_FIELDS_ROW, SETUP_FIELDS_ROW + rows)
     }
+}
+
+/** Name an error for the log. */
+message_of_error :: fn(error: slop_os.ChannelError) -> string {
+    runtime.log_info("trace connection failed: %", error)
+    return "failed"
+}
+
+/** Log why there's no trace connection. */
+log_none :: fn(why: string) -> os.Channel[trace.Trace]? {
+    runtime.log_info("trace connection: %", why)
+    return null
 }

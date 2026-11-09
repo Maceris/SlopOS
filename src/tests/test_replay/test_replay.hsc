@@ -3,7 +3,8 @@
  * threads each take a lock count times, and under it mix the clock and their number into a total they share; then
  * the first thread reads the CPU's counter directly, and mixes it in too. What it writes on the shell's terminal, the
  * total, depends on the order the threads took the lock in, the clock and the counter: so only an exact replay gives it
- * again.
+ * again. Given a channel too, it sends itself a channel end and uses what it receives, which a replay has only from the
+ * recording (decisions/0185, 12g).
  */
 package test_replay
 
@@ -42,9 +43,11 @@ Shared :: struct {
  *
  * @param session_terminal The shell's terminal, which the total's written on; without it, nothing is.
  * @param count How many turns each thread takes, at least 1.
- * @return 0 once it's written; 2 if a thread couldn't be started, 3 if the terminal couldn't be opened.
+ * @param channel Any number to send itself a channel end, and write on and close the end it receives; none not to.
+ * @return 0 once it's written; 2 if a thread couldn't be started, 3 if the terminal couldn't be opened, 4 if the end
+ *     couldn't be passed.
  */
-main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64) -> int {
+main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, channel: u64?) -> int {
     shared :: runtime.new(Shared)
     shared.count = if count == 0 { 1 } else { count }
     shared.total = 1
@@ -60,6 +63,10 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64) -> int 
     }
     for thread in threads {
         runtime.thread_join(thread)
+    }
+    if channel is_some {
+        passed :: pass_an_end() or_return 4
+        shared.total = shared.total * 31 + passed
     }
     match session_terminal {
         case Some(given) => {
@@ -111,3 +118,31 @@ read_counter :: fn() -> u64 {
         return aarch64.read_system_register(.CNTVCT_EL0)
     }
 }
+
+/**
+ * Send itself a channel end over another channel, receive it, write on it, and close it: what it receives is a handle
+ * a replay has only from the recording.
+ *
+ * @return The handle received, as a number; null if a channel couldn't be made, or the end wasn't passed.
+ */
+pass_an_end :: fn() -> u64? {
+    budget :: slop_os.startup_block().budget
+    carrier :: slop_os.channel_create(budget, 0, 0) or_return null
+    passed :: slop_os.channel_create(budget, 0, 0) or_return null
+    port :: os.port_for(budget, carrier.b) or_return null
+    sent :: slop_os.Handle.[cast[slop_os.Handle](passed.a)]
+    if os.send(carrier.a, port, u8.[1, 2, 3], sent) != null {
+        return null
+    }
+    bytes : u8[16]
+    handles : slop_os.Handle[1]
+    got :: os.receive(carrier.b, port, bytes, handles) or_return null
+    if got.handle_count == 0 {
+        return null
+    }
+    end :: cast[slop_os.Channel](handles[0])
+    _ = slop_os.channel_write(end, u8.[4, 5], slop_os.NO_BATCH)
+    _ = slop_os.handle_close(cast[slop_os.Handle](end))
+    return cast[u64](handles[0])
+}
+

@@ -75,6 +75,7 @@ import events from "../../protocols/events"
 import bundle_store from "../../protocols/bundle_store"
 import config_protocol from "../../protocols/config"
 import power_protocol from "../../protocols/power"
+import trace from "../../protocols/trace"
 import bundle from "../../bundle"
 import schema from "std"
 import service_kit from "../../libraries/service_kit"
@@ -740,6 +741,14 @@ Supervisor :: struct {
     tracing : bool,
     /** When each thread first ran, as the trace showed it, for test_trace's boot timeline. */
     first_runs : FirstRun[..],
+    /** Its end of the trace connection an administrator was allowed (system_trace.hsc); NONE without one. */
+    trace_end : slop_os.Channel,
+    /** When the trace under way ends, in nanoseconds of the monotonic clock; 0 with none under way. */
+    trace_until : u64,
+    /** Each thread's counts in the trace under way. */
+    trace_counts : ThreadCount[..],
+    /** How many events the trace under way has had. */
+    trace_events : u64,
     /** The faults' intercept of the program launched last, from kept until its entry takes it; null between. */
     launched_faults : os.LaunchedFaults?,
     /** Where the image of the program launched last is, from kept until its entry takes it. */
@@ -1060,7 +1069,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
         first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, terminal = NOWHERE, input = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
-        launched_lifecycle = NONE, last_panic = last_panic}
+        launched_lifecycle = NONE, last_panic = last_panic, trace_end = NONE}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, power_button = power_button_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
         virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
@@ -1301,7 +1310,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     supervisor.steady = true
     arm_watchdog(&supervisor)
     loop {
-        wait_and_handle_until(&supervisor, if supervisor.watchdog_end != NONE { supervisor.next_pet } else { slop_os.NO_DEADLINE })
+        wait_and_handle_until(&supervisor, trace_deadline(&supervisor, if supervisor.watchdog_end != NONE { supervisor.next_pet } else { slop_os.NO_DEADLINE }))
+        serve_trace(&supervisor)
         tend_watchdog(&supervisor)
     }
 }
@@ -2570,6 +2580,15 @@ options_for :: fn(supervisor: ptr[mut Supervisor], name: string) -> os.LaunchOpt
     if supervisor.events_end != NONE {
         match events.open(supervisor.events_end, supervisor.events_port, name) {
             case Some(opened) => {
+                // Its records kept to the budget its configuration gives, if it gives one (decisions/0185, 12g)
+                index :: system_records.index_of(supervisor.records, name)
+                if index < system_records.MAX_SERVICES && index < cast[usize](supervisor.records.service_count)
+                    && supervisor.records.services[index].events_budget != 0 {
+                    configured :: supervisor.records.services[index].events_budget
+                    if events.set_budget(supervisor.events_end, supervisor.events_port, name, configured) {
+                        log_line.write(supervisor.log, "supervisor: %'s records are kept to % bytes, as its configuration says", name, configured)
+                    }
+                }
                 rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
                     | cast[u32](slop_os.RIGHT_TRANSFER))
                 match slop_os.handle_duplicate(cast[slop_os.Handle](opened.ring), rights) {
@@ -2711,11 +2730,37 @@ start_events :: fn(supervisor: ptr[mut Supervisor], again: usize) {
                 }
                 case Error(error) => {}
             }
+            log_through_events(supervisor)
         }
         case Error(error) => {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         }
+    }
+}
+
+/**
+ * Have the supervisor's own records go to the events service, under its source "supervisor", once there is one
+ * (decisions/0185, 12g): it starts before the events service, so it's given no ring at its start, and its typed
+ * records, like its crash reports, would go nowhere. The ring's owning handle is kept for the rest of its life.
+ *
+ * @param supervisor The supervisor, whose events connection opens the source; nothing's done if its logger has a ring.
+ */
+log_through_events :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.events_end == NONE {
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[events.Request](&out)
+    request^ = .Open(bytes_of(&out, "supervisor"))
+    into := os.Incoming.{}
+    match events.ask(supervisor.events_end, supervisor.events_port, &out, &into) {
+        case Opened(source) => {
+            if !runtime.slop_os_adopt_events_ring(cast[u32](source.ring), cast[u32](source.doorbell)) {
+                _ = slop_os.handle_close(cast[slop_os.Handle](source.doorbell))
+            }
+        }
+        case _ => {}
     }
 }
 
@@ -4808,6 +4853,34 @@ serve_power_on :: fn(supervisor: ptr[mut Supervisor], slot: u32) {
         out := os.Outgoing.{}
         response :: os.begin[power_protocol.Response](&out)
         asked :: os.message_of[power_protocol.Request](&into)^
+        // A trace connection, for the terminal service's only, once an administrator's allowed it (system_trace.hsc)
+        tracing :: match asked {
+            case TraceConnection => true
+            case _ => false
+        }
+        // An events connection, the terminal service's only too, once an administrator's allowed reading the log
+        reading :: match asked {
+            case EventsConnection => true
+            case _ => false
+        }
+        if reading {
+            given : os.Channel[events.Events]? = if slot == CONSOLE_POWER { admin_events_connection(supervisor) } else { null }
+            match given {
+                case Some(connection) => response^ = .EventsConnection(connection)
+                case None => response^ = .Refused
+            }
+            _ = power_protocol.send_response(end, supervisor.port, &out)
+            continue
+        }
+        if tracing {
+            given : os.Channel[trace.Trace]? = if slot == CONSOLE_POWER { trace_connection(supervisor) } else { null }
+            match given {
+                case Some(connection) => response^ = .TraceConnection(connection)
+                case None => response^ = .Refused
+            }
+            _ = power_protocol.send_response(end, supervisor.port, &out)
+            continue
+        }
         restart :: match asked {
             case Restart => true
             case _ => false

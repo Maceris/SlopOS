@@ -12,6 +12,9 @@ import recording from "../../recording"
  * (recording.record), one thread at a time, in base's deterministic mode, and keeps the recording; replay name
  * arguments runs it again from the recording, with its seeds (recording.replay), and says whether it went exactly as
  * recorded, or where it diverged. A recording isn't given the clock page, which isn't a system call's to record.
+ *
+ * record name arguments to path keeps the recording as a typed file too (recording.RecordingFile, decisions/0185,
+ * 12g), with the program's name, arguments and hash; replay from path replays one, refusing another build of it.
  */
 
 /** The key a recorded or replayed program's stops come under, on a port of its own. */
@@ -27,7 +30,14 @@ RECORDING_END_KEY : u64 : 2
  * @return Null once it's ended; an error if there's no program, or it couldn't be made or started.
  */
 record_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
-    call :: prepare_recorded(shell, tree, "record")?
+    // to path, at its end, is where the recording's kept, not the program's
+    path : string? = null
+    dropped : usize = 0
+    if tree.children.count >= 3 && tree.children[tree.children.count - 2].kind == .Word && tree.children[tree.children.count - 2].text == "to" {
+        path = tree.children[tree.children.count - 1].text
+        dropped = 2
+    }
+    call :: prepare_recorded(shell, tree, "record", dropped)?
     defer end_call(call)
     port :: slop_os.port_create(slop_os.startup_block().budget) or_return error_at(tree.at, "there's no memory to record it")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -47,7 +57,216 @@ record_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resul
         code :: if events.count > 0 { events[events.count - 1].value } else { cast[u64](0) }
         say(shell, message("% was recorded: % calls in % threads, ended with %", call.tree.text, made.calls, made.threads, code))
     }
+    match path {
+        case Some(where) => {
+            match write_recording(shell, call, made, where) {
+                case Some(problem) => return error_at(tree.at, message("the recording couldn't be kept in %: %", where, problem))
+                case None => say(shell, message("kept in %", where))
+            }
+        }
+        case None => {}
+    }
     return .Ok(.Null)
+}
+
+/**
+ * Keep a recording as a typed file.
+ *
+ * @param shell The shell, beneath whose home it's written.
+ * @param call The recorded call: its program's name, arguments and file.
+ * @param made The recording.
+ * @param path Where, from the shell's directory, made or replaced.
+ * @return Null once it's written; why not otherwise, a phrase.
+ */
+write_recording :: fn(shell: ptr[mut Shell], call: ptr[Call], made: ptr[recording.Recording], path #escaping : string) -> string? {
+    arguments : u8[..]
+    defer runtime.array_free(&arguments)
+    for child in call.tree.children {
+        for byte in string_bytes(child.text) {
+            runtime.array_add(&arguments, byte)
+        }
+        runtime.array_add(&arguments, cast[u8](0x0a))
+    }
+    // Laid out as a message's value is, but on the heap, as a recording is bigger than a message: the struct, then its lists
+    value : u8[..]
+    defer runtime.array_free(&value)
+    header :: (size_of(recording.RecordingFile) + 7) & ~cast[usize](7)
+    for i in cast[usize](0)..<header {
+        runtime.array_add(&value, cast[u8](0))
+    }
+    file := recording.RecordingFile.{program_hash = file_hash(call.executable), seeds = made.seeds, threads = made.threads, calls = made.calls}
+    file.program = place_items(&value, string_bytes(call.tree.text))
+    file.arguments = place_items(&value, arguments[0..<arguments.count])
+    stored : recording.StoredEvent[..]
+    defer runtime.array_free(&stored)
+    for event in made.events {
+        runtime.array_add(&stored, recording.stored_of(event))
+    }
+    file.events = place_items(&value, stored[0..<stored.count])
+    file.bytes = place_items(&value, made.bytes[0..<made.bytes.count])
+    if value.count < header || value.count == 0 {
+        return "there wasn't the memory"
+    }
+    for byte, i in view_of(cast[ptr[u8]](&file), size_of(recording.RecordingFile)) {
+        if i < value.count {
+            value[i] = byte
+        }
+    }
+    placed :: directory_of(shell, path) or_return "its directory couldn't be opened"
+    defer os.close_directory(placed.directory)
+    match os.write_typed_in[recording.RecordingFile](placed.directory, placed.name, value[0..<value.count]) {
+        case Some(error) => return message("it couldn't be written: %", error)
+        case None => {}
+    }
+    return null
+}
+
+/**
+ * Add items to a value being laid out, aligned for them, as a message's appended data is.
+ *
+ * @tparam E The items' type: plain data.
+ * @param value The value's bytes so far, grown.
+ * @param items The items, copied.
+ * @return Where they are, from the value's start, for a Relative field.
+ */
+place_items :: fn[E](value: ptr[mut u8[..]], items: E[]) -> slop_os.Relative[E] {
+    alignment :: align_of(E)
+    loop {
+        if value.count % alignment == 0 {
+            break
+        }
+        runtime.array_add(value, cast[u8](0))
+    }
+    start :: value.count
+    bytes :: items.count * size_of(E)
+    source :: cast[ptr[u8]](items.data)
+    for i in cast[usize](0)..<bytes {
+        runtime.array_add(value, cast[ptr[u8]](cast[u64](source) + cast[u64](i))^)
+    }
+    return slop_os.Relative[E].{offset = cast[u32](start), count = cast[u32](items.count)}
+}
+
+/** A path's directory, open, and its last name. */
+Placed :: struct {
+    /** The directory the path's in, the caller's to close. */
+    directory : os.Directory,
+    /** The path's last name, a view of it. */
+    name : string,
+}
+
+/**
+ * Open the directory a path's in, from the shell's directory, and give its last name.
+ *
+ * @param shell The shell, beneath whose home it's opened.
+ * @param path The path.
+ * @return The directory and the last name; null if it couldn't be opened, or the path ends in a /.
+ */
+directory_of :: fn(shell: ptr[mut Shell], path #escaping : string) -> Placed? {
+    bytes :: string_bytes(path)
+    split := bytes.count
+    loop {
+        if split == 0 || (split - 1 < bytes.count && bytes[split - 1] == 0x2f) {
+            break
+        }
+        split -= 1
+    }
+    if split >= bytes.count {
+        return null
+    }
+    name :: string_of(&bytes[split], bytes.count - split)
+    place :: if split > 0 { message("%", string_of(&bytes[0], split)) } else { message(".") }
+    handle :: match opened_beneath_home(shell, place, .Dir) {
+        case Ok(opened) => opened
+        case Error(problem) => return null
+    }
+    directory, error :: os.directory_on(cast[slop_os.Channel](handle))
+    if error != null {
+        _ = slop_os.handle_close(handle)
+        return null
+    }
+    return Placed.{directory = directory, name = name}
+}
+
+/**
+ * Hash a program's file, as a recording keeps it.
+ *
+ * @param executable The file.
+ * @return Its BLAKE3-256 hash; all zeros if it couldn't be read.
+ */
+file_hash :: fn(executable: slop_os.Memory) -> u8[32] {
+    none : u8[32]
+    size :: slop_os.memory_size(executable) or_return none
+    bytes, failed :: runtime.new_array(u8, cast[usize](size))
+    if failed != null {
+        return none
+    }
+    defer runtime.free_array(bytes)
+    if slop_os.memory_read(executable, 0, bytes) is_error {
+        return none
+    }
+    return runtime.hash_blake3(bytes)
+}
+
+/**
+ * Replay a recording kept in a file, for replay from path: the program it names run with the arguments it keeps, if
+ * it's the same build.
+ *
+ * @param shell The shell.
+ * @param tree The Call node of replay, its children "from" and the path.
+ * @return Null once it's replayed or diverged; an error if the file doesn't read as a recording, the program's another
+ *     build, or it couldn't be started.
+ */
+replay_file :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    if tree.children.count < 2 {
+        return error_at(tree.at, "replay from takes a recording's path")
+    }
+    path :: tree.children[1].text
+    placed :: directory_of(shell, path) or_return error_at(tree.at, message("%'s directory couldn't be opened", path))
+    defer os.close_directory(placed.directory)
+    bytes :: match os.read_typed_in[recording.RecordingFile](placed.directory, placed.name) {
+        case Ok(read) => read
+        case Error(error) => return error_at(tree.at, message("% isn't a recording that reads: %", path, error))
+    }
+    file :: os.typed_value[recording.RecordingFile](bytes)
+    // The recording, from the file's lists
+    kept := runtime.new(recording.Recording)
+    kept.seeds = file.seeds
+    kept.threads = file.threads
+    kept.calls = file.calls
+    for each in os.items_of(bytes, file.events) {
+        event :: recording.event_of(each) or_return error_at(tree.at, message("% has an event that isn't one", path))
+        if event.bytes_at > cast[usize](file.bytes.count) || event.bytes_count > cast[usize](file.bytes.count) - event.bytes_at {
+            return error_at(tree.at, message("% has an event past its bytes", path))
+        }
+        runtime.array_add(&kept.events, event)
+    }
+    for byte in os.items_of(bytes, file.bytes) {
+        runtime.array_add(&kept.bytes, byte)
+    }
+    // The call it was of: its program and arguments, as words
+    program :: os.items_of(bytes, file.program)
+    if program.count == 0 {
+        return error_at(tree.at, message("% names no program", path))
+    }
+    inner := runtime.new(Node)
+    inner^ = Node.{kind = .Call, at = tree.at, text = message("%", string_of(&program[0], program.count))}
+    words :: os.items_of(bytes, file.arguments)
+    start : usize = 0
+    for byte, i in words {
+        if byte != 0x0a {
+            continue
+        }
+        word := runtime.new(Node)
+        word^ = Node.{kind = .Word, at = tree.at, text = if i > start && start < words.count { message("%", string_of(&words[start], i - start)) } else { "" }}
+        runtime.array_add(&inner.children, word)
+        start = i + 1
+    }
+    call :: prepare_call(shell, inner, false)?
+    defer end_call(call)
+    if file_hash(call.executable) != file.program_hash {
+        return error_at(tree.at, message("% is a recording of another build of %", path, inner.text))
+    }
+    return replay_with(shell, tree, call, kept)
 }
 
 /**
@@ -60,9 +279,25 @@ record_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resul
  * @return Null once it's replayed or diverged; an error if there's no recording, or the program couldn't be started.
  */
 replay_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    if tree.children.count == 2 && tree.children[0].kind == .Word && tree.children[0].text == "from" {
+        return replay_file(shell, tree)
+    }
     kept :: shell.recording or_return error_at(tree.at, "there's no recording to replay: record name arguments makes one")
     call :: prepare_recorded(shell, tree, "replay")?
     defer end_call(call)
+    return replay_with(shell, tree, call, kept)
+}
+
+/**
+ * Replay a recording of a call, its program started with the recording's seeds.
+ *
+ * @param shell The shell.
+ * @param tree The Call node of replay, for errors.
+ * @param call The call, prepared, the caller's to end.
+ * @param kept The recording.
+ * @return Null once it's replayed or diverged; an error if the program couldn't be started.
+ */
+replay_with :: fn(shell: ptr[mut Shell], tree: ptr[Node], call: ptr[mut Call], kept: ptr[recording.Recording]) -> Result[Value, EvalError] {
     port :: slop_os.port_create(slop_os.startup_block().budget) or_return error_at(tree.at, "there's no memory to replay it")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     match start_recorded(shell, call, port, kept.seeds) {
@@ -86,9 +321,10 @@ replay_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resul
  * @param shell The shell.
  * @param tree The Call node of record, replay or profile.
  * @param command Its name, for the error.
+ * @param dropped How many of its last children aren't the program's, like record's to path.
  * @return The call, prepared, the caller's to end.
  */
-prepare_recorded :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], command: string) -> Result[ptr[mut Call], EvalError] {
+prepare_recorded :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], command: string, dropped: usize = 0) -> Result[ptr[mut Call], EvalError] {
     if tree.children.count == 0 || tree.children[0].kind != .Word {
         return .Error(EvalError.{message = message("% needs a program and its arguments: % name arguments", command, command), at = tree.at})
     }
@@ -96,7 +332,7 @@ prepare_recorded :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], comman
     inner := runtime.new(Node)
     inner^ = Node.{kind = .Call, at = named.at, text = named.text}
     for child, i in tree.children {
-        if i > 0 {
+        if i > 0 && i + dropped < tree.children.count {
             runtime.array_add(&inner.children, child)
         }
     }

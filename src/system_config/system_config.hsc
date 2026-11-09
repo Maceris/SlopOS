@@ -181,6 +181,11 @@ Service :: struct {
     not_restarted : bool,
     /** How long it has to be up, from boot, in milliseconds (decisions/0115); 0 for DEFAULT_DEADLINE_MS. */
     deadline_ms : u32,
+    /**
+     * The bytes of its records the events service keeps (decisions/0185, 12g), beyond or short of its default for the
+     * system's services; 0 for that default.
+     */
+    events_budget : u64,
 }
 
 /**
@@ -246,7 +251,7 @@ SERVICES :: Service.[
     Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(echo.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
-        entry = type_of(hello.main)},
+        events_budget = 2 * MIB, entry = type_of(hello.main)},
     // Objects by their hashes, on the system volume, paged into whoever reads them (decisions/0094)
     Service.{name = "bundle_store", boot_set = true, module = "bundle_store_service.elf", starter = .Supervisor, by_manager = true,
         budget = 16 * MIB, entry = type_of(bundle_store_service.main)},
@@ -416,6 +421,7 @@ make_records :: fn() -> system_records.SystemRecords {
         record.not_restarted = if each.not_restarted { 1 } else { 0 }
         record.late = if is_late(each.name) { 1 } else { 0 }
         record.deadline_ms = each.deadline_ms
+        record.events_budget = each.events_budget
         record.budget = each.budget
         record.vendor = each.devices.vendor
         record.device = each.devices.device

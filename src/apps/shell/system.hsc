@@ -7,6 +7,7 @@ import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import programs from "../../protocols/programs"
 import powerbox from "../../protocols/powerbox"
+import trace from "../../protocols/trace"
 
 /*
  * The system, as a session sees it (decisions/0179, 11e4): processes, the session's programs and the shell's jobs as a
@@ -521,3 +522,79 @@ powerbox_connection :: fn(shell: ptr[mut Shell], program: string) -> slop_os.Cha
         case _ => null
     }
 }
+
+/**
+ * Trace the whole system for some seconds, once an administrator allows it (decisions/0185, 12g): the session's
+ * powerbox asks on the trusted path, where the secure attention key brings up a screen for the administrator's name
+ * and password; once they're right, the shell's given a trace connection to the supervisor, which traces for that long
+ * and says what each service's threads did: how often they were switched to and made ready, the busiest first.
+ *
+ * @param shell The shell, whose session's powerbox is asked.
+ * @param tree The Call node of trace, its one argument the seconds, 1 to 10; 1 without one.
+ * @return Null once it's said; an error without a powerbox, for arguments, or if it's refused.
+ */
+trace_system :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    seconds := cast[u64](1)
+    if tree.children.count > 1 {
+        return error_at(tree.at, "trace takes the seconds to trace for, 1 to 10")
+    }
+    if tree.children.count == 1 {
+        seconds = number_of(tree.children[0].text) or_else 0
+    }
+    if seconds == 0 || seconds * 1000 > cast[u64](trace.MAX_MILLISECONDS) {
+        return error_at(tree.at, "trace takes the seconds to trace for, 1 to 10")
+    }
+    end :: powerbox_connection(shell, "shell") or_return error_at(tree.at, "trace needs the session's powerbox, which this session hasn't")
+    defer slop_os.handle_close(cast[slop_os.Handle](end))
+    port :: os.port_for(slop_os.startup_block().budget, end) or_return error_at(tree.at, "the powerbox can't be reached")
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .RequestTrace(os.append(&out, string_bytes("as you asked in the shell")))
+    if powerbox.send_request(end, port, &out) != null {
+        return error_at(tree.at, "the powerbox can't be reached")
+    }
+    say(shell, "Press Ctrl+Alt+Delete: an administrator's name and password allow it.")
+    into := os.Incoming.{}
+    loop {
+        match powerbox.receive_response(end, port, &into, true) {
+            case Received => break
+            case _ => return error_at(tree.at, "the powerbox can't be reached")
+        }
+    }
+    connection := os.Channel[trace.Trace].{}
+    match os.message_of[powerbox.Response](&into)^ {
+        case TraceGranted(given) => connection = given
+        case Busy => return error_at(tree.at, "the powerbox is asking the user something else; try again once that's answered")
+        case _ => return error_at(tree.at, "trace was refused")
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
+    traced :: os.port_for(slop_os.startup_block().budget, connection.end) or_return error_at(tree.at, "the supervisor can't be reached")
+    defer slop_os.handle_close(cast[slop_os.Handle](traced))
+    asking := os.Outgoing.{}
+    os.begin[trace.Request](&asking)^ = .Trace(cast[u32](seconds * 1000))
+    if trace.send_request(connection.end, traced, &asking) != null {
+        return error_at(tree.at, "the supervisor can't be reached")
+    }
+    say(shell, message("tracing for % s", seconds))
+    answer := os.Incoming.{}
+    loop {
+        match trace.receive_response(connection.end, traced, &answer, true) {
+            case Received => break
+            case _ => return error_at(tree.at, "the supervisor can't be reached")
+        }
+    }
+    match os.message_of[trace.Response](&answer)^ {
+        case Traced(result) => {
+            say(shell, message("% events in % s", result.events, seconds))
+            for row in os.items(&answer, result.rows) {
+                name :: if row.name_bytes > 0 && cast[usize](row.name_bytes) <= row.name.count { string_of(&row.name[0], cast[usize](row.name_bytes)) } else { "?" }
+                say(shell, message("  %: % switches, % wakes", name, row.switches, row.wakes))
+            }
+            return .Ok(.Null)
+        }
+        case Busy => return error_at(tree.at, "another trace is under way")
+        case _ => return error_at(tree.at, "the supervisor couldn't trace")
+    }
+}
+

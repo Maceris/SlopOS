@@ -7,6 +7,9 @@ import text_buffer from "std"
 import slop_os from "std/os"
 import os from "std"
 import crash_reports from "../../crash_reports"
+import schema from "std"
+import powerbox from "../../protocols/powerbox"
+import events from "../../protocols/events"
 import symbols from "../symbols"
 
 /*
@@ -135,55 +138,181 @@ forget_crash :: fn(crash: ptr[mut Crash]) {
  * @param tree The Call node of crashes, which takes nothing.
  * @return Null.
  */
-show_crashes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+show_crashes :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    if tree.children.count == 1 && tree.children[0].kind == .Word && tree.children[0].text == "system" {
+        return show_system_crashes(shell, tree)
+    }
     if tree.children.count > 0 {
-        return error_at(tree.at, "crashes takes nothing")
+        return error_at(tree.at, "crashes takes nothing, or system")
     }
     if shell.crashes.count == 0 {
         say(shell, "no crashes")
     }
     for &crash in shell.crashes {
-        say(shell, crash.heading)
-        names : u8[NAMES_BYTES]
-        named :: name_frames(shell, crash, names)
-        at : usize = 0
-        count :: if crash.count <= crash_reports.MAX_FRAMES { crash.count } else { crash_reports.MAX_FRAMES }
-        // The lines come after the names, from the debug file
-        lines_at := at
-        for i in cast[u32](0)..<count {
-            _ = next_line(names, named, &lines_at)
-        }
-        for i in cast[u32](0)..<count {
-            if cast[usize](i) >= crash.frames.count {
-                break
-            }
-            address :: crash.frames[cast[usize](i)]
-            name :: next_line(names, named, &at)
-            source :: if cast[slop_os.Handle](crash.debug) != slop_os.NO_HANDLE { next_line(names, named, &lines_at) } else { "" }
-            storage : u8[256]
-            line := text_buffer.make(storage)
-            if address < crash.image {
-                text_buffer.append_format(&line, "  #% %{#x}", i, address)
-            }
-            else if name == "" || name == "?" {
-                text_buffer.append_format(&line, "  #% image+%{#x}", i, address - crash.image)
-            }
-            else {
-                text_buffer.append_format(&line, "  #% % (image+%{#x})", i, name, address - crash.image)
-            }
-            if source != "" && source != "?" {
-                text_buffer.append_format(&line, " at %", source)
-            }
-            say(shell, text_buffer.as_string(&line))
-        }
+        show_crash(shell, crash)
     }
     return .Ok(.Null)
 }
 
+/**
+ * Show one crash report: its heading, then its frames, each named by the function it's in, and its line with a debug
+ * file, where the symbols program can say.
+ *
+ * @param shell The shell, which says it.
+ * @param crash The report.
+ */
+show_crash :: fn(shell: ptr[mut Shell], crash: ptr[Crash]) {
+    say(shell, crash.heading)
+    names : u8[NAMES_BYTES]
+    named :: name_frames(shell, crash, names)
+    at : usize = 0
+    count :: if crash.count <= crash_reports.MAX_FRAMES { crash.count } else { crash_reports.MAX_FRAMES }
+    // The lines come after the names, from the debug file
+    lines_at := at
+    for i in cast[u32](0)..<count {
+        _ = next_line(names, named, &lines_at)
+    }
+    for i in cast[u32](0)..<count {
+        if cast[usize](i) >= crash.frames.count {
+            break
+        }
+        address :: crash.frames[cast[usize](i)]
+        name :: next_line(names, named, &at)
+        source :: if cast[slop_os.Handle](crash.debug) != slop_os.NO_HANDLE { next_line(names, named, &lines_at) } else { "" }
+        storage : u8[256]
+        line := text_buffer.make(storage)
+        if address < crash.image {
+            text_buffer.append_format(&line, "  #% %{#x}", i, address)
+        }
+        else if name == "" || name == "?" {
+            text_buffer.append_format(&line, "  #% image+%{#x}", i, address - crash.image)
+        }
+        else {
+            text_buffer.append_format(&line, "  #% % (image+%{#x})", i, name, address - crash.image)
+        }
+        if source != "" && source != "?" {
+            text_buffer.append_format(&line, " at %", source)
+        }
+        say(shell, text_buffer.as_string(&line))
+    }
+}
+
+/**
+ * Show the crash reports in the system's log (decisions/0185, 12g), for crashes system: the supervisor's, of the
+ * system's services, and the session manager's, of sessions' programs. Reading the log takes an administrator: the
+ * session's powerbox asks on the trusted path, and once they've allowed it, the shell's given a connection to the events
+ * service, whose records' typed arguments a report's read back from.
+ *
+ * @param shell The shell, whose session's powerbox is asked.
+ * @param tree The Call node of crashes.
+ * @return Null once they're shown; an error without a powerbox, or if it's refused.
+ */
+show_system_crashes :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    end :: powerbox_connection(shell, "shell") or_return error_at(tree.at, "crashes system needs the session's powerbox, which this session hasn't")
+    defer slop_os.handle_close(cast[slop_os.Handle](end))
+    port :: os.port_for(slop_os.startup_block().budget, end) or_return error_at(tree.at, "the powerbox can't be reached")
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .RequestSystemLog(os.append(&out, string_bytes("to show its crash reports, as you asked in the shell")))
+    if powerbox.send_request(end, port, &out) != null {
+        return error_at(tree.at, "the powerbox can't be reached")
+    }
+    say(shell, "Press Ctrl+Alt+Delete: an administrator's name and password allow it.")
+    into := os.Incoming.{}
+    loop {
+        match powerbox.receive_response(end, port, &into, true) {
+            case Received => break
+            case _ => return error_at(tree.at, "the powerbox can't be reached")
+        }
+    }
+    connection := os.Channel[events.Events].{}
+    match os.message_of[powerbox.Response](&into)^ {
+        case LogGranted(given) => connection = given
+        case Busy => return error_at(tree.at, "the powerbox is asking the user something else; try again once that's answered")
+        case _ => return error_at(tree.at, "reading the system's log was refused")
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
+    log_port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return error_at(tree.at, "the events service can't be reached")
+    defer slop_os.handle_close(cast[slop_os.Handle](log_port))
+    wanted :: schema.hash(type_info_of(crash_reports.CrashReport))
+    shown : u32 = 0
+    // Crash reports are errors, so only those are asked for, each Query scanning the source from its start
+    for source in string.["supervisor", "sessions"] {
+        from : u64 = 0
+        for i in 0..<MAX_SYSTEM_RECORDS {
+            asking := os.Outgoing.{}
+            query :: os.begin[events.Request](&asking)
+            query^ = .Query(events.QueryOf.{source = os.append(&asking, string_bytes(source)), from = from,
+                level = cast[u8](runtime.LogLevel.ERROR), wait = false})
+            if events.send_request(connection.end, log_port, &asking) != null {
+                break
+            }
+            answer := os.Incoming.{}
+            if !received(events.receive_response(connection.end, log_port, &answer, true)) {
+                break
+            }
+            found := events.Found.{}
+            match os.message_of[events.Response](&answer)^ {
+                case Found(record) => found = record
+                case _ => break
+            }
+            from = found.number + 1
+            if found.argument_hash != wanted {
+                continue
+            }
+            report := schema.read_value[crash_reports.CrashReport](os.items(&answer, found.argument)) or_else crash_reports.CrashReport.{}
+            if report.program == "" {
+                continue
+            }
+            shown += 1
+            show_report(shell, &report)
+        }
+    }
+    if shown == 0 {
+        say(shell, "no crashes in the system's log")
+    }
+    return .Ok(.Null)
+}
+
+/** The most records of a source crashes system reads. */
+MAX_SYSTEM_RECORDS :: 4096
+
+/**
+ * Show a crash report read from the system's log, named through its program's files as the shell's own are.
+ *
+ * @param shell The shell.
+ * @param report The report.
+ */
+show_report :: fn(shell: ptr[mut Shell], report: ptr[crash_reports.CrashReport]) {
+    bytes : u8[CRASH_TEXT_LIMIT]
+    text := text_buffer.make(bytes)
+    crash_reports.describe(report, &text, false)
+    crash := Crash.{heading = message("%", text_buffer.as_string(&text)), executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
+        debug = cast[slop_os.Memory](slop_os.NO_HANDLE), image = report.image, frames = report.frames, count = report.frame_count}
+    match find_program(shell, report.program) {
+        case Some(found) => {
+            crash.executable = found.executable
+            _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
+        }
+        case None => {}
+    }
+    crash.debug = debug_memory(shell, report.program) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    show_crash(shell, &crash)
+    for handle in slop_os.Handle.[cast[slop_os.Handle](crash.executable), cast[slop_os.Handle](crash.debug)] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
+}
+
 /** The most bytes of the names the symbols program sends for one crash. */
 NAMES_BYTES :: 8192
-/** The memory the symbols program runs with besides twice the file it reads whole: 8 MiB. */
-SYMBOLS_BUDGET : u64 : 8 << 20
+/**
+ * The memory the symbols program runs with besides twice the file it reads whole: 2 MiB. It's split off the shell's own
+ * budget, of 16 MiB, so it's kept small, and given back once it's ended (ask_symbols waits for that).
+ */
+SYMBOLS_BUDGET : u64 : 2 << 20
 /** The largest file the symbols program is given room for: 32 MiB. */
 MAX_SYMBOLS_FILE : u64 : 32 << 20
 
@@ -282,7 +411,28 @@ ask_symbols :: fn(shell: ptr[mut Shell], executable: slop_os.Memory, offsets: u6
     }
     handles : slop_os.Handle[1]
     got :: os.receive(pair.a, port, into, handles) or_return 0
+    // Its end waited for, a moment at most, so its budget's the shell's again before the next ask
+    wait_for_end(launched.process, SYMBOLS_END_WAIT)
     return cast[usize](got.size)
+}
+
+/** How long ask_symbols waits for the symbols program to end once it's answered: 2 s. */
+SYMBOLS_END_WAIT : u64 : 2_000_000_000
+
+/**
+ * Wait for a process to end, for a while at most.
+ *
+ * @param process The process, which needs RIGHT_PROCESS_INSPECT to be watched; it stays the caller's.
+ * @param longest The longest to wait, in nanoseconds.
+ */
+wait_for_end :: fn(process: slop_os.Process, longest: u64) {
+    port :: slop_os.port_create(slop_os.startup_block().budget) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    if slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, 1, .Once) is_error {
+        return void
+    }
+    packets : slop_os.Packet[1]
+    _ = slop_os.port_wait(port, packets, (slop_os.clock_monotonic() or_else 0) + longest)
 }
 
 /**

@@ -2,6 +2,8 @@ package power
 
 import os from "std"
 import slop_os from "std/os"
+import trace from "../trace"
+import events from "../events"
 
 /*
  * Asking for the system to shut down or restart (decisions/0180, 0182): the supervisor serves it, to the terminal
@@ -37,6 +39,16 @@ Request :: union {
     Restart,
     /** The power button was pressed: shut the system down, as ShutDown does (decisions/0182). Answered as it is. */
     PowerButton,
+    /**
+     * The terminal service's, once an administrator's allowed a trace (decisions/0185, 12g): a new trace connection to
+     * the supervisor, for the program that asked. Answered with TraceConnection, or Refused from another connection.
+     */
+    TraceConnection,
+    /**
+     * The terminal service's, once an administrator's allowed reading the system's log (decisions/0185, 12g): a new
+     * connection to the events service, for the program that asked. Answered with EventsConnection, or Refused.
+     */
+    EventsConnection,
 }
 
 /** What the supervisor answers. */
@@ -45,6 +57,10 @@ Response :: union {
     Done,
     /** Their answer when the root task couldn't be told, as when its channel's gone. */
     Refused,
+    /** TraceConnection's answer: the connection's end, which moves to the terminal service. */
+    TraceConnection(os.Channel[trace.Trace]),
+    /** EventsConnection's answer: the connection's end, which moves to the terminal service. */
+    EventsConnection(os.Channel[events.Events]),
     /** The answer to a request the supervisor doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }

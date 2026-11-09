@@ -103,6 +103,11 @@ NOWHERE : usize : ~cast[usize](0)
 SessionSettings :: struct {
     /** A std/locale name, as "en-GB"; empty until it's chosen. Only en-US and en-GB are taken. */
     locale : slop_os.Relative[u8],
+    /**
+     * The bytes of records the events service keeps of each of the session's programs (decisions/0185, 12g), from
+     * events.MIN_BUDGET; 0 for events.SESSION_BUDGET.
+     */
+    events_budget : u64,
 }
 
 /**
@@ -172,6 +177,8 @@ Session :: struct {
     user : u8[USER_BYTES],
     /** How many bytes its user's name has: 0 for a session with no user. */
     user_bytes : usize,
+    /** Its user's programs' records' budget, from their settings; 0 for events.SESSION_BUDGET. */
+    events_budget : u64,
     /** Its locale's name, the first locale_bytes of it. */
     locale : u8[LOCALE_BYTES],
     /** How many bytes its locale's name has: 0 for none, as for a session with no user. */
@@ -653,6 +660,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         }
     }
     if user.count > 0 {
+        made.events_budget = events_budget_for(sessions, user)
         chosen :: locale_for(sessions, user, layout)
         for byte, i in string_bytes(chosen) {
             if i < made.locale.count {
@@ -1163,7 +1171,8 @@ prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared
         match events.open(sessions.events_end, sessions.events_port, name) {
             case Some(opened) => {
                 // A session's program's records kept to its budget (decisions/0183)
-                _ = events.set_budget(sessions.events_end, sessions.events_port, name, events.SESSION_BUDGET)
+                configured :: if cast[usize](number) < sessions.sessions.count { sessions.sessions[cast[usize](number)].events_budget } else { cast[u64](0) }
+                _ = events.set_budget(sessions.events_end, sessions.events_port, name, if configured != 0 { configured } else { events.SESSION_BUDGET })
                 ring_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
                     | cast[u32](slop_os.RIGHT_TRANSFER))
                 match slop_os.handle_duplicate(cast[slop_os.Handle](opened.ring), ring_rights) {
@@ -1335,6 +1344,41 @@ end_program :: fn(sessions: ptr[mut Manager], index: usize, why: string) -> sess
         _ = slop_os.process_kill(sessions.programs[index].process)
     }
     return .Ended
+}
+
+/**
+ * Find the budget a user's settings give each of their sessions' programs' records (decisions/0185, 12g).
+ *
+ * @param sessions The session manager, through whose config store the user's settings are read.
+ * @param user The user's name, not empty.
+ * @return The budget in bytes, at least events.MIN_BUDGET; 0 for the default, without the config store or a setting.
+ */
+events_budget_for :: fn(sessions: ptr[mut Manager], user: u8[]) -> u64 {
+    if sessions.settings_end == NONE {
+        return 0
+    }
+    owner : u8[OWNER_BYTES]
+    count :: owner_of(user, "", &owner)
+    out := os.Outgoing.{}
+    request :: os.begin[config.Request](&out)
+    request^ = .ValueFor(config.ValueFor.{owner = os.append(&out, owner[0..<count]), name = os.append(&out, string_bytes("session"))})
+    into := os.Incoming.{}
+    connection :: match config.ask(sessions.settings_end, sessions.settings_port, &out, &into) {
+        case Opened(opened) => config.Config[SessionSettings].{end = opened.end}
+        case _ => return 0
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return 0
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    if config.declare(connection, port) is_error {
+        return 0
+    }
+    value := os.Outgoing.{}
+    if config.read(connection, port, &value) is_error {
+        return 0
+    }
+    budget :: os.typed_value[SessionSettings](os.value_bytes(&value)).events_budget
+    return if budget >= events.MIN_BUDGET { budget } else { 0 }
 }
 
 /**

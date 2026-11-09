@@ -116,6 +116,13 @@ ServiceRecord :: struct {
     first_parameter : u32,
     /** How many parameters its entry has, all within the records' parameter_count. */
     parameter_count : u32,
+    /** Zeros, to align what follows. */
+    padding_more : u32,
+    /**
+     * The bytes of records the events service keeps of it (decisions/0185, 12g); 0 for the events service's default
+     * for the system's services.
+     */
+    events_budget : u64,
 }
 
 /** A parameter of a service's entry: its name, what it is, and its protocol's tag. */

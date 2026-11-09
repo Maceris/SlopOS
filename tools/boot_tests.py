@@ -747,13 +747,52 @@ TESTS = [
         "--expect-console-line=let counter go",
         "--expect-console-line=error: debugging counter was refused, or it isn't running",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # Tracing the whole system (decisions/0185, 12g): trace asks the powerbox, the secure attention key brings up the
+    # elevation screen, and the administrator's name and password give the shell a trace connection to the supervisor,
+    # which traces for a second and says what each service did
+    ("traces the whole system once an administrator allows it", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtrace 1\\r\\w\\p\\e[3;7~"
+        "\\wadmin\\rcorrect horse battery staple\\r\\p\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=Press Ctrl+Alt+Delete: an administrator's name and password allow it.",
+        "--console-input-after=  Trace the system",
+        "--expect-line=[user] powerbox: shell asks for a trace",
+        "--expect-line=[user] supervisor: a trace connection for an administrator",
+        "--expect-line=[user] supervisor: tracing for 1000 ms",
+        "--expect-console-line=tracing for 1 s", "--expect-console-contains= events in 1 s",
+        "--expect-console-contains= switches, ",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # The system's crash reports (decisions/0185, 12g): test_crash crashes the update service, which the supervisor
+    # reports in its source; crashes system, once the administrator allows reading the log, reads it back as a typed
+    # record and names its frames through the update service's files
+    ("shows the system's crash reports to an administrator", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_crash test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wcrashes system\\r\\w\\p\\e[3;7~"
+        "\\wadmin\\rcorrect horse battery staple\\r\\p\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=Press Ctrl+Alt+Delete: an administrator's name and password allow it.",
+        "--console-input-after=  Read the system's log",
+        "--expect-line=[user] supervisor: update crashed: execute fault",
+        "--expect-line=[user] supervisor: an events connection for an administrator",
+        "--expect-console-start=update: execute fault", "--expect-console-start=  #0 ",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Record and replay (decisions/0183, 12c): test_replay's threads, recorded one at a time, replayed exactly from
     # the recording with its seeds; and replayed with another count, which diverges, where it's said
     ("records a program of several threads and replays it exactly, and says where a changed one diverges", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wrecord test_replay 20\\r\\p\\p\\preplay test_replay 20\\r\\p\\p\\preplay test_replay 21\\r\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\wrecord test_replay 20\\r\\p\\p\\preplay test_replay 20\\r\\p\\p\\preplay test_replay 21\\r\\p\\p\\p"
+        # A channel end passed and used, recorded to a file and replayed from it (decisions/0185, 12g)
+        "record test_replay 5 1 to passed.recording\\r\\p\\p\\preplay from passed.recording\\r\\p\\p\\p"
+        "replay from nothing.recording\\r\\p\\ptest_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -761,6 +800,8 @@ TESTS = [
         "--expect-console-start=test_replay was recorded: ",
         "--expect-console-start=test_replay was replayed exactly: ",
         "--expect-console-start=test_replay diverged after ",
+        "--expect-console-line=kept in passed.recording", "--expect-console-start=test_replay: 5 turns, total 0x",
+        "--expect-console-start=error: nothing.recording isn't a recording that reads: ",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Profiling (decisions/0183, 12d): test_profile spins in spin_here, which a profile of it finds most of its samples in
     ("profiles a program, its samples named by function", 7,
@@ -1120,6 +1161,8 @@ TESTS = [
         [argument.replace("test_services", "test_services test_events") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] events: serving",
         "--expect-line=[user] supervisor: test_events: the waiting query got hello's record 0: heap working, random numbers working",
+        # hello's budget, from the system configuration (decisions/0185, 12g)
+        "--expect-line=[user] supervisor: hello's records are kept to 2097152 bytes, as its configuration says",
         "--expect-line=[user] supervisor: test_events: hello's record 0 read back from the system volume: heap working, random numbers working",
         "--expect-line=[user] supervisor: test_events: clock's record 1 read back from the system volume: serving",
         # The clock service's source given the smallest budget, which its restarts pass, dropping its oldest records (decisions/0183)

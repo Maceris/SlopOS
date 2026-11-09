@@ -191,6 +191,10 @@ runtime's types after its functions. Two bugs found: base's `slop_os_start_threa
 stack pointer at their entry, 8 off what a called function expects, so an aligned store in a thread's frame faulted
 (nothing had made one before a fiber pool on a second thread did); and `std`'s launch kept the address space rightless,
 so it couldn't be passed on; it has `RIGHT_TRANSFER` now.
+Then for 12g (2026-11-08, `0185`): base's `slop_os_adopt_events_ring`, for a process given its log ring after it
+started. A protocol message's 4 KiB limit and a typed file's plain-data lists shaped the recording file: it's laid out
+by hand on the heap, its events as a plain struct. A build once stopped in the compiler's JIT (`RuntimeDyld`'s
+`resolveRelocation`, COFF x86-64, a fatal error), and didn't again; not chased further.
 
 ## 4. Features That Look Like a Strong Fit
 

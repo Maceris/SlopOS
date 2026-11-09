@@ -2241,8 +2241,9 @@ take_accounts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 if service.elevating && is_power(view(service).ask.kind) {
                     power_allowed(service)
                 }
-                else if service.elevating && view(service).ask.kind == .DebugOther {
-                    runtime.log_info("elevation: the administrator allowed a debugger")
+                else if service.elevating && (view(service).ask.kind == .DebugOther || view(service).ask.kind == .Trace
+                    || view(service).ask.kind == .SystemLog) {
+                    runtime.log_info("elevation: the administrator allowed it")
                     end_elevation(service, true)
                 }
             }

@@ -401,6 +401,9 @@ call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, E
     if tree.text == "grants" {
         return kept_grants(shell, tree)
     }
+    if tree.text == "trace" {
+        return trace_system(shell, tree)
+    }
     if tree.text == "shut-down" || tree.text == "restart" {
         return power_down(shell, tree, tree.text == "restart")
     }
