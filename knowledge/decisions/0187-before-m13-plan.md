@@ -1,6 +1,6 @@
 # 0187: Before M13, What Was Promised and Not Built, Planned
 
-Status: accepted; C1 built, C2 and C3 to be planned with the project's owner
+Status: accepted; C1 and C2 built, C3 to come
 Date: 2026-11-09
 Related: `0011` (memory budgets), `0037` and `0093` (CPU budgets and scheduling), `0096` (robustness, R6), `0185`
 (12h, a child CPU budget for each shell job), `../design/scheduling.md`, `../design/services.md`, `../roadmap.md`
@@ -102,3 +102,40 @@ In four parts, in Hemera:
 
 Not modelled: plain (non-atomic) accesses racing with atomic ones, which `loom` models only through its own cells, and
 consume ordering, which Hemera hasn't got.
+
+## As Built: C2
+- **C2a**: `TargetOptions.model_checked` and `--model-checked`, the hooks in `base/runtime/model.hsc` and
+  `CarrierBlock.model`. base's own atomics aren't routed to the hooks: they're the runtime's machinery, its allocator's
+  and `morestack`'s among them, and a hook switching fibers in the middle of one broke the heap.
+- **C2b**: `testing.check_model`, `spawn` and `join` (`std/testing/model.hsc`), as planned. A thread at a spin hint or a
+  join isn't chosen again until another thread changes memory or ends, unless it last read an old store, so two waiting
+  threads don't hand the turn to each other for ever; the schedule's choices print as `ModelOptions.replay` takes them.
+- **C2c**: the memory model (`std/testing/model_memory.hsc`), as planned, with two choices closer to CPUs than to C11:
+  a sequentially consistent load reads the newest store, and a thread's first load after a spin hint reads the newest,
+  as a waiting thread relies on stores becoming visible. A location whose memory no longer holds its newest store, as a
+  plain write or reused memory leaves it, starts again. The model's work is done on the driver's stack, as the hooks run
+  on the test's threads' stacks, which it overran.
+- **C2d**: Hemera's `model_checking` scenario: a lost update found; atomic and `SpinLock` increments, `SharedPtr`'s
+  counts and upgrades, and the fiber pool's carrier queues with a thief, correct under every schedule; relaxed message
+  passing found, released passing not. Each of std's was checked by weakening it on purpose: a relaxed `release` fails
+  210 schedules, a `take_local` without its compare-exchange 2592.
+- **Model-checked tests need stack checks that grow fibers' stacks** (`--stack-check=morestack`): without them, a test's
+  threads, which are fibers, overran their first segments.
+- **Found on the way: the LLVM patches couldn't be applied again** on a reconfigure: an earlier patch a later one
+  overlaps doesn't reverse on its own, so it was taken as not applied. They're checked from the last back now.
+
+## Decision: C3, R6's Schedule Exploration
+The roadmap named the frame caches and the slab magazines, but neither has an atomic: both are per-CPU or under a lock.
+The kernel's lock-free protocols are elsewhere, and in its own package, which isn't built hosted. So C3 takes each
+protocol's core into a package of its own, as `frames` and `slab` are, which the kernel uses and a hosted test builds:
+- **The handle entry's tag** (`handles.hsc`): lookups read an entry without the table's lock, its tag before and after;
+  closes and installs change it under the lock. Checked: a lookup racing a close and the entry's reuse sees the old
+  entry whole, or fails, never one entry's object with another's rights.
+- **The TLB shootdown's handshake** (`shootdown.hsc`): one at a time, each other CPU asked to flush and counted down.
+  Checked: an initiator doesn't go on before every CPU has flushed its batch, and two initiators at once take turns,
+  each flushing the other's batch while it waits, never waiting on each other.
+- **The tests are built model-checked**: the build package's tests target takes `model_checked=on`, with stack checks
+  that grow fibers' stacks, which `unit_tests.py` passes. A model check in a build without it runs one schedule.
+
+Run-queue stealing, quiescent states and the events and trace rings follow the same way, in a later stage if they're
+worth it.
