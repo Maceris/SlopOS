@@ -156,6 +156,8 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 90 | `process_cpu_info` | process | the process's threads' CPU time, and the time threads of processes not on its CPU budget ran on that budget, a loan's, both in nanoseconds; needs `RIGHT_PROCESS_INSPECT` (`0185`) |
 | 91 | `memory_budget_others` | budget | the bytes charged to the memory budget by objects of processes not on it, as a server's made for a client are; no right needed (`0185`) |
 | 92 | `thread_set_page` | memory, offset | none: the calling thread's per-thread page from its next scheduling point, a `ThreadPage` at offset in anonymous memory, which needs `RIGHT_MEMORY_READ` (`0041`, `0185`); `NO_HANDLE` for none |
+| 93 | `process_set_control_flow` | process, features, region, size | none: the hardware control-flow integrity the process's code was built for (`CONTROL_FLOW_` bits), and the region its threads' shadow stacks go in, each made and mapped by the kernel as a thread is made; needs `RIGHT_PROCESS_THREADS` (`0186`) |
+| 94 | `coverage_take` | counters | how many coverage counters the kernel has, copied into counters as far as it reaches, then zeroed; only in a kernel built with them (the build's `coverage=on`), for the system call fuzzer; no handle needed (`0186`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the

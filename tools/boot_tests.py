@@ -1402,6 +1402,8 @@ TESTS = [
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
     program_test("controls a process from a debugger in user mode, with breakpoints, steps and watchpoints, and a launch's intercept of its faults",
                  "test_control", X86_CONTROL_TESTS),
+    # The system call fuzzer, every input drawn afresh, as the kernel has no coverage counters (decisions/0186, He)
+    program_test("survives the system call fuzzer", "test_fuzz_syscalls", 1),
     ("resumes after an NMI", 0, ["--command-line=test_exit test_nmi", "--expect-line=[info] test_nmi: back from the NMI"]),
     # A CPU spinning with interrupts off is caught by another's tick, and the kernel stops with Lockup (decisions/0183)
     ("catches a CPU that stops making progress", 8, ["--command-line=test_exit test_lockup",
@@ -1484,18 +1486,26 @@ KVM_TESTS = [
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS, own=False)
 
+# The system call fuzzer on a kernel with coverage counters (decisions/0186, He), which guide it; on the others it
+# draws every input afresh (TESTS)
+COVERAGE_TESTS = [
+    program_test("fuzzes the system calls, guided by the kernel's coverage", "test_fuzz_syscalls", 1),
+]
+AARCH64_COVERAGE_TESTS = aarch64_tests(COVERAGE_TESTS, own=False)
+
 
 # Where a failed build's output is kept, since a run's own output may be cut short or filtered
 FAILED_BUILD_LOG = ROOT / "build" / "failed_kernel_build.log"
 
 
-def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x86_64") -> bool:
+def build_kernel(output: Path, stack_check: str = "trap", architecture: str = "x86_64", coverage: bool = False) -> bool:
     """
-    Builds the kernel through the build package, checks and all. If it fails, everything the compiler
-    wrote, with its exit code, is printed and kept in FAILED_BUILD_LOG (hemera-feedback.md's build
-    failure seen once, which needs its output to be looked into).
+    Builds the kernel through the build package, checks and all, with coverage counters for the system call fuzzer if
+    asked (coverage=on). If it fails, everything the compiler wrote, with its exit code, is printed and kept in
+    FAILED_BUILD_LOG (hemera-feedback.md's build failure seen once, which needs its output to be looked into).
     """
-    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output},arch={architecture}",
+    setting = ",coverage=on" if coverage else ""
+    command = ["hemera", f"--setting=targets=kernel,stack_check={stack_check},kernel_output={output},arch={architecture}{setting}",
                str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
         command.insert(1, f"--install-path={os.environ['HEMERA_INSTALL']}")
@@ -1521,9 +1531,14 @@ def build_tools(output: Path) -> bool:
 
 
 def build_programs(output: Path, architecture: str = "x86_64", robustness: bool = False) -> bool:
-    """Builds SlopOS's programs through the build package, for an architecture, into the folder output."""
+    """
+    Builds SlopOS's programs through the build package, for an architecture, into the folder output; the system call
+    fuzzer runs for SLOPOS_FUZZ_SECONDS, if it's set (fuzz_seconds).
+    """
     output.mkdir(parents=True, exist_ok=True)
     setting = ",robustness=on" if robustness else ""
+    if os.environ.get("SLOPOS_FUZZ_SECONDS"):
+        setting += f",fuzz_seconds={int(os.environ['SLOPOS_FUZZ_SECONDS'])}"
     command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}{setting}",
                str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):
@@ -1564,8 +1579,15 @@ def main() -> int:
         if not build_kernel(aarch64_morestack_kernel, "morestack", "aarch64"):
             print("FAILED: the kernel doesn't build for AArch64 with morestack")
             return 1
+        coverage_kernel = Path(temporary) / "kernel_coverage.elf"
+        aarch64_coverage_kernel = Path(temporary) / "kernel_aarch64_coverage.elf"
+        if not (build_kernel(coverage_kernel, coverage=True) and build_kernel(aarch64_coverage_kernel, architecture="aarch64", coverage=True)):
+            print("FAILED: the kernel doesn't build with coverage counters")
+            return 1
         built = time.monotonic() - suite_started
         jobs = (boot_jobs(kernel, TESTS) + boot_jobs(morestack_kernel, MORESTACK_TESTS) + address_jobs(kernel)
+                + boot_jobs(coverage_kernel, COVERAGE_TESTS)
+                + boot_jobs(aarch64_coverage_kernel, AARCH64_COVERAGE_TESTS, ["--arch=aarch64"])
                 + boot_jobs(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
                 + boot_jobs(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
                 + address_jobs(aarch64_kernel, ["--arch=aarch64"], "AArch64: "))
@@ -1574,7 +1596,8 @@ def main() -> int:
             print("the KVM tests are left out: SLOPOS_KVM_HOST isn't set")
         jobs += boot_jobs(kernel, kvm_tests, [f"--kvm={KVM_HOST}"])
         failed = run_jobs(jobs)
-        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)             + len(kvm_tests)
+        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)
+        count += len(COVERAGE_TESTS) + len(AARCH64_COVERAGE_TESTS)             + len(kvm_tests)
         print_timings(time.monotonic() - suite_started, built)
         if FLAKY:
             print(f"{len(FLAKY)} flaky, failing among the others and passing alone: " + "; ".join(FLAKY))

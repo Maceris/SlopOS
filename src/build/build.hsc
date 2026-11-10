@@ -20,6 +20,8 @@
  * - robustness: on, for robustness testing's machinery (src/robustness, decisions/0096): the kernel's failure points,
  *   which fail= on its command line makes fail, and the hosted tests' (SLOPOS_FAIL). off by default, and then none of
  *   it is compiled in. Read by the code with compiler.target_setting, as every target gets the command line's settings.
+ * - coverage: on, for the system call fuzzer (decisions/0186, He): the kernel built with coverage counters, which it
+ *   gives user space read only (coverage_memory). off by default.
  */
 package build
 
@@ -235,6 +237,7 @@ add_kernel :: fn() {
     kernel.target_options.red_zone = false
     // Landing pads and signed returns, which the kernel turns on where the CPU has them (decisions/0186)
     kernel.target_options.control_flow_integrity = true
+    kernel.target_options.coverage = compiler.target_setting("coverage", default = "off") == "on"
     kernel.target_options.stack_check_failure = .Trap
     if compiler.target_setting("stack_check", default = "trap") == "morestack" {
         kernel.target_options.stack_check_failure = .Morestack

@@ -1,6 +1,6 @@
 # 0186: H, Hardening, Planned
 
-Status: accepted, chosen with the project's owner; built, Ha to Hd
+Status: accepted, chosen with the project's owner; built, Ha to He
 Date: 2026-11-09
 Related: `0003` (the CPU baseline), `0013` (the threat model), `0019` (AES detected at boot), `0023` (cheap threads,
 user space owns stacks), `0096` (robustness), `0097` (lessons adopted: the transient-execution boot log), `0088` and
@@ -268,4 +268,43 @@ architectures.
   how many bytes of RAM it maps, but QEMU's AArch64 virt has RAM from 1 GiB, so the direct map reaches further. Without
   KASLR the window always overlapped it; with KASLR now and then. Nothing was mapped in the window early enough to
   show it until the kernel's shadow stacks were. It now keeps clear of the highest physical address mapped.
+
+## As Built: He
+- **Fixtures for property tests** (Hemera's `testing.fixture`): a volume's image costs far more to make than a case
+  takes to run, and Hemera has no mutable globals, so a property test can ask its runner to keep something from its
+  first case to its last, made once and released after, in `hemera --test`'s runs, its shrinking, and `hemera --fuzz`.
+  Each case puts it back as it found it.
+- **Hosted fuzz targets**, each a property test `hemera --fuzz` guides by coverage, and runs 100 random cases of in
+  the unit tests:
+  - FAT's and slopfs's (plain and encrypted) mount paths: up to 16 byte changes where the structure is, or slopfs's
+    three ways of damage, drawn, on a volume set up once; the seeded fuzzers stay.
+  - The ELF loader: hello.elf with up to 16 bytes changed, most in its headers, read, and loaded and relocated if it
+    reads (`SLOPOS_PROGRAMS` says where it is, as `hemera --fuzz` gives no argument).
+  - Every protocol's validators (`src/protocols/test`): any bytes, as any protocol's request or response with any
+    number of handles, judged without reading outside them and the same way twice. For that, Hemera's channel,
+    message and protocol code builds on every OS now, std's protocol packages too; launching stays SlopOS's. That a
+    message accepted encodes back the same, which the plan asked, isn't checked: it needs code generated per protocol.
+  - AML's three property tests, as they were.
+  - `tools/fuzz.py` builds and runs each for `SLOPOS_FUZZ_SECONDS` (60 by default), keeping each target's corpus and
+    findings under `SLOPOS_FUZZ_FOLDER`. Ten seconds each found nothing; the validators run some 35,000 cases a second,
+    the encrypted volume 10, its key derived at each mount.
+- **The system call fuzzer** (`src/tests/test_fuzz_syscalls`):
+  - *Coverage*: Hemera's `TargetOptions.coverage` instruments a build as `--fuzz` does; the build's `coverage=on`
+    turns it on for the kernel, and `coverage_take` (call 94; ABI 13, with Hc's call 93) copies its counters to the
+    caller and zeroes them. A call rather than a mapping: a take a few hundred thousand times a run is cheap, and the
+    counters needn't be page-aligned or shared.
+  - *Calls*: from the ABI table, each argument word drawn by its parameter's type, which a compile-time table gives:
+    a handle mostly of the kind its parameter takes, from objects the fuzzer made under a budget of its own; scratch
+    memory between unmapped ranges, or addresses no user mapping has; numbers at and past limits; a wait's deadline
+    milliseconds off. Calls that would end it, start code in it, change its own thread or what it measures aren't made.
+  - *Guidance*: inputs that reach a new bucket of a kernel counter's hits are kept and changed. In 20 seconds it makes
+    some 450,000 calls and reaches some 3,000 of the x86-64 kernel's 12,851 counters; without coverage counters every
+    input is drawn afresh.
+  - *Checks*: the kernel survives, and the root task finds the fuzzer's budget back to nothing and only the kernel's
+    objects left. Boot tests run it on both kernels, with and without counters, on both architectures;
+    `SLOPOS_FUZZ_SECONDS` lengthens it, and `fuzz_seed` replays a run's draws (its timing aside). A run under
+    `robustness=on`, which the plan asked, isn't in the suites yet.
+  - *Open*: while it was being built, two runs of some fifty ended early: once killed (`EXIT_KILLED`, a fault or a
+    kill of its own process) and once on a failed assertion (134), without the logs that would say where. Forty runs
+    since, the same seeds among them, passed; a boot test that fails prints the whole log, so the next will show it.
 
