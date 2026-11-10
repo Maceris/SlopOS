@@ -251,9 +251,9 @@ pages (`0056`) and the per-thread page shared with the kernel (`0041`); in P, AC
 
 Planned 2026-10-29 (`decisions/0096`): error paths run, by machinery compiled in only under `robustness=on`. Done: **R1**
 fault injection swept by `boot_tests.py` (`0104`), **R2** counters started near their wrap (`0105`), **R3** lock ranks
-(`0106`), **R4** storage faults, with 9c (`0112`), and **R5** chaos, random services killed and budgets checked (`0181`'s F6).
-Still to come: **R6** schedule exploration for lock-free code, when Hemera's atomics can be intercepted, planned for
-Before M13 (its C2 and C3).
+(`0106`), **R4** storage faults, with 9c (`0112`), **R5** chaos, random services killed and budgets checked (`0181`'s F6),
+and **R6** schedule exploration of lock-free code on Hemera's model checker, in Before M13's C2 and C3 (`0187`): the
+handle entry's tag and the shootdown's handshake, in packages of their own with model-checked tests.
 
 Specs: none; prior art in Linux's `failslab`, `INITIAL_JIFFIES` and `lockdep`, `loom` and CHESS.
 Stresses: compile-time settings read by target code, `Allocator` wrappers, per-CPU state checked on every lock.
@@ -567,7 +567,7 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M9 | done 2026-10-31 (`decisions/0092` to `0126`): the scheduler, clock and events services, the bundle store and paged memory, the config store, generations and updates, installations, shared libraries and substitution, and 9f's follow-ups |
 | Catch-up | done 2026-10-30, in four parts (`decisions/0098` to `0101`): what M5 to M9 planned and hadn't built, the house-rule checks, and deferred items done or placed in M10, M12 and P |
 | Perf | done 2026-10-31 (`decisions/0097`, `0112`, `0127` to `0130`): benchmarks held to baselines, tickless idle, large pages, CPU loans in the storage servers |
-| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 done 2026-11-07 (`0181`'s F6); R6 not started, planned for Before M13 (C2, Hemera's atomics intercepted, then C3) |
+| R | planned 2026-10-29 (`decisions/0096`): R1 to R4 done 2026-10-30 (`0104` to `0106`, `0112`); R5 done 2026-11-07 (`0181`'s F6); R6 done 2026-11-10, Before M13's C2 and C3 (`0187`) |
 | B | done 2026-10-31 (`decisions/0131` to `0135`): Hemera's UEFI target, SlopOS's bootloader, boot counting and recovery, ISOs through it, Limine and BIOS boot removed |
 | M10 | done 2026-11-02 (`decisions/0136` to `0161`): the terminal and input services and the trusted path, accounts, login and sessions, the powerbox and sharing |
 | M11 | done 2026-11-06 (`decisions/0162` to `0180`): the shell, its language, calls through manifests, pipelines, interactive use, and the tools and scripts |
@@ -575,5 +575,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | P | done 2026-11-07 (`decisions/0182`), in five parts, P1 to P5: turning off and restarting, AML, the ACPI service and the power button, a graceful shutdown, the hardware watchdog |
 | M12 | done 2026-11-09: 12a to 12d (`decisions/0183`), and 12e to 12h, what they left (`decisions/0185`); a child CPU budget for each shell job waits for session programs to get CPU budgets (Before M13's C1) |
 | H | done 2026-11-09 (`decisions/0186`), in five stages, Ha to He: the x86-64 test path and the boot log, Hemera, user space, the kernel, the fuzzers. Ha built: boots through KVM in the Linux VM for CET's shadow stacks, the features detected, and the transient-execution log; Hb, Hemera's landing pads, signed returns and notes; Hc, user space's PAC, BTI and GCS on AArch64 and shadow stacks and IBT on x86-64; Hd, the kernel's PAC, BTI and GCS on AArch64 and IBT on x86-64, supervisor shadow stacks waiting for FRED; He, coverage-guided fuzzing: FAT, slopfs, the ELF loader, AML and every protocol's validators under `hemera --fuzz` (`tools/fuzz.py`), and the system calls guided by the kernel's coverage counters |
-| Before M13 | planned 2026-11-09 (`decisions/0187`), in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it. C1 built: each session and each program the shell starts on a CPU budget of its own |
+| Before M13 | planned 2026-11-09 (`decisions/0187`), in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it. Done 2026-11-10: each session and each program the shell starts on a CPU budget of its own (C1); Hemera's atomics routed to a model checker with weak memory, in `std/testing` (C2); the handle entry's tag and the shootdown's handshake in packages of their own, checked, a lookup's torn read found and fixed (C3) |
 | M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |

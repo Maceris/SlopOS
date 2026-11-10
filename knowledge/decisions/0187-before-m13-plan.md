@@ -1,6 +1,6 @@
 # 0187: Before M13, What Was Promised and Not Built, Planned
 
-Status: accepted; C1 and C2 built, C3 to come
+Status: accepted; built
 Date: 2026-11-09
 Related: `0011` (memory budgets), `0037` and `0093` (CPU budgets and scheduling), `0096` (robustness, R6), `0185`
 (12h, a child CPU budget for each shell job), `../design/scheduling.md`, `../design/services.md`, `../roadmap.md`
@@ -139,3 +139,33 @@ protocol's core into a package of its own, as `frames` and `slab` are, which the
 
 Run-queue stealing, quiescent states and the events and trace rings follow the same way, in a later stage if they're
 worth it.
+
+## As Built: C3
+- **`kernel/handle_entries`**: `HandleEntry` and its tag, and `start`, `fill`, `read`, `empty` and `peek`, which
+  `handles.hsc`'s install, lookup, remove and freeing use. Its kind and rights are plain numbers, so it needs nothing of
+  the kernel's.
+- **`kernel/shootdowns`**: the handshake's `Handshake` (`running` and `pending`) and its steps, `try_start`,
+  `expect_flushes`, `request`, `is_requested`, `flushed`, `all_flushed` and `finish`, of which `shootdown.hsc`'s
+  shootdown and flush are made; the batch, the IPIs and the flushes stay the kernel's. Its test runs the kernel's steps
+  on two CPUs with a number for a batch, each flushing whatever it's asked to while it waits to start and once it's
+  done, as an idle CPU takes the IPI.
+- **Found: a lookup could take one handle's object with another's tag.** An entry's object and generation were plain
+  fields, read without the lock between two loads of its tag. A close's release store of the next generation orders
+  what's before it, not the reuse's writes after it, so a lookup could read the reuse's object, then the old tag again,
+  and take them together. The CPUs SlopOS runs on don't do it, as the lock between the close and the reuse orders them
+  there, but C11 doesn't promise it. The fields are relaxed atomics now, so the race is defined, and `fill` fences
+  (release) before it writes them: a lookup that reads one then sees the close's tag. Without the fence the check
+  fails in its 1300th schedule.
+- **The shootdown's handshake was right**: an initiator goes on only once every CPU flushed its batch, and two at once
+  take turns, under every schedule with two preemptions. A flush's decrement weakened to relaxed fails in the 95th.
+- **Found in the checker: spinning threads deadlocked, or spun for ever.** A thread at a spin hint was taken as waiting
+  whenever its last load read the newest store, though its loop hadn't read everything it checks since the last change:
+  a CPU reading its flush request, then whether every shootdown had finished, was left waiting after the last one had,
+  and the check reported a deadlock. And a spinning thread could read an old request for ever, as only its first load
+  after a spin hint read the newest. Now a spin hint waits only once nothing changed since the thread's previous one,
+  and at a spin hint a thread sees every store made so far (Hemera's `docs/testing.md`, Model Checking). Before, the
+  check stopped at its 500,000 executions; now it explores every schedule in about 3 seconds.
+- **The tests target takes `model_checked=on`**, which `unit_tests.py` passes; built without it, a check runs one
+  schedule, in which the shootdown's spinning CPUs never end, so its test is only run model-checked.
+- **Failures go to the test's `T`** from its threads, through its address, so the first failing schedule is reported
+  with its replay; `handle_entries_test` and `shootdowns_test` are in `RAW_POINTERS` for that address.

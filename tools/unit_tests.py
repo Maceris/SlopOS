@@ -6,7 +6,8 @@ with Hemera's compiler (hemera on the PATH, or HEMERA), so they test code that d
 like the frame allocator over a buffer.
 
 SlopOS's programs are built first (targets=programs), and each test is given the folder they're in,
-for tests that read one, like the ELF loader's.
+for tests that read one, like the ELF loader's. The tests are built model-checked (model_checked=on, decisions/0187), so
+their model checks explore their threads' schedules.
 
 With --robustness it sweeps the tests in SWEPT instead (knowledge/decisions/0096, 0104): built with robustness=on, each
 runs once counting its allocations and failure points (SLOPOS_FAIL=count, src/robustness/hosted), then once for each
@@ -48,7 +49,7 @@ def main() -> int:
         if not build(hemera, f"targets=programs,programs_output={programs.as_posix()}"):
             print("FAILED: the programs don't build")
             return 1
-        if not build(hemera, f"targets=tests,tests_output={Path(temporary).as_posix()}"):
+        if not build(hemera, f"targets=tests,model_checked=on,tests_output={Path(temporary).as_posix()}"):
             print("FAILED: the tests don't build")
             return 1
         # The build package names each test program after the package it tests, <package>_test

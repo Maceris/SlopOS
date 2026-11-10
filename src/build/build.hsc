@@ -22,6 +22,9 @@
  *   it is compiled in. Read by the code with compiler.target_setting, as every target gets the command line's settings.
  * - coverage: on, for the system call fuzzer (decisions/0186, He): the kernel built with coverage counters, which it
  *   gives user space read only (coverage_memory). off by default.
+ * - model_checked: on, for the tests' model checks (decisions/0187, C3): every test program built with --model-checked,
+ *   its atomics the model checker's to switch threads at, and stack checks that grow fibers' stacks; tools/unit_tests.py
+ *   passes it. off by default, and then a model check runs one schedule.
  */
 package build
 
@@ -442,7 +445,7 @@ add_tools :: fn(folder: string) {
  *
  * A test package with a main of its own, as one the robustness sweeps run through robustness/hosted is, starts there;
  * any other is built as a test program, its #test functions run and reported by the entry Hemera gives it
- * (decisions/0175).
+ * (decisions/0175). With model_checked=on, each is built model-checked, with morestack stack checks (decisions/0187).
  *
  * @param folder The folder searched, relative to src/build; a test folder's own subfolders aren't.
  */
@@ -468,6 +471,10 @@ add_tests :: fn(folder: string) {
         test.output_path = text_buffer.as_string(&output)
         info :: compiler.load_package(subfolder) or_else compiler.PackageInfo.{}
         test.test = compiler.find_function(&info, "main") is_none
+        if compiler.target_setting("model_checked", default = "off") == "on" {
+            test.target_options.model_checked = true
+            test.target_options.stack_check_failure = .Morestack
+        }
         target :: compiler.add_target(test)
     }
 }

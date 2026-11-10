@@ -3,6 +3,7 @@ package kernel
 import intrinsics from "base"
 import runtime from "base"
 import arch_interface from "../arch_interface"
+import shootdowns from "shootdowns"
 
 #if TARGET_ARCH == .x86_64 {
     import arch from "../arch/x86_64"
@@ -20,17 +21,15 @@ import arch_interface from "../arch_interface"
  * flushes when the IPI takes it from idle, or while it waits for a shootdown of its own to start,
  * so two CPUs starting shootdowns at once don't wait on each other. Since the kernel runs with
  * interrupts disabled, a CPU holding a lock another waits for could wait for that one forever, so
- * a shootdown starts with no other lock held.
+ * a shootdown starts with no other lock held. Its handshake is the shootdowns package's.
  */
 
 /** The kernel's one TLB shootdown at a time: the batch being flushed and who hasn't flushed it yet. */
 Shootdown :: struct {
-    /** 1 while a shootdown runs, 0 otherwise; taken with an atomic compare-exchange, so one runs at a time. */
-    running : u32,
-    /** What the running shootdown flushes, copied here so every CPU can read it until pending reaches 0. */
+    /** Which shootdown runs, and who hasn't flushed its batch. */
+    handshake : shootdowns.Handshake,
+    /** What the running shootdown flushes, copied here so every CPU can read it until each has flushed. */
     batch : arch_interface.TlbBatch,
-    /** How many other CPUs haven't flushed this batch yet; each decrements it atomically as it does. */
-    pending : u32,
 }
 
 /**
@@ -49,7 +48,7 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
         flush_for_shootdown(cpu)
         arch.spin_hint()
     }
-    while !start_shootdown(&kernel.shootdown)
+    while !shootdowns.try_start(&kernel.shootdown.handshake)
     kernel.shootdown.batch = batch^
     cpus :: kernel.cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
@@ -59,13 +58,13 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
             others += 1
         }
     }
-    intrinsics.atomic_store_u32_release(&kernel.shootdown.pending, others)
+    shootdowns.expect_flushes(&kernel.shootdown.handshake, others)
     for other, index in cpus {
         if index < online && cast[u32](index) != cpu.index {
             per_cpus :: kernel.per_cpus
             runtime.assert(index < per_cpus.count, "every online CPU has a PerCpu")
             target :: cast[ptr[mut PerCpu]](per_cpus[index])
-            intrinsics.atomic_store_u32_release(&target.flush_requested, 1)
+            shootdowns.request(&target.flush_requested)
             arch.send_ipi(other.hardware_id, .TlbFlush)
         }
     }
@@ -73,19 +72,8 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
     loop {
         arch.spin_hint()
     }
-    while intrinsics.atomic_load_u32_acquire(&kernel.shootdown.pending) != 0
-    intrinsics.atomic_store_u32_release(&kernel.shootdown.running, 0)
-}
-
-/**
- * Try to become the running shootdown.
- *
- * @param shootdown The kernel's shootdown state.
- * @return True if none was running and this CPU's now is, with acquire ordering; false if another is running.
- */
-start_shootdown :: fn(shootdown: ptr[mut Shootdown]) -> bool {
-    _, started :: intrinsics.interlocked_compare_exchange_u32_acquire(&shootdown.running, 1, 0)
-    return started
+    while !shootdowns.all_flushed(&kernel.shootdown.handshake)
+    shootdowns.finish(&kernel.shootdown.handshake)
 }
 
 /**
@@ -96,11 +84,10 @@ start_shootdown :: fn(shootdown: ptr[mut Shootdown]) -> bool {
  * @param cpu The calling CPU's PerCpu, whose flush_requested is cleared once it has flushed.
  */
 flush_for_shootdown :: fn(cpu: ptr[mut PerCpu]) {
-    if intrinsics.atomic_load_u32_acquire(&cpu.flush_requested) == 0 {
+    if !shootdowns.is_requested(&cpu.flush_requested) {
         return void
     }
     kernel :: cpu.kernel
     arch.flush_tlb(&kernel.shootdown.batch)
-    intrinsics.atomic_store_u32_no_fence(&cpu.flush_requested, 0)
-    intrinsics.interlocked_decrement_u32_release(&kernel.shootdown.pending)
+    shootdowns.flushed(&kernel.shootdown.handshake, &cpu.flush_requested)
 }
