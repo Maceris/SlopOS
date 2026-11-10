@@ -252,13 +252,23 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
     if thread.budget != 0 {
         charge(cast[ptr[mut CpuTime]](thread.budget), cpu.run_start, used, now)
     }
+    /*
+     * Its budget object, read once: it's changed under kernel.cpu_budgets_lock, not held here, so another CPU can take
+     * the thread off it, to 0, between two reads. One that's destroyed meanwhile stays until this CPU's next quiescent
+     * point.
+     */
+    object :: intrinsics.atomic_load_u64(&thread.budget_object)
+    // Its budget's time (decisions/0187)
+    if object != 0 {
+        _ = intrinsics.interlocked_exchange_add_u64(&cast[ptr[mut CpuBudget]](object).ran, used)
+    }
     // Its process's time, and its budget's run by others, a loan's, for attribution (decisions/0185)
     owner :: thread.header.owner
     if owner != 0 {
         process :: cast[ptr[mut Process]](owner)
         _ = intrinsics.interlocked_exchange_add_u64(&process.run_time, used)
-        if thread.budget_object != 0 && process.cpu_budget != thread.budget_object {
-            _ = intrinsics.interlocked_exchange_add_u64(&cast[ptr[mut CpuBudget]](thread.budget_object).run_by_others, used)
+        if object != 0 && process.cpu_budget != object {
+            _ = intrinsics.interlocked_exchange_add_u64(&cast[ptr[mut CpuBudget]](object).run_by_others, used)
         }
     }
     cpu.run_start = now

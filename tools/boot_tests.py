@@ -226,7 +226,7 @@ TESTS = [
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
         "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 79 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
-        "--expect-line=[user] scheduler: 5 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
+        "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working",
@@ -917,6 +917,16 @@ TESTS = [
     # it writes them, said to have ended at the prompt and finished with wait, which gives them; Ctrl-C stopping one in
     # the foreground over its lifecycle channel, behind what's typed ahead too, and killing a stubborn one after the
     # grace period; stop ending a job; and jobs listing them
+    # A job on a CPU budget of its own, an eighth of its session's, which processes shows (decisions/0187)
+    ("runs each job on a CPU budget of its own, which processes shows", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=120").replace("--timeout=120", "--timeout=240")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wtest_shell_calls 1 cj --sleep 20s &\\r\\p\\p\\pprocesses | map name\\r\\p\\pprocesses | map share\\r\\p\\pprocesses | map budget\\r\\p\\pprocesses\\r\\p\\p\\p\\p\\p\\p\\p\\p\\p\\p\\p\\p",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=[1] started",
+        "--expect-console-contains=test_shell_calls (job 1)", "--expect-console-contains=25000", "--expect-console-contains=3125"])),
     ("runs jobs in the background, and stops them with Ctrl-C and stop", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
@@ -1162,6 +1172,15 @@ TESTS = [
         "--expect-line=[user] sessions: test_pressure: idle installations stopped: 1; the shown session's left running",
         # Shown again, its installation stopped under pressure is started again (decisions/0181, F3)
         "--expect-line=[user] sessions: starting counter again in session 0, stopped under memory pressure"])),
+    # Each session on a CPU budget of its own, a quarter of the sessions' tenth of a CPU (decisions/0187)
+    ("runs each session on a CPU budget of its own", 7,
+     with_before_qemu([argument.replace("test_services", "test_services use_echo test_session_cpu test_settle=30") for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\p\\p",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
+        "--console-input-after=echo: first line", "--console-input-after=  Log in",
+        "--expect-line=[user] terminal: login: another session",
+        "--expect-line=[user] sessions: test_session_cpu: 2 sessions on CPU budgets of their own, 25000 millionths of a CPU each; the first's programs ran on its"])),
     ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: made the accounts volume",

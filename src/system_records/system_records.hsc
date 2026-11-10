@@ -76,6 +76,11 @@ CpuRecord :: struct {
     time_ns : u64,
     /** The CPUs its threads run on, a bit per CPU's index; 0 for every CPU. */
     cpus : u64,
+    /**
+     * 1 if the service splits its budget for others, as the session manager does for sessions (decisions/0187), and is
+     * given it splittable; 0 otherwise.
+     */
+    splits : u32,
 }
 
 /**

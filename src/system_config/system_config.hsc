@@ -125,11 +125,18 @@ INSTALLATIONS :: Installation.[Installation.{name = "counter", program = "counte
 DEFAULT_DEADLINE_MS : u32 : 120_000
 
 /**
- * The budget every service without one of its own runs on, at a middling priority: half a CPU, so that what has
- * budgets of its own is never kept waiting by everything else, which runs on in the background band once this is
+ * The budget every service without one of its own runs on, at a middling priority: four tenths of a CPU, so that what
+ * has budgets of its own is never kept waiting by everything else, which runs on in the background band once this is
  * spent.
  */
-DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 5_000_000}
+DEFAULT_CPU :: CpuShare.{priority = 100, period_ns = 10_000_000, time_ns = 4_000_000}
+
+/**
+ * What the session manager splits a budget for each session off (decisions/0187): a tenth of a CPU, taken from the
+ * default's, at a priority between the default's and the interactive services', so that people's programs aren't kept
+ * waiting by services in the background, nor keep what talks to them waiting.
+ */
+SESSIONS_CPU :: CpuShare.{priority = 150, period_ns = 10_000_000, time_ns = 1_000_000}
 
 /** What talks to people runs first: a tenth of a CPU each, at a high priority. */
 INTERACTIVE_CPU :: CpuShare.{priority = 200, period_ns = 10_000_000, time_ns = 1_000_000}
@@ -174,6 +181,11 @@ Service :: struct {
     boot_set : bool,
     /** Its CPU budget, which the scheduler service splits off the root's; None for the default (DEFAULT_CPU). */
     cpu : CpuShare?,
+    /**
+     * Whether it splits its CPU budget for others, as the session manager does for each session (decisions/0187):
+     * its starter is given the budget with the right to split it, as well as the copy it's put on. Only with a cpu.
+     */
+    cpu_splits : bool,
     /**
      * Whether its starter leaves it ended when it ends other than by exiting with 0, rather than starting it again, as
      * the supervisor does everything else it starts, up to three times a minute (decisions/0077, 0093).
@@ -247,7 +259,7 @@ SERVICES :: Service.[
      * budgets split off this one's (decisions/0150, 0153, 0156)
      */
     Service.{name = "sessions", module = "session_manager.elf", starter = .Supervisor, by_manager = true, budget = 48 * MIB,
-        entry = type_of(session_manager.main)},
+        entry = type_of(session_manager.main), cpu = SESSIONS_CPU, cpu_splits = true},
     Service.{name = "echo", module = "echo.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(echo.main), cpu = INTERACTIVE_CPU},
     Service.{name = "hello", module = "hello.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
@@ -428,7 +440,7 @@ make_records :: fn() -> system_records.SystemRecords {
         record.class = each.devices.class
         match each.cpu {
             case Some(share) => record.cpu = system_records.CpuRecord.{has = 1, priority = share.priority, period_ns = share.period_ns,
-                time_ns = share.time_ns, cpus = share.cpus}
+                time_ns = share.time_ns, cpus = share.cpus, splits = if each.cpu_splits { 1 } else { 0 }}
             case None => {}
         }
         record.first_parameter = made.parameter_count

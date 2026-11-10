@@ -34,16 +34,26 @@ Request :: union {
      * service already has as many clients as it takes. Sent on the listener, and answered with nothing.
      */
     Connect(os.Channel[Scheduler]),
+    /**
+     * Ask for the CPU budget of a service that splits it for others, as the session manager does for each session
+     * (decisions/0187), by its name as BudgetFor takes it: one whose system_config entry has cpu_splits. Answered with
+     * Budget, the handle with the right to split it (RIGHT_CPU_BUDGET_SPLIT) besides BudgetFor's, but not to change it;
+     * or NoBudget, for a service that doesn't split its budget, or has none of its own.
+     */
+    SplittableBudgetFor(slop_os.Relative[u8]),
 }
 
 /** What the scheduler service answers. */
 Response :: union {
     /**
      * BudgetFor's answer: a handle to the budget with only the rights to bind processes to it and to send it, which
-     * moves to the client.
+     * moves to the client; SplittableBudgetFor's, with the right to split it too.
      */
     Budget(slop_os.CpuBudget),
-    /** BudgetFor's answer when it has no budget to give: none could be split off the root's, or copied. */
+    /**
+     * BudgetFor's answer when it has no budget to give: none could be split off the root's, or copied; and
+     * SplittableBudgetFor's, besides, for a service that doesn't split its budget.
+     */
     NoBudget,
     /** The answer to a request the service doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
@@ -106,7 +116,37 @@ budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .BudgetFor(os.append(&out, string_bytes(name)))
-    if send_request(end, port, &out) is_some {
+    return ask_budget(end, port, &out)
+}
+
+/**
+ * Ask the scheduler service for the budget of a service that splits it for others (decisions/0187), and wait for its
+ * answer, as budget_for does.
+ *
+ * @param end A connection to the scheduler service, kept by the caller.
+ * @param port A port bound to end, waited on for the answer.
+ * @param name The service's name, as system_config names it.
+ * @return A handle to the budget, with the right to split it, the caller's to send or close; null if the request
+ *     couldn't be sent, the connection's gone, or the service doesn't split its budget or has none of its own.
+ */
+splittable_budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop_os.CpuBudget? {
+    out := os.Outgoing.{}
+    request :: os.begin[Request](&out)
+    request^ = .SplittableBudgetFor(os.append(&out, string_bytes(name)))
+    return ask_budget(end, port, &out)
+}
+
+/**
+ * Send a request for a budget, and wait for its answer.
+ *
+ * @param end A connection to the scheduler service, kept by the caller.
+ * @param port A port bound to end, waited on for the answer.
+ * @param out The request, built.
+ * @return The budget's handle, the caller's; null if the request couldn't be sent, the connection's gone, or the
+ *     answer was NoBudget.
+ */
+ask_budget :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> slop_os.CpuBudget? {
+    if send_request(end, port, out) is_some {
         return null
     }
     into := os.Incoming.{}

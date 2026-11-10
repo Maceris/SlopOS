@@ -2388,7 +2388,7 @@ start_session :: fn(service: ptr[mut Service], home: os.Channel[dir.Dir]?) -> bo
         return false
     }
     budget :: slop_os.startup_block().budget
-    pair :: os.channel_for[terminal.Terminal](budget, 0) or_return false
+    pair :: os.channel_for[terminal.Terminal](budget, terminal.RING_BYTES) or_return false
     client :: match service_kit.add_client_index(&service.connected, service.port, pair.a) {
         case Some(added) => added
         case None => {

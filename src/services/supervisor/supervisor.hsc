@@ -397,6 +397,11 @@ SessionGrants :: struct {
     command_line : slop_os.Memory?,
     /** The listener for its client, the terminal service; the supervisor keeps its other end. */
     clients : os.Listener[session.Session],
+    /**
+     * Its CPU budget with the right to split it, for each session's budget (decisions/0187); null without the
+     * scheduler service, or one that doesn't give it.
+     */
+    cpu_budget : slop_os.CpuBudget?,
 }
 
 /** What the disk check is given (disk_check.main); its handles move to it at its launch. */
@@ -4360,7 +4365,7 @@ start_input :: fn(supervisor: ptr[mut Supervisor], again: usize) {
  */
 start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     service :: service_named(supervisor, "terminal") or_return void
-    pair :: os.channel_for[terminal.Terminal](supervisor.block.budget, 0) or_return void
+    pair :: os.channel_for[terminal.Terminal](supervisor.block.budget, terminal.RING_BYTES) or_return void
     grants := TerminalGrants.{log = duplicate_log(supervisor), serial_line = connector_to(supervisor, supervisor.first_serial),
         input = connector_to(supervisor, supervisor.input), accounts_service = connector_to(supervisor, supervisor.accounts),
         clients = os.Listener[terminal.Terminal].{end = pair.a}}
@@ -4649,6 +4654,10 @@ start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         events_service = events_connection(supervisor), store = store_connection(supervisor), apps = system_directory(supervisor, "apps"),
         installation_list = installations_for_sessions(supervisor), command_line = command_line_copy(supervisor),
         clients = os.Listener[session.Session].{end = pair.a}}
+    // Its budget to split for each session (decisions/0187)
+    if supervisor.scheduler_end != NONE {
+        grants.cpu_budget = scheduler_protocol.splittable_budget_for(supervisor.scheduler_end, supervisor.scheduler_port, service.name)
+    }
     // The config store's connection for users' values, the session manager's from now on
     if supervisor.config_users != NONE {
         grants.settings = os.Channel[config_protocol.ConfigValue].{end = supervisor.config_users}

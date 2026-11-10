@@ -199,6 +199,11 @@ Call :: struct {
     returned : Value,
     /** The memory it's given to run on, in bytes; 0 for PROGRAM_BUDGET, a program's, and SCRIPT_BUDGET for a script's. */
     budget : u64,
+    /**
+     * Once it's started: the CPU budget it runs on, a child of the session's (decisions/0187), the owning handle, closed
+     * by end_call; NO_HANDLE when it runs on the shell's.
+     */
+    cpu_budget : slop_os.CpuBudget,
 }
 
 /**
@@ -243,6 +248,10 @@ end_call :: fn(call: ptr[mut Call]) {
         }
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](call.executable))
+    // Its CPU budget destroyed, now it's ended
+    if cast[slop_os.Handle](call.cpu_budget) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](call.cpu_budget))
+    }
     if call.has_result {
         _ = slop_os.handle_close(cast[slop_os.Handle](call.result))
     }
@@ -255,6 +264,44 @@ end_call :: fn(call: ptr[mut Call]) {
     runtime.array_free(&call.parameters)
     schema.free(&call.manifest)
     runtime.free(call)
+}
+
+/** What part of its session's CPU share each program the shell starts is guaranteed: an eighth (decisions/0187). */
+PROGRAM_SHARE_PARTS : u64 : 8
+
+/**
+ * Make a CPU budget for a program the shell starts (decisions/0187): a child of its session's, at its priority and
+ * period, an eighth of its share. Without the session's budget, or room left in it, there's none, and the program runs
+ * on the shell's.
+ *
+ * @param shell The shell, whose cpu_budget it's split off, and whose memory budget pays for it.
+ * @return The owning handle, the call's to keep while it runs; NO_HANDLE for none.
+ */
+program_cpu_budget :: fn(shell: ptr[Shell]) -> slop_os.CpuBudget {
+    none :: cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
+    if cast[slop_os.Handle](shell.cpu_budget) == slop_os.NO_HANDLE {
+        return none
+    }
+    session :: slop_os.cpu_budget_describe(shell.cpu_budget) or_return none
+    time :: session.time / PROGRAM_SHARE_PARTS
+    if time == 0 {
+        return none
+    }
+    return slop_os.cpu_budget_create(shell.cpu_budget, slop_os.startup_block().budget, cast[u32](session.priority), session.period, time) or_else none
+}
+
+/**
+ * Copy a program's CPU budget to launch it on: the rights to put it on the budget and to send the handle.
+ *
+ * @param budget The budget, kept by the caller; NO_HANDLE for none.
+ * @return The copy, which moves to the launch; null for none, or one that can't be copied.
+ */
+bindable_copy :: fn(budget: slop_os.CpuBudget) -> slop_os.CpuBudget? {
+    if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
+        return null
+    }
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_TRANSFER))
+    return cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](budget), rights) or_return null)
 }
 
 /**
@@ -282,11 +329,15 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
+    // On a CPU budget of its own, a child of its session's (decisions/0187)
+    own_cpu :: program_cpu_budget(shell)
+    options.cpu_budget = bindable_copy(own_cpu)
     budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
     match os.launch_named(manager, shell.manager_port, tree.text, call.executable, budget, call.grants, call.values, options) {
         case Ok(made) => {
             call.started = true
             call.launched = made
+            call.cpu_budget = own_cpu
             call.lifecycle = ends.a
             call.key = key
             // Its lifecycle channel wakes the shell when it says its progress; without the binding, it's read anyway
@@ -300,6 +351,9 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
             close_copy(options.clock)
             close_copy(options.locale)
             close_copy(options.result)
+            if cast[slop_os.Handle](own_cpu) != slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](own_cpu))
+            }
             return EvalError.{message = message("% didn't start: %", tree.text, error), at = tree.at}
         }
     }

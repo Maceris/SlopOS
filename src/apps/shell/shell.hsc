@@ -47,6 +47,11 @@ Shell :: struct {
     home_port : slop_os.Port,
     /** The process manager it starts programs through; null if it wasn't given one, so no program can start. */
     manager : os.Channel[process_manager.ProcessManager]?,
+    /**
+     * Its session's CPU budget, with the right to split it, for a child of it for each program it starts
+     * (decisions/0187); NO_HANDLE without one, when they run on the shell's.
+     */
+    cpu_budget : slop_os.CpuBudget,
     /** A port bound to manager's end; unset without one. */
     manager_port : slop_os.Port,
     /** The session manager's connection it finds programs on (decisions/0170); null if it wasn't given one. */
@@ -98,15 +103,18 @@ Shell :: struct {
  * @param script A script to run (decisions/0179, 11e6), instead of reading lines: its parameters bound to the grants
  *     and values of their names, then its statements run in turn, its home its here. Without it, the shell reads lines
  *     on its terminal.
+ * @param cpu_budget Its session's CPU budget, which it may split, for a child of it for each program it starts
+ *     (decisions/0187). Without it, they run on the shell's own.
  * @return 0 after exit, or when it's asked to stop on its lifecycle channel; 2 if the terminal couldn't be opened or
  *     a port couldn't be made; 3 when its terminal goes. For a script: 0 once it's run to its end, 1 for its error, 2
  *     if it couldn't be read.
  */
 main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
     manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?,
-    script: os.Channel[read_only_file.ReadOnlyFile]?) -> int {
+    script: os.Channel[read_only_file.ReadOnlyFile]?, cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
+    shell.cpu_budget = cpu_budget or_else cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
     shell.scope = runtime.new(Scope)
     shell.console = terminal.open(session_terminal) or_return 2
     shell.next_key = FIRST_KEY

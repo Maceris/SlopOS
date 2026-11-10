@@ -39,15 +39,18 @@ ask_session :: fn(shell: ptr[mut Shell], out: ptr[mut os.Outgoing], into: ptr[mu
 }
 
 /**
- * List the session's processes as a tree: the session's programs, then the shell's jobs' programs beneath the shell.
+ * List the session's processes as a tree: the session itself, its CPU budget's, then its programs, then the shell's
+ * jobs' programs beneath the shell.
  *
  * It fails for arguments, or when the session manager can't be asked.
  *
  * @param shell The shell, whose session is asked and whose jobs are looked at.
  * @param tree The Call node of processes.
- * @return A list of records: name, parent ("session", or "shell" for a job's program), state ("running", "not
- *     responding" for a program that didn't answer a ping in time, or for a job's, "ended"), memory and limit, sizes
- *     of its budget's use and limit, 0 where they couldn't be read.
+ * @return A list of records: name, parent ("session", or "shell" for a job's program; "" for the session), state
+ *     ("running", "not responding" for a program that didn't answer a ping in time, or for a job's, "ended"), memory
+ *     and limit, sizes of its budget's use and limit, 0 where they couldn't be read; cpu, its time, and for the
+ *     session, its CPU budget's; share, the CPU budget's guaranteed share in millionths of a CPU, and budget, the time
+ *     run on it, for the session and each job with a CPU budget of its own (decisions/0187), 0 for none.
  */
 list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 0 {
@@ -60,13 +63,19 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
         return error_at(tree.at, "the session manager couldn't be asked")
     }
     made :: new_list()
+    // The session's own budget, which its programs run on
+    session := slop_os.CpuBudgetInfo.{}
+    if cast[slop_os.Handle](shell.cpu_budget) != slop_os.NO_HANDLE {
+        session = slop_os.cpu_budget_describe(shell.cpu_budget) or_else session
+    }
+    runtime.array_add(&made.items, process_record("session", "", "running", 0, 0, session.ran, session.lent, 0, session.share, session.ran))
     match os.message_of[programs.Response](&into)^ {
         case RunningPrograms(running) => {
             for each in os.items(&into, running) {
                 name :: copied_first(each.name[0..<each.name.count], cast[usize](each.name_bytes))
                 state :: if each.responding != 0 { "running" } else { "not responding" }
                 runtime.array_add(&made.items, process_record(name, "session", state, each.memory, each.memory_limit, each.cpu_ns,
-                    each.lent_ns, each.charged))
+                    each.lent_ns, each.charged, 0, 0))
             }
         }
         case _ => return error_at(tree.at, "the session manager couldn't be asked")
@@ -89,8 +98,12 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
                 case Error(error) => {}
             }
             charged :: slop_os.memory_budget_others(call.launched.budget) or_else 0
+            own := slop_os.CpuBudgetInfo.{}
+            if cast[slop_os.Handle](call.cpu_budget) != slop_os.NO_HANDLE {
+                own = slop_os.cpu_budget_describe(call.cpu_budget) or_else own
+            }
             runtime.array_add(&made.items, process_record(message("% (job %)", call.tree.text, job.number), "shell", state, used, limit,
-                cpu.run_ns, cpu.lent_ns, charged))
+                cpu.run_ns, cpu.lent_ns, charged, own.share, own.ran))
         }
     }
     return .Ok(.List(made))
@@ -107,10 +120,12 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
  * @param cpu Its threads' CPU time, in nanoseconds.
  * @param lent The time services ran on its CPU budget for it, lent it, in nanoseconds (decisions/0185, 12h).
  * @param charged The bytes services' objects charged to its memory budget.
+ * @param share Its CPU budget's guaranteed share, in millionths of a CPU; 0 for none of its own.
+ * @param budget The time run on its CPU budget, in nanoseconds; 0 for none of its own.
  * @return The record.
  */
 process_record :: fn(name #escaping : string, parent #escaping : string, state #escaping : string, memory: u64, limit: u64, cpu: u64,
-    lent: u64, charged: u64) -> Value {
+    lent: u64, charged: u64, share: u64, budget: u64) -> Value {
     record :: new_record()
     set_field(record, "name", .Text(name))
     set_field(record, "parent", .Text(parent))
@@ -120,6 +135,8 @@ process_record :: fn(name #escaping : string, parent #escaping : string, state #
     set_field(record, "cpu", .Duration(cast[i64](cpu)))
     set_field(record, "lent", .Duration(cast[i64](lent)))
     set_field(record, "charged", .Size(charged))
+    set_field(record, "share", .Int(cast[i64](share)))
+    set_field(record, "budget", .Duration(cast[i64](budget)))
     return .Record(record)
 }
 

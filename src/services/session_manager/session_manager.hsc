@@ -108,6 +108,12 @@ SessionSettings :: struct {
      * events.MIN_BUDGET; 0 for events.SESSION_BUDGET.
      */
     events_budget : u64,
+    /**
+     * The share of a CPU each of the user's sessions is guaranteed, in millionths (decisions/0187); 0 for a quarter of
+     * the sessions' share. One that doesn't fit what's left of the sessions' share runs the session on the session
+     * manager's budget.
+     */
+    cpu_share : u64,
 }
 
 /**
@@ -131,6 +137,11 @@ ShellGrants :: struct {
     data : installations.AppData?,
     /** A script to run instead of reading lines (decisions/0179, 11e6): never one for a session's first program. */
     script : os.Channel[read_only_file.ReadOnlyFile]?,
+    /**
+     * Its session's CPU budget with the right to split it, for a child of it for each job (decisions/0187); null for a
+     * session without a budget of its own.
+     */
+    cpu_budget : slop_os.CpuBudget?,
 }
 
 /**
@@ -198,6 +209,13 @@ Session :: struct {
     powerbox_port : slop_os.Port,
     /** Its shell's programs connection (decisions/0170), bound to the session manager's port; NONE for none. */
     programs_end : slop_os.Channel,
+    /**
+     * Its CPU budget, a child of the sessions' (decisions/0187), the owning handle, which every one of its programs runs
+     * on, destroyed when it ends; NO_HANDLE for none, when they run on the session manager's.
+     */
+    cpu_budget : slop_os.CpuBudget,
+    /** Its share of a CPU, in millionths, as asked for; 0 for the default. */
+    cpu_share : u64,
 }
 
 /**
@@ -326,6 +344,8 @@ Manager :: struct {
     showings : u64,
     /** Whether test_pressure is still to come, once two sessions are. */
     test_pressure : bool,
+    /** Whether test_session_cpu is still to come, once two sessions are (decisions/0187). */
+    test_session_cpu : bool,
     /**
      * Whether use_echo makes echo each session's first program, in the shell's place, as tests of the terminal and the
      * powerbox drive it.
@@ -333,6 +353,11 @@ Manager :: struct {
     use_echo : bool,
     /** The budget test_pressure charges its own with to bring on pressure, until it's relieved; NO_HANDLE for none. */
     ballast : slop_os.MemoryBudget,
+    /**
+     * The sessions' CPU budget, with the right to split it, for each session's (decisions/0187); NO_HANDLE without
+     * one, when every session runs on the session manager's.
+     */
+    cpu_budget : slop_os.CpuBudget,
     /** The sessions, by number. */
     sessions : Session[MAX_SESSIONS],
     /** Every session's programs, the first count of them in use or once used. */
@@ -351,8 +376,9 @@ Manager :: struct {
  * It serves the session protocol on its listener until the system ends: Start and StartWithoutUser make a session and
  * start its first program, List gives a session's programs, End and EndSession end a program or a whole session, and
  * Shown says which session the console shows. A session's first program is the shell, from the bundle store, or echo
- * without one. Its command line's words test_installations and test_pressure turn on its tests, and use_echo starts
- * echo in the shell's place.
+ * without one. Its command line's words test_installations, test_pressure and test_session_cpu turn on its tests, and
+ * use_echo starts echo in the shell's place. Each session runs on a CPU budget of its own, split off cpu_budget
+ * (decisions/0187).
  *
  * @param log The kernel's debug log, which every program it starts is given a copy of. Without it, they're given none.
  * @param manager The connector to the process manager, dialed for the connection programs are launched through.
@@ -367,19 +393,22 @@ Manager :: struct {
  * @param apps The system volume's apps directory, the installations' data directories' parent for a session with no
  *     user. Without it, such a session runs no installations.
  * @param installation_list The system's list of installations in the config store. Without it, sessions run none.
- * @param command_line The kernel's command line, read for test_installations, test_pressure and use_echo. Without it,
- *     none of them is on.
+ * @param command_line The kernel's command line, read for test_installations, test_pressure, test_session_cpu and
+ *     use_echo. Without it, none of them is on.
  * @param clients Where connections from the session protocol's clients, the trusted path, arrive; more come through
  *     Connect.
+ * @param cpu_budget The sessions' CPU budget, which it may split, for each session's (decisions/0187). Without it,
+ *     every session runs on the session manager's own.
  * @return 1 if its port couldn't be made or bound to its budget's pressure; 2 if the process manager couldn't be
  *     dialed; 3 if the clients' listener couldn't be bound. It doesn't return otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], echo_module: slop_os.Memory?,
     events_service: os.Channel[events.Events]?, settings: os.Channel[config.ConfigValue]?, store: os.Channel[bundle_store.BundleStore]?,
     apps: os.Channel[dir.Dir]?, installation_list: config.Config[system_records.Installations]?, command_line: slop_os.Memory?,
-    clients: os.Listener[session.Session]) -> int {
+    clients: os.Listener[session.Session], cpu_budget: slop_os.CpuBudget?) -> int {
     block :: slop_os.startup_block()
     sessions := runtime.new(Manager)
+    sessions.cpu_budget = cpu_budget or_else cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
     sessions.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     sessions.echo_module = echo_module
     sessions.checking = NOWHERE
@@ -427,6 +456,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], ech
             text :: service_kit.text_of(block, memory) or_else ""
             sessions.test_installations = service_kit.has_word(text, "test_installations")
             sessions.test_pressure = service_kit.has_word(text, "test_pressure")
+            sessions.test_session_cpu = service_kit.has_word(text, "test_session_cpu")
             sessions.use_echo = service_kit.has_word(text, "use_echo")
         }
         case None => {}
@@ -653,14 +683,16 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         return .Refused
     }
     made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE,
-        powerbox_end = NONE, programs_end = NONE}
+        powerbox_end = NONE, programs_end = NONE, cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
     for byte, i in user {
         if i < made.user.count {
             made.user[i] = byte
         }
     }
     if user.count > 0 {
-        made.events_budget = events_budget_for(sessions, user)
+        settings :: user_settings(sessions, user)
+        made.events_budget = if settings.events_budget >= events.MIN_BUDGET { settings.events_budget } else { cast[u64](0) }
+        made.cpu_share = settings.cpu_share
         chosen :: locale_for(sessions, user, layout)
         for byte, i in string_bytes(chosen) {
             if i < made.locale.count {
@@ -669,6 +701,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
             }
         }
     }
+    made.cpu_budget = session_budget(sessions, made.cpu_share)
     sessions.sessions[number] = made
     if user.count == 0 {
         runtime.log_info("a session with no user, on a boot with no accounts")
@@ -687,11 +720,53 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         return .Refused
     }
     start_installations(sessions, cast[u32](number))
+    check_session_cpu(sessions)
     if sessions.test_installations && user.count > 0 {
         sessions.test_installations = false
         sessions.checking = number
     }
     return .Started(cast[u32](number))
+}
+
+/**
+ * test_session_cpu (decisions/0187), once two sessions are: each on a CPU budget of its own, of a quarter of the
+ * sessions' share, and the first's programs ran on its own, not the session manager's. Says what it found.
+ *
+ * @param sessions The session manager, whose test_session_cpu is cleared once it's checked.
+ */
+check_session_cpu :: fn(sessions: ptr[mut Manager]) {
+    if !sessions.test_session_cpu {
+        return void
+    }
+    on_budgets := 0
+    first_ran := false
+    share := cast[u64](0)
+    for each in sessions.sessions {
+        if !each.in_use || cast[slop_os.Handle](each.cpu_budget) == slop_os.NO_HANDLE {
+            continue
+        }
+        info :: slop_os.cpu_budget_describe(each.cpu_budget) or_else slop_os.CpuBudgetInfo.{}
+        if on_budgets == 0 {
+            first_ran = info.ran > 0
+            share = info.share
+        }
+        else if info.share != share {
+            share = 0
+        }
+        on_budgets += 1
+    }
+    if on_budgets < 2 {
+        return void
+    }
+    sessions.test_session_cpu = false
+    parent :: slop_os.cpu_budget_describe(sessions.cpu_budget) or_else slop_os.CpuBudgetInfo.{}
+    if share == 0 || share != parent.share / cast[u64](MAX_SESSIONS) || !first_ran {
+        runtime.log_error("test_session_cpu: sessions' budgets wrong: shares % of the sessions' %, the first's programs ran on it: %", share,
+            parent.share, first_ran)
+        return void
+    }
+    runtime.log_info("test_session_cpu: % sessions on CPU budgets of their own, % millionths of a CPU each; the first's programs ran on its",
+        on_budgets, share)
 }
 
 /**
@@ -749,7 +824,12 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
             drop_finder(sessions, i)
         }
     }
-    made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE, programs_end = NONE}
+    // Its budget destroyed: what still runs on it runs on the session manager's
+    if cast[slop_os.Handle](made.cpu_budget) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.cpu_budget))
+    }
+    made^ = Session.{locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE, powerbox_end = NONE, programs_end = NONE,
+        cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
 }
 
 /**
@@ -806,6 +886,9 @@ launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
     }
     prepared :: prepare(sessions, number, "shell") or_return false
     grants := ShellGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}
+    if cast[usize](number) < sessions.sessions.count {
+        grants.cpu_budget = budget_copy(sessions.sessions[cast[usize](number)].cpu_budget, true)
+    }
     // Its own connection to the process manager, to launch what it calls, and its programs connection
     grants.manager = process_manager.connect(sessions.manager.end, sessions.manager_port, slop_os.startup_block().budget)
     grants.programs = programs_connection(sessions, number)
@@ -1166,6 +1249,8 @@ prepare :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> Prepared
     prepared.options.lifecycle = ends.b
     if cast[usize](number) < sessions.sessions.count {
         prepared.options.locale = locale_page(&sessions.sessions[cast[usize](number)])
+        // On its session's budget (decisions/0187)
+        prepared.options.cpu_budget = budget_copy(sessions.sessions[cast[usize](number)].cpu_budget, false)
     }
     if sessions.events_end != NONE {
         match events.open(sessions.events_end, sessions.events_port, name) {
@@ -1347,15 +1432,18 @@ end_program :: fn(sessions: ptr[mut Manager], index: usize, why: string) -> sess
 }
 
 /**
- * Find the budget a user's settings give each of their sessions' programs' records (decisions/0185, 12g).
+ * Read a user's settings for their sessions: what their programs' records keep (decisions/0185, 12g) and their CPU
+ * share (decisions/0187). The locale is read on its own (locale_for).
  *
  * @param sessions The session manager, through whose config store the user's settings are read.
  * @param user The user's name, not empty.
- * @return The budget in bytes, at least events.MIN_BUDGET; 0 for the default, without the config store or a setting.
+ * @return The settings, as they're kept, their locale not to be read; zeros, each a default, without the config store
+ *     or a setting.
  */
-events_budget_for :: fn(sessions: ptr[mut Manager], user: u8[]) -> u64 {
+user_settings :: fn(sessions: ptr[mut Manager], user: u8[]) -> SessionSettings {
+    none :: SessionSettings.{}
     if sessions.settings_end == NONE {
-        return 0
+        return none
     }
     owner : u8[OWNER_BYTES]
     count :: owner_of(user, "", &owner)
@@ -1365,20 +1453,71 @@ events_budget_for :: fn(sessions: ptr[mut Manager], user: u8[]) -> u64 {
     into := os.Incoming.{}
     connection :: match config.ask(sessions.settings_end, sessions.settings_port, &out, &into) {
         case Opened(opened) => config.Config[SessionSettings].{end = opened.end}
-        case _ => return 0
+        case _ => return none
     }
     defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
-    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return 0
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return none
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     if config.declare(connection, port) is_error {
-        return 0
+        return none
     }
     value := os.Outgoing.{}
     if config.read(connection, port, &value) is_error {
-        return 0
+        return none
     }
-    budget :: os.typed_value[SessionSettings](os.value_bytes(&value)).events_budget
-    return if budget >= events.MIN_BUDGET { budget } else { 0 }
+    read :: os.typed_value[SessionSettings](os.value_bytes(&value))
+    return SessionSettings.{events_budget = read.events_budget, cpu_share = read.cpu_share}
+}
+
+/**
+ * Make a session's CPU budget (decisions/0187): a child of the sessions' budget, at its priority and period, of the
+ * share asked for, or a quarter of the sessions' share, so MAX_SESSIONS sessions fit. One that can't be made is
+ * logged, and the session's programs run on the session manager's budget.
+ *
+ * @param sessions The session manager, whose cpu_budget it's split off, and whose memory budget pays for it.
+ * @param share The share asked for, in millionths of a CPU; 0 for the default.
+ * @return The budget's owning handle, the session's; NO_HANDLE without the sessions' budget or room in it.
+ */
+session_budget :: fn(sessions: ptr[Manager], share: u64) -> slop_os.CpuBudget {
+    none :: cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
+    if cast[slop_os.Handle](sessions.cpu_budget) == slop_os.NO_HANDLE {
+        return none
+    }
+    parent :: slop_os.cpu_budget_describe(sessions.cpu_budget) or_return none
+    wanted :: if share != 0 { share } else { parent.share / cast[u64](MAX_SESSIONS) }
+    time :: parent.period / 1_000_000 * wanted
+    if time == 0 || time > parent.period {
+        runtime.log_warn("a session's CPU share of % millionths doesn't fit its period, so it runs on the session manager's", wanted)
+        return none
+    }
+    match slop_os.cpu_budget_create(sessions.cpu_budget, slop_os.startup_block().budget, cast[u32](parent.priority), parent.period, time) {
+        case Ok(made) => return made
+        case Error(error) => {
+            runtime.log_warn("no CPU budget for a session (%), so it runs on the session manager's", error)
+            return none
+        }
+    }
+}
+
+/**
+ * Copy a session's CPU budget to give a program: to put it on, or for its shell, to split too.
+ *
+ * @param budget The session's budget, kept; NO_HANDLE for none.
+ * @param splits Whether the copy may be split (RIGHT_CPU_BUDGET_SPLIT), as the shell's is for its jobs.
+ * @return The copy, which moves to the program; null for no budget, or one that can't be copied.
+ */
+budget_copy :: fn(budget: slop_os.CpuBudget, splits: bool) -> slop_os.CpuBudget? {
+    if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
+        return null
+    }
+    rights := cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_TRANSFER)
+    if splits {
+        rights |= cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT)
+    }
+    match slop_os.handle_duplicate(cast[slop_os.Handle](budget), cast[slop_os.Rights](rights)) {
+        case Ok(copy) => return cast[slop_os.CpuBudget](copy)
+        case Error(error) => return null
+    }
 }
 
 /**

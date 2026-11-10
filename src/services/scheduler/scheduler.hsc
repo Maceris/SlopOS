@@ -29,8 +29,13 @@ Split :: struct {
      * the scheduler's life.
      */
     name : string,
-    /** The budget, the scheduler's own, with every right; only bind-only copies are given away. */
+    /**
+     * The budget, the scheduler's own, with every right; bind-only copies are given away, and splittable ones for a
+     * service that splits it.
+     */
     budget : slop_os.CpuBudget,
+    /** Whether the service splits its budget for others (system_config's cpu_splits, decisions/0187). */
+    splits : bool,
 }
 
 /** The service's state, all of it main's, kept for its life. */
@@ -99,7 +104,7 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
         }
         match slop_os.cpu_budget_create(cpu_budget, block.budget, own.priority, own.period_ns, own.time_ns) {
             case Ok(made) => {
-                service.budgets[at] = Split.{name = name, budget = made}
+                service.budgets[at] = Split.{name = name, budget = made, splits = own.splits == 1}
                 service.count = at + 1
                 if own.cpus != 0 {
                     match slop_os.cpu_budget_set_cpus(made, own.cpus) {
@@ -137,7 +142,9 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
  * Answer every request one client has sent, until none is left or the client's gone.
  *
  * A BudgetFor is answered with Budget, a bind-only copy of the named service's budget or of the default for a name
- * without one, or NoBudget when there's no budget to give or it can't be copied. A Connect adds its channel as a
+ * without one, or NoBudget when there's no budget to give or it can't be copied. A SplittableBudgetFor is answered
+ * with Budget, a copy that can be split too, only for a service that splits its own (decisions/0187); NoBudget
+ * otherwise. A Connect adds its channel as a
  * client, closing it when the table's full. An unknown request is answered Unsupported; an invalid one is skipped.
  *
  * @param service The service, which isn't changed but for its budgets' copies given away.
@@ -179,6 +186,18 @@ serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients]
                 }
                 _ = protocol.send_response(end, service.port, &out)
             }
+            case SplittableBudgetFor(named) => {
+                bytes :: os.items(into, named)
+                name :: if bytes.count == 0 { "" } else { string_of(&bytes[0], bytes.count) }
+                out := os.Outgoing.{}
+                response :: os.begin[protocol.Response](&out)
+                response^ = .NoBudget
+                match splittable(service, name) {
+                    case Some(budget) => response^ = .Budget(budget)
+                    case None => {}
+                }
+                _ = protocol.send_response(end, service.port, &out)
+            }
             case Connect(connection) => {
                 if !service_kit.add_client(connected, service.port, connection.end) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -204,6 +223,29 @@ budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
         }
     }
     return service.default_budget
+}
+
+/**
+ * Copy the budget of a service that splits it for others with the rights to split it, put processes on it and send
+ * it, but not to change it, to give away (decisions/0187).
+ *
+ * @param service The service, which keeps the budget.
+ * @param name The service's name, compared exactly with the configuration's names.
+ * @return The copy, the caller's to send or close; null for a service without a budget of its own, one that doesn't
+ *     split it, or a copy that can't be made.
+ */
+splittable :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget? {
+    for each, i in service.budgets {
+        if i < service.count && each.name == name && each.splits {
+            rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT) | cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND)
+                | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](each.budget), rights) {
+                case Ok(copy) => return cast[slop_os.CpuBudget](copy)
+                case Error(error) => return null
+            }
+        }
+    }
+    return null
 }
 
 /**

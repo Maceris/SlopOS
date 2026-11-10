@@ -70,6 +70,11 @@ CpuBudget :: struct #align(16) {
      * loans it was lent as (decisions/0185, 12h). Added to atomically.
      */
     run_by_others : u64,
+    /**
+     * The CPU time run on it, by any thread, its loans' included but not its children's, in counter ticks
+     * (decisions/0187): what a session or a job ran. Added to atomically.
+     */
+    ran : u64,
 }
 
 /**
@@ -664,8 +669,9 @@ cpu_budget_words :: fn(kernel: ptr[mut Kernel], budget: ptr[CpuBudget], words: m
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     lent :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.run_by_others))
+    ran :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.ran))
     values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share, budget.time.cpus,
-        lent]
+        lent, ran]
     for value, i in values {
         if i < words.count {
             words[i] = value
