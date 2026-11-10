@@ -73,3 +73,32 @@ A survey for C1 found:
   twice without `kernel.cpu_budgets_lock`, checking it wasn't 0 and then adding to it, while another CPU could take the
   thread off it between the two: the fuzzer's destroyed budgets made it fault at the end of a run. The `run_by_others`
   count of 12h had the same two reads; both now use one read, the object's memory kept until a quiescent point.
+
+## Decision: C2, Hemera's Atomics Intercepted
+Chosen with the project's owner: **weak memory modelled too**, as `loom` does, not only interleavings; and interleavings
+chosen **systematically within a preemption bound, and at random from a seed** for longer runs.
+
+A survey of Hemera found its atomics generated from one table (`base/intrinsics/atomics.hsc`): loads, stores,
+exchanges, compare-exchanges and read-modify-writes for every integer width, the memory order in the name (seq_cst
+unsuffixed, `_acquire`, `_release`, `_acquire_release`, `_no_fence`); fences by hand; `spin_hint`; and the runtime's
+`wait_on_value` and wakes. The compiler emits all of them in one place (`emit_intrinsic`). Fibers can run several of a
+test's threads on one carrier, switched where a scheduler chooses.
+
+In four parts, in Hemera:
+- **C2a, the option.** `TargetOptions.model_checked`: each atomic operation, fence and `spin_hint` becomes a call to the
+  runtime (`base/runtime/model.hsc`), with its address, operands, width and order. The call does the operation itself,
+  since a weak-memory checker chooses what a load reads; outside a check it does it as the hardware would. Without the
+  option nothing changes: the calls aren't emitted.
+- **C2b, the checker** (`std/testing`'s model): a test's threads are fibers on one carrier, switched only at those
+  calls and at waits and wakes. Every interleaving within a preemption bound (2 by default) is tried, depth first, or
+  schedules are drawn at random from a seed; a failure prints its schedule, which replays it.
+- **C2c, weak memory**: each atomic location keeps its stores in modification order, each with its thread's vector
+  clock; a load may read any store coherence and its order allow, that choice another of the search's branches;
+  acquire and release synchronise through the clocks, seq_cst operations and fences keep one total order. A location's
+  first value is what memory held when it was first touched; the newest store is also written to memory, for code that
+  reads it plainly.
+- **C2d, std's lock-free code**: `SpinLock`, the fiber pool's local queues and stealing, `SharedPtr`'s counts, as
+  hosted tests in the model-checked build; what they find fixed and kept as tests.
+
+Not modelled: plain (non-atomic) accesses racing with atomic ones, which `loom` models only through its own cells, and
+consume ordering, which Hemera hasn't got.
