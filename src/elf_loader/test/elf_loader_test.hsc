@@ -55,6 +55,120 @@ hello :: fn(t: ptr[mut testing.T]) -> Result[Hello, testing.Stopped] {
     }
 }
 
+/** The most bytes of image a changed file may ask for before the fuzzer loads it, so a case doesn't run out of memory. */
+MOST_FUZZED_IMAGE : u64 : 16 << 20
+/** How many bytes a fuzzing case changes at most. */
+MOST_CHANGES :: 16
+/** How far into the file most changes go: its headers, the program headers and the dynamic section's start. */
+HEADER_BYTES : u64 : 4096
+
+/** What the fuzzer changes: hello.elf's bytes, and a copy of them as built, which each case puts back. */
+FuzzFile :: struct {
+    /** The bytes each case changes, then puts back; from the context's allocator. */
+    bytes : mut u8[],
+    /** The file as built. */
+    built : mut u8[],
+}
+
+/**
+ * Make the fuzzer's file: hello.elf from the folder in SLOPOS_PROGRAMS, or else the program's first argument, as
+ * hemera --fuzz gives none.
+ *
+ * @return The file, twice, freed by free_fuzz_file; null if there's no folder or the file can't be read.
+ */
+make_fuzz_file :: fn() -> FuzzFile? {
+    path_storage : u8[1024]
+    path := text_buffer.make(path_storage)
+    match os.get_environment("SLOPOS_PROGRAMS") {
+        case Ok(folder) => text_buffer.append(&path, folder)
+        case Error(failure) => {
+            arguments :: os.arguments()
+            if arguments.count < 2 {
+                return null
+            }
+            text_buffer.append(&path, arguments[1])
+        }
+    }
+    text_buffer.append(&path, "/hello.elf")
+    contents :: os.read_entire_file(text_buffer.as_string(&path)) or_return null
+    defer strings.free_string(contents)
+    file :: string_bytes(contents)
+    bytes, failed :: runtime.new_array(u8, file.count)
+    if failed != null {
+        return null
+    }
+    built, copy_failed :: runtime.new_array(u8, file.count)
+    if copy_failed != null {
+        runtime.free_array(bytes)
+        return null
+    }
+    for byte, i in file {
+        if i < bytes.count && i < built.count {
+            bytes[i] = byte
+            built[i] = byte
+        }
+    }
+    return FuzzFile.{bytes = bytes, built = built}
+}
+
+/**
+ * Give back what make_fuzz_file made.
+ *
+ * @param file The file, not used after.
+ */
+free_fuzz_file :: fn(file: ptr[mut FuzzFile]) {
+    runtime.free_array(file.bytes)
+    runtime.free_array(file.built)
+}
+
+/**
+ * Check that hello.elf changed as a case draws is read, loaded and relocated, or refused, without crashing, and that
+ * nothing it reads or writes goes outside the file or the image (decisions/0186, He): up to MOST_CHANGES bytes, most
+ * in its first HEADER_BYTES, then read, and if it reads as an executable of a size that fits, loaded and relocated
+ * into an image of that size. hemera --fuzz guides it by coverage; SLOPOS_PROGRAMS or the first argument says where
+ * hello.elf is.
+ *
+ * @param t The test's state.
+ * @param source The case's source: each change's place and the bits it flips.
+ * @return Ok once the case has run; Error(Failed) if hello.elf couldn't be read.
+ */
+a_changed_file_is_loaded_or_refused_without_crashing #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+    kept :: testing.fixture[FuzzFile](source, make_fuzz_file, free_fuzz_file)
+    file :: testing.require_some(t, kept, "hello.elf is read from SLOPOS_PROGRAMS or the first argument")?
+    bytes :: file.bytes
+    changes :: testing.draw_between(source, 1, MOST_CHANGES)
+    for i in 0..<changes {
+        anywhere :: testing.draw_below(source, 4) == 0
+        reach :: if anywhere || cast[u64](bytes.count) < HEADER_BYTES { cast[u64](bytes.count) } else { HEADER_BYTES }
+        at :: cast[usize](testing.draw_below(source, reach))
+        change :: testing.draw_between(source, cast[u8](1), cast[u8](255))
+        if at < bytes.count {
+            bytes[at] = bytes[at] ~ change
+        }
+    }
+    match elf_loader.read(bytes) {
+        case Ok(read) => {
+            executable := read
+            if executable.size > 0 && executable.size <= MOST_FUZZED_IMAGE {
+                image, failed :: runtime.new_array(u8, cast[usize](executable.size))
+                if failed == null {
+                    if elf_loader.load(&executable, bytes, image) is_ok {
+                        _ = elf_loader.relocate(&executable, bytes, image, BASE)
+                    }
+                    runtime.free_array(image)
+                }
+            }
+        }
+        case Error(failure) => {}
+    }
+    for byte, i in file.built {
+        if i < bytes.count {
+            bytes[i] = byte
+        }
+    }
+    return .Ok
+}
+
 /**
  * Give back what hello read.
  *

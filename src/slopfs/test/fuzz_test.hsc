@@ -13,6 +13,9 @@ import slopfs from ".."
  * changed somewhere down a tree with every seal from there to the checkpoint made again, as someone who can compute
  * BLAKE3 could, so what's behind the seals is fuzzed too. SLOPOS_FUZZ_ROUNDS asks for more rounds than the
  * default.
+ *
+ * The same, as property tests hemera --fuzz guides by coverage (decisions/0186, He): each case's damage is drawn,
+ * on an image set up once (testing.fixture).
  */
 
 /** The size of the fuzzer's disk, in blocks: 4 MiB. */
@@ -40,6 +43,149 @@ an_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: f
 
 an_encrypted_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     return check_fuzz(t, true)
+}
+
+an_image_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source])
+    -> testing.Outcome {
+    kept :: testing.fixture[FuzzImage](source, make_plain_image, free_fuzz_image)
+    return check_drawn(t, source, testing.require_some(t, kept, "the image to damage is set up")?)
+}
+
+an_encrypted_image_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T],
+    source: ptr[mut testing.Source]) -> testing.Outcome {
+    kept :: testing.fixture[FuzzImage](source, make_sealed_image, free_fuzz_image)
+    return check_drawn(t, source, testing.require_some(t, kept, "the image to damage is set up")?)
+}
+
+/** How many bytes a case flips at most. */
+MOST_FLIPS :: 16
+
+/**
+ * Check that an image damaged as a case draws can be mounted and used as far as it goes without crashing or hanging:
+ * the undamaged image copied back, then one of check_fuzz's three ways of damage, drawn, then exercise.
+ *
+ * @param t The test's state.
+ * @param source The case's source: the way, then the bytes and bits, the blocks, or the seed of the node changed.
+ * @param image The fixture: the device over the disk, and the undamaged image.
+ * @return Ok.
+ */
+check_drawn :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source], image: ptr[mut FuzzImage]) -> testing.Outcome {
+    disk :: cast[ptr[mut Disk]](image.device.context)
+    base :: image.base
+    copy_into(disk.bytes, base)
+    way :: testing.draw_below(source, 3)
+    if way == 0 {
+        flips :: testing.draw_between(source, 1, MOST_FLIPS)
+        for flip_index in 0..<flips {
+            at :: cast[usize](testing.draw_below(source, cast[u64](disk.bytes.count)))
+            change :: testing.draw_between(source, cast[u8](1), cast[u8](255))
+            if at < disk.bytes.count {
+                disk.bytes[at] = disk.bytes[at] ~ change
+            }
+        }
+    }
+    else if way == 1 {
+        from :: testing.draw_below(source, FUZZ_BLOCKS)
+        to :: testing.draw_below(source, FUZZ_BLOCKS)
+        zero :: testing.draw_bool(source)
+        for i in 0..<cast[usize](slopfs.BLOCK_BYTES) {
+            from_at :: cast[usize](from * slopfs.BLOCK_BYTES) + i
+            to_at :: cast[usize](to * slopfs.BLOCK_BYTES) + i
+            if from_at < base.count && to_at < disk.bytes.count {
+                disk.bytes[to_at] = if zero { cast[u8](0) } else { base[from_at] }
+            }
+        }
+    }
+    else {
+        // A node changed and resealed, as mutate_sealed's generator chooses from the seed drawn
+        random := Random.{state = testing.draw[u64](source) | 1}
+        mutate_sealed(disk, &random)
+    }
+    survived := Survived.{}
+    exercise(&image.device, &survived, image.sealed)
+    return .Ok
+}
+
+/** What the property tests damage: a volume made as check_fuzz's, once, and the image it leaves. */
+FuzzImage :: struct {
+    /** The device over the disk the cases damage, freed by free_fuzz_image. */
+    device : slopfs.Device,
+    /** The image as the workload left it, which each case starts from; from runtime.new_array. */
+    base : mut u8[],
+    /** Whether the volume is encrypted. */
+    sealed : bool,
+}
+
+/**
+ * Make the plain property test's image.
+ *
+ * @return The image, the fixture's; null if it couldn't be set up.
+ */
+make_plain_image :: fn() -> FuzzImage? {
+    return make_fuzz_image(false)
+}
+
+/**
+ * Make the encrypted property test's image.
+ *
+ * @return The image, the fixture's; null if it couldn't be set up.
+ */
+make_sealed_image :: fn() -> FuzzImage? {
+    return make_fuzz_image(true)
+}
+
+/**
+ * Make an image as check_fuzz does: a formatted disk with a volume the crash test's workload fills, and a copy of it.
+ * The tests' helpers record into a T of its own, a failure there meaning it couldn't be set up.
+ *
+ * @param sealed Whether the volume is encrypted.
+ * @return The image, freed by free_fuzz_image; null if any step failed, nothing left to free.
+ */
+make_fuzz_image :: fn(sealed: bool) -> FuzzImage? {
+    setup := testing.T.{name = "the fuzzer's image"}
+    t :: &setup
+    device :: formatted(t, FUZZ_BLOCKS, 0xf0) or_return null
+    disk :: cast[ptr[mut Disk]](device.context)
+    made := false
+    match slopfs.mount(device) {
+        case Ok(container) => {
+            match create_test_volume(container, "fuzz", sealed) {
+                case Ok(volume) => {
+                    made = true
+                    for step in 0..<STEPS - 1 {
+                        if (workload(t, volume, step) is_error) || (require_commit(t, container, "each step of the workload commits") is_error) {
+                            made = false
+                            break
+                        }
+                    }
+                }
+                case Error(failure) => {}
+            }
+            slopfs.unmount(container)
+        }
+        case Error(failure) => {}
+    }
+    if !made || setup.failure_count > 0 {
+        free_device(device)
+        return null
+    }
+    base, error :: runtime.new_array(u8, disk.bytes.count)
+    if error != null {
+        free_device(device)
+        return null
+    }
+    copy_into(base, disk.bytes)
+    return FuzzImage.{device = device, base = base, sealed = sealed}
+}
+
+/**
+ * Give back what make_fuzz_image made.
+ *
+ * @param image The image, not used after.
+ */
+free_fuzz_image :: fn(image: ptr[mut FuzzImage]) {
+    runtime.free_array(image.base)
+    free_device(image.device)
 }
 
 /**
