@@ -510,8 +510,8 @@ fibers.
 
 ## Linear Algebra — Between 13c and 13e
 
-Scheduled 2026-11-11 by the project's owner: Hemera's float math and linear algebra (`decisions/0189`,
-`hemera-proposals/linear-algebra.md`), for M15's canvas, fonts and graphics programs, built after M13's 13c and before
+Scheduled 2026-11-11 by the project's owner, and built that day: Hemera's float math and linear algebra (`decisions/0189`,
+whose As Built says what was made), for M15's canvas, fonts and graphics programs, built after M13's 13c and before
 its 13e, which then goes on. In 0189's order:
 
 - **L1, float math:** the float intrinsics in the compiler (`floor`, `ceil`, `trunc`, `round_even`,
@@ -596,5 +596,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | H | done 2026-11-09 (`decisions/0186`), in five stages, Ha to He: the x86-64 test path and the boot log, Hemera, user space, the kernel, the fuzzers. Ha built: boots through KVM in the Linux VM for CET's shadow stacks, the features detected, and the transient-execution log; Hb, Hemera's landing pads, signed returns and notes; Hc, user space's PAC, BTI and GCS on AArch64 and shadow stacks and IBT on x86-64; Hd, the kernel's PAC, BTI and GCS on AArch64 and IBT on x86-64, supervisor shadow stacks waiting for FRED; He, coverage-guided fuzzing: FAT, slopfs, the ELF loader, AML and every protocol's validators under `hemera --fuzz` (`tools/fuzz.py`), and the system calls guided by the kernel's coverage counters |
 | Before M13 | planned 2026-11-09 (`decisions/0187`), in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it. Done 2026-11-10: each session and each program the shell starts on a CPU budget of its own (C1); Hemera's atomics routed to a model checker with weak memory, in `std/testing` (C2); the handle entry's tag and the shootdown's handshake in packages of their own, checked, a lookup's torn read found and fixed (C3) |
 | M13 | planned 2026-11-10 (`decisions/0188`): 13a to 13g; 13a built, virtio-net and the `net` protocol; 13b built, the network layer: DHCPv4, SLAAC, ARP, neighbour discovery and pings; 13c built, TCP, UDP, the `Network` protocol and its policies, about 20 MiB/s to the development machine; 13d built, the crypto TLS needs in Hemera's `std` |
-| Linear Algebra | decided 2026-11-10 (`decisions/0189`), scheduled 2026-11-11 between M13's 13c and 13e: L1 to L4; not started |
+| Linear Algebra | decided 2026-11-10 (`decisions/0189`), scheduled 2026-11-11 between M13's 13c and 13e: L1 to L4; done 2026-11-11: float intrinsics, std/math and correctly rounded parsing (L1), arrays as vectors with swizzles (L2), matrices (L3), std/linear_algebra (L4) |
 | M14–M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
