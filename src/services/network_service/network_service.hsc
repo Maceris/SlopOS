@@ -1,37 +1,35 @@
 /**
  * The network service (decisions/0188): the system's network stack, over the first NIC's driver, through the net
- * protocol. In 13a it takes the interface: it dials the driver, says what it is, maps the connection's buffer and gives
- * the driver every receive slot, giving each again as its frame is read. With test_arp=<address> on the kernel's
- * command line, it asks by ARP who has that IPv4 address, from 0.0.0.0, as a probe does (RFC 5227), and logs the
- * answer.
+ * protocol. It takes the interface, as 13a built, and runs the network layer (src/net_stack) on it, 13b: an IPv4 address
+ * by DHCP, IPv6 addresses by SLAAC, each logged as it's had. Frames received go to the stack, and each slot is given
+ * back; frames the stack queues go out through the send slots free, the rest waiting in the stack until one is; its
+ * timers are one port timer, at its next deadline.
  *
- * SPEC: RFC 826 (ARP), RFC 5227 (ARP probes)
+ * With test_ping on the kernel's command line, it pings the IPv4 router once it has a lease, and the IPv6 router once
+ * it has a global address, and logs their answers.
  */
 package network_service
 
 import runtime from "base"
 import os from "std"
+import random from "std"
+import text_buffer from "std"
 import slop_os from "std/os"
 import connector from "../../protocols/connector"
 import net from "../../protocols/net"
+import net_stack from "../../net_stack"
 import service_kit from "../../libraries/service_kit"
 
-/** The port key the NIC's connector is bound with. */
-CONNECTOR_KEY : u64 : 2
 /** The port key the NIC's connection is bound with. */
 NIC_KEY : u64 : 1
-/** Ethernet's type for ARP. */
-ETHER_ARP : u16 : 0x0806
-/** ARP's operation for a request. */
-ARP_REQUEST : u16 : 1
-/** ARP's operation for a reply. */
-ARP_REPLY : u16 : 2
-/** The bytes of an ARP request or reply for IPv4 over Ethernet, with its Ethernet header: 14 and 28. */
-ARP_FRAME : u32 : 42
+/** The port key the NIC's connector is bound with. */
+CONNECTOR_KEY : u64 : 2
+/** The port key the stack's timer is bound with. */
+TIMER_KEY : u64 : 3
 
 /** The service's state, on the heap, main's for its life. */
 Service :: struct {
-    /** The port its NIC's connection is bound to. */
+    /** The port its NIC's connection and its timer are bound to. */
     port : slop_os.Port,
     /** Its connection to the NIC's driver; NO_HANDLE without one. */
     nic : slop_os.Channel,
@@ -39,8 +37,22 @@ Service :: struct {
     info : net.Info,
     /** Where the connection's buffer is mapped, 0 before it is. */
     buffer : u64,
-    /** The IPv4 address test_arp asks for, as its four bytes in a u32, high first; 0 for none. */
-    probed : u32,
+    /** Whether each send slot has a frame the driver hasn't given back. */
+    sending : bool[net.SLOTS],
+    /** The network layer, once the NIC is had. */
+    stack : ptr[mut net_stack.Stack]?,
+    /** Whether test_ping asks for pings. */
+    test_ping : bool,
+    /** The IPv4 router to ping, once leased; 0.0.0.0 before. */
+    router_v4 : net_stack.Ipv4,
+    /** Whether the IPv4 router's been pinged. */
+    pinged_v4 : bool,
+    /** The IPv6 router to ping, once found; :: before. */
+    router_v6 : net_stack.Ipv6,
+    /** Whether a global IPv6 address is the interface's, which the IPv6 ping waits for. */
+    global_v6 : bool,
+    /** Whether the IPv6 router's been pinged. */
+    pinged_v6 : bool,
 }
 
 /**
@@ -48,7 +60,7 @@ Service :: struct {
  *
  * @param log The debug log its lines go to; without one, it writes nothing there.
  * @param nic A connector to the first NIC's driver; without one, there's no network, and it only waits to stop.
- * @param command_line The kernel's command line, read for test_arp=<a.b.c.d>.
+ * @param command_line The kernel's command line, read for test_ping.
  * @return 0 once it's asked to stop; 2 if no port could be made.
  */
 main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, command_line: slop_os.Memory?) -> int {
@@ -58,10 +70,7 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
     service.port = slop_os.port_create(startup.budget) or_return 2
     _ = service_kit.watch_stop(service.port)
     match command_line {
-        case Some(memory) => {
-            text :: service_kit.text_of(startup, memory) or_else ""
-            service.probed = ipv4_of(service_kit.word_after(text, "test_arp=") or_else "") or_else 0
-        }
+        case Some(memory) => service.test_ping = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_ping")
         case None => {}
     }
     match nic {
@@ -71,6 +80,13 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
     into := os.Incoming.{}
     loop {
         take_answers(service, &into)
+        match service.stack {
+            case Some(stack) => {
+                net_stack.tick(stack, now())
+                pump(service, stack)
+            }
+            case None => {}
+        }
         if service_kit.stopping() {
             return 0
         }
@@ -80,9 +96,18 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
 }
 
 /**
- * Dial the NIC's driver, say what it is, map the buffer, give every receive slot, and send test_arp's probe.
+ * Give the time, as the stack counts it: the monotonic clock's nanoseconds.
  *
- * @param service The service, whose nic, info and buffer are set once each is had; what fails is logged, and the
+ * @return It; 0 if the clock can't be read.
+ */
+now :: fn() -> u64 {
+    return slop_os.clock_monotonic() or_else 0
+}
+
+/**
+ * Dial the NIC's driver, say what it is, map the buffer, give every receive slot, and start the stack on it.
+ *
+ * @param service The service, whose nic, info, buffer and stack are set once each is had; what fails is logged, and the
  *     service runs without a network.
  * @param dialing The connector to the driver.
  */
@@ -140,9 +165,10 @@ take_nic :: fn(service: ptr[mut Service], dialing: os.Channel[connector.Connecto
     for slot in cast[u32](0)..<net.SLOTS {
         request(service, .Receive(slot))
     }
-    if service.probed != 0 {
-        probe(service, service.probed)
-    }
+    stack :: runtime.new(net_stack.Stack)
+    net_stack.start(stack, net_stack.Setup.{mac = net_stack.Mac.{bytes = mac}, mtu = service.info.mtu, seed = random.next_u64()}, now())
+    service.stack = stack
+    pump(service, stack)
 }
 
 /**
@@ -161,44 +187,8 @@ request :: fn(service: ptr[mut Service], request: net.Request) {
 }
 
 /**
- * Ask by ARP who has an IPv4 address, from 0.0.0.0 as a probe does, in the first send slot.
- *
- * @param service The service, with the NIC's buffer mapped.
- * @param address The address, its four bytes high first.
- */
-probe :: fn(service: ptr[mut Service], address: u32) {
-    slot :: net.SLOTS
-    frame :: view_of(cast[ptr[mut u8]](service.buffer + cast[u64](slot) * cast[u64](net.SLOT_BYTES)), cast[usize](ARP_FRAME))
-    if frame.count < 42 {
-        return void
-    }
-    for &byte in frame {
-        byte^ = 0
-    }
-    mac :: service.info.mac
-    // Ethernet: to everyone, from the interface, ARP
-    for i in cast[usize](0)..<6 {
-        frame[i] = 0xff
-        frame[6 + i] = mac[i]
-    }
-    put_u16(frame, 12, ETHER_ARP)
-    // ARP: Ethernet and IPv4, 6 and 4 bytes, a request, from the interface at 0.0.0.0, for the address
-    put_u16(frame, 14, 1)
-    put_u16(frame, 16, 0x0800)
-    frame[18] = 6
-    frame[19] = 4
-    put_u16(frame, 20, ARP_REQUEST)
-    for i in cast[usize](0)..<6 {
-        frame[22 + i] = mac[i]
-    }
-    for i in cast[usize](0)..<4 {
-        frame[38 + i] = cast[u8](address >> cast[u32](24 - 8 * i))
-    }
-    request(service, .Send(net.Frame.{slot = slot, length = ARP_FRAME}))
-}
-
-/**
- * Take every answer the NIC's driver has sent, reading each frame received and giving its slot again.
+ * Take every answer the NIC's driver has sent: each frame received goes to the stack, and its slot is given again; each
+ * send slot given back is free again.
  *
  * @param service The service; its connection to the NIC is closed if it fails.
  * @param into Where each answer is received, reused for each.
@@ -220,8 +210,18 @@ take_answers :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[net.Response](into)^ {
             case Received(frame) => {
-                read_frame(service, frame)
+                if frame.slot < net.SLOTS && frame.length <= net.SLOT_BYTES {
+                    match service.stack {
+                        case Some(stack) => net_stack.receive(stack, slot_bytes(service, frame.slot, frame.length), now())
+                        case None => {}
+                    }
+                }
                 request(service, .Receive(frame.slot))
+            }
+            case Sent(slot) => {
+                if slot >= net.SLOTS && cast[usize](slot - net.SLOTS) < service.sending.count {
+                    service.sending[slot - net.SLOTS] = false
+                }
             }
             case Refused(refused) => runtime.log_info("the network interface refused slot %: %", refused.slot, refused.reason)
             case Link(up) => runtime.log_info("the link is %", if up { "up" } else { "down" })
@@ -231,92 +231,138 @@ take_answers :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
 }
 
 /**
- * Read a frame received: an ARP reply from the address test_arp asks for is logged.
+ * View a slot of the NIC's buffer.
  *
- * @param service The service, with the NIC's buffer mapped.
- * @param frame The frame, in a receive slot.
+ * @param service The service, with the buffer mapped.
+ * @param slot The slot, below 2 * net.SLOTS.
+ * @param length How much of it, at most net.SLOT_BYTES.
+ * @return Its first length bytes.
  */
-read_frame :: fn(service: ptr[mut Service], frame: net.Frame) {
-    if frame.slot >= net.SLOTS || frame.length < ARP_FRAME || frame.length > net.SLOT_BYTES {
-        return void
-    }
-    bytes :: view_of(cast[ptr[u8]](service.buffer + cast[u64](frame.slot) * cast[u64](net.SLOT_BYTES)), cast[usize](frame.length))
-    if bytes.count < 42 || u16_at(bytes, 12) != ETHER_ARP || u16_at(bytes, 20) != ARP_REPLY {
-        return void
-    }
-    sender :: (cast[u32](bytes[28]) << 24) | (cast[u32](bytes[29]) << 16) | (cast[u32](bytes[30]) << 8) | cast[u32](bytes[31])
-    if service.probed == 0 || sender != service.probed {
-        return void
-    }
-    runtime.log_info("%.%.%.% is at %{02x}:%{02x}:%{02x}:%{02x}:%{02x}:%{02x}", bytes[28], bytes[29], bytes[30], bytes[31],
-        bytes[22], bytes[23], bytes[24], bytes[25], bytes[26], bytes[27])
+slot_bytes :: fn(service: ptr[Service], slot: u32, length: u32) -> mut u8[] {
+    return view_of(cast[ptr[mut u8]](service.buffer + cast[u64](slot) * cast[u64](net.SLOT_BYTES)), cast[usize](length))
 }
 
 /**
- * Read a big-endian u16 from bytes.
+ * Move what the stack has for the world on: each event logged, then each frame it queued into a free send slot, sent,
+ * while slots are free; and its timer set to its next deadline. Events go first, as what they start, a ping, queues
+ * frames too, which would otherwise wait for the next wake.
  *
- * @param bytes The bytes.
- * @param at Where it starts; one whose two bytes aren't both within bytes reads as 0.
- * @return The value.
+ * @param service The service.
+ * @param stack The stack.
  */
-u16_at :: fn(bytes: u8[], at: usize) -> u16 {
-    after :: at + 1
-    if at >= bytes.count || after >= bytes.count {
-        return 0
+pump :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
+    loop {
+        happened :: net_stack.take_event(stack) or_break
+        report(service, stack, happened)
     }
-    return (cast[u16](bytes[at]) << 8) | cast[u16](bytes[after])
-}
-
-/**
- * Write a big-endian u16 into bytes.
- *
- * @param bytes The bytes.
- * @param at Where it starts; one whose two bytes aren't both within bytes writes nothing.
- * @param value The value.
- */
-put_u16 :: fn(bytes: mut u8[], at: usize, value: u16) {
-    after :: at + 1
-    if at >= bytes.count || after >= bytes.count {
-        return void
-    }
-    bytes[at] = cast[u8](value >> 8)
-    bytes[after] = cast[u8](value)
-}
-
-/**
- * Read an IPv4 address in dotted decimal.
- *
- * @param text The address, as four numbers from 0 to 255 with dots between, and nothing else.
- * @return Its four bytes, high first; null if it isn't one.
- */
-ipv4_of :: fn(text: string) -> u32? {
-    value := cast[u32](0)
-    part := cast[u32](0)
-    digits := 0
-    dots := 0
-    for character in text {
-        if character == '.' {
-            if digits == 0 || dots >= 3 {
-                return null
+    if service.buffer != 0 && cast[slop_os.Handle](service.nic) != slop_os.NO_HANDLE {
+        for &busy, index in service.sending {
+            if busy^ {
+                continue
             }
-            value = (value << 8) | part
-            part = 0
-            digits = 0
-            dots += 1
+            slot :: net.SLOTS + cast[u32](index)
+            length :: net_stack.take_frame(stack, slot_bytes(service, slot, net.SLOT_BYTES)) or_break
+            busy^ = true
+            request(service, .Send(net.Frame.{slot = slot, length = cast[u32](length)}))
         }
-        else if character >= '0' && character <= '9' {
-            part = part * 10 + (cast[u32](character) - cast[u32]('0'))
-            digits += 1
-            if part > 255 || digits > 3 {
-                return null
+    }
+    deadline :: net_stack.next_deadline(stack)
+    if deadline != ~cast[u64](0) {
+        _ = slop_os.port_set_timer(service.port, TIMER_KEY, deadline)
+    }
+}
+
+/**
+ * Log an event of the stack's, and with test_ping, ping a router once it's known.
+ *
+ * @param service The service.
+ * @param stack The stack.
+ * @param happened The event.
+ */
+report :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], happened: net_stack.Event) {
+    storage : u8[256]
+    line := text_buffer.make(storage)
+    match happened {
+        case Leased(lease) => {
+            text_buffer.append(&line, "leased ")
+            append_v4(&line, lease.address)
+            text_buffer.append_format(&line, "/% from ", lease.prefix_length)
+            append_v4(&line, lease.server)
+            text_buffer.append(&line, ", its router ")
+            append_v4(&line, lease.router)
+            text_buffer.append(&line, ", DNS ")
+            append_v4(&line, lease.dns)
+            text_buffer.append_format(&line, ", for % s", lease.seconds)
+            service.router_v4 = lease.router
+        }
+        case LeaseLost => text_buffer.append(&line, "the IPv4 lease ended")
+        case AddressReady(assigned) => {
+            text_buffer.append(&line, if assigned.link_local { "link-local address " } else { "IPv6 address " })
+            append_v6(&line, assigned.address)
+            text_buffer.append_format(&line, "/%", assigned.prefix_length)
+            if !assigned.link_local {
+                service.global_v6 = true
             }
         }
-        else {
-            return null
+        case AddressConflict(address) => {
+            text_buffer.append(&line, "another has ")
+            append_address(&line, address)
+            text_buffer.append(&line, ", so it isn't taken")
+        }
+        case RouterFound(router) => {
+            text_buffer.append(&line, "IPv6 router ")
+            append_v6(&line, router)
+            service.router_v6 = router
+        }
+        case EchoReplied(echo) => {
+            append_address(&line, echo.from)
+            text_buffer.append(&line, " answered a ping")
         }
     }
-    if digits == 0 || dots != 3 {
-        return null
+    runtime.log_info("%", text_buffer.as_string(&line))
+    if !service.test_ping {
+        return void
     }
-    return (value << 8) | part
+    if !service.pinged_v4 && !net_stack.is_zero_ipv4(service.router_v4) {
+        service.pinged_v4 = net_stack.ping(stack, .V4(service.router_v4)) is_some
+    }
+    if !service.pinged_v6 && service.global_v6 && !net_stack.is_zero_ipv6(service.router_v6) {
+        service.pinged_v6 = net_stack.ping(stack, .V6(service.router_v6)) is_some
+    }
+}
+
+/**
+ * Append an IPv4 address in dotted decimal.
+ *
+ * @param line Where.
+ * @param address The address.
+ */
+append_v4 :: fn(line: ptr[mut text_buffer.TextBuffer], address: net_stack.Ipv4) {
+    bytes :: address.bytes
+    text_buffer.append_format(line, "%.%.%.%", bytes[0], bytes[1], bytes[2], bytes[3])
+}
+
+/**
+ * Append an IPv6 address, as RFC 5952 writes it.
+ *
+ * @param line Where.
+ * @param address The address.
+ */
+append_v6 :: fn(line: ptr[mut text_buffer.TextBuffer], address: net_stack.Ipv6) {
+    text : u8[40]
+    length :: net_stack.format_ipv6(address, view_of(&text[0], text.count))
+    text_buffer.append(line, string_of(&text[0], length))
+}
+
+/**
+ * Append an address of either family.
+ *
+ * @param line Where.
+ * @param address The address.
+ */
+append_address :: fn(line: ptr[mut text_buffer.TextBuffer], address: net_stack.IpAddress) {
+    match address {
+        case V4(v4) => append_v4(line, v4)
+        case V6(v6) => append_v6(line, v6)
+    }
 }

@@ -245,13 +245,20 @@ TESTS = [
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on,iommu_platform=on"]),
-    # virtio-net (decisions/0188, 13a): the driver serving QEMU's MAC, the network service taking the interface, and an
-    # ARP probe for QEMU's user-mode gateway answered, through the net protocol's slots
-    ("drives virtio-net, and its ARP probe for the gateway is answered", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_arp=10.0.2.2",
+    # virtio-net and the network layer (decisions/0188, 13a and 13b): the driver serving QEMU's MAC, the network service
+    # taking the interface, a lease from QEMU's user-mode DHCP, a link-local address and one from its router's prefix
+    # (each stable, so only their prefixes are known), and a ping to the router over each family answered. Both families
+    # are on, as QEMU has them when neither is named: ipv6=on alone turns IPv4 off
+    ("drives virtio-net, leases an address and takes IPv6's, and pings the router over each", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=5 test_ping",
         "--expect-line=[user] virtio_net: serving 52:54:00:12:34:56, its link up",
         "--expect-line=[user] network: interface 52:54:00:12:34:56, its link up, MTU 1500",
-        "--expect-line=[user] network: 10.0.2.2 is at 52:55:0a:00:02:02",
+        "--expect-line=[user] network: leased 10.0.2.15/24 from 10.0.2.2, its router 10.0.2.2, DNS 10.0.2.3, for 86400 s",
+        "--expect-line=[user] network: 10.0.2.2 answered a ping",
+        "--expect-line-start=[user] network: link-local address fe80::",
+        "--expect-line=[user] network: IPv6 router fe80::2",
+        "--expect-line-start=[user] network: IPv6 address fec0::",
+        "--expect-line=[user] network: fe80::2 answered a ping",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-netdev", "user,id=n0",
         "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)

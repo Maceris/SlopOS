@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a and 13d built, 13b, 13c and 13e to 13g to come
+Status: accepted, chosen with the project's owner; 13a, 13b and 13d built, 13c and 13e to 13g to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -159,6 +159,36 @@ Seven stages, each with an as-built record:
 - **Not yet:** the link going down and up (`WatchLink`) isn't tested, which needs QEMU's monitor.
 - **Tests:** "drives virtio-net, and its ARP probe for the gateway is answered", on both architectures: QEMU's MAC, the
   link up, the MTU, and 10.0.2.2's answer from QEMU's gateway.
+
+## As Built: 13b
+- **`src/net_stack`**: the network layer as a state machine with no system calls: `receive` takes a frame, `tick` the
+  time, and it answers with frames its caller takes (`take_frame`, into a send slot) and events (`take_event`): a lease,
+  an address ready, a router found, a conflict, a ping answered. Its tables are fixed (16 neighbours of each family, 4
+  global IPv6 addresses, 2 routers, 32 frames waiting), and a frame for a neighbour not yet resolved waits in its entry,
+  the last one winning. Frames are read through bounds-checked helpers, so a short one reads zeroes, never past its end.
+- **IPv4**: ARP, answering for the interface's address and learning who asks; IPv4 without fragments, which are dropped;
+  ICMP echo both ways. **DHCPv4** with backoff from 4 s to 64 s, renewal at T1 to the server, rebinding at T2, and the
+  lease lost at its end; an ACK is announced by a gratuitous ARP, and an offered address someone answers ARP for is
+  declined. Its messages are 548 bytes, 576 with their headers: QEMU's user-mode DHCP server reads none shorter, and
+  BOOTP's 300, which the stack first sent, went unanswered.
+- **IPv6**: a link-local address and one for each autonomous /64 a router advertises, each checked for duplicates by
+  one solicitation and a second's wait, with stable interface identifiers: SHA-256 over the prefix, the MAC address, a
+  counter and a secret from the boot's seed (RFC 7217). Routers solicited three times; neighbour discovery answers and
+  resolves; RFC 4862's two-hour rule on lifetimes; ICMPv6 echo both ways. Only hop-by-hop options among extension
+  headers are passed over; multicast listener discovery isn't spoken.
+- **The network service** runs it: frames received go to the stack and their slots are given again, frames it queues go
+  out through free send slots, and one port timer wakes it at the stack's next deadline. Its events are logged, and with
+  `test_ping` it pings each family's router once it's known. **Found:** it sent frames before handling events, so a
+  ping an event started waited for the next wake, the stack's next deadline, seconds later; events go first now. Fibers
+  wait for 13c, where connections need them.
+- **Found in testing:** QEMU's `-netdev user,ipv6=on` alone turns IPv4 off: naming one family leaves the other off
+  unless it's named too. The boot test names neither, so both are on.
+- **Tests:** hosted (`net_stack_test`): a host and a router stack on a simulated link, the test playing the router's
+  DHCP server and advertisements: a lease, a link-local and a global address, and pings answered over both families, on
+  a clean link and over 20 seeds of a link that drops a fifth of frames, duplicates a tenth and delays each up to 50 ms;
+  a lease renewed past its first term; frames made at random, as a property, taken without harm; and IPv6 text as RFC
+  5952 writes it. Taking the prefix option out fails every seed. Boot, on both architectures: a lease of 10.0.2.15/24
+  from QEMU, link-local and fec0::/64 addresses, its router fe80::2, and pings to 10.0.2.2 and fe80::2 answered.
 
 ## As Built: 13d
 In Hemera's `std/crypto`, Freestanding, nothing allocated; secrets `#secret` and their functions `#constant_time`.
