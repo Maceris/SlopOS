@@ -3801,12 +3801,19 @@ check_events :: fn(supervisor: ptr[mut Supervisor], waiting: Waiting) {
         }
     }
     /*
-     * The clock service started again BUDGET_RESTARTS times, past its source's smallest budget, a pause after each for
-     * the events service to store what it wrote apart: so its file's moved aside more than once, and its oldest records
-     * are dropped
+     * The clock service started again BUDGET_RESTARTS times, past its source's smallest budget, each time once the last
+     * has logged that it's serving, and a pause after each for the events service to store what it wrote apart: so its
+     * file's moved aside more than once, and its oldest records are dropped. Killed before it logged, as a loaded machine
+     * had it, a start wrote nothing, and nothing was dropped
      */
+    // Its first start's second record says it's serving
+    next := cast[u64](2)
     for round in 0..<BUDGET_RESTARTS {
         _ = kill_and_wait(supervisor, "clock", "test_events")
+        match serving_record(supervisor, next) {
+            case Some(number) => next = number + 1
+            case None => log_line.write(supervisor.log, "supervisor: test_events: the clock service didn't say it's serving again")
+        }
         pause(supervisor, BUDGET_PAUSE)
     }
     out := os.Outgoing.{}
@@ -3819,6 +3826,45 @@ check_events :: fn(supervisor: ptr[mut Supervisor], waiting: Waiting) {
         case _ => log_line.write(supervisor.log, "supervisor: test_events: no record of the clock service")
     }
 }
+
+/**
+ * Wait for the clock service's next record saying it's serving, as test_events starts it again, at most
+ * SERVING_NANOSECONDS, looking every SERVING_POLL.
+ *
+ * @param supervisor The supervisor, whose events service is queried, waiting without handling its port.
+ * @param from The number of the first of the clock service's records to look at, past those of its starts before.
+ * @return The record's number; null if there's none by the deadline, or the events service can't be asked.
+ */
+serving_record :: fn(supervisor: ptr[mut Supervisor], from: u64) -> u64? {
+    deadline :: (slop_os.clock_monotonic() or_else 0) + SERVING_NANOSECONDS
+    next := from
+    loop {
+        out := os.Outgoing.{}
+        request :: os.begin[events.Request](&out)
+        request^ = .Query(events.QueryOf.{source = bytes_of(&out, "clock"), from = next, level = 0})
+        into := os.Incoming.{}
+        match events.ask(supervisor.events_end, supervisor.events_port, &out, &into) {
+            case Found(found) => {
+                if text_of_items(os.items(&into, found.text)) == "serving" {
+                    return found.number
+                }
+                next = found.number + 1
+                continue
+            }
+            case End => {}
+            case _ => return null
+        }
+        if (slop_os.clock_monotonic() or_else 0) >= deadline {
+            return null
+        }
+        pause(supervisor, SERVING_POLL)
+    }
+}
+
+/** The longest test_events waits for the clock service to say it's serving again, in nanoseconds: 5 s. */
+SERVING_NANOSECONDS : u64 : 5_000_000_000
+/** How long test_events waits between looks for that record, in nanoseconds: 10 ms. */
+SERVING_POLL : u64 : 10_000_000
 
 /** How many times test_events starts the clock service again past its budget: RESTARTS, so it's started each time. */
 BUDGET_RESTARTS :: 3

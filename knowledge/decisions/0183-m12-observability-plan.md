@@ -143,6 +143,10 @@ Four parts, each with an as-built record:
   `test_installations` crashes the counter last; `test_control` checks a launch's intercept, a report's frames and
   `STOP_FAULT_LIMITED`; `test_lockup` spins CPU 1 with interrupts off; `test_events` drops a source's oldest records
   past the smallest budget. On both architectures.
+- **Found later (2026-11-11): `test_events`' budget check was flaky.** It killed the clock service three times with
+  50 ms between, so on a loaded machine a start could be killed before it logged anything, and then too little was
+  written for the oldest records to go. The supervisor now waits, up to 5 seconds, for each start's `serving` record
+  before the next kill.
 
 ## As Built: 12b
 - **The kernel.** `thread_set_debug` sets a parked thread's debugging state, a `ThreadDebug`: whether it single-steps,
