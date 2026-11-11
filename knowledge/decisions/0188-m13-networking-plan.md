@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; to be built, 13a to 13g
+Status: accepted, chosen with the project's owner; 13a built, 13b to 13g to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -133,3 +133,29 @@ Seven stages, each with an as-built record:
 - The network service's fibers are the first in a service, so its waits, timers and budgets on fibers are proved there.
 - A program's reach on the network is its policy, answered without looking at its traffic.
 - Remote login (M14) builds on the `Network` protocol's listeners, the stack and `std/crypto`.
+
+## As Built: 13a
+- **Transport** (`src/virtio`): a queue's layout follows its size, descriptors then the driver's ring then the device's,
+  and `setup_queue` takes its memory's size, sizing the queue to the largest power of two the device takes, the memory
+  holds and `MAX_QUEUE_SIZE` (256) allows: one page holds 128, so the other drivers' queues, a page each, grew from 64.
+  `add_chain` adds a chain without notifying, `notify` tells the device once, and `set_config_vector` routes
+  configuration changes to a vector.
+- **The `net` protocol** (`src/protocols/net`): as planned, with each slot's answer its own: `Receive(slot)` is held
+  until a frame arrives in it, and `Send(frame)` answered `Sent(slot)` once the device has taken it, in any order, so
+  no message carries a frame. `WatchLink(state)` is held until the link leaves it. A driver serves one client at a
+  time, and the buffer is the driver's for its life, so a new client sees the slots the last left given. Its channels'
+  ring is 16 KiB (`RING_BYTES`): every slot's request and answer fit, as a sender that doesn't watch for room would
+  otherwise wait on a full ring for ever, which the network service did on the default 1 KiB.
+- **The driver** (`src/drivers/virtio_net`): MAC, status, MTU and both checksum features where offered; a chain is the
+  frame's 12-byte header, from a page of the driver's, then the slot, so frames sit at a slot's start. Each queue
+  interrupts through a vector of its own, and configuration changes through a third. A received frame whose checksum
+  the device left partial is completed in software. QEMU's user-mode network offers no checksum offloads, so those
+  paths wait for a tap device to be tried.
+- **The network service** (`src/services/network_service`): it dials the first NIC, says what it is, maps the buffer
+  and gives every receive slot; with `test_arp=<address>` it probes that address by ARP, from 0.0.0.0. It's started
+  only when there's a NIC, after the other drivers. It and the driver are boot modules, as the other drivers are.
+- **`boot.py` passes `-nic none`**, so q35's default NIC and AArch64's are gone unless a test adds one; QEMU's PCI
+  addresses moved up a slot, and the virtio-rng test's expected address with them.
+- **Not yet:** the link going down and up (`WatchLink`) isn't tested, which needs QEMU's monitor.
+- **Tests:** "drives virtio-net, and its ARP probe for the gateway is answered", on both architectures: QEMU's MAC, the
+  link up, the MTU, and 10.0.2.2's answer from QEMU's gateway.

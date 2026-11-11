@@ -92,7 +92,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, block.space, pages, 0, 2 * PAGE, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.queue = virtio.setup_queue(&driver.transport, 0, pages, device_address, 0) or_return 8
+    driver.queue = virtio.setup_queue(&driver.transport, 0, pages, device_address,virtio.QUEUE_PAGE, 0) or_return 8
     driver.buffer = pages + PAGE
     driver.buffer_device = device_address + PAGE
     virtio.ready(&driver.transport)

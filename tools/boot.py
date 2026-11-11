@@ -216,7 +216,7 @@ def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, 
     boot = ["-cdrom", str(image)] if image is not None else []
     command = [
         str(qemu), "-M", "q35", "-m", "512M", "-cpu", cpu, *boot,
-        *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),
+        *serial_arguments(serial, keys), "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
     firmware = find_tool("OVMF", ["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF.fd"], [qemu.parent / "share"])
@@ -280,7 +280,7 @@ def run_kvm(host: str, image: Path | None, serial: Path, timeout: float, extra: 
     machine = "q35,kernel-irqchip=split" if any("intel-iommu" in argument for argument in there) else "q35"
     command = [
         "qemu-system-x86_64", "-accel", "kvm", "-M", machine, "-m", "512M", "-cpu", "host", *boot,
-        "-serial", f"file:{folder}/serial.txt", "-display", "none", *([] if reboot else ["-no-reboot"]),
+        "-serial", f"file:{folder}/serial.txt", "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-drive", f"if=pflash,format=raw,readonly=on,file={KVM_FIRMWARE}",
         *there,
     ]
@@ -311,7 +311,7 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
         str(qemu), "-M", machine, "-m", "512M", "-cpu", cpu,
         *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}", *cd,
-        *serial_arguments(serial, keys), "-display", "none", *([] if reboot else ["-no-reboot"]),
+        *serial_arguments(serial, keys), "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
         "-semihosting-config", "enable=on,target=native",
     ]
     if keys is not None:

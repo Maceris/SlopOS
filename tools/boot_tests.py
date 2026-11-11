@@ -224,7 +224,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 79 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 81 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -240,11 +240,20 @@ TESTS = [
         "--expect-line=[info] root task ended with code 0"]),
     # virtio-rng, modern only, found by the platform service, claimed by the supervisor for its driver
     ("drives virtio-rng from the platform service, and reseeds entropy from it", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services", "--expect-line=[user] platform: 0:3.0 (6900 4164) claimed",
+        "--command-line=test_exit test_services", "--expect-line=[user] platform: 0:2.0 (6900 4164) claimed",
         "--expect-line=[user] root task: the supervisor started virtio_rng",
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on,iommu_platform=on"]),
+    # virtio-net (decisions/0188, 13a): the driver serving QEMU's MAC, the network service taking the interface, and an
+    # ARP probe for QEMU's user-mode gateway answered, through the net protocol's slots
+    ("drives virtio-net, and its ARP probe for the gateway is answered", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_arp=10.0.2.2",
+        "--expect-line=[user] virtio_net: serving 52:54:00:12:34:56, its link up",
+        "--expect-line=[user] network: interface 52:54:00:12:34:56, its link up, MTU 1500",
+        "--expect-line=[user] network: 10.0.2.2 is at 52:55:0a:00:02:02",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-netdev", "user,id=n0",
+        "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
     ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",
         "--expect-line=[user] platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory",
