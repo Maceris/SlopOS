@@ -110,11 +110,12 @@ Answered 2026-11-08 (`decisions/0183`):
 
 ## Networking
 
-Open, from `design/networking.md` (2026-10-24):
+Answered 2026-11-10 (`decisions/0188`):
 
-- **Network authority as narrowed connections** (destinations and listening ports in a policy), with or without a
-  first-use prompt through the powerbox.
-- **TLS in `std`**, or a service that holds keys and terminates connections.
+- **Network authority**: narrowed connections, destinations and listening ports in a policy; more than a session's
+  default is asked of the powerbox, with no first-use prompt for each destination.
+- **TLS in `std`**, interoperating with the Internet's servers; no TLS service.
+- **The resolver** stays in the network service.
 
 ## Display and audio
 

@@ -1,6 +1,6 @@
 # Networking
 
-Status: **proposed** 2026-10-24, for roadmap M13 and M14. Builds on `../decisions/0013` (capabilities don't cross
+Status: **proposed** 2026-10-24, for roadmap M13 and M14; M13 planned in `../decisions/0188`, which answers §9. Builds on `../decisions/0013` (capabilities don't cross
 the network), `0014` (servers authorize by connection), `0037` (lending), `0043` (SSH, then a native protocol) and
 `services.md`. The choices still to make are at the end and in `../open-questions.md`, *Networking*.
 
@@ -96,7 +96,7 @@ the network), `0014` (servers authorize by connection), `0037` (lending), `0043`
 
 ## Also Proposed (`lessons.md` §7, 2026-10-30)
 
-Decided when M13 is planned:
+Decided when M13 was planned (`../decisions/0188`), as proposed:
 - No loopback for local services, which are reached through capabilities; loopback only in a policy that names it.
 - A destination by name never reaches private, loopback or link-local addresses unless the policy names that range
   (DNS rebinding, §7.1).

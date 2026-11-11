@@ -498,8 +498,11 @@ Design: `design/networking.md`.
 - **Time**: NTP with NTS (RFC 5905, 8915) in the clock service.
 - **TLS 1.3** (RFC 8446) in `std`, with hostname verification by default and the trust store a capability.
 
-In five stages: **13a** virtio-net and `net`; **13b** IP, ARP, NDP, ICMP, DHCPv4, SLAAC; **13c** TCP, UDP and the
-network service's protocol; **13d** DNS and NTP; **13e** TLS.
+Planned 2026-11-10 (`decisions/0188`), in seven stages: **13a** virtio-net and `net`; **13b** IP, ARP, NDP, ICMP,
+DHCPv4, SLAAC; **13c** TCP, UDP, the `Network` protocol and its policies; **13d** the crypto TLS needs, in Hemera's
+`std` (P-256, RSA, SHA-384, AES-128-GCM, AES-SIV, X.509); **13e** names and the clock's floor; **13f** TLS 1.3 in `std`;
+**13g** NTP with NTS. TLS interoperates with the Internet's servers; the resolver is in the network service; more
+authority than a session's default is asked of the powerbox.
 
 Specs: the RFCs above, RFC 791, 792, 826, 2131, 4443, 4861, 4862, 8200, 7323, 2018, 9438, 1035, 3596.
 Stresses: packet processing speed, wrapping arithmetic (sequence numbers), thousands of timers and connections on
@@ -576,4 +579,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M12 | done 2026-11-09: 12a to 12d (`decisions/0183`), and 12e to 12h, what they left (`decisions/0185`); a child CPU budget for each shell job waits for session programs to get CPU budgets (Before M13's C1) |
 | H | done 2026-11-09 (`decisions/0186`), in five stages, Ha to He: the x86-64 test path and the boot log, Hemera, user space, the kernel, the fuzzers. Ha built: boots through KVM in the Linux VM for CET's shadow stacks, the features detected, and the transient-execution log; Hb, Hemera's landing pads, signed returns and notes; Hc, user space's PAC, BTI and GCS on AArch64 and shadow stacks and IBT on x86-64; Hd, the kernel's PAC, BTI and GCS on AArch64 and IBT on x86-64, supervisor shadow stacks waiting for FRED; He, coverage-guided fuzzing: FAT, slopfs, the ELF loader, AML and every protocol's validators under `hemera --fuzz` (`tools/fuzz.py`), and the system calls guided by the kernel's coverage counters |
 | Before M13 | planned 2026-11-09 (`decisions/0187`), in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it. Done 2026-11-10: each session and each program the shell starts on a CPU budget of its own (C1); Hemera's atomics routed to a model checker with weak memory, in `std/testing` (C2); the handle entry's tag and the shootdown's handshake in packages of their own, checked, a lookup's torn read found and fixed (C3) |
-| M13–M16, H | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| M13 | planned 2026-11-10 (`decisions/0188`): 13a to 13g; not started |
+| M14–M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
