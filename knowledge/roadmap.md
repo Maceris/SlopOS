@@ -523,8 +523,8 @@ its 13e, which then goes on. In 0189's order:
   and `identity`; `docs/operators.md` made true.
 - **L4, `std/linear_algebra`:** vectors' and quaternions' functions, determinants and inverses, and Vulkan's and
   OpenGL's transforms.
-- **L5, pure f32, vector and fast float math** (`decisions/0190`), added 2026-11-11 by the project's owner, before 13e:
-  `std/math`'s f32 functions in f32 alone, within 1 ulp; every function lane by lane on `vector[T, n]`; and
+- **L5, f32's own, vector and fast float math** (`decisions/0190`), added 2026-11-11 by the project's owner, before 13e:
+  `std/math`'s f32 functions with kernels of their own, within 1 ulp; every function lane by lane on `vector[T, n]`; and
   `std/math/fast`, about 3.5 ulp, for shading and sampling; each tier measured in `perf_tests`.
 
 ## M14 — Remote Login (L4)

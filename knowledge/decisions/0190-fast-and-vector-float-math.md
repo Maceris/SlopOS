@@ -1,4 +1,4 @@
-# 0190: Pure f32, Fast and Vector Float Math
+# 0190: f32's Own, Fast and Vector Float Math
 
 Status: accepted, chosen with the project's owner; to be built as Linear Algebra's L5, before M13's 13e
 Date: 2026-11-11
@@ -14,14 +14,19 @@ be scalar and slow.
 
 ## Decision
 
-- **Pure f32:** `std/math`'s f32 functions work in f32 alone, still within 1 ulp each (as musl's and CORE-MATH's f32
-  functions are), with their own reductions and shorter polynomials. f64's stay fdlibm's.
+- **f32's own kernels:** `std/math`'s f32 functions take and give f32, still within 1 ulp each, with reductions and
+  polynomials sized for 24 bits rather than fdlibm's 53. Inside, each works however reaches 1 ulp cheapest: mostly
+  short f64 polynomials, as ARM's, musl's and CORE-MATH's f32 functions do, which cost about twice f32's instructions
+  on a vector, less than carrying f32 pairs for the extra precision would. Asked and chosen 2026-11-11, after the
+  owner first asked for pure f32: what made the old ones slow was fdlibm's 53-bit algorithms and their scalar
+  branches, not f64 itself. f64's stay fdlibm's.
 - **Lane by lane:** the same functions, by the same names, take `vector[f32, n]` and `vector[f64, n]`: branch-free
   kernels (a reduction exact over the usual range, a polynomial with fused multiply-adds, special cases chosen with
   `select`), with any lane outside the fast range done again through the exact scalar path, so results are the same
   as the scalar functions' bound says.
 - **Fast math:** `std/math/fast`, the same functions, for scalars and vectors of f32 and f64, documented as less
-  precise: within about 3.5 ulp each, each function's bound stated, trading accuracy for fewer operations.
+  precise: within about 3.5 ulp each, each function's bound stated, trading accuracy for fewer operations; its f32
+  functions are f32 throughout.
 - **Measured:** `perf_tests` measures each tier, so speed is known, not guessed; the reference tests hold every
   function to its stated bound.
 
