@@ -1,6 +1,6 @@
 # Proposal: Float Math and Linear Algebra
 
-Status: **decided** 2026-11-10 (`../decisions/0189`), to be built. For M15's canvas and compositor
+Status: **decided** 2026-11-10 (`../decisions/0189`), to be built between M13's 13c and 13e (`../roadmap.md`). For M15's canvas and compositor
 (`../design/display.md` §6), fonts, and graphics programs written in Hemera (a ray tracer, Vulkan programs through
 `vendor/vulkan`). Once in Hemera, its docs are the reference and this proposal is removed.
 

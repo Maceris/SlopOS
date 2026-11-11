@@ -1,6 +1,6 @@
 # 0189: Linear Algebra in Hemera
 
-Status: accepted
+Status: accepted; scheduled 2026-11-11 between M13's 13c and 13e (`../roadmap.md`, Linear Algebra)
 Date: 2026-11-10
 
 ## Context
