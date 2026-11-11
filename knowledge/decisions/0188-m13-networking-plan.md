@@ -159,3 +159,43 @@ Seven stages, each with an as-built record:
 - **Not yet:** the link going down and up (`WatchLink`) isn't tested, which needs QEMU's monitor.
 - **Tests:** "drives virtio-net, and its ARP probe for the gateway is answered", on both architectures: QEMU's MAC, the
   link up, the MTU, and 10.0.2.2's answer from QEMU's gateway.
+
+## As Built: 13d
+In Hemera's `std/crypto`, Freestanding, nothing allocated; secrets `#secret` and their functions `#constant_time`.
+- **SHA-384**, and HMAC and HKDF over it: SHA-512 from its own words, a type of its own (`Sha384`).
+- **AES-128-GCM**: AES's core became an `AesKey` of 10 or 14 rounds, AES-NI or bitsliced, which AES-256-GCM, AES-128-GCM
+  and AES-SIV share; AES-256-GCM's API is unchanged.
+- **AES-SIV-CMAC** (RFC 5297), 256 and 512 (AES-192's 384 isn't there): associated data and an optional nonce, which is
+  RFC 5297's two forms and what NTS's AEAD_AES_SIV_CMAC_256 uses, not its general list of strings, since Hemera's
+  escape checks refuse a list of views into a caller's stack. A refused message's plaintext is zeroed, as SIV decrypts
+  before it can check.
+- **P-256**: Montgomery arithmetic on four 64-bit limbs, Renes–Costello–Batina's complete formulas, a 4-bit window read
+  from every table entry with `intrinsics.select`; ctgrind caught LLVM turning a mask of ands and ors into a branch,
+  hence `select`. ECDH, key generation, and ECDSA signing with RFC 6979's nonce (random bytes mixed in when given) and
+  verifying. Public keys uncompressed or compressed, checked on the curve.
+- **P-384 ECDSA verification**, beyond the plan: Let's Encrypt's ECDSA intermediates and ISRG Root X2 are P-384 keys
+  signing with ecdsa-with-SHA384, so without it common chains fail. Verifying only, on the big-integer type.
+- **Big integers and RSA**: `BigNumber`, up to 8192 bits in place, public and variable time, Montgomery modulo an odd
+  number; PKCS #1 v1.5 (the expected encoding built and compared whole, so a DigestInfo without its NULL is refused)
+  and PSS with MGF1 over the same hash, SHA-256/384/512. No RSA signing or decryption.
+- **DER, X.509, PEM**: DER read strictly; each element a view with what follows it (a reader struct's views couldn't
+  be returned past the escape checks). `x509_verify_chain(chain, anchors, now, purpose)` takes a chain and the anchors
+  each as DER certificates one after another, builds paths depth first (order and extra certificates don't matter),
+  and checks signatures (RSA ≥ 2048 bits, P-256, P-384, Ed25519), validity, basic constraints, key usage, path lengths,
+  extended key usage (the leaf's and any CA's that has one), name constraints on DNS names, IP addresses, email
+  addresses and directory names, and that every critical extension is understood; it answers an `X509Verdict` naming
+  the reason. `x509_matches_host` matches a leaf to a host name (wildcards in the first label) or IP address; the
+  common name isn't used. `pem_certificates` turns a PEM file into the DER list the anchors are. Names are compared
+  byte for byte; policies aren't processed; there's no revocation.
+- **Tests:** `wycheproof_tls`, Wycheproof's vectors: HMAC/HKDF-SHA384, AES-128-GCM (AES-NI and software), both AES-SIV
+  files (both paths), P-256 ECDH (raw points and SubjectPublicKeyInfo) and ECDSA (P1363 and DER), P-384 ECDSA, RSA
+  PKCS #1 v1.5 and PSS at 2048 to 4096 bits; about 8,000 cases. `x509`, chains from a test authority its
+  `make_certificates.py` makes with Python's cryptography: good ones (RSA, RSA-PSS, P-256, P-384, Ed25519, out of
+  order) and one bad chain for each verdict, host names, base64, DER times. `curves` gains RFC 6979's signatures and
+  ECDH agreement; `hashes` SHA-384's known answers; `ctgrind` P-256 (keys, ECDH, signing), AES-128-GCM, AES-SIV and
+  SHA-384 under Valgrind, clean. HemeraTest Release 195 of 195; the Linux tests 63 of 63 on x86-64 and 61 of 61 on
+  AArch64.
+- **For the owner:** P-384 verification was added (above). Anchors are checked as if in the path, so an expired root
+  or one whose constraints don't allow the chain refuses it; a version 1 anchor is taken to be a CA. RSA keys under
+  2048 bits are refused in certificates. A chain is DER certificates one after another, so 13f's TLS copies a
+  Certificate message's entries together before validating.
