@@ -1,19 +1,25 @@
 # Display, Input and Audio
 
-Status: **proposed** 2026-10-24, for roadmap M15 and M16. Builds on `../decisions/0018` (the powerbox's GUI front
-end), `0043` (the trusted path), `0037` and `scheduling.md` (soft real-time), `console-and-sessions.md` (the input
-service and the secure attention key) and `../problems-and-directions.md` §15. The choices still to make are at the
-end and in `../open-questions.md`, *Display and audio*.
+Status: **proposed** 2026-10-24, for roadmap M15 and M16; the surface protocol's later-proofing (§3), real
+hardware's framebuffer (§2) and the canvas (§6) added 2026-11-10. Builds on `../decisions/0018` (the powerbox's GUI front end), `0043`
+(the trusted path), `0037` and `scheduling.md` (soft real-time), `console-and-sessions.md` (the input service and the
+secure attention key) and `../problems-and-directions.md` §12 and §15. The choices still to make are at the end and in
+`../open-questions.md`, *Display and audio*.
 
 ## 1. What Goes Wrong Elsewhere
 
 | Problem | Where | SlopOS answer |
 |---|---|---|
 | Any client can read every keystroke and every other window's pixels, and inject input | X11 | Clients see only their own surfaces and get input only when focused (§3) |
-| Isolation first, then years without screen sharing, global shortcuts, colour pickers or clipboard managers, until portals were added | Wayland | Capture, global shortcuts, input injection and clipboard history are powerbox capabilities from the start (§4) |
+| Isolation first, then years without screen sharing, global shortcuts, color pickers or clipboard managers, until portals were added | Wayland | Capture, global shortcuts, input injection and clipboard history are powerbox capabilities from the start (§4) |
 | Any app reads the clipboard whenever it likes (exposed by iOS 14's paste notices) | Every desktop and phone | Paste delivers the clipboard to the focused client on the user's gesture only (§4) |
 | Apps draw lookalike system dialogs and fake address bars | Every GUI | A band on every window drawn by the compositor, naming its program; a layer only the trusted services draw on (§5) |
 | Accessibility is a separate bus added later, with access to everything | AT-SPI, UI Automation | Accessibility is a capability with its own protocol, granted to the assistive program (§4) |
+| Buffers shared with the GPU were synchronized implicitly, through the kernel, for a decade before explicit sync reached the protocol (2024) | Linux DRM and Wayland | Every buffer submitted carries an acquire and a release fence from the first protocol version, signalled at once while composition is in software (§3) |
+| Pixel formats were a short list; tiled and compressed GPU layouts needed modifiers added to every API later | Linux DRM, Wayland, X11 | A buffer is described by its format, a layout modifier and its planes from the first version; M15 implements linear only (§3) |
+| color management and HDR are retrofits, years in the making | Wayland (its color protocol took about five years), X11, Windows before 10 | Surfaces declare a color space from the first version, as they declare a scale (§3) |
+| Drawing in the display server ties every program to its primitives and makes the server huge | X11's core protocol, GDI | Clients draw their own pixels; a 2D canvas library does it for them (§6) |
+| GPU drivers are millions of lines in the kernel, the largest attack surface and the most common crash | Linux, Windows | No GPU driver: composition and drawing stay in software, which runs the same in QEMU and on real hardware (§2, §6) |
 | Audio glitches under load because the mixer competes with everything else | Desktop Linux before PipeWire's real-time scheduling, others | The mixer has a budget of short periods at high priority (`0037`), and that is measured (§7) |
 | The microphone or camera is in use without the user knowing | Desktops before indicators | Capture is a powerbox capability, shown on the trusted path while held (§7) |
 
@@ -26,17 +32,39 @@ end and in `../open-questions.md`, *Display and audio*.
 ```
 
 - **virtio-gpu** in 2D mode speaks the `display` protocol: modes, scanout buffers in shared memory, flushes of damaged
-  rectangles, and a vsync event where the device gives one.
+  rectangles, a vsync event where the device gives one, and the cursor through the device's cursor queue, so the
+  pointer moves without a composite (the largest single win for input-to-photon latency).
+- **On real hardware**, the framebuffer the firmware's graphics output set up at boot (the one the console uses)
+  speaks the same protocol: the one mode it was left in, no vsync event and no cursor plane, so the compositor draws
+  the pointer itself and paces frames by its own clock.
 - **The input service** (M10) owns the seat: it routes keyboard and pointer events to whichever of the terminal
   service and the compositor has the seat, and recognizes the secure attention key before either.
 - **The compositor** composites clients' surfaces in software, with SIMD (AVX2 on x86-64-v3, NEON on AArch64), and owns
-  the GUI's trusted path. GPU acceleration is out of scope.
+  the GUI's trusted path. GPU acceleration is out of scope (`../problems-and-directions.md` §12): a real driver is
+  years of expert work per GPU family, and every hobby OS with one ported Mesa rather than write it.
 
 ## 3. Surfaces
 
 - A client creates a surface by giving the compositor a memory object it draws into; it submits a frame with its
   damage, and the compositor answers when the buffer can be reused and when the frame was shown (presentation
   feedback, so animation can pace itself).
+
+From the first protocol version, though M15 uses only the simplest case of each, so what other systems retrofitted
+(§1) never needs a new protocol:
+
+- **Explicit sync.** A submitted buffer carries an *acquire* fence, which the compositor waits on before reading it,
+  and is answered with a *release* fence, which the client waits on before writing it again. A client that draws on
+  other threads submits as soon as it starts and signals the acquire fence when it's done; one that draws first
+  submits it signalled.
+- **Buffer descriptions.** A format (a four-character code, as DRM's), a layout modifier (linear in M15) and one to
+  three planes, each with its offset and stride in the memory object, so YUV video and any later layout fit. The compositor lists the formats and modifiers it takes, per output.
+- **Color.** A surface declares its color space and transfer function (sRGB in M15; linear, Display P3 and PQ for
+  HDR later), as it declares its scale. The compositor converts what it can and says what it can't.
+- **Present modes.** FIFO (one frame per refresh, the default) and mailbox (the newest frame wins, for low latency),
+  and an optional target time for a frame, for pacing and for the input-to-photon test.
+- **Subsurfaces and direct scanout.** A surface can have child surfaces at offsets (a video in a window, a cursor
+  drawn by the client), and a full-screen surface whose buffer matches the output's format is scanned out without a
+  copy, the identity band then shown on demand (§8).
 - Input reaches a surface only while it has focus or the pointer is over it, and only events for it.
 - The compositor runs on a budget of its own at a high priority (`0037`), so a busy client can't make the pointer
   stutter.
@@ -72,8 +100,13 @@ Each is asked for through the powerbox and granted by the user on the trusted pa
   `hmtx` and `kern`/`GPOS` pair kerning; CFF outlines later.
 - **Shaping:** Latin and other scripts without complex shaping first; bidirectional text (UAX #9) and complex scripts
   later, documented as missing.
-- **The UI library** lays out and draws the widgets the first programs need, and generates a form from a manifest,
-  as the shell generates a command line from one (`shell.md` §8).
+- **The canvas**, under the UI library: a 2D drawing library over a pixel buffer, with paths (lines, quadratic and
+  cubic curves), fills (non-zero and even-odd), strokes (joins, caps, dashes), solid and gradient paints, images with
+  filtering, clips, transforms, and text through the font rasterizer, rasterized on the CPU with SIMD as the
+  compositor is, and reporting the damage it drew. It knows nothing of SlopOS, so it belongs in Hemera's `std` and
+  runs on Windows and Linux too (§8).
+- **The UI library** lays out and draws the widgets the first programs need on the canvas, and generates a form from
+  a manifest, as the shell generates a command line from one (`shell.md` §8).
 - **Programs:** a terminal emulator speaking the terminal protocol (`console-and-sessions.md` §2), the typed-data
   viewer, a launcher, the powerbox's chooser.
 
@@ -100,6 +133,6 @@ Decided when M15 and M16 are planned:
 ## 8. Open Questions
 
 - Whether the identity band is always on, or only on windows that ask for input (a video player full screen).
-- How much of the UI library belongs in Hemera's `std` (fonts and rasterizing are general-purpose) and how much in
-  SlopOS.
+- How much of the UI library belongs in Hemera's `std` and how much in SlopOS. Proposed: fonts, rasterizing and the
+  canvas (§6) in `std`; the widgets that speak SlopOS protocols (manifests, the powerbox) in SlopOS.
 - Whether text and fonts come earlier, for the framebuffer console's Unicode coverage in M10.
