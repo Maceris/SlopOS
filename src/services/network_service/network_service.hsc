@@ -314,6 +314,9 @@ report :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], happene
             append_v6(&line, router)
             service.router_v6 = router
         }
+        // Connections are 13c2's
+        case Incoming(_) => return void
+        case Ended(_) => return void
         case EchoReplied(echo) => {
             append_address(&line, echo.from)
             text_buffer.append(&line, " answered a ping")

@@ -282,6 +282,20 @@ receive_ipv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
             return void
         }
     }
+    if next == PROTOCOL_TCP || next == PROTOCOL_UDP {
+        // Only to an address of the interface's, not a group
+        if !is_ours_v6(stack, destination, false) {
+            return void
+        }
+        payload :: part(packet, at, total)
+        if next == PROTOCOL_TCP {
+            receive_tcp(stack, .V6(source), pseudo_sum_v6(source, destination, PROTOCOL_TCP, payload.count), payload)
+        }
+        else {
+            receive_udp6(stack, source, destination, payload)
+        }
+        return void
+    }
     if next != PROTOCOL_ICMPV6 {
         return void
     }

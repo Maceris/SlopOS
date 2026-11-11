@@ -250,7 +250,10 @@ receive_udp4 :: fn(stack: ptr[mut Stack], source: Ipv4, destination: Ipv4, datag
         return void
     }
     if u16_at(whole, 0) == DHCP_SERVER_PORT && u16_at(whole, 2) == DHCP_CLIENT_PORT {
-        receive_dhcp(stack, whole[UDP_HEADER..<length])
+        receive_dhcp(stack, part(whole, UDP_HEADER, length))
+    }
+    else if !is_zero_ipv4(stack.ipv4) && same_ipv4(destination, stack.ipv4) {
+        deliver_datagram(stack, .V4(source), u16_at(whole, 0), u16_at(whole, 2), part(whole, UDP_HEADER, length))
     }
 }
 

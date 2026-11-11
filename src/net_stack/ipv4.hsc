@@ -130,6 +130,9 @@ receive_ipv4 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
     if protocol == PROTOCOL_ICMP && to_us {
         receive_icmp(stack, source, payload)
     }
+    else if protocol == PROTOCOL_TCP && to_us {
+        receive_tcp(stack, .V4(source), pseudo_sum_v4(source, destination, PROTOCOL_TCP, payload.count), payload)
+    }
     else if protocol == PROTOCOL_UDP {
         receive_udp4(stack, source, destination, payload)
     }

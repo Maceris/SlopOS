@@ -33,7 +33,7 @@ ETHERNET_HEADER :: 14
 /** How many frames wait to be sent at most; past them, the newest is dropped. */
 OUTBOX :: 32
 /** How many events wait to be taken at most; past them, the newest is dropped. */
-EVENTS :: 32
+EVENTS :: 128
 /** How many IPv4 neighbours it knows at once. */
 ARP_ENTRIES :: 16
 /** How many IPv6 neighbours it knows at once. */
@@ -68,6 +68,8 @@ ETHER_ARP : u16 : 0x0806
 ETHER_IPV6 : u16 : 0x86dd
 /** IP's protocol number for ICMP. */
 PROTOCOL_ICMP : u8 : 1
+/** IP's protocol number for TCP. */
+PROTOCOL_TCP : u8 : 6
 /** IP's protocol number for UDP. */
 PROTOCOL_UDP : u8 : 17
 /** IP's protocol number for ICMPv6. */
@@ -151,6 +153,10 @@ Event :: union {
     RouterFound(Ipv6),
     /** A ping was answered. */
     EchoReplied(Echo),
+    /** A TCP connection arrived at a listener, and waits for tcp_accept. */
+    Incoming(TcpIncoming),
+    /** A TCP connection ended: its number's no longer good, or, closed, in TIME-WAIT. */
+    Ended(TcpEnded),
 }
 
 // ---- Its state
@@ -289,6 +295,14 @@ Stack :: struct {
 
     pings : Ping[PINGS],
     ping_sequence : u16,
+
+    // TCP and UDP
+    tcbs : Tcb[TCP_CONNECTIONS],
+    listeners : TcpListener[TCP_LISTENERS],
+    sockets : UdpSocket[UDP_SOCKETS],
+    inbox : Datagram[UDP_INBOX],
+    /** Datagrams dropped as the inbox was full. */
+    dropped_datagrams : u64,
 }
 
 /** How the stack is set up. */
@@ -371,6 +385,7 @@ tick :: fn(stack: ptr[mut Stack], now: u64) {
     tick_neighbours(stack, true)
     tick_neighbours(stack, false)
     tick_ipv6(stack)
+    tick_tcp(stack)
     for &ping in stack.pings {
         if ping.active && now >= ping.sent + PING_LIFE {
             ping.active = false
@@ -415,7 +430,7 @@ next_deadline :: fn(stack: ptr[Stack]) -> u64 {
             soonest = each.sent + PING_LIFE
         }
     }
-    return soonest
+    return tcp_deadline(stack, soonest)
 }
 
 /**

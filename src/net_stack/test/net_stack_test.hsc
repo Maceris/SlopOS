@@ -289,6 +289,8 @@ take_events :: fn(world: ptr[mut World]) {
             case LeaseLost => world.trouble += 1
             case AddressConflict(_) => world.trouble += 1
             case RouterFound(_) => {}
+            case Incoming(_) => {}
+            case Ended(_) => {}
         }
     }
     loop {
