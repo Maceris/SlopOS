@@ -850,7 +850,8 @@ tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
     can_send :: tcb.state == .Established || tcb.state == .CloseWait || tcb.state == .FinWait1 || tcb.state == .Closing
         || tcb.state == .LastAck
     loop {
-        if !can_send {
+        // No room to queue it: it waits for tcp_resume, as the outbox drains
+        if !can_send || outbox_full(stack) {
             break
         }
         // Holes first in recovery, past what the peer has SACKed
@@ -1710,6 +1711,7 @@ hole_length :: fn(tcb: ptr[Tcb], hole: u32) -> u32 {
  * @param tcb The connection.
  */
 enter_recovery :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+    stack.fast_retransmits += 1
     reduce_window(stack, tcb)
     tcb.in_recovery = true
     tcb.recover = tcb.snd_max
@@ -2027,6 +2029,7 @@ retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
         }
         return void
     }
+    stack.timeouts += 1
     reduce_window(stack, tcb)
     tcb.cwnd = cast[u64](tcb.mss)
     tcb.in_recovery = false
@@ -2039,6 +2042,24 @@ retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
     // An unacknowledged FIN goes again after the data
     tcb.fin_sent = false
     tcp_output(stack, tcb)
+}
+
+/**
+ * Go on sending what connections held back while the outbox was full, now that it may have room: its caller calls this
+ * once it has taken frames.
+ *
+ * @param stack The stack.
+ */
+tcp_resume :: fn(stack: ptr[mut Stack]) {
+    for &tcb in stack.tcbs {
+        if outbox_full(stack) {
+            return void
+        }
+        if tcb.state == .Established || tcb.state == .CloseWait || tcb.state == .FinWait1 || tcb.state == .Closing
+            || tcb.state == .LastAck {
+            tcp_output(stack, tcb)
+        }
+    }
 }
 
 /**

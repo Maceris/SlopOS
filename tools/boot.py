@@ -480,8 +480,9 @@ class Keyboard:
 class NetworkPeers:
     """
     Peers on the development machine for the network's tests (decisions/0188, 13c), reached from the machine through
-    QEMU's user-mode network at 10.0.2.2: a TCP echo server and a UDP echo server, each on a free loopback port, which
-    replace {tcp_echo} and {udp_echo} in the kernel's command line; and a forward from a free loopback port to the
+    QEMU's user-mode network at 10.0.2.2: a TCP echo server, a UDP echo server and a TCP sink, which reads everything
+    and closes once its peer has finished, each on a free loopback port, which replace {tcp_echo}, {udp_echo} and
+    {tcp_sink} in the kernel's command line and what's typed and expected; and a forward from a free loopback port to the
     machine's port 7, which this connects to once the serial output says the machine listens there, sending bytes and
     checking they come back. A virtio NIC on that network is added to QEMU's arguments.
     """
@@ -497,12 +498,16 @@ class NetworkPeers:
         self.tcp.listen()
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp.bind(("127.0.0.1", 0))
+        self.sink = socket.socket()
+        self.sink.bind(("127.0.0.1", 0))
+        self.sink.listen()
         self.forward = free_port()
-        for serve in (self.serve_tcp, self.serve_udp, self.connect_in):
+        for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.connect_in):
             threading.Thread(target=serve, daemon=True).start()
 
     def words(self, command_line: str) -> str:
-        return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1]))
+        return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1])) \
+            .replace("{tcp_sink}", str(self.sink.getsockname()[1]))
 
     def qemu_arguments(self) -> list[str]:
         return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7",
@@ -525,6 +530,24 @@ class NetworkPeers:
                     if not data:
                         break
                     connection.sendall(data)
+                connection.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+    def serve_sink(self) -> None:
+        while True:
+            try:
+                connection, _ = self.sink.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.drain, args=(connection,), daemon=True).start()
+
+    @staticmethod
+    def drain(connection: socket.socket) -> None:
+        with connection:
+            try:
+                while connection.recv(1 << 20):
+                    pass
                 connection.shutdown(socket.SHUT_WR)
             except OSError:
                 pass

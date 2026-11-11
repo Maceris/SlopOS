@@ -54,6 +54,10 @@ Pair :: struct {
     random : u64,
     faults : Faults,
     listener : u32,
+    /** The one frame from the first stack to drop, by its number, from 1; 0 for none. */
+    drop_nth : u64,
+    /** How many frames the first stack has sent. */
+    sent_by_first : u64,
 }
 
 /**
@@ -135,6 +139,12 @@ draw_pair :: fn(pair: ptr[mut Pair]) -> u64 {
  * @param to 0 for the first stack, 1 for the second.
  */
 send_pair :: fn(pair: ptr[mut Pair], bytes: u8[], to: u32) {
+    if to == 1 {
+        pair.sent_by_first += 1
+        if pair.sent_by_first == pair.drop_nth {
+            return void
+        }
+    }
     if draw_pair(pair) % 100 < pair.faults.drop {
         return void
     }
@@ -161,6 +171,17 @@ send_pair :: fn(pair: ptr[mut Pair], bytes: u8[], to: u32) {
 pair_frames :: fn(pair: ptr[mut Pair]) {
     frame : u8[net_stack.MAX_FRAME]
     into :: view_of(&frame[0], frame.count)
+    loop {
+        length :: net_stack.take_frame(&pair.a, into) or_break
+        send_pair(pair, net_stack.part(into, 0, length), 1)
+    }
+    loop {
+        length :: net_stack.take_frame(&pair.b, into) or_break
+        send_pair(pair, net_stack.part(into, 0, length), 0)
+    }
+    // What TCP held back while the outboxes were full
+    net_stack.tcp_resume(&pair.a)
+    net_stack.tcp_resume(&pair.b)
     loop {
         length :: net_stack.take_frame(&pair.a, into) or_break
         send_pair(pair, net_stack.part(into, 0, length), 1)
@@ -467,5 +488,24 @@ exchanges_datagrams #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
         answer :: net_stack.take_datagram(&pair.a, client, view_of(&into[0], into.count)) or_else net_stack.DatagramFrom.{}
         testing.expect_eq(t, string_of(&into[0], answer.length), "an answer", "the answer arrives")
     }
+    return .Ok
+}
+
+/** One data segment lost is sent again on the receiver's duplicate acknowledgements, not on the timer. */
+recovers_a_lost_segment_without_the_timer #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    pair :: make_pair(9, Faults.{})
+    defer runtime.free(pair)
+    // Past the handshake and some data, into a full window
+    pair.drop_nth = 40
+    pair.apps[0].to_send = 500_000
+    pair.apps[1].to_send = 0
+    first :: &pair.apps[0]
+    first.connection = net_stack.tcp_connect(&pair.a, .V4(SECOND_V4), LISTEN_PORT, rings_of(first)) or_else 0
+    first.open = true
+    run_pair(pair, 60 * net_stack.SECOND, true)
+    testing.expect_eq(t, pair.apps[1].read, 500_000, "every byte arrives")
+    testing.expect_eq(t, pair.apps[1].wrong, 0, "as written")
+    testing.expect(t, pair.a.fast_retransmits >= 1, "the lost segment was sent again on duplicate acknowledgements")
+    testing.expect_eq(t, pair.a.timeouts, 0, "and never on the timer")
     return .Ok
 }

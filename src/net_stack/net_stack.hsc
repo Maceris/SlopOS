@@ -30,8 +30,11 @@ import crypto from "std"
 MAX_FRAME :: 1514
 /** The bytes of an Ethernet header: two addresses and a type. */
 ETHERNET_HEADER :: 14
-/** How many frames wait to be sent at most; past them, the newest is dropped. */
-OUTBOX :: 32
+/**
+ * How many frames wait to be sent at most: 64, as many as a NIC's send slots. Past them, the newest is dropped, but
+ * TCP sends nothing while there's no room (outbox_full), and goes on as there is (tcp_resume).
+ */
+OUTBOX :: 64
 /** How many events wait to be taken at most; past them, the newest is dropped. */
 EVENTS :: 128
 /** How many IPv4 neighbours it knows at once. */
@@ -303,6 +306,9 @@ Stack :: struct {
     inbox : Datagram[UDP_INBOX],
     /** Datagrams dropped as the inbox was full. */
     dropped_datagrams : u64,
+    /** How many times TCP's retransmitted on duplicate acknowledgements or SACK, and on its timer, for tests. */
+    fast_retransmits : u64,
+    timeouts : u64,
 }
 
 /** How the stack is set up. */
@@ -460,6 +466,16 @@ take_frame :: fn(stack: ptr[mut Stack], into: mut u8[]) -> usize? {
         }
     }
     return frame.length
+}
+
+/**
+ * Tell whether the outbox has room for fewer than a few more frames, so TCP holds back what it would send.
+ *
+ * @param stack The stack.
+ * @return True if fewer than 4 frames' room is left: room kept for acknowledgements, ARP and the like.
+ */
+outbox_full :: fn(stack: ptr[Stack]) -> bool {
+    return stack.outbox_count + 4 >= OUTBOX
 }
 
 /**

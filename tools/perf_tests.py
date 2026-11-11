@@ -33,14 +33,25 @@ ICOUNT = ["-icount", "shift=0,sleep=off"]
 PERF_LINE = re.compile(r"perf: (\w+) (\d+)")
 NAMES = ["ipc_round_trip", "page_fault", "thread_create", "process_create", "file_create_sync", "program_start",
          "boot_to_healthy"]
+# What's measured in wall time only, never counted: TCP to a peer on the development machine, which runs in the host's
+# time (decisions/0188, 13c)
+WALL_ONLY = ["tcp_send_4mib"]
 # What's held to its baseline: the kernel's, whose counts repeat. The rest wait on the disk, whose requests finish in the
 # host's time even under -icount, so their counts move by tens of percent from one boot to the next: reported only
 GATED = ["ipc_round_trip", "page_fault", "thread_create", "process_create"]
 
 
-def boots(kernel: Path, programs: Path, image_builder: Path, more: list) -> list:
-    """The boots that measure: test_perf alone, on one CPU, and a boot from the image builder's disk."""
-    return [
+def boots(kernel: Path, programs: Path, image_builder: Path, more: list, icount: bool) -> list:
+    """
+    The boots that measure: test_perf alone, on one CPU, and a boot from the image builder's disk; and, timed by the wall
+    only, test_network sending to a TCP sink on this machine.
+    """
+    network = [] if icount else [
+        [f"--kernel={kernel}", f"--programs={programs}", "--timeout=300", "--expect=7", "--network-peers",
+         "--command-line=test_exit test_services test_settle=20 test_network tcp_echo={tcp_echo} udp_echo={udp_echo} tcp_sink={tcp_sink}",
+         *more],
+    ]
+    return network + [
         [f"--kernel={kernel}", f"--programs={programs}", "--timeout=600", "--expect=7",
          "--command-line=test_exit test_program=test_perf", "--expect-line=[user] test_perf: 4 tests: 4 passed, 0 failed",
          *more],
@@ -52,7 +63,7 @@ def boots(kernel: Path, programs: Path, image_builder: Path, more: list) -> list
 def measure(kernel: Path, programs: Path, image_builder: Path, more: list, icount: bool, folder: Path) -> dict | None:
     """Every number the boots say, by name: null if one didn't end as it should."""
     numbers = {}
-    for index, arguments in enumerate(boots(kernel, programs, image_builder, more)):
+    for index, arguments in enumerate(boots(kernel, programs, image_builder, more, icount)):
         serial = folder / f"serial_{index}_{'icount' if icount else 'wall'}.txt"
         command = [sys.executable, str(BOOT), *arguments, f"--serial={serial}", "--", *(ICOUNT if icount else []), "-smp", "1"]
         result = subprocess.run(command, capture_output=True, text=True)
@@ -91,6 +102,12 @@ def main() -> int:
                 failed += 1
                 continue
             known = baselines.setdefault(architecture, {})
+            for name in WALL_ONLY:
+                if name in times:
+                    print(f"measured: {architecture}: {name}: {times[name]} ns, wall time only")
+                else:
+                    print(f"FAILED: {architecture}: {name} wasn't measured")
+                    failed += 1
             for name in NAMES:
                 if not counted:
                     if name in times:

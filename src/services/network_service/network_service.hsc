@@ -289,6 +289,17 @@ pump :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
             busy^ = true
             request(service, .Send(net.Frame.{slot = slot, length = cast[u32](length)}))
         }
+        // What TCP held back while the outbox was full, now there's room, into the slots still free
+        net_stack.tcp_resume(stack)
+        for &busy, index in service.sending {
+            if busy^ {
+                continue
+            }
+            slot :: net.SLOTS + cast[u32](index)
+            length :: net_stack.take_frame(stack, slot_bytes(service, slot, net.SLOT_BYTES)) or_break
+            busy^ = true
+            request(service, .Send(net.Frame.{slot = slot, length = cast[u32](length)}))
+        }
     }
     deadline :: net_stack.next_deadline(stack)
     if deadline != ~cast[u64](0) {

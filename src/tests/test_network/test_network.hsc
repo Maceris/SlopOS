@@ -6,7 +6,9 @@
  * - a TCP connection to the echo peer at 10.0.2.2:<tcp_echo>, its echo of every byte written checked;
  * - a datagram to the UDP echo peer at 10.0.2.2:<udp_echo>, its echo checked;
  * - a listener on port 7, which echoes back what the development machine sends through QEMU's forward, once it says
- *   it's listening.
+ *   it's listening;
+ * - with tcp_sink=<port>, how long SINK_BYTES take to send to the sink there, as "perf: tcp_send_4mib <nanoseconds>",
+ *   which tools/perf_tests.py reports.
  *
  * A connection refused isn't among them: QEMU's user-mode network doesn't answer a SYN for a closed port on the
  * development machine at all, so the stack's retries would run a minute to a timeout. net_stack's hosted tests check
@@ -27,6 +29,8 @@ import service_kit from "../../libraries/service_kit"
 ECHO_BYTES : usize : 65536
 /** How many bytes are written before what's echoed is read back: 8 KiB, so neither side's rings fill. */
 CHUNK :: 8192
+/** How many bytes the throughput measure sends: 4 MiB. */
+SINK_BYTES : usize : 4 << 20
 /** How many times an Open is tried while there's no route yet, as the lease is still coming: 60, half a second apart. */
 OPEN_TRIES :: 60
 
@@ -44,6 +48,7 @@ main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, co
     text :: service_kit.text_of(startup, command_line or_return 2) or_else ""
     tcp_echo :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tcp_echo=") or_else "") or_else 0)
     udp_echo :: cast[u16](service_kit.number_of(service_kit.word_after(text, "udp_echo=") or_else "") or_else 0)
+    tcp_sink :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tcp_sink=") or_else "") or_else 0)
     if tcp_echo == 0 || udp_echo == 0 {
         runtime.log_info("no peers' ports on the command line")
         return 2
@@ -54,7 +59,55 @@ main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, co
     echo_tcp(service, net_address.Endpoint.{address = peer, port = tcp_echo})
     echo_udp(service, net_address.Endpoint.{address = peer, port = udp_echo})
     serve_echo(service)
+    if tcp_sink != 0 {
+        measure_send(service, net_address.Endpoint.{address = peer, port = tcp_sink})
+    }
     return 0
+}
+
+/**
+ * Measure how long SINK_BYTES take to send to the TCP sink, from opening the connection to the sink's finishing once it
+ * has them all.
+ *
+ * @param service The connection to the network service.
+ * @param to The sink.
+ */
+measure_send :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) {
+    started :: slop_os.clock_monotonic() or_else 0
+    tcp := match open_when_routed(service, to) {
+        case Ok(found) => found
+        case Error(failure) => {
+            runtime.log_info("the TCP sink couldn't be reached: %", failure)
+            return void
+        }
+    }
+    chunk : u8[CHUNK]
+    for &byte, i in chunk {
+        byte^ = pattern(i)
+    }
+    sent := cast[usize](0)
+    loop {
+        if sent >= SINK_BYTES {
+            break
+        }
+        written :: net.write(&tcp, view_of(&chunk[0], chunk.count))
+        if written == 0 {
+            break
+        }
+        sent += written
+    }
+    while true
+    net.finish(&tcp)
+    back : u8[16]
+    _ = net.read(&tcp, view_of(&back[0], back.count))
+    net.close(&tcp)
+    elapsed :: (slop_os.clock_monotonic() or_else 0) - started
+    if sent < SINK_BYTES {
+        runtime.log_info("the TCP sink took % of % bytes", sent, SINK_BYTES)
+        return void
+    }
+    runtime.log_info("perf: tcp_send_4mib %", elapsed)
+    runtime.log_info("sent % MiB in % ms", SINK_BYTES >> 20, elapsed / 1_000_000)
 }
 
 /**
