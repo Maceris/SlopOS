@@ -15,6 +15,7 @@ import unicode from "std"
 import slop_os from "std/os"
 import terminal as protocol from "std/os/slop_os"
 import dir from "std/os/slop_os"
+import network from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import programs as finding from "../../protocols/programs"
@@ -27,6 +28,13 @@ PROMPT :: "> "
 Shell :: struct {
     /** The session's terminal, which lines are read from and everything's written to. */
     console : terminal.Terminal,
+    /**
+     * The session's network connection (decisions/0188, 13c), which copies of go to programs that take one; null
+     * without a network.
+     */
+    network : os.Channel[network.Network]?,
+    /** A port bound to network, waited on for its answers. */
+    network_port : slop_os.Port,
     /** The scope names are bound in now: the shell's own, or a function's call's or a stage's item's while it runs. */
     scope : ptr[mut Scope],
     /** Whether exit has been run, so the shell ends before reading another line. */
@@ -111,9 +119,14 @@ Shell :: struct {
  */
 main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
     manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?,
-    script: os.Channel[read_only_file.ReadOnlyFile]?, cpu_budget: slop_os.CpuBudget?) -> int {
+    script: os.Channel[read_only_file.ReadOnlyFile]?, cpu_budget: slop_os.CpuBudget?, network: os.Channel[network.Network]?) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
+    shell.network = network
+    match network {
+        case Some(given) => shell.network_port = os.port_for(block.budget, given.end) or_return 2
+        case None => {}
+    }
     shell.cpu_budget = cpu_budget or_else cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
     shell.scope = runtime.new(Scope)
     shell.console = terminal.open(session_terminal) or_return 2

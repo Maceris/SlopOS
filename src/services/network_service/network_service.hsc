@@ -6,7 +6,9 @@
  * timers are one port timer, at its next deadline.
  *
  * Programs reach the network through it, 13c: its listener's connections speak the network protocol (std/os/slop_os's
- * network), whose Open, Listen and Udp give channels of their own (tcp_stream, tcp_listener, datagrams). A connection's
+ * network), whose Open, Listen and Udp give channels of their own (tcp_stream, tcp_listener, datagrams). A connection
+ * made through the listener allows everything, as its holder, the session manager or a test, is given it to narrow;
+ * Narrow makes one allowing less, and every Open, Listen, Udp and datagram is checked against its connection's policy. A connection's
  * data is in the program's memory, mapped here at an address slot of the connection's, MAX_MEMORY each, so addresses
  * are reused as connections come and go.
  *
@@ -461,12 +463,16 @@ SocketSlot :: struct {
     socket : u32,
     /** Whether a Receive is held. */
     receiving : bool,
+    /** The policy of the connection it was opened on, which each datagram sent or taken is checked against. */
+    policy : network.Policy,
 }
 
 /** What serving programs keeps: their channels and what each holds. */
 Serving :: struct {
     /** The network channels, the listener among them. */
     clients : service_kit.Clients,
+    /** Each network channel's policy, by its index in clients: everything for one made through the listener. */
+    policies : network.Policy[service_kit.MAX_CLIENTS],
     streams : Stream[STREAMS],
     listeners : ListenerSlot[LISTENERS],
     sockets : SocketSlot[SOCKETS],
@@ -494,7 +500,7 @@ start_serving :: fn(service: ptr[mut Service], clients: os.Listener[network.Netw
         each.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
     }
     serving.slots = runtime.reserve_addresses(cast[usize](cast[u64](STREAMS) * MAX_MEMORY)) or_else 0
-    return serving.slots != 0 && service_kit.add_client(&serving.clients, service.port, clients.end)
+    return serving.slots != 0 && add_network_client(service, clients.end, network.everything())
 }
 
 /**
@@ -553,17 +559,83 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 return void
             }
         }
+        if index >= serving.policies.count {
+            return void
+        }
+        policy :: &serving.policies[index]
         match os.message_of[network.Request](into)^ {
-            case Open(open) => answer_network(service, end, open_stream(service, open))
-            case Listen(port) => answer_network(service, end, open_listener(service, port))
-            case Udp(port) => answer_network(service, end, open_socket(service, port))
+            case Open(open) => {
+                if network.allows_connect(policy, network.TRANSPORT_TCP, open.to) {
+                    answer_network(service, end, open_stream(service, open))
+                }
+                else {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
+                    answer_network(service, end, .Refused(.NotAllowed))
+                }
+            }
+            case Listen(port) => answer_network(service, end, if network.allows_listen(policy, network.TRANSPORT_TCP, port) {
+                open_listener(service, port) } else { network.Response.Refused(.NotAllowed) })
+            case Udp(port) => answer_network(service, end, if port == 0 || network.allows_listen(policy, network.TRANSPORT_UDP, port) {
+                open_socket(service, port, policy) } else { network.Response.Refused(.NotAllowed) })
+            case Narrow(narrowing) => {
+                wanted := network.policy_of(os.items(into, narrowing.connect), os.items(into, narrowing.listen))
+                    or_else network.Policy.{connect_count = network.MAX_RULES + 1}
+                // One with too many rules is refused, as it's no policy at all
+                allowed :: wanted.connect_count <= network.MAX_RULES && network.within(policy, &wanted)
+                answer_network(service, end, if allowed { another_connection(service, wanted) } else { network.Response.Refused(.NotAllowed) })
+            }
+            case Copy => answer_network(service, end, another_connection(service, policy^))
             case Connect(connection) => {
-                if !service_kit.add_client(&serving.clients, service.port, connection.end) {
+                /*
+                 * Through the listener, the first client: everything allowed, as the supervisor gives the listener only
+                 * to who holds the network. Through any other connection, that connection's policy, so a Connect is
+                 * no way around a Narrow
+                 */
+                given :: if index == 0 { network.everything() } else { policy^ }
+                if !add_network_client(service, connection.end, given) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
         }
     }
+}
+
+/**
+ * Serve another network channel, with a policy.
+ *
+ * @param service The service.
+ * @param end The service's end of it.
+ * @param policy What it allows.
+ * @return True once it's served; false if there's no room, when end isn't taken.
+ */
+add_network_client :: fn(service: ptr[mut Service], end: slop_os.Channel, policy: network.Policy) -> bool {
+    serving :: &service.serving
+    index :: service_kit.add_client_index(&serving.clients, service.port, end) or_return false
+    if index < serving.policies.count {
+        serving.policies[index] = policy
+    }
+    return true
+}
+
+/**
+ * Make another network channel, with a policy, for Narrow or Copy.
+ *
+ * @param service The service.
+ * @param policy What it allows.
+ * @return Narrowed, with the program's end; or Refused NoRoom.
+ */
+another_connection :: fn(service: ptr[mut Service], policy: network.Policy) -> network.Response {
+    startup :: slop_os.startup_block()
+    pair :: match os.channel_for[network.Network](startup.budget, network.RING_BYTES) {
+        case Ok(found) => found
+        case Error(error) => return .Refused(.NoRoom)
+    }
+    if !add_network_client(service, pair.b, policy) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return .Refused(.NoRoom)
+    }
+    return .Narrowed(os.Channel[network.Network].{end = pair.a})
 }
 
 /**
@@ -1219,7 +1291,7 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
  * @param port The port, or 0 for an ephemeral one.
  * @return Bound with the socket's channel; or Refused.
  */
-open_socket :: fn(service: ptr[mut Service], port: u16) -> network.Response {
+open_socket :: fn(service: ptr[mut Service], port: u16, policy: ptr[network.Policy]) -> network.Response {
     startup :: slop_os.startup_block()
     stack :: service.stack or_return .Refused(.NoRoute)
     index := cast[usize](SOCKETS)
@@ -1247,7 +1319,7 @@ open_socket :: fn(service: ptr[mut Service], port: u16) -> network.Response {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return .Refused(.NoRoom)
     }
-    service.serving.sockets[index] = SocketSlot.{end = pair.b, socket = socket}
+    service.serving.sockets[index] = SocketSlot.{end = pair.b, socket = socket, policy = policy^}
     return .Bound(os.Channel[datagrams.Datagrams].{end = pair.a})
 }
 
@@ -1286,8 +1358,11 @@ serve_socket :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
         }
         match os.message_of[datagrams.Request](into)^ {
             case Send(send) => {
+                // One the policy doesn't allow is dropped, as one lost would be
                 match stack_address(send.to) {
-                    case Some(to) => _ = net_stack.udp_send(stack, slot.socket, to, send.to.port, os.items(into, send.bytes))
+                    case Some(to) => if network.allows_connect(&slot.policy, network.TRANSPORT_UDP, send.to) {
+                        _ = net_stack.udp_send(stack, slot.socket, to, send.to.port, os.items(into, send.bytes))
+                    }
                     case None => {}
                 }
             }
@@ -1319,7 +1394,15 @@ answer_receive :: fn(service: ptr[mut Service], index: usize) {
     }
     stack :: service.stack or_return void
     payload : u8[net_stack.MAX_DATAGRAM]
-    got :: net_stack.take_datagram(stack, slot.socket, view_of(&payload[0], payload.count)) or_return void
+    got := net_stack.DatagramFrom.{}
+    // Datagrams from peers the policy doesn't allow are dropped
+    loop {
+        got = net_stack.take_datagram(stack, slot.socket, view_of(&payload[0], payload.count)) or_return void
+        if network.allows_connect(&slot.policy, network.TRANSPORT_UDP, endpoint_of(got.from, got.from_port)) {
+            break
+        }
+    }
+    while true
     slot.receiving = false
     count :: if got.length < payload.count { got.length } else { payload.count }
     out := os.Outgoing.{}

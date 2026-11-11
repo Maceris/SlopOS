@@ -44,10 +44,11 @@ enter_elevation :: fn(service: ptr[mut Service]) {
     runtime.log_info("elevation: % asks %", bytes_text(first_of(view(service).ask.requester[0..<view(service).ask.requester.count],
         view(service).ask.requester_count)), if kind == .ShutDown { "to shut down" } else if kind == .Restart { "to restart" }
         else if is_debug(kind) { "to debug a program" } else if kind == .Trace { "to trace the system" }
-        else if kind == .SystemLog { "to read the system's log" } else { "for an account" })
+        else if kind == .SystemLog { "to read the system's log" } else if kind == .Network { "to reach the network" }
+        else { "for an account" })
     say(service, "")
     // The user's own program needs only their say; anything else, the administrator's
-    setup_step(service, if kind == .Debug { SetupStep.Confirm } else { SetupStep.AdminName })
+    setup_step(service, if kind == .Debug || kind == .Network { SetupStep.Confirm } else { SetupStep.AdminName })
     update_status(service)
 }
 
@@ -58,7 +59,7 @@ enter_elevation :: fn(service: ptr[mut Service]) {
  * @return True for an account, a shutdown and a restart.
  */
 is_elevation :: fn(kind: prompt.Kind) -> bool {
-    return kind == .Account || is_power(kind) || is_debug(kind) || kind == .Trace || kind == .SystemLog
+    return kind == .Account || is_power(kind) || is_debug(kind) || kind == .Trace || kind == .SystemLog || kind == .Network
 }
 
 /**
@@ -228,7 +229,7 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
             case None => response^ = .Refused
         }
     }
-    else if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind)) {
+    else if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind) || shown.ask.kind == .Network) {
         response^ = .Allowed
     }
     else if made && service.name_count <= service.name.count {
@@ -327,6 +328,7 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
     asked :: &view(service).ask
     debugging :: is_debug(asked.kind)
     screen.write_at(panel, 1, 2, if debugging { "Debug a program" } else if asked.kind == .Trace { "Trace the system" }
+        else if asked.kind == .Network { "Reach the network" }
         else if asked.kind == .SystemLog { "Read the system's log" }
         else if restart { "Restart the system" } else { "Shut the system down" }, bold)
     storage : u8[200]
@@ -345,14 +347,21 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
     else if asked.kind == .SystemLog {
         text_buffer.append(&line, " asks to read the system's log, every service's records, ")
     }
+    else if asked.kind == .Network {
+        // What it would reach, beyond the session's own
+        text_buffer.append(&line, " asks to reach ")
+        text_buffer.append(&line, bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count)))
+        text_buffer.append(&line, ", ")
+    }
     else {
         text_buffer.append(&line, if restart { " asks to restart the system, " } else { " asks to shut the system down, " })
     }
     text_buffer.append(&line, bytes_text(first_of(asked.purpose[0..<asked.purpose.count], asked.purpose_count)))
     text_buffer.append(&line, ".")
     screen.write_at(panel, 3, 2, text_buffer.as_string(&line), plain)
-    if asked.kind == .Debug {
-        screen.write_at(panel, 4, 2, "It could read and change everything the program has. Enter allows it, Esc refuses.", plain)
+    if asked.kind == .Debug || asked.kind == .Network {
+        screen.write_at(panel, 4, 2, if asked.kind == .Debug { "It could read and change everything the program has. Enter allows it, Esc refuses." }
+            else { "It could send what the program has there. Enter allows it, Esc refuses." }, plain)
         if whole {
             redraw(service)
         }
@@ -418,7 +427,7 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
-    if is_power(asked.kind) || is_debug(asked.kind) || asked.kind == .Trace || asked.kind == .SystemLog {
+    if is_power(asked.kind) || is_debug(asked.kind) || asked.kind == .Trace || asked.kind == .SystemLog || asked.kind == .Network {
         draw_power_elevation(service, whole, asked.kind == .Restart)
         return void
     }

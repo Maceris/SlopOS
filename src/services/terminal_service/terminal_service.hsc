@@ -2694,7 +2694,8 @@ setup_enter :: fn(service: ptr[mut Service]) {
         }
         case .Confirm => {
             if service.elevating {
-                runtime.log_info("elevation: the user allowed a debugger")
+                runtime.log_info("elevation: the user allowed %", if view(service).ask.kind == .Network { "a network connection" }
+                    else { "a debugger" })
                 end_elevation(service, true)
             }
         }

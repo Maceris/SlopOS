@@ -428,6 +428,8 @@ SessionGrants :: struct {
     command_line : slop_os.Memory?,
     /** The listener for its client, the terminal service; the supervisor keeps its other end. */
     clients : os.Listener[session.Session],
+    /** A connector to the network service (decisions/0188), the sessions' network; null without one. */
+    network : os.Channel[connector.Connector]?,
     /**
      * Its CPU budget with the right to split it, for each session's budget (decisions/0187); null without the
      * scheduler service, or one that doesn't give it.
@@ -1243,6 +1245,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         start_accounts(&supervisor, storage_slot, NOWHERE)
     }
     start_input(&supervisor, NOWHERE)
+    // The network service before the session manager, which holds the network for the sessions (decisions/0188)
+    if !supervisor.recovery {
+        start_network(&supervisor, NOWHERE)
+    }
     // The session manager before the terminal service, which asks it to make sessions (decisions/0150)
     start_sessions(&supervisor, NOWHERE)
     start_terminal(&supervisor, NOWHERE)
@@ -1251,7 +1257,6 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         log_line.write(supervisor.log, "supervisor: recovery: the boot set, the drivers and the console only")
     }
     else {
-        start_network(&supervisor, NOWHERE)
         if test_network_client {
             start_test_network(&supervisor)
         }
@@ -4477,7 +4482,7 @@ start_network :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         return void
     }
     service :: service_named(supervisor, "network") or_return void
-    pair :: os.channel_for[network.Network](supervisor.block.budget, 0) or_return void
+    pair :: os.channel_for[network.Network](supervisor.block.budget, network.RING_BYTES) or_return void
     grants := NetworkGrants.{log = duplicate_log(supervisor), nic = connector_to(supervisor, supervisor.first_nic),
         clients = os.Listener[network.Network].{end = pair.a}}
     match supervisor.command_line {
@@ -4835,6 +4840,7 @@ start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         case Error(error) => {}
     }
     grants := SessionGrants.{log = duplicate_log(supervisor), manager = manager, echo_module = echo_module,
+        network = connector_to(supervisor, supervisor.network),
         events_service = events_connection(supervisor), store = store_connection(supervisor), apps = system_directory(supervisor, "apps"),
         installation_list = installations_for_sessions(supervisor), command_line = command_line_copy(supervisor),
         clients = os.Listener[session.Session].{end = pair.a}}

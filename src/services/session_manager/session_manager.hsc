@@ -28,6 +28,7 @@ import read_only_file from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import terminal from "std/os/slop_os"
+import network from "std/os/slop_os"
 import schema from "std"
 import strings from "std"
 import echo from "../../apps/echo"
@@ -142,6 +143,52 @@ ShellGrants :: struct {
      * session without a budget of its own.
      */
     cpu_budget : slop_os.CpuBudget?,
+    /**
+     * The session's network connection (decisions/0188, 13c): public addresses, any port, no listening; copies of it
+     * go to programs that take one. Null without a network.
+     */
+    network : os.Channel[network.Network]?,
+}
+
+/**
+ * Dial the network service, for the connection allowing everything that sessions' are made from.
+ *
+ * @param sessions The manager, whose network_end is set once it's dialed; without it, sessions have no network.
+ * @param dialing The connector to the network service.
+ */
+take_network :: fn(sessions: ptr[mut Manager], dialing: os.Channel[connector.Connector]) {
+    block :: slop_os.startup_block()
+    port :: os.port_for(block.budget, dialing.end) or_return void
+    match connector.dial[network.Network](dialing.end, port) {
+        case Some(connection) => match os.port_for(block.budget, connection.end) {
+            case Some(bound) => {
+                sessions.network_end = connection.end
+                sessions.network_port = bound
+            }
+            case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+        }
+        case None => runtime.log_info("no network for the sessions")
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+}
+
+/**
+ * Make a network connection for a session: its shell's, narrowed to public addresses, any port, and no listening; or
+ * its powerbox's, allowing everything, which what the user allows a program is narrowed from.
+ *
+ * @param sessions The manager.
+ * @param narrowed True for the shell's; false for the powerbox's.
+ * @return The connection, which moves to who it's for; null without a network.
+ */
+session_network :: fn(sessions: ptr[mut Manager], narrowed: bool) -> os.Channel[network.Network]? {
+    if sessions.network_end == NONE {
+        return null
+    }
+    if narrowed {
+        policy := network.public_only()
+        return network.narrow(sessions.network_end, sessions.network_port, &policy)
+    }
+    return network.copy(sessions.network_end, sessions.network_port)
 }
 
 /**
@@ -178,6 +225,11 @@ PowerboxGrants :: struct {
      * debugger once the user's allowed it; null if it couldn't be made.
      */
     programs : os.Channel[programs.Programs]?,
+    /**
+     * A network connection allowing everything (decisions/0188, 13c), which what the user allows a program is narrowed
+     * from; null without a network.
+     */
+    network : os.Channel[network.Network]?,
 }
 
 /** A session: whether it's one now, and its user's name, empty for a boot with no accounts. */
@@ -358,6 +410,13 @@ Manager :: struct {
      * one, when every session runs on the session manager's.
      */
     cpu_budget : slop_os.CpuBudget,
+    /**
+     * Its network connection, allowing everything (decisions/0188, 13c), which each session's are narrowed or copied
+     * from; NONE without a network.
+     */
+    network_end : slop_os.Channel,
+    /** A port bound to network_end, waited on for its answers. */
+    network_port : slop_os.Port,
     /** The sessions, by number. */
     sessions : Session[MAX_SESSIONS],
     /** Every session's programs, the first count of them in use or once used. */
@@ -405,9 +464,14 @@ Manager :: struct {
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], echo_module: slop_os.Memory?,
     events_service: os.Channel[events.Events]?, settings: os.Channel[config.ConfigValue]?, store: os.Channel[bundle_store.BundleStore]?,
     apps: os.Channel[dir.Dir]?, installation_list: config.Config[system_records.Installations]?, command_line: slop_os.Memory?,
-    clients: os.Listener[session.Session], cpu_budget: slop_os.CpuBudget?) -> int {
+    clients: os.Listener[session.Session], cpu_budget: slop_os.CpuBudget?, network: os.Channel[connector.Connector]?) -> int {
     block :: slop_os.startup_block()
     sessions := runtime.new(Manager)
+    sessions.network_end = NONE
+    match network {
+        case Some(dialing) => take_network(sessions, dialing)
+        case None => {}
+    }
     sessions.cpu_budget = cpu_budget or_else cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
     sessions.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     sessions.echo_module = echo_module
@@ -892,6 +956,8 @@ launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
     // Its own connection to the process manager, to launch what it calls, and its programs connection
     grants.manager = process_manager.connect(sessions.manager.end, sessions.manager_port, slop_os.startup_block().budget)
     grants.programs = programs_connection(sessions, number)
+    // The session's network: public addresses, any port, no listening (decisions/0188)
+    grants.network = session_network(sessions, true)
     if cast[usize](number) < sessions.sessions.count && sessions.sessions[cast[usize](number)].apps != NONE {
         match opened_directory(sessions.sessions[cast[usize](number)].apps, SHELL_DATA, true) {
             case Some(end) => grants.data = installations.AppData.{end = end}
@@ -1141,7 +1207,8 @@ launch_powerbox :: fn(sessions: ptr[mut Manager], number: u32, home: os.Channel[
         return false
     }
     pair :: os.channel_for[powerbox.Powerbox](slop_os.startup_block().budget, 0) or_return false
-    grants := PowerboxGrants.{prompts = prompts, manager = os.Channel[powerbox.Powerbox].{end = pair.a}}
+    grants := PowerboxGrants.{prompts = prompts, manager = os.Channel[powerbox.Powerbox].{end = pair.a},
+        network = session_network(sessions, false)}
     match home {
         case Some(root) => match connection_to(root.end) {
             case Some(another) => grants.home = os.Channel[dir.Dir].{end = another}

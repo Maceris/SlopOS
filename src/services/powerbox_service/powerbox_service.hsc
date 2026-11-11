@@ -23,6 +23,8 @@ import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import files from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
+import network from "std/os/slop_os"
+import text_buffer from "std"
 import powerbox from "../../protocols/powerbox"
 import programs from "../../protocols/programs"
 import prompt from "../../protocols/prompt"
@@ -69,6 +71,8 @@ Waiting :: struct {
     /** For a debugger: why it asks, the first purpose_count bytes, asked again of the administrator if need be. */
     purpose : u8[powerbox.PURPOSE_BYTES],
     purpose_count : usize,
+    /** For a network connection: what it would allow. */
+    policy : network.Policy,
 }
 
 /** The powerbox's state: its connections, its clients, and the request waiting for the user. */
@@ -95,6 +99,13 @@ Box :: struct {
     programs_end : slop_os.Channel,
     /** A port bound to programs_end, waited on for its answers. */
     programs_port : slop_os.Port,
+    /**
+     * A network connection allowing everything (decisions/0188, 13c), which what the user allows is narrowed from; NONE
+     * without one, when every RequestNetwork is refused.
+     */
+    network_end : slop_os.Channel,
+    /** A port bound to network_end, waited on for its answers. */
+    network_port : slop_os.Port,
 }
 
 /**
@@ -113,15 +124,28 @@ Box :: struct {
  *     connections and names.
  * @param programs A programs connection of the powerbox's own, on which it asks the session manager to attach a
  *     debugger the user's allowed (decisions/0185); without it, every RequestDebug is refused.
+ * @param network A network connection allowing everything, which each network connection the user allows is narrowed
+ *     from (decisions/0188); without it, every RequestNetwork is refused.
  * @return 0 when it's asked to stop; 1 if its port couldn't be made; 2 if a port for the home or the prompt
  *     connection couldn't be made or bound; 3 if the manager's connection couldn't be served.
  */
 main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manager: os.Channel[powerbox.Powerbox],
-    programs: os.Channel[programs.Programs]?) -> int {
+    programs: os.Channel[programs.Programs]?, network: os.Channel[network.Network]?) -> int {
     block :: slop_os.startup_block()
     box := runtime.new(Box)
     box.port = slop_os.port_create(block.budget) or_return 1
     box.programs_end = NONE
+    box.network_end = NONE
+    match network {
+        case Some(found) => match os.port_for(block.budget, found.end) {
+            case Some(port) => {
+                box.network_end = found.end
+                box.network_port = port
+            }
+            case None => {}
+        }
+        case None => {}
+    }
     match programs {
         case Some(connection) => {
             box.programs_end = connection.end
@@ -234,6 +258,12 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
             }
             case RequestSystemLog(purpose) => {
                 match ask(box, index, .SystemLog, false, os.items(into, purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
+            case RequestNetwork(asked) => {
+                match ask_network(box, index, os.items(into, asked.purpose), os.items(into, asked.connect), os.items(into, asked.listen)) {
                     case Some(answer) => response^ = answer
                     case None => continue
                 }
@@ -352,9 +382,55 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
         if kind == .Account { "new account" } else if kind == .ShutDown { "shutdown" } else if kind == .Restart { "restart" }
         else if kind == .Debug || kind == .DebugOther { "debugger" }
         else if kind == .Trace { "trace" } else if kind == .SystemLog { "read of the system's log" }
+        else if kind == .Network { "network connection" }
         else if kind == .File { if write { "file to write" } else { "file to read" } }
         else { if write { "directory to write in" } else { "directory to read" } })
     return null
+}
+
+/**
+ * Ask the user for a network connection a program wants: its rules described on the trusted path.
+ *
+ * @param box The powerbox.
+ * @param index The asking program's client index.
+ * @param purpose Why it asks.
+ * @param connect What it would connect to.
+ * @param listen What it would listen on.
+ * @return The answer now: Busy, or Refused without a network connection to give from, or with rules past MAX_RULES; null
+ *     once it's asked, to be answered when the user has.
+ */
+ask_network :: fn(box: ptr[mut Box], index: usize, purpose: u8[], connect: network.Rule[], listen: network.Rule[]) -> powerbox.Response? {
+    if box.network_end == NONE {
+        return .Refused
+    }
+    policy :: network.policy_of(connect, listen) or_return .Refused
+    storage : u8[200]
+    described := text_buffer.make(storage)
+    network.describe(&policy, &described)
+    asked :: ask(box, index, .Network, false, purpose, string_bytes(text_buffer.as_string(&described)), u8.[])
+    if asked is_none {
+        box.waiting.policy = policy
+    }
+    return asked
+}
+
+/**
+ * Give the waiting program the network connection the user allowed, narrowed from the powerbox's own.
+ *
+ * @param box The powerbox, its waiting request a network connection's.
+ */
+network_allowed :: fn(box: ptr[mut Box]) {
+    match network.narrow(box.network_end, box.network_port, &box.waiting.policy) {
+        case Some(made) => {
+            storage : u8[200]
+            described := text_buffer.make(storage)
+            network.describe(&box.waiting.policy, &described)
+            who :: name_of(box, box.waiting.client)
+            runtime.log_info("gave % a network connection: %", as_text(who), text_buffer.as_string(&described))
+            answer(box, .NetworkGranted(made))
+        }
+        case None => answer(box, .Refused)
+    }
 }
 
 /**
@@ -385,6 +461,10 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
         case Allowed => {
             if box.waiting.kind == .Debug || box.waiting.kind == .DebugOther {
                 attach_allowed(box, into)
+                return void
+            }
+            if box.waiting.kind == .Network {
+                network_allowed(box)
                 return void
             }
             runtime.log_info("the administrator allowed a %", if box.waiting.kind == .Restart { "restart" } else { "shutdown" })

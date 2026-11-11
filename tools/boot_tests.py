@@ -224,7 +224,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 82 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 83 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -801,6 +801,25 @@ TESTS = [
         "--expect-line=[user] supervisor: tracing for 1000 ms",
         "--expect-console-line=tracing for 1 s", "--expect-console-contains= events in 1 s",
         "--expect-console-contains= switches, ",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # Network authority (decisions/0188, 13c): the session's network allows public addresses only, so connect to the
+    # peer on this machine, at QEMU's private 10.0.2.2, asks the powerbox; the secure attention key shows what it asks,
+    # Escape refuses it, and asked again, Enter allows it, and the peer's echo comes back
+    ("reaches a private address only once the user allows it", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done", "--network-peers",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wconnect 10.0.2.2 {tcp_echo} hello\\r\\p\\p\\p\\e[3;7~\\w\\e\\p\\p\\p"
+        "connect 10.0.2.2 {tcp_echo} hello\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=  Reach the network", "--console-input-after=  Reach the network",
+        "--expect-line=[user] powerbox: connect asks for a network connection",
+        "--expect-line=[user] powerbox: gave connect a network connection: TCP to 10.0.2.2, port {tcp_echo}",
+        "--expect-line=[user] shell: error: connect: NotAllowed",
+        "--expect-line=[user] terminal: elevation: the user allowed a network connection",
+        "--expect-console-line=  connect asks to reach TCP to 10.0.2.2, port {tcp_echo}, to send it a message.",
+        "--expect-console-line=hello",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # The system's crash reports (decisions/0185, 12g): test_crash crashes the update service, which the supervisor
     # reports in its source; crashes system, once the administrator allows reading the log, reads it back as a typed

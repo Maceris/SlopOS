@@ -6,6 +6,7 @@ import os from "std"
 import schema from "std"
 import slop_os from "std/os"
 import process_manager from "std/os/slop_os"
+import network from "std/os/slop_os"
 import lifecycle from "std/os/slop_os"
 import dir from "std/os/slop_os"
 import files from "std/os/slop_os"
@@ -50,6 +51,11 @@ Giving :: enum {
      * name (decisions/0181, F4): what it's given through it, the user chooses on the trusted path.
      */
     Powerbox,
+    /**
+     * A connection to the network, without an argument (decisions/0188, 13c): a copy of the session's, allowing what
+     * it does; more is the powerbox's to give.
+     */
+    Network,
     /** A grant the shell doesn't make: a parameter that's optional goes without it. */
     Other,
 }
@@ -604,6 +610,9 @@ giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
         if inner == "Powerbox" {
             return .Powerbox
         }
+        if inner == "Network" {
+            return .Network
+        }
     }
     return .Other
 }
@@ -850,6 +859,21 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
         made :: protocol.connect(shell.console.end, shell.console.port, budget) or_return .Error(EvalError.{
             message = "there's no memory for its terminal connection", at = tree.at})
         return .Ok(cast[slop_os.Handle](made.end))
+    }
+    if parameter.giving == .Network {
+        given :: match shell.network {
+            case Some(session) => network.copy(session.end, shell.network_port)
+            case None => null
+        }
+        match given {
+            case Some(made) => return .Ok(cast[slop_os.Handle](made.end))
+            case None => {
+                if parameter.optional {
+                    return .Ok(null)
+                }
+                return .Error(EvalError.{message = message("% needs the network, which this session hasn't", tree.text), at = tree.at})
+            }
+        }
     }
     if parameter.giving == .Powerbox {
         match powerbox_connection(shell, tree.text) {

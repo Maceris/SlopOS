@@ -1275,6 +1275,10 @@ def main() -> int:
         peers = NetworkPeers(serial) if arguments.network_peers else None
         if peers is not None:
             command_line = peers.words(command_line)
+            # What's typed, and what's expected, name the peers' ports too
+            for name in ("console_input", "expect_line", "expect_line_start", "expect_console_line", "expect_console_start",
+                         "expect_console_contains", "console_input_after"):
+                setattr(arguments, name, [peers.words(each) for each in getattr(arguments, name)])
         image = None
         if not arguments.boot_disk:
             image = make_image(kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, xorriso, folder,

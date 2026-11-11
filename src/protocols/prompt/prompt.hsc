@@ -49,6 +49,11 @@ Kind :: enum #backed_by(u32) {
     Trace = 8,
     /** The system's log read (decisions/0185, 12g), which elevation allows: an events connection. */
     SystemLog = 9,
+    /**
+     * A network connection allowing more than the session's own (decisions/0188, 13c), what it allows described by
+     * suggested: the user allows it, with no password, as it's their own program. Answered Allowed, or Refused.
+     */
+    Network = 10,
 }
 
 /** A request of one of the session's programs, for the user to answer. */

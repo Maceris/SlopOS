@@ -161,7 +161,8 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                     if kept.kind == .Directory { "directory" } else if kept.kind == .Account { "new account" }
                     else if kept.kind == .ShutDown { "shutdown" } else if kept.kind == .Restart { "restart" }
                     else if kept.kind == .Debug || kept.kind == .DebugOther { "debugger" } else if kept.kind == .Trace { "trace" }
-                    else if kept.kind == .SystemLog { "read of the system's log" } else { "file" })
+                    else if kept.kind == .SystemLog { "read of the system's log" } else if kept.kind == .Network { "network connection" }
+                    else { "file" })
                 if i == service.active && !service.attention && service.setup == .Off {
                     use_active(service)
                     update_status(service)
@@ -184,6 +185,7 @@ append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) 
         else if asked.kind == .ShutDown { " asks to shut down" } else if asked.kind == .Restart { " asks to restart" }
         else if asked.kind == .Debug || asked.kind == .DebugOther { " asks to debug a program" }
         else if asked.kind == .Trace { " asks to trace the system" } else if asked.kind == .SystemLog { " asks to read the system's log" }
+        else if asked.kind == .Network { " asks to reach the network" }
         else { " asks for a file" })
     text_buffer.append(status, ": Ctrl+Alt+Delete")
 }

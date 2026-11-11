@@ -6,6 +6,7 @@ import dir from "std/os/slop_os"
 import file from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
+import network from "std/os/slop_os"
 import trace from "../trace"
 import events from "../events"
 
@@ -106,6 +107,16 @@ PowerRequest :: struct {
     restart : bool,
 }
 
+/** A network connection allowing more than the program's own (decisions/0188, 13c), as RequestNetwork asks for it. */
+NetworkRequest :: struct {
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the user. */
+    purpose : slop_os.Relative[u8],
+    /** What it would connect to, as network's rules; at most network.MAX_RULES. */
+    connect : slop_os.Relative[network.Rule],
+    /** What it would listen on; at most network.MAX_RULES. */
+    listen : slop_os.Relative[network.Rule],
+}
+
 /** A program to debug (decisions/0185, 12f), as RequestDebug asks for it. */
 DebugRequest :: struct {
     /** The program's name, as the session runs it: an installation's, or "powerbox"; up to NAME_BYTES, as UTF-8. */
@@ -189,6 +200,11 @@ Request :: union {
      */
     RequestSystemLog(slop_os.Relative[u8]),
     /**
+     * Ask for a network connection allowing what's asked (decisions/0188, 13c), which the user allows on the trusted
+     * path, its rules described to them. Answered with NetworkGranted, or Refused; at once with Busy.
+     */
+    RequestNetwork(NetworkRequest),
+    /**
      * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
      * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
      */
@@ -221,6 +237,8 @@ Response :: union {
     TraceGranted(os.Channel[trace.Trace]),
     /** RequestSystemLog's answer: a connection to the events service, which moves to the program. */
     LogGranted(os.Channel[events.Events]),
+    /** RequestNetwork's answer: a network connection allowing what was asked, which moves to the program. */
+    NetworkGranted(os.Channel[network.Network]),
     /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
     Unsupported,
 }
@@ -243,6 +261,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case RequestDebug(_) => false
         case RequestTrace(_) => false
         case RequestSystemLog(_) => false
+        case RequestNetwork(_) => false
         case Serve(_) => false
     }
 }
