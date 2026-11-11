@@ -54,6 +54,7 @@ import session from "../protocols/session"
 import power from "../protocols/power"
 import powerbox from "../protocols/powerbox"
 import test_channels from "../tests/test_channels"
+import test_network from "../tests/test_network"
 import test_control from "../tests/test_control"
 import test_devices from "../tests/test_devices"
 import test_memory from "../tests/test_memory"
@@ -269,6 +270,9 @@ SERVICES :: Service.[
     // The network stack (decisions/0188), over the first NIC; started only when there's one
     Service.{name = "network", module = "network_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(network_service.main)},
+    // The network's test client (decisions/0188, 13c), started only with test_network on the kernel's command line
+    Service.{name = "test_network", module = "test_network.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+        entry = type_of(test_network.main), not_restarted = true},
     // Objects by their hashes, on the system volume, paged into whoever reads them (decisions/0094)
     Service.{name = "bundle_store", boot_set = true, module = "bundle_store_service.elf", starter = .Supervisor, by_manager = true,
         budget = 16 * MIB, entry = type_of(bundle_store_service.main)},

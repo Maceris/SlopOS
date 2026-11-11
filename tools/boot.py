@@ -477,6 +477,89 @@ class Keyboard:
                 self.key("shift", False)
 
 
+class NetworkPeers:
+    """
+    Peers on the development machine for the network's tests (decisions/0188, 13c), reached from the machine through
+    QEMU's user-mode network at 10.0.2.2: a TCP echo server and a UDP echo server, each on a free loopback port, which
+    replace {tcp_echo} and {udp_echo} in the kernel's command line; and a forward from a free loopback port to the
+    machine's port 7, which this connects to once the serial output says the machine listens there, sending bytes and
+    checking they come back. A virtio NIC on that network is added to QEMU's arguments.
+    """
+
+    LISTENING = "[user] test_network: listening on 7"
+    SENT = 40000
+
+    def __init__(self, serial: Path):
+        self.serial = serial
+        self.problem = None
+        self.tcp = socket.socket()
+        self.tcp.bind(("127.0.0.1", 0))
+        self.tcp.listen()
+        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp.bind(("127.0.0.1", 0))
+        self.forward = free_port()
+        for serve in (self.serve_tcp, self.serve_udp, self.connect_in):
+            threading.Thread(target=serve, daemon=True).start()
+
+    def words(self, command_line: str) -> str:
+        return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1]))
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7",
+                "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]
+
+    def serve_tcp(self) -> None:
+        while True:
+            try:
+                connection, _ = self.tcp.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.echo, args=(connection,), daemon=True).start()
+
+    @staticmethod
+    def echo(connection: socket.socket) -> None:
+        with connection:
+            try:
+                while True:
+                    data = connection.recv(65536)
+                    if not data:
+                        break
+                    connection.sendall(data)
+                connection.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+    def serve_udp(self) -> None:
+        while True:
+            try:
+                data, sender = self.udp.recvfrom(65536)
+                self.udp.sendto(data, sender)
+            except OSError:
+                return
+
+    def connect_in(self) -> None:
+        while True:
+            written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+            if self.LISTENING in written:
+                break
+            time.sleep(0.2)
+        sent = bytes((i * 7 + 3) & 0xff for i in range(self.SENT))
+        try:
+            with socket.create_connection(("127.0.0.1", self.forward), timeout=20) as connection:
+                connection.sendall(sent)
+                connection.shutdown(socket.SHUT_WR)
+                back = bytearray()
+                while True:
+                    data = connection.recv(65536)
+                    if not data:
+                        break
+                    back += data
+            if bytes(back) != sent:
+                self.problem = f"the machine's echo on port 7 gave {len(back)} bytes back of {len(sent)}, or other bytes"
+        except OSError as error:
+            self.problem = f"the machine's port 7 couldn't be reached through the forward: {error}"
+
+
 class PowerButton(Keyboard):
     """
     The machine's power button, pressed through QEMU's machine protocol (system_powerdown) once the serial output has a
@@ -1082,6 +1165,10 @@ def main() -> int:
     parser.add_argument("--shut-down-when-done", action="store_true",
                         help="once every --expect-console-line is shown and every --console-input typed, type the secure "
                         "attention key and P, which shuts the system down (decisions/0180), rather than waiting out its settle")
+    parser.add_argument("--network-peers", action="store_true",
+                        help="a virtio NIC on QEMU's user-mode network, and echo peers on this machine for test_network: "
+                        "{tcp_echo} and {udp_echo} in the command line are their ports, and port 7 on the machine is "
+                        "connected to and checked once it listens (decisions/0188)")
     parser.add_argument("--power-button-after",
                         help="press the machine's power button, through QEMU's machine protocol, once the serial output has "
                         "this line (decisions/0182)")
@@ -1184,12 +1271,17 @@ def main() -> int:
         image_builder = image_builder.resolve()
         # The kernel's own regions follow its command line; the image and the direct map, the generation's kaslr
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
+        serial = folder / "serial.txt"
+        peers = NetworkPeers(serial) if arguments.network_peers else None
+        if peers is not None:
+            command_line = peers.words(command_line)
         image = None
         if not arguments.boot_disk:
             image = make_image(kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, xorriso, folder,
                                command_line, not arguments.no_kaslr, not arguments.release_generation)
-        serial = folder / "serial.txt"
         extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
+        if peers is not None:
+            extra += peers.qemu_arguments()
         console = None
         disk = folder / "disk.img"
         # How long each phase takes, said at the end, to see where a test's time goes
@@ -1309,6 +1401,9 @@ def main() -> int:
         if screen_wrong is not None:
             print(f"boot.py: the framebuffer: {screen_wrong}", file=sys.stderr)
             missing_shown.append(screen_wrong)
+        if peers is not None and peers.problem is not None:
+            print(f"boot.py: the network peers: {peers.problem}", file=sys.stderr)
+            missing_shown.append(peers.problem)
         for expected in unwritten:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
         for text in leaked:

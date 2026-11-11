@@ -105,7 +105,11 @@ tier_of :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramI
         }
         return OS
     }
-    constant :: compiler.find_constant(package, "PACKAGE_TIER") or_else compiler.ConstantInfo.{}
+    // A package without one has no constant to read, and is reported as NO_TIER
+    constant :: compiler.find_constant(package, "PACKAGE_TIER") or_return NO_TIER
+    if constant.value.data == null {
+        return NO_TIER
+    }
     name :: reflection.enum_member_name(constant.value) or_else ""
     if name == "Freestanding" {
         return FREESTANDING

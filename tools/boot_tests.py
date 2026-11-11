@@ -224,7 +224,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 81 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 82 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -261,6 +261,16 @@ TESTS = [
         "--expect-line=[user] network: fe80::2 answered a ping",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-netdev", "user,id=n0",
         "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]),
+    # Programs on the network (decisions/0188, 13c): test_network, through the network service and std/net, echoes TCP
+    # and UDP off peers on this machine, and echoes back what this machine sends to its port 7 through QEMU's forward,
+    # which boot.py checks (--network-peers); the peers' ports change each time
+    ("reaches peers over TCP and UDP, and serves one, through the network service", 7, [WITH_PROGRAMS, "--network-peers",
+        "--command-line=test_exit test_services test_settle=10 test_network tcp_echo={tcp_echo} udp_echo={udp_echo}",
+        "--expect-line-start=[user] test_network: TCP echo of 65536 bytes from 10.0.2.2:",
+        "--expect-line-start=[user] test_network: UDP echo from 10.0.2.2:",
+        "--expect-line=[user] test_network: listening on 7",
+        "--expect-line=[user] test_network: echoed 40000 bytes back to 10.0.2.2",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
     ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",
         "--expect-line=[user] platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory",
