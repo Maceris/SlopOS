@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a, 13b and 13d built, 13c and 13e to 13g to come
+Status: accepted, chosen with the project's owner; 13a to 13d built, 13e to 13g to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -189,6 +189,51 @@ Seven stages, each with an as-built record:
   a lease renewed past its first term; frames made at random, as a property, taken without harm; and IPv6 text as RFC
   5952 writes it. Taking the prefix option out fails every seed. Boot, on both architectures: a lease of 10.0.2.15/24
   from QEMU, link-local and fec0::/64 addresses, its router fe80::2, and pings to 10.0.2.2 and fe80::2 answered.
+
+## As Built: 13c
+Built in four parts: TCP and UDP in the stack (13c1), the protocols and the network service serving them (13c2),
+policies (13c3), and throughput (13c4).
+- **TCP** (`src/net_stack/tcp.hsc`): RFC 9293's states, window scaling and timestamps, SACK and recovery by it (and by
+  three duplicate acknowledgements), RFC 6298's timers, CUBIC, keyed initial sequence numbers (RFC 6528), zero-window
+  probes and TIME-WAIT. A connection's send and receive rings are its caller's memory, given by address, so data is
+  copied once each way. Changed connections are listed for the caller (`take_changed`), and `Incoming` and `Ended`
+  events, `Ended` carrying the final totals, so a program reads what arrived before a reset. **UDP** sockets over both
+  families, with an inbox of datagrams each.
+- **The protocols** (Hemera's `std/os/slop_os`), as planned with these changes: `Open(to, memory)` rather than
+  `Connect(destination)`, as `Connect` is every protocol's for a fresh connection; the stream is `tcp_stream`, whose
+  rings are halves of memory the program gives, and whose `Watch(progress)` is held until the totals move, with
+  `Wrote`, `Read`, `Finish`, `Abort` and `Describe`; a listener's `Accept(memory)` answers each stream, rather than
+  `Accepted` messages it sends unasked, so the program gives each stream's memory. Datagrams' `Send` and `Receive`.
+  `std/net` writes, reads, finishes, listens, accepts and sends datagrams over them, each call waiting on a port of its
+  connection's own, so a program on fibers waits a fiber at a time.
+- **Policies** (`std/os/slop_os/network/policy.hsc`): up to 16 rules for connecting and 16 for listening, each public
+  addresses, any or a range, a family, transports and ports; plain bytes, as a message's contents must be. Names in
+  rules wait for 13e's resolver. `Narrow` answers a connection allowed what both policies allow, `Copy` one allowed the
+  same. **Found:** a `Connect` on a narrowed connection was served as on the listener, with everything allowed; a
+  connection made through any channel but the listener now gets its sender's policy.
+- **The network service** serves a client at a time per message, not on fibers, as planned: every request is answered
+  at once or held as state (a stream's watch, a datagram receive, an accept) and answered from the stack's changes, so
+  fibers weren't needed. A stream's memory is mapped at an address slot of its own, up to 1 MiB each.
+- **Authority:** the supervisor starts the network service before the session manager, which holds its root
+  connection. Each session's shell gets it narrowed to public addresses, any port, no listening, and gives copies to
+  programs that take a `Channel[Network]` (`Giving.Network`); the powerbox gets it whole, and `RequestNetwork` asks on
+  the trusted path, a prompt answered as a debugger's is, and narrows it to what was asked. The `connect` app sends a
+  line and shows the echo, asking the powerbox when its policy refuses.
+- **Throughput (13c4).** **Found:** TCP queued past the stack's 32 frames waiting, the newest dropped, so every window
+  ended on the retransmission timer: 4 MiB to a peer on the development machine took 10.3 s. TCP now holds back while
+  the outbox is nearly full (`outbox_full`) and goes on as frames are taken (`tcp_resume`), which the network service
+  calls once it's filled the send slots; the outbox holds 64. The same 4 MiB take about 200 ms.
+- **Found in testing:** QEMU's user-mode network never answers a SYN to a closed port on the host, so refusal is tested
+  hosted only; system records hold 48 services (magic `SLOPSYS2`), as `test_network` made 33; the house rules' tier
+  check crashed on a std package without a `PACKAGE_TIER`, and reports it now.
+- **Tests:** hosted (`net_stack_test`), two stacks over the simulated link: 200 KB each way over both families, clean
+  and over ten lossy seeds, checked whole; refusal, a timeout, a reset, a closed window, a SYN-ACK's options,
+  datagrams; and one data segment dropped, sent again on duplicate acknowledgements and never on the timer, 500 KB
+  arriving whole. Packetdrill-style scripts weren't written: the paired stacks over a faulty link took their place.
+  `network_policy` (Hemera's hosted tests): public addresses, what a policy allows, and narrowing. Boot, on both
+  architectures (`test_network`, with `--network-peers`): TCP and UDP echo off peers on the development machine, one
+  connection in through QEMU's forward, and `connect` to private 10.0.2.2 refused on Escape and echoed once allowed on
+  Enter. `perf_tests.py` reports 4 MiB's sending in wall time only, as it runs in the host's time.
 
 ## As Built: 13d
 In Hemera's `std/crypto`, Freestanding, nothing allocated; secrets `#secret` and their functions `#constant_time`.
