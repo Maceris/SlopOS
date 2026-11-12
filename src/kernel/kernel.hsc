@@ -169,6 +169,10 @@ Kernel :: struct {
     lockup : u32,
     /** The stuck CPU's index plus one, whose NMI notes where it was; 0 before a lockup (lockups.hsc). */
     lockup_target : u32,
+    /** test_lockup_lock's lock, which CPU 1 takes as it stops, at rank LockupTest (lockups.hsc). */
+    lockup_test_lock : concurrency.SpinLock,
+    /** 1 once CPU 1 holds lockup_test_lock, for CPU 0 to wait for it; written atomically. */
+    lockup_test_held : u32,
     /** 1 while the trace is on (tracing.hsc, trace_set); read and written atomically. */
     tracing : u32,
     /** The counter next_cpu_of turns from, so IRQs are routed to the CPUs in turn (irqs.hsc, devices.hsc). */

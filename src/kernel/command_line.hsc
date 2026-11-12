@@ -27,6 +27,11 @@ Options :: struct {
      */
     test_lockup : bool,
     /**
+     * test_lockup_lock: test_lockup, CPU 1 holding a lock as it stops, which CPU 0 then waits for at a tick, so its
+     * wait for the lock is what catches it.
+     */
+    test_lockup_lock : bool,
+    /**
      * test_tamper: once the boot CPU has gone idle, return through a tampered return address in the kernel, which its
      * signed returns or shadow stack refuse, stopping it with the fault named (decisions/0186, Hd); skipped, said so,
      * where the CPU has neither.
@@ -170,6 +175,10 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
     }
     if word == "test_lockup" {
         options.test_lockup = true
+    }
+    if word == "test_lockup_lock" {
+        options.test_lockup = true
+        options.test_lockup_lock = true
     }
     if word == "test_tamper" {
         options.test_tamper = true

@@ -19,6 +19,9 @@ import robustness from "../robustness"
  * off, as every lock here is taken with them off, and stops the kernel if either isn't so. The frame allocator's, the
  * slab caches' and the architectures' locks are leaves, taking nothing (a slab's, then the frame allocator's), and are
  * outside the table.
+ *
+ * A CPU waiting for a lock checks the others for lockups as it spins (lockups.hsc): with interrupts off, its own ticks
+ * don't come, and a CPU stuck holding the lock would otherwise stop it too, with nothing left ticking to see either.
  */
 LockRank :: enum #backed_by(u32) {
     /**
@@ -87,6 +90,8 @@ LockRank :: enum #backed_by(u32) {
     ProcessDebug = 305,
     /** A CPU's trace ring's lock, taken in the scheduler's paths under any other (tracing.hsc). */
     Trace = 310,
+    /** test_lockup_lock's lock, which CPU 1 holds as it stops and CPU 0 then waits for, at a tick (lockups.hsc). */
+    LockupTest = 320,
 }
 
 /**
@@ -104,15 +109,15 @@ lock_at :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
         match held_ranks() {
             case Some(held) => {
                 check_interrupts(rank)
-                if !concurrency.lock_ranked(spin_lock, cast[u32](rank), held) {
+                if !concurrency.lock_ranked(spin_lock, cast[u32](rank), held, watching()) {
                     lock_order_broken(rank, "taken after a higher rank")
                 }
             }
-            case None => concurrency.lock(spin_lock)
+            case None => concurrency.lock_waiting(spin_lock, watching())
         }
     }
     #else {
-        concurrency.lock(spin_lock)
+        concurrency.lock_waiting(spin_lock, watching())
     }
 }
 
@@ -130,15 +135,15 @@ lock_after :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
         match held_ranks() {
             case Some(held) => {
                 check_interrupts(rank)
-                if !concurrency.lock_ranked_after(spin_lock, cast[u32](rank), held) {
+                if !concurrency.lock_ranked_after(spin_lock, cast[u32](rank), held, watching()) {
                     lock_order_broken(rank, "taken after a higher rank, or one of its own at a higher address")
                 }
             }
-            case None => concurrency.lock(spin_lock)
+            case None => concurrency.lock_waiting(spin_lock, watching())
         }
     }
     #else {
-        concurrency.lock(spin_lock)
+        concurrency.lock_waiting(spin_lock, watching())
     }
 }
 
@@ -165,6 +170,11 @@ unlock_at :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
     #else {
         concurrency.unlock(spin_lock)
     }
+}
+
+/** What a CPU does while it waits for a lock: check the others for lockups (check_lockups_while_locking). */
+watching :: fn() -> concurrency.Waiting {
+    return concurrency.Waiting.{call = check_lockups_while_locking, state = null}
 }
 
 /**

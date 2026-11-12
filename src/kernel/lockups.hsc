@@ -40,12 +40,25 @@ REGISTERS_PER_LINE :: 4
  */
 check_lockups :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
     intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
-    // test_lockup: the second CPU stops making progress, interrupts off
+    // test_lockup: the second CPU stops making progress, interrupts off; with test_lockup_lock, holding a lock
     if kernel.options.test_lockup && cpu.index == 1 && cpu.timer_ticks >= TEST_LOCKUP_TICK {
-        runtime.log_info("test_lockup: CPU 1 spins with interrupts off")
+        if kernel.options.test_lockup_lock {
+            lock_at(&kernel.lockup_test_lock, .LockupTest)
+            intrinsics.atomic_store_u32_release(&kernel.lockup_test_held, 1)
+            runtime.log_info("test_lockup: CPU 1 holds a lock and spins with interrupts off")
+        }
+        else {
+            runtime.log_info("test_lockup: CPU 1 spins with interrupts off")
+        }
         loop {
             arch.spin_hint()
         }
+    }
+    // test_lockup_lock: the boot CPU then waits for that lock, at a tick, so only its wait can see CPU 1 stuck
+    if kernel.options.test_lockup && kernel.options.test_lockup_lock && cpu.index == 0
+        && intrinsics.atomic_load_u32_acquire(&kernel.lockup_test_held) != 0 {
+        runtime.log_info("test_lockup: CPU 0 waits for the lock CPU 1 holds")
+        lock_at(&kernel.lockup_test_lock, .LockupTest)
     }
     check_others(kernel, cpu, now)
 }
@@ -62,6 +75,27 @@ check_lockups_while_waiting :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu])
     now :: arch.counter()
     intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
     check_others(kernel, cpu, now)
+}
+
+/**
+ * While this CPU waits for a lock with interrupts off, check the others for lockups (a Waiting's call, locks.hsc).
+ *
+ * Unlike a shootdown's wait, it doesn't renew its own heartbeat, as it isn't making progress: two CPUs each waiting for
+ * a lock the other holds both stop ticking, and are seen as stuck. Nothing's checked before the CPU has its PerCpu, or
+ * once a lockup's being reported, whose report takes locks of its own.
+ *
+ * @param state Not used.
+ */
+check_lockups_while_locking :: fn(state: rawptr) {
+    if intrinsics.carrier().program_data == null {
+        return void
+    }
+    cpu :: per_cpu()
+    kernel :: cpu.kernel
+    if intrinsics.atomic_load_u32_acquire(&kernel.lockup) != 0 {
+        return void
+    }
+    check_others(kernel, cpu, arch.counter())
 }
 
 /**

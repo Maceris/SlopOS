@@ -1480,6 +1480,14 @@ TESTS = [
         "--expect-disk-text=lockup: CPU 1 was at kernel+", "--expect-disk-text=lockup: CPU 1's registers:",
         "--expect-disk-text=lockup: CPU 1's stack:", "--expect-disk-text=  at kernel+",
         "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] lockup: CPU 1 made no progress for 5 seconds"])),
+    # CPU 1 stops holding a lock, which the boot CPU then waits for: only its wait, with no CPU ticking, can see it
+    ("sees a stuck CPU from a CPU waiting for the lock it holds", 7, with_before_qemu(
+        [argument.replace("test_services", "test_services panic_reset test_lockup_lock") for argument in BOOT_DISK_BASE], [
+        "--allow-reboot", "--expect-line=[info] test_lockup: CPU 1 holds a lock and spins with interrupts off",
+        "--expect-line=[info] test_lockup: CPU 0 waits for the lock CPU 1 holds",
+        "--expect-line=[info] resetting, the panic record kept",
+        "--expect-disk-text=lockup: CPU 1 was at kernel+",
+        "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] lockup: CPU 1 made no progress for 5 seconds"])),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: 2 tests: 2 passed, 0 failed"]),
     ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",
