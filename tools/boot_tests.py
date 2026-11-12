@@ -1495,6 +1495,16 @@ TESTS = [
         "--expect-line=[info] resetting, the panic record kept",
         "--expect-disk-text=lockup: CPU 1 was at kernel+",
         "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] lockup: CPU 1 made no progress for 5 seconds"])),
+    # The clock's floor (decisions/0188, 13e): the first boot's real-time clock ahead, in 2030, whose time the clock saves
+    # on the system volume; the second's set back to 2001, so the clock starts at the generation's build time, then goes
+    # forward to the time saved
+    ("starts the clock no earlier than its generation's build, or the time it saved", 7, with_before_qemu(BOOT_DISK_BASE, [
+        "--boots=2", "--boot-qemu-argument=1:-rtc", "--boot-qemu-argument=1:base=2030-01-02T03:04:05",
+        "--boot-qemu-argument=2:-rtc", "--boot-qemu-argument=2:base=2001-01-01T00:00:00",
+        "--expect-line-start=[user] clock: the real-time clock reads 2030-01-02 ",
+        "--expect-boot-line-start=2:[user] clock: the real-time clock reads 2001-01-01 ",
+        "--expect-boot-line-start=2:[user] clock: the clock was behind when this generation was built, ",
+        "--expect-boot-line-start=2:[user] clock: the clock was behind when the time was last saved, 2030-01-02 "])),
     ("switches between fibers", 0, ["--command-line=test_exit test_fibers",
                                     "--expect-line=[info] test_fibers: 2 tests: 2 passed, 0 failed"]),
     ("shares fiber pools between CPUs", 0, ["--command-line=test_exit test_pool",

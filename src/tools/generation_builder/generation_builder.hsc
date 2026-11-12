@@ -24,6 +24,7 @@ package generation_builder
 
 import runtime from "base"
 import os from "std"
+import time from "std"
 import strings from "std"
 import bundle from "../../bundle"
 import generations from "../../generations"
@@ -74,7 +75,7 @@ main :: fn() -> int {
             return 2
         }
     }
-    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_PERMANENT}
+    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_PERMANENT, built = built_now()}
     made.number = number_of(argument(arguments, base + 2)) or_return 3
     made.kaslr = if argument(arguments, base + 3) == "yes" { 1 } else { 0 }
     made.development = if development { cast[u8](1) } else { cast[u8](0) }
@@ -149,7 +150,8 @@ stage :: fn(arguments: string[]) -> int {
     }
     system :: argument(arguments, 2)
     store :: argument(arguments, 3)
-    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_TENTATIVE, tries_left = generations.TRIES}
+    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_TENTATIVE, tries_left = generations.TRIES,
+        built = built_now()}
     made.number = number_of(argument(arguments, 4)) or_return 3
     made.kaslr = if argument(arguments, 5) == "yes" { 1 } else { 0 }
     if !generations.set_line(&made.command_line, argument(arguments, 6)) {
@@ -320,4 +322,14 @@ joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[1024]]) -> str
         }
     }
     return if count > 0 { string_of(&storage^[0], count) } else { "" }
+}
+
+/**
+ * Give the time now, as a generation's record keeps when it was built.
+ *
+ * @return Seconds since 1970-01-01T00:00:00Z; 0 if the clock can't be read, or it's past what a u32 holds.
+ */
+built_now :: fn() -> u32 {
+    now :: time.now() or_return 0
+    return if now.seconds > 0 && now.seconds <= cast[i64](0xffffffff) { cast[u32](now.seconds) } else { cast[u32](0) }
 }

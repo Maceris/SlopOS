@@ -10,6 +10,12 @@
  * The clock is x86's MC146818, through its two I/O ports, or Arm's PL031, through its registers (the platform
  * protocol's RealTimeClock), each to the second. An MC146818 counts years to 99: its century is read from register
  * 0x32, where PCs keep it, if what's there is a century from 19 to 21, or taken as 20.
+ *
+ * The clock has a floor (decisions/0188, 13e): it starts no earlier than when the running generation was built, which
+ * the kernel's command line says (built=<seconds>), nor than the time it saved last. A real-time clock behind its floor,
+ * as one whose battery's flat is, is set forward to it, so certificates are checked against a time that may be late,
+ * but never decades early. The time's saved in the directory a Keep gives, once the system volume's there, as a file
+ * of its seconds (SAVED_FILE): read then, every clock_setting.SAVE_MINUTES, after each Set, and as the service stops.
  */
 //SPEC: Motorola MC146818A data sheet (registers 0x00 to 0x0b, update-in-progress, SET, DM and 24/12)
 //SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
@@ -21,6 +27,7 @@ import os from "std"
 import time from "std"
 import slop_os from "std/os"
 import text_buffer from "std"
+import dir from "std/os/slop_os"
 import service_kit from "../../libraries/service_kit"
 import clock_setting from "../../protocols/clock_setting"
 
@@ -89,7 +96,23 @@ Clock :: struct {
     rtc : Rtc,
     /** The clock page, mapped readable and writable; it's the only writer, every program a reader. */
     page : ptr[mut runtime.SlopOsClockPage],
+    /** The time last put on the page, in nanoseconds since 1970 UTC, and the monotonic reading it was the time at. */
+    utc : i64,
+    at : u64,
+    /** Whether a time's on the page. */
+    published : bool,
+    /** The directory the time's kept in, once a Keep's given one, and when it's next saved, by the monotonic clock. */
+    keeping : bool,
+    directory : os.Directory,
+    next_save : u64,
 }
+
+/** The file the time's saved in, in Keep's directory: its seconds since 1970 UTC, in decimal. */
+SAVED_FILE :: "time"
+/** The port key the save's timer is bound with, past every client's index. */
+SAVE_KEY : u64 : 1000
+/** How long between saves, in nanoseconds. */
+SAVE_INTERVAL : u64 : cast[u64](clock_setting.SAVE_MINUTES) * 60 * 1_000_000_000
 
 /**
  * Drive the real-time clock: put the time it reads on the clock page every program reads the time from, and set it
@@ -104,11 +127,13 @@ Clock :: struct {
  *     read-only, as its grant "clock".
  * @param clients The listener of the clock_setting protocol its first client connects on; who holds a connection can
  *     set the time, and further clients come as Connect requests.
+ * @param command_line The kernel's command line, read for built=<seconds>, when the running generation was built: the
+ *     clock's floor. Without it, or the word, there's no floor till a Keep's saved time.
  * @return Only on failing to start: 1 if the clock page can't be mapped, 2 if the PL031's registers can't be, 3 without
  *     a real-time clock, 4 without a port, and 5 if its first client can't be added. Serving, it doesn't return.
  */
 main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, clock_page: slop_os.Memory,
-    clients: os.Listener[clock_setting.ClockSetting]) -> int {
+    clients: os.Listener[clock_setting.ClockSetting], command_line: slop_os.Memory?) -> int {
     block :: slop_os.startup_block()
     service := Clock.{}
     service.rtc.ports = rtc_ports
@@ -130,9 +155,14 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
         runtime.log_error("no real-time clock")
         return 3
     }
+    built :: match command_line {
+        case Some(memory) => cast[i64](service_kit.number_of(service_kit.word_after(service_kit.text_of(block, memory) or_else "", "built=")
+            or_else "") or_else 0)
+        case None => cast[i64](0)
+    }
     match read_rtc(&service.rtc) {
         case Some(seconds) => {
-            publish(service.page, seconds * NANOSECONDS, slop_os.clock_monotonic() or_else 0)
+            put_time(&service, seconds * NANOSECONDS)
             storage : u8[32]
             shown := text_buffer.make(storage)
             append_time(&shown, seconds)
@@ -140,6 +170,7 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
         }
         case None => runtime.log_warn("the real-time clock holds no time it can read")
     }
+    raise_to(&service, built, "this generation was built")
 
     port :: slop_os.port_create(block.budget) or_return 4
     _ = service_kit.watch_stop(port)
@@ -158,13 +189,146 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
             i += 1
         }
         while i < connected.count
-        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
+        // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done, and the time saved
         if service_kit.stopping() {
+            save(&service)
             return 0
+        }
+        if service.keeping && (slop_os.clock_monotonic() or_else 0) >= service.next_save {
+            save(&service)
+            schedule_save(&service, port)
         }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
     }
+}
+
+/**
+ * Put a time on the clock page, at the monotonic reading now, and remember it, to tell the time from.
+ *
+ * @param service The clock service's state.
+ * @param utc The time, in nanoseconds since 1970 UTC.
+ */
+put_time :: fn(service: ptr[mut Clock], utc: i64) {
+    at :: slop_os.clock_monotonic() or_else 0
+    publish(service.page, utc, at)
+    service.utc = utc
+    service.at = at
+    service.published = true
+}
+
+/**
+ * Tell the time, as the page has it now.
+ *
+ * @param service The clock service's state.
+ * @return Nanoseconds since 1970 UTC; null if no time's been put on the page.
+ */
+time_now :: fn(service: ptr[Clock]) -> i64? {
+    if !service.published {
+        return null
+    }
+    now :: slop_os.clock_monotonic() or_else service.at
+    return service.utc + cast[i64](now - service.at)
+}
+
+/**
+ * Set the clock forward to a floor, if it's behind it: the page, and the real-time clock, which is logged if it won't take
+ * it.
+ *
+ * @param service The clock service's state.
+ * @param floor The floor, in seconds since 1970 UTC; 0 for none, which changes nothing.
+ * @param what What the floor is, as a phrase to follow "when", "the time", or the like: "this generation was built".
+ */
+raise_to :: fn(service: ptr[mut Clock], floor: i64, what: string) {
+    if floor <= 0 {
+        return void
+    }
+    current :: time_now(service) or_else 0
+    if current >= floor * NANOSECONDS {
+        return void
+    }
+    storage : u8[32]
+    shown := text_buffer.make(storage)
+    append_time(&shown, floor)
+    put_time(service, floor * NANOSECONDS)
+    written :: write_rtc(&service.rtc, floor)
+    runtime.log_info("the clock was behind when %, %: set forward to it%", what, text_buffer.as_string(&shown),
+        if written { "" } else { ", but the real-time clock won't take it" })
+}
+
+/**
+ * Keep the time in a directory: read what's saved there, set the clock forward to it if it's behind, and save it now.
+ *
+ * @param service The clock service's state, whose directory is replaced once end opens as one.
+ * @param port The port the save's timer wakes.
+ * @param end The directory's end, which the service takes over, even when it fails.
+ * @return True if it's kept there; false if a port for it couldn't be made, the directory before kept.
+ */
+keep :: fn(service: ptr[mut Clock], port: slop_os.Port, end: slop_os.Channel) -> bool {
+    directory, error :: os.directory_on(end)
+    if error != null {
+        return false
+    }
+    if service.keeping {
+        os.close_directory(service.directory)
+    }
+    service.directory = directory
+    service.keeping = true
+    raise_to(service, read_saved(service), "the time was last saved")
+    save(service)
+    schedule_save(service, port)
+    return true
+}
+
+/**
+ * Read the time saved in the kept directory.
+ *
+ * @param service The clock service's state, keeping the time.
+ * @return The seconds since 1970 UTC saved; 0 if there's no file, or it isn't a number.
+ */
+read_saved :: fn(service: ptr[mut Clock]) -> i64 {
+    file :: os.open_in(service.directory, SAVED_FILE, .READ) or_return 0
+    defer os.close(file)
+    storage : u8[32]
+    count :: os.read(file, view_of(&storage[0], storage.count)) or_else 0
+    length := if count < storage.count { count } else { storage.count }
+    // Its number, a line feed after it or not
+    if length > 0 && length <= storage.count && storage[length - 1] == 10 {
+        length -= 1
+    }
+    return cast[i64](service_kit.number_of(string_of(&storage[0], length)) or_else 0)
+}
+
+/**
+ * Save the time in the kept directory, if there's one; a save that fails is logged, and tried again at the next.
+ *
+ * @param service The clock service's state.
+ */
+save :: fn(service: ptr[mut Clock]) {
+    if !service.keeping {
+        return void
+    }
+    current :: time_now(service) or_return void
+    if current <= 0 {
+        return void
+    }
+    storage : u8[32]
+    text := text_buffer.make(storage)
+    text_buffer.append_format(&text, "%\n", current / NANOSECONDS)
+    if os.write_entire_file_in(service.directory, SAVED_FILE, text_buffer.as_string(&text)) is_some {
+        runtime.log_warn("the time couldn't be saved")
+    }
+}
+
+/**
+ * Set when the time's next saved, and the port's timer for it.
+ *
+ * @param service The clock service's state.
+ * @param port The port.
+ */
+schedule_save :: fn(service: ptr[mut Clock], port: slop_os.Port) {
+    service.next_save = (slop_os.clock_monotonic() or_else 0) + SAVE_INTERVAL
+    _ = slop_os.port_set_timer(port, SAVE_KEY, service.next_save)
 }
 
 /**
@@ -205,7 +369,17 @@ serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], in
             case Set(utc) => {
                 out := os.Outgoing.{}
                 response :: os.begin[clock_setting.Response](&out)
-                response^ = if set(service, utc) { .Done } else { .Refused }
+                done :: set(service, utc)
+                if done {
+                    save(service)
+                }
+                response^ = if done { .Done } else { .Refused }
+                _ = clock_setting.send_response(end, port, &out)
+            }
+            case Keep(directory) => {
+                out := os.Outgoing.{}
+                response :: os.begin[clock_setting.Response](&out)
+                response^ = if keep(service, port, directory.end) { .Done } else { .Refused }
                 _ = clock_setting.send_response(end, port, &out)
             }
             case Connect(connection) => {
@@ -239,7 +413,7 @@ set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
         runtime.log_warn("can't set the real-time clock to %", text_buffer.as_string(&shown))
         return false
     }
-    publish(service.page, utc, slop_os.clock_monotonic() or_else 0)
+    put_time(service, utc)
     // Read back: the second it's on may have passed since
     back :: read_rtc(&service.rtc) or_else 0
     storage : u8[32]

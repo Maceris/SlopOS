@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a to 13d built, 13e to 13g to come
+Status: accepted, chosen with the project's owner; 13a to 13e built, 13f and 13g to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -274,3 +274,45 @@ In Hemera's `std/crypto`, Freestanding, nothing allocated; secrets `#secret` and
   or one whose constraints don't allow the chain refuses it; a version 1 anchor is taken to be a CA. RSA keys under
   2048 bits are refused in certificates. A chain is DER certificates one after another, so 13f's TLS copies a
   Certificate message's entries together before validating.
+
+## As Built: 13e
+Built in two parts: names (13e1) and the clock's floor (13e2).
+- **The resolver** (`src/net_stack/dns.hsc`), in the stack as planned and so tested hosted: a stub resolver over the
+  stack's own UDP, a query for each kind (A, AAAA) from a socket of its own on a random port with a random ID, whose
+  datagrams go to it rather than the inbox; an answer counts only from the server asked, with the query's ID and its
+  question (RFC 5452). A query unanswered is asked again of the next server, its wait doubling from 1 s, four tries;
+  SERVFAIL and REFUSED pass to the next server at once. CNAMEs are followed, eight deep. Answers are cached for their
+  TTL, an hour at most; a name that doesn't exist, or has no address of a kind, for a minute (RFC 2308). Results come
+  IPv6 first, the families taking turns (RFC 8305 §4). Servers are configured, or learned from DHCP's option 6 and
+  routers' RDNSS options (RFC 8106), which the plan didn't name; configured ones take their place. Names are checked as
+  labels of letters, digits, hyphens and underscores; literal addresses aren't parsed, as Open takes them.
+- **The protocol** (Hemera's `std/os/slop_os/network`): `Resolve(name, kinds)` answered `Resolved` with up to 8
+  addresses, and `OpenName(name, port, memory)` answered `Opened` once resolved, or `Refused` with the resolver's
+  outcome (`NoSuchName`, `NoAddress`, `ResolveFailed`, `BadName`). Resolving needs a policy that connects somewhere, so
+  a program allowed nothing can't send its secrets out in queries. `std/net` gains `resolve`, `open_name` and
+  `describe`. **Policies by name**: a rule may name a host, or `*.domain` for the names under it, up to 63 bytes, which
+  allows connecting by that name; rules grew, so the protocol's ring is 8 KiB. **The rebinding rule** (`allows_named`):
+  an address a name resolved to that isn't public is reached only through a range rule covering it, whatever else the
+  policy allows, everything included; a public one through any rule covering it, or a rule naming the host.
+- **Happy Eyeballs** in the network service (`names.hsc`): OpenName's stream is answered once resolved, its addresses
+  those the policy allows, tried IPv6 first, the next started every 250 ms while none has connected, up to four at once,
+  every attempt over the stream's own rings, as no byte moves before a connection's established; the first to connect
+  is the stream's and the others are aborted, one that fails starts the next at once, and the last to fail ends it.
+- **The clock's floor** (13e2): a generation's record keeps when it was built (`built`, seconds since 1970, in what had
+  been padding, so its layout is unchanged and older records read 0), set by the generation builder; the bootloader adds
+  `built=<seconds>` to the kernel's command line, and the clock service starts no earlier. The time's kept in the system
+  volume's `clock` directory, which the supervisor gives the clock through `clock_setting`'s new `Keep` once the volume's
+  there (and again if either restarts): the time saved there is read, the clock set forward to it if it's behind, and it's
+  saved then, every five minutes, after each `Set` and as the service stops, as its seconds in decimal, so a torn write
+  reads as none. A real-time clock behind the floor is set forward too.
+- **Found:** `boot.py` gave every boot of a test the same QEMU arguments, so a test of the saved time couldn't set the
+  real-time clock differently in each; `--boot-qemu-argument=<boot>:<argument>` does, and `--expect-boot-line-start`
+  checks a later boot's line by its start.
+- **Tests:** hosted (`net_stack_test`'s `dns_test`): names of both kinds, a CNAME, case and a final dot, IPv4 only, a name
+  that doesn't exist, a server that fails, bad names; the cache and its expiry; a forged answer ignored; a silent server
+  passed over; the servers learned from DHCP and RDNSS; ten lossy seeds; and names read from random bytes. Hemera's
+  `network_policy`: names matched, names reaching public addresses only, narrowing to names. Boot, on both
+  architectures: `test_network` with a DNS peer on the development machine (`{dns}`), `peer.slopos.test` resolved IPv6
+  first, reached by name at 10.0.2.2 after QEMU never connects its IPv6 address, refused through a public-only
+  connection, and a missing name; and the floor, the first boot's real-time clock in 2030 saved, the second's in 2001
+  starting at the build time and going forward to 2030.

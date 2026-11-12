@@ -477,6 +477,11 @@ class Keyboard:
                 self.key("shift", False)
 
 
+def boot_only(arguments, boot: int) -> list[str]:
+    """The arguments for QEMU that --boot-qemu-argument gives one boot, by its number from 1."""
+    return [each.split(":", 1)[1] for each in arguments.boot_qemu_argument if each.split(":", 1)[0] == str(boot)]
+
+
 class NetworkPeers:
     """
     Peers on the development machine for the network's tests (decisions/0188, 13c), reached from the machine through
@@ -1262,6 +1267,11 @@ def main() -> int:
                         help="with --boot-disk: boot the same disk this many times, each after the last stopped, as a reboot would")
     parser.add_argument("--expect-boot-line", action="append", default=[],
                         help="with --boots: <boot>:<line>, a line that boot's serial output must have, from 2")
+    parser.add_argument("--boot-qemu-argument", action="append", default=[],
+                        help="<boot>:<argument>, an argument for QEMU in that boot only, from 1, after the others, as -rtc's "
+                        "differing from boot to boot")
+    parser.add_argument("--expect-boot-line-start", action="append", default=[],
+                        help="with --boots: <boot>:<start>, the start of a line that boot's serial output must have, from 2")
     parser.add_argument("--stage-generation",
                         help="with --boot-disk: stage generation 2 on the system volume, the same programs with this command line, "
                              "for the update service to install (decisions/0116)")
@@ -1395,10 +1405,10 @@ def main() -> int:
         if arguments.bootloader_edit is not None:
             keys = SerialKeys(serial, "e", arguments.bootloader_edit + "\r")
         if aarch64:
-            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu, keys,
+            code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, 1), not arguments.no_iommu, keys,
                                arguments.allow_reboot)
         else:
-            code = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra, keys,
+            code = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, 1), keys,
                        arguments.allow_reboot)
         phases.append(("boot 1", time.monotonic() - booting_started))
         # Read while the folder it's in is still there
@@ -1415,9 +1425,9 @@ def main() -> int:
             serial.unlink(missing_ok=True)
             booting_started = time.monotonic()
             if aarch64:
-                again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra, not arguments.no_iommu)
+                again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot), not arguments.no_iommu)
             else:
-                again = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra)
+                again = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot))
             phases.append((f"boot {boot}", time.monotonic() - booting_started))
             later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
@@ -1487,6 +1497,11 @@ def main() -> int:
             for line in wanted:
                 if line not in text.splitlines():
                     print(f"boot.py: boot {boot}'s serial output has no line {line!r}", file=sys.stderr)
+                    later_failed = True
+            starts = [line.split(":", 1)[1] for line in arguments.expect_boot_line_start if line.split(":", 1)[0] == str(boot)]
+            for start in starts:
+                if not any(line.startswith(start) for line in text.splitlines()):
+                    print(f"boot.py: boot {boot}'s serial output has no line starting {start!r}", file=sys.stderr)
                     later_failed = True
         return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten and not leaked and not later_failed else 1
     return code

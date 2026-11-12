@@ -250,6 +250,8 @@ ClockGrants :: struct {
     clock_page : slop_os.Memory,
     /** The listener the supervisor sets the time through; the supervisor keeps its other end. */
     clients : os.Listener[clock_setting.ClockSetting],
+    /** A copy of the kernel's command line, read for built=, the clock's floor (decisions/0188, 13e). */
+    command_line : slop_os.Memory?,
 }
 
 /** What the ACPI service is given (acpi_service.main); its handles move to it at its launch. */
@@ -1801,6 +1803,7 @@ open_system :: fn(supervisor: ptr[mut Supervisor], storage_slot: usize) {
                     case None => {}
                 }
             }
+            keep_time(supervisor)
         }
         // What needs the system volume can't start without it, if it hadn't started before
         case None => {
@@ -3256,6 +3259,22 @@ lent_directory :: fn(supervisor: ptr[mut Supervisor], name: string, service: str
 }
 
 /**
+ * Give the clock service the system volume's "clock" directory, made if it isn't there, to keep the time in across boots
+ * (decisions/0188, 13e): the clock's set forward to the time saved there, if it's behind it. What fails is logged.
+ *
+ * @param supervisor The supervisor, with a system volume and a connection to the clock service.
+ */
+keep_time :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.clock_setting == NONE {
+        return void
+    }
+    directory :: lent_directory(supervisor, "clock", "clock") or_return void
+    if !clock_setting.keep(supervisor.clock_setting, supervisor.clock_setting_port, directory) {
+        log_line.write(supervisor.log, "supervisor: the clock service won't keep the time on the system volume")
+    }
+}
+
+/**
  * Lend a CPU budget to a dir connection, with Lend, and wait for the answer.
  *
  * @param supervisor The supervisor, whose budget pays for the port the answer is waited on.
@@ -3962,7 +3981,7 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
     page :: slop_os.handle_duplicate(cast[slop_os.Handle](supervisor.clock_page), page_rights) or_return void
     grants := ClockGrants.{clock_page = cast[slop_os.Memory](page),
-        clients = os.Listener[clock_setting.ClockSetting].{end = pair.a}}
+        clients = os.Listener[clock_setting.ClockSetting].{end = pair.a}, command_line = command_line_copy(supervisor)}
     if cast[slop_os.Handle](rtc.ports) != slop_os.NO_HANDLE {
         grants.rtc_ports = rtc.ports
     }
@@ -3992,6 +4011,10 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     supervisor.clock_setting = pair.b
     supervisor.clock_setting_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    // Started again with the system volume there, it keeps the time there again
+    if supervisor.system != NONE {
+        keep_time(supervisor)
+    }
     slot :: place(supervisor, "clock", launched, again)
     if slot >= supervisor.started.count {
         return void

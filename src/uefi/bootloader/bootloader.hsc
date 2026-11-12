@@ -489,6 +489,12 @@ write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: pt
     if generation.development == 1 {
         append(&line, " development")
     }
+    // When it was built, which the clock starts no earlier than (decisions/0188, 13e)
+    if generation.built != 0 {
+        built_digits : u8[20]
+        append(&line, " built=")
+        append(&line, generations.decimal(cast[u64](generation.built), &built_digits))
+    }
     if !bundle.same(generation.store_root, bundle.Hash.{}) {
         hex_storage : u8[64]
         append(&line, " store_root=")

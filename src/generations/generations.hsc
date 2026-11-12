@@ -91,8 +91,11 @@ Generation :: struct {
     store_root : bundle.Hash,
     /** How many of files are the boot set, 0 to MAX_BOOT_FILES; 0 for a kernel booted alone. */
     file_count : u32,
-    /** Zeros, keeping files 8-byte aligned; not checked. */
-    padding_after : u32,
+    /**
+     * When it was built, in seconds since 1970-01-01T00:00:00Z, which the clock starts no earlier than (decisions/0188,
+     * 13e): 0 if it isn't known, as in a record written before it was kept. Not checked.
+     */
+    built : u32,
     /** The boot set, its first file_count entries, the first the root task's; the rest are zeros, not checked. */
     files : BootFile[MAX_BOOT_FILES],
     /**
