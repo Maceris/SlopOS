@@ -1,5 +1,9 @@
 package net_stack
 
+#if base.OS == .SlopOS {
+    import slop_os from "std/os"
+}
+
 /*
  * TCP (RFC 9293), with window scaling and timestamps (RFC 7323), selective acknowledgements (RFC 2018) and loss
  * recovery by them (RFC 6675, simplified), retransmission timers (RFC 6298), CUBIC (RFC 9438), and initial sequence
@@ -84,12 +88,19 @@ TcpState :: enum {
     TimeWait,
 }
 
-/** Memory of the caller's, by address, used as a ring of bytes. */
+/** Memory used as a ring of bytes: the caller's, at an address, or a memory object's, copied through the kernel. */
 Ring :: struct {
-    /** Its address in the caller's address space. */
+    /** Its address in the caller's address space; or, with memory, where it starts in that memory. */
     at : u64,
     /** Its size in bytes, at least 1. */
     bytes : u64,
+    /**
+     * On SlopOS, a handle to a memory object holding the ring from at, with RIGHT_MEMORY_READ and RIGHT_MEMORY_WRITE,
+     * the caller's while the connection lasts: copied with the kernel's memory_read and memory_write rather than mapped,
+     * so the memory's owner destroying it fails a copy, which ends the connection, rather than faulting. 0 for memory at
+     * the address at.
+     */
+    memory : u64,
 }
 
 /** A connection's rings: what the application writes, and what arrives for it. */
@@ -170,6 +181,8 @@ Tcb :: struct {
     /** The listener it arrived at, plus one; 0 for one connected out. */
     listener : u32,
     rings : TcpRings,
+    /** Whether a ring couldn't be copied to or from, its memory gone: tcp_output aborts it. */
+    ring_gone : bool,
     /** Whether it's marked changed, and in the changed list. */
     changed : bool,
     /** When an Incoming one is dropped, or a TIME-WAIT one freed. */
@@ -713,11 +726,15 @@ ring_bytes :: fn(ring: Ring) -> mut u8[] {
  * @param ring The ring.
  * @param offset The stream offset of the first byte.
  * @param into Where they go, all of it filled.
+ * @return False if a memory object's ring couldn't be read, its memory gone; into is then partly filled.
  */
-ring_read :: fn(ring: Ring, offset: u64, into: mut u8[]) {
+ring_read :: fn(ring: Ring, offset: u64, into: mut u8[]) -> bool {
+    if ring.memory != 0 {
+        return read_with_memory(ring, offset, into)
+    }
     bytes :: ring_bytes(ring)
     if bytes.count == 0 {
-        return void
+        return true
     }
     for &byte, i in into {
         at :: cast[usize]((offset + cast[u64](i)) % ring.bytes)
@@ -725,6 +742,7 @@ ring_read :: fn(ring: Ring, offset: u64, into: mut u8[]) {
             byte^ = bytes[at]
         }
     }
+    return true
 }
 
 /**
@@ -733,11 +751,15 @@ ring_read :: fn(ring: Ring, offset: u64, into: mut u8[]) {
  * @param ring The ring.
  * @param offset The stream offset of the first byte.
  * @param from What's copied.
+ * @return False if a memory object's ring couldn't be written, its memory gone.
  */
-ring_write :: fn(ring: Ring, offset: u64, from: u8[]) {
+ring_write :: fn(ring: Ring, offset: u64, from: u8[]) -> bool {
+    if ring.memory != 0 {
+        return write_with_memory(ring, offset, from)
+    }
     bytes :: ring_bytes(ring)
     if bytes.count == 0 {
-        return void
+        return true
     }
     for byte, i in from {
         at :: cast[usize]((offset + cast[u64](i)) % ring.bytes)
@@ -745,6 +767,87 @@ ring_write :: fn(ring: Ring, offset: u64, from: u8[]) {
             bytes[at] = byte
         }
     }
+    return true
+}
+
+/**
+ * Copy out of a memory object's ring through the kernel, wrapping: at most two memory_reads.
+ *
+ * @param ring The ring, its memory set.
+ * @param offset The stream offset of the first byte.
+ * @param into Where they go, all of it filled.
+ * @return False if a read failed, the memory gone or the ring running past its end; always false but on SlopOS.
+ */
+read_with_memory :: fn(ring: Ring, offset: u64, into: mut u8[]) -> bool {
+    #if base.OS == .SlopOS {
+        if ring.bytes == 0 || into.count == 0 {
+            return true
+        }
+        memory :: cast[slop_os.Memory](ring.memory)
+        first :: offset % ring.bytes
+        head :: ring_head(ring, first, into.count)
+        if slop_os.memory_read(memory, ring.at + first, part_mut(into, 0, head)) is_error {
+            return false
+        }
+        return head >= into.count || (slop_os.memory_read(memory, ring.at, part_mut(into, head, into.count)) is_ok)
+    }
+    #else {
+        return false
+    }
+}
+
+/**
+ * Copy into a memory object's ring through the kernel, wrapping: at most two memory_writes.
+ *
+ * @param ring The ring, its memory set.
+ * @param offset The stream offset of the first byte.
+ * @param from What's copied.
+ * @return False if a write failed, the memory gone or the ring running past its end; always false but on SlopOS.
+ */
+write_with_memory :: fn(ring: Ring, offset: u64, from: u8[]) -> bool {
+    #if base.OS == .SlopOS {
+        if ring.bytes == 0 || from.count == 0 {
+            return true
+        }
+        memory :: cast[slop_os.Memory](ring.memory)
+        first :: offset % ring.bytes
+        head :: ring_head(ring, first, from.count)
+        if slop_os.memory_write(memory, ring.at + first, part(from, 0, head)) is_error {
+            return false
+        }
+        return head >= from.count || (slop_os.memory_write(memory, ring.at, part(from, head, from.count)) is_ok)
+    }
+    #else {
+        return false
+    }
+}
+
+/**
+ * Give how many of a copy's bytes come before a ring's end: the rest wrap to its start.
+ *
+ * @param ring The ring.
+ * @param first Where in it the copy starts, below its size.
+ * @param count The copy's bytes.
+ * @return The bytes before the end.
+ */
+ring_head :: fn(ring: Ring, first: u64, count: usize) -> usize {
+    to_end :: ring.bytes - first
+    return if cast[u64](count) < to_end { count } else { cast[usize](to_end) }
+}
+
+/**
+ * View part of bytes that can change.
+ *
+ * @param bytes The bytes.
+ * @param from Where the part starts.
+ * @param to Where it ends, past its last byte.
+ * @return The part; empty if from to to isn't within bytes.
+ */
+part_mut :: fn(bytes: mut u8[], from: usize, to: usize) -> mut u8[] {
+    if from > to || to > bytes.count {
+        return bytes[0..<0]
+    }
+    return bytes[from..<to]
 }
 
 /**
@@ -842,6 +945,11 @@ timestamp :: fn(stack: ptr[Stack]) -> u32 {
  * @param tcb The connection.
  */
 tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+    // Its memory's gone: it can't go on, so it's reset
+    if tcb.ring_gone && tcb.state != .Free {
+        tcp_abort(stack, connection_number(tcb))
+        return void
+    }
     if tcb.state != .Established && tcb.state != .CloseWait && tcb.state != .FinWait1 && tcb.state != .Closing
         && tcb.state != .LastAck && tcb.state != .FinWait2 && tcb.state != .TimeWait {
         return void
@@ -861,7 +969,10 @@ tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
                     if in_flight(tcb) < tcb.cwnd {
                         length :: hole_length(tcb, hole)
                         if length > 0 {
-                            send_data(stack, tcb, hole, length)
+                            if !send_data(stack, tcb, hole, length) {
+                                tcp_abort(stack, connection_number(tcb))
+                                return void
+                            }
                             tcb.rescue = hole + length
                             sent_any = true
                             continue
@@ -886,7 +997,10 @@ tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
             }
             most :: if room < cast[u64](segment_data(tcb)) { room } else { cast[u64](segment_data(tcb)) }
             length :: if unsent < most { unsent } else { most }
-            send_data(stack, tcb, tcb.snd_nxt, cast[u32](length))
+            if !send_data(stack, tcb, tcb.snd_nxt, cast[u32](length)) {
+                tcp_abort(stack, connection_number(tcb))
+                return void
+            }
             sent_any = true
             continue
         }
@@ -987,11 +1101,14 @@ offset_of :: fn(tcb: ptr[Tcb], seq: u32) -> u64 {
  * @param seq Where it starts.
  * @param length How many bytes, at most segment_data.
  */
-send_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, length: u32) {
+send_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, length: u32) -> bool {
     data : u8[MAX_FRAME]
     count :: if cast[usize](length) < data.count { cast[usize](length) } else { data.count }
     bytes :: view_of(&data[0], count)
-    ring_read(tcb.rings.send, offset_of(tcb, seq), bytes)
+    if !ring_read(tcb.rings.send, offset_of(tcb, seq), bytes) {
+        tcb.ring_gone = true
+        return false
+    }
     end :: seq + cast[u32](count)
     flags := TCP_ACK
     if offset_of(tcb, end) == tcb.written {
@@ -1013,6 +1130,7 @@ send_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, length: u32)
     tcb.ack_deadline = 0
     tcb.ack_now = false
     tcb.unacknowledged_segments = 0
+    return true
 }
 
 /**
@@ -1718,8 +1836,7 @@ enter_recovery :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
     tcb.rescue = tcb.snd_una
     tcb.duplicate_acks = 0
     length :: hole_length(tcb, tcb.snd_una)
-    if length > 0 {
-        send_data(stack, tcb, tcb.snd_una, length)
+    if length > 0 && send_data(stack, tcb, tcb.snd_una, length) {
         tcb.rescue = tcb.snd_una + length
     }
 }
@@ -1854,7 +1971,11 @@ take_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment],
         if skip < data.count && offset < window {
             most :: window - offset
             length :: if cast[u64](data.count - skip) < most { data.count - skip } else { cast[usize](most) }
-            ring_write(tcb.rings.receive, tcb.delivered + offset, part(data, skip, skip + length))
+            if !ring_write(tcb.rings.receive, tcb.delivered + offset, part(data, skip, skip + length)) {
+                // Its memory's gone: nothing's taken, and tcp_output resets it
+                tcb.ring_gone = true
+                return void
+            }
             end :: start + cast[u32](length)
             if start == tcb.rcv_nxt {
                 tcb.rcv_nxt = end
@@ -2025,7 +2146,7 @@ retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
     if flight == 0 {
         // A zero window: a byte probes it
         if tcb.written > tcb.acknowledged {
-            send_data(stack, tcb, tcb.snd_una, 1)
+            _ = send_data(stack, tcb, tcb.snd_una, 1)
         }
         return void
     }

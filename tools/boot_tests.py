@@ -828,6 +828,21 @@ TESTS = [
         "--expect-console-line=  connect asks to reach TCP to 10.0.2.2, port {tcp_echo}, to send it a message.",
         "--expect-console-line=hello",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
+    # TLS (decisions/0188, 13f): test_network, given the boot disk's trust store, which holds tools/tls_peers' test root,
+    # reaches boot.py's TLS peer by name over std/net's TLS, its RSA and P-256 chains checked and its echo whole, and
+    # refuses a certificate for another name, an expired one and one from a root it doesn't trust; then serves TLS on
+    # port 443 as machine.slopos.test, which boot.py's client checks against the root, and echoes what it sends
+    ("speaks TLS as a client and a server, checking certificates against the trust store", 7,
+     with_before_qemu([argument.replace("test_services no_disk_check", "test_services no_disk_check test_settle=10 test_network "
+                                        "tcp_echo={tcp_echo} udp_echo={udp_echo} dns=10.0.2.2:{dns} tls={tls}")
+                       .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE], ["--network-peers",
+        "--expect-line=[user] test_network: rsa.slopos.test reached over TLS, its certificate checked, its echo whole",
+        "--expect-line=[user] test_network: ecdsa.slopos.test reached over TLS, its certificate checked, its echo whole",
+        "--expect-line=[user] test_network: wrong.slopos.test refused over TLS: its certificate's for another name, alert 42",
+        "--expect-line=[user] test_network: expired.slopos.test refused over TLS: EXPIRED, alert 45",
+        "--expect-line=[user] test_network: stranger.slopos.test refused over TLS: UNKNOWN_ISSUER, alert 48",
+        "--expect-line=[user] test_network: serving TLS on 443",
+        "--expect-line=[user] test_network: served TLS as machine.slopos.test, echoing 34 bytes"])),
     # The system's crash reports (decisions/0185, 12g): test_crash crashes the update service, which the supervisor
     # reports in its source; crashes system, once the administrator allows reading the log, reads it back as a typed
     # record and names its frames through the update service's files

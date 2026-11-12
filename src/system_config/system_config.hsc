@@ -12,6 +12,7 @@ import compiler from "base"
 import runtime from "base"
 import text_buffer from "std"
 import os from "std"
+import read_only_dir from "std/os/slop_os"
 import system_records from "../system_records"
 import clock_service from "../services/clock"
 import acpi_service from "../services/acpi_service"
@@ -270,8 +271,9 @@ SERVICES :: Service.[
     // The network stack (decisions/0188), over the first NIC; started only when there's one
     Service.{name = "network", module = "network_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(network_service.main)},
-    // The network's test client (decisions/0188, 13c), started only with test_network on the kernel's command line
-    Service.{name = "test_network", module = "test_network.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+    // The network's test client (decisions/0188, 13c), started only with test_network on the kernel's command line;
+    // room for TLS's state, some 300 KiB a connection, and trust anchors (13f)
+    Service.{name = "test_network", module = "test_network.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
         entry = type_of(test_network.main), not_restarted = true},
     // Objects by their hashes, on the system volume, paged into whoever reads them (decisions/0094)
     Service.{name = "bundle_store", boot_set = true, module = "bundle_store_service.elf", starter = .Supervisor, by_manager = true,
@@ -370,10 +372,11 @@ ROOT_TASK_SERVES :: type.[os.Listener[supervision.Supervision]]
 
 /**
  * What the supervisor serves itself: connectors, which dial what it started (decisions/0077), and the session of the
- * console's programs, to the terminal service (decisions/0139); and power, which the terminal service asks to shut
- * down on (decisions/0180).
+ * console's programs, to the terminal service (decisions/0139); power, which the terminal service asks to shut down on
+ * (decisions/0180); and the trust store, the system volume's directory of roots, read only (decisions/0188, 13f).
  */
-SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session.Session], os.Listener[power.Power]]
+SUPERVISOR_SERVES :: type.[os.Listener[connector.Connector], os.Listener[session.Session], os.Listener[power.Power],
+    os.Listener[read_only_dir.ReadOnlyDir]]
 
 /**
  * What the storage manager serves itself: each volume server's stored links, on a connection it makes for each

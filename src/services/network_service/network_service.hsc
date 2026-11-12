@@ -9,8 +9,9 @@
  * network), whose Open, Listen and Udp give channels of their own (tcp_stream, tcp_listener, datagrams). A connection
  * made through the listener allows everything, as its holder, the session manager or a test, is given it to narrow;
  * Narrow makes one allowing less, and every Open, Listen, Udp and datagram is checked against its connection's policy. A connection's
- * data is in the program's memory, mapped here at an address slot of the connection's, MAX_MEMORY each, so addresses
- * are reused as connections come and go.
+ * data is in the program's memory, which isn't mapped here but copied to and from through the kernel (memory_read and
+ * memory_write), as the program owns it: a program that destroys it, closing it while data's still to send, ends its own
+ * connection rather than faulting the service (13f).
  *
  * Names are resolved by the stack's resolver, 13e (names.hsc): Resolve gives a name's addresses, and OpenName connects
  * to them as Happy Eyeballs does. Its DNS servers are DHCP's and routers', or dns=<address>:<port> on the kernel's
@@ -439,7 +440,7 @@ LISTENERS :: 16
 SOCKETS :: 16
 /** The most Accepts a listener holds at once. */
 HELD_ACCEPTS :: 4
-/** The largest memory a connection's rings take: 1 MiB, two rings of 512 KiB; each stream's address slot is this. */
+/** The largest memory a connection's rings take: 1 MiB, two rings of 512 KiB. */
 MAX_MEMORY : u64 : 1 << 20
 /** The smallest: two pages. */
 MIN_MEMORY : u64 : 8192
@@ -510,12 +511,10 @@ Serving :: struct {
     sockets : SocketSlot[SOCKETS],
     /** Resolves and OpenNames waiting for their lookups (names.hsc). */
     pending : Pending[PENDING],
-    /** Each stream's address slot, MAX_MEMORY apart, from slots on; 0 if they couldn't be reserved. */
-    slots : u64,
 }
 
 /**
- * Set up serving: the address slots for streams' memory, and the listener for programs' connections.
+ * Set up serving: the listener for programs' connections.
  *
  * @param service The service.
  * @param clients The listener, served as a client itself.
@@ -533,8 +532,7 @@ start_serving :: fn(service: ptr[mut Service], clients: os.Listener[network.Netw
     for &each in serving.sockets {
         each.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
     }
-    serving.slots = runtime.reserve_addresses(cast[usize](cast[u64](STREAMS) * MAX_MEMORY)) or_else 0
-    return serving.slots != 0 && add_network_client(service, clients.end, network.everything())
+    return add_network_client(service, clients.end, network.everything())
 }
 
 /**
@@ -750,23 +748,14 @@ endpoint_of :: fn(address: net_stack.IpAddress, port: u16) -> net_address.Endpoi
 }
 
 /**
- * Take a program's memory for a stream: check its size and map it at the stream's slot.
+ * Take a program's memory for a stream: check its size.
  *
- * @param service The service.
- * @param index The stream's index.
  * @param memory The memory, the service's now; closed if it won't do.
- * @return Its size; null if it isn't MIN_MEMORY to MAX_MEMORY, a whole number of pairs of pages, or couldn't be mapped.
+ * @return Its size; null if it isn't MIN_MEMORY to MAX_MEMORY, or a whole number of pairs of pages.
  */
-take_memory :: fn(service: ptr[mut Service], index: usize, memory: slop_os.Memory) -> u64? {
-    startup :: slop_os.startup_block()
+take_memory :: fn(memory: slop_os.Memory) -> u64? {
     size :: slop_os.memory_size(memory) or_else 0
-    if size < MIN_MEMORY || size > MAX_MEMORY || size % (2 * PAGE) != 0 || service.serving.slots == 0 {
-        _ = slop_os.handle_close(cast[slop_os.Handle](memory))
-        return null
-    }
-    at :: service.serving.slots + cast[u64](index) * MAX_MEMORY
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    if slop_os.memory_map(memory, startup.space, at, 0, size, read_write) is_error {
+    if size < MIN_MEMORY || size > MAX_MEMORY || size % (2 * PAGE) != 0 {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
     }
@@ -774,16 +763,16 @@ take_memory :: fn(service: ptr[mut Service], index: usize, memory: slop_os.Memor
 }
 
 /**
- * Give a stream's rings, in its slot.
+ * Give a stream's rings in its memory, which the stack copies to and from through the kernel.
  *
- * @param service The service.
- * @param index The stream's index.
- * @param bytes Its memory's size.
+ * @param memory The memory, the service's while the connection lasts.
+ * @param bytes Its size.
  * @return The rings: the first half the program writes, the second what arrives.
  */
-rings_at :: fn(service: ptr[Service], index: usize, bytes: u64) -> net_stack.TcpRings {
-    at :: service.serving.slots + cast[u64](index) * MAX_MEMORY
-    return net_stack.TcpRings.{send = net_stack.Ring.{at = at, bytes = bytes / 2}, receive = net_stack.Ring.{at = at + bytes / 2, bytes = bytes / 2}}
+rings_of :: fn(memory: slop_os.Memory, bytes: u64) -> net_stack.TcpRings {
+    handle :: cast[u64](cast[u32](memory))
+    return net_stack.TcpRings.{send = net_stack.Ring.{at = 0, bytes = bytes / 2, memory = handle},
+        receive = net_stack.Ring.{at = bytes / 2, bytes = bytes / 2, memory = handle}}
 }
 
 /**
@@ -860,11 +849,11 @@ open_stream :: fn(service: ptr[mut Service], open: network.OpenTo) -> network.Re
         _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
         return .Refused(.NoRoom)
     }
-    bytes :: take_memory(service, index, open.memory) or_return .Refused(.BadMemory)
-    connection :: match net_stack.tcp_connect(stack, to, open.to.port, rings_at(service, index, bytes)) {
+    bytes :: take_memory(open.memory) or_return .Refused(.BadMemory)
+    connection :: match net_stack.tcp_connect(stack, to, open.to.port, rings_of(open.memory, bytes)) {
         case Some(found) => found
         case None => {
-            release_memory(service, index, open.memory)
+            release_memory(open.memory)
             return .Refused(if net_stack.has_source(stack, to) { network.Refusal.NoRoom } else { network.Refusal.NoRoute })
         }
     }
@@ -872,7 +861,7 @@ open_stream :: fn(service: ptr[mut Service], open: network.OpenTo) -> network.Re
         case Some(found) => found
         case None => {
             net_stack.tcp_abort(stack, connection)
-            release_memory(service, index, open.memory)
+            release_memory(open.memory)
             return .Refused(.NoRoom)
         }
     }
@@ -889,14 +878,11 @@ open_stream :: fn(service: ptr[mut Service], open: network.OpenTo) -> network.Re
 }
 
 /**
- * Give back a stream's memory: unmapped from its slot and closed.
+ * Give back a stream's memory: closed.
  *
- * @param service The service.
- * @param index The stream's index.
  * @param memory The memory.
  */
-release_memory :: fn(service: ptr[mut Service], index: usize, memory: slop_os.Memory) {
-    _ = slop_os.memory_unmap(slop_os.startup_block().space, service.serving.slots + cast[u64](index) * MAX_MEMORY)
+release_memory :: fn(memory: slop_os.Memory) {
     _ = slop_os.handle_close(cast[slop_os.Handle](memory))
 }
 
@@ -1039,7 +1025,7 @@ free_stream_entry :: fn(service: ptr[mut Service], index: usize) {
     _ = slop_os.handle_close(cast[slop_os.Handle](stream.end))
     stream.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
     if cast[slop_os.Handle](stream.memory) != slop_os.NO_HANDLE {
-        release_memory(service, index, stream.memory)
+        release_memory(stream.memory)
         stream.memory = cast[slop_os.Memory](slop_os.NO_HANDLE)
     }
 }
@@ -1325,7 +1311,7 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
                 continue
             }
         }
-        bytes :: match take_memory(service, stream_index, memory) {
+        bytes :: match take_memory(memory) {
             case Some(found) => found
             case None => {
                 net_stack.tcp_abort(stack, connection)
@@ -1333,16 +1319,16 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
                 continue
             }
         }
-        if !net_stack.tcp_accept(stack, connection, rings_at(service, stream_index, bytes)) {
+        if !net_stack.tcp_accept(stack, connection, rings_of(memory, bytes)) {
             // It went before it was taken: the Accept's memory waits for the next
-            release_memory(service, stream_index, memory)
+            release_memory(memory)
             continue
         }
         channel :: match make_stream_channel(service, stream_index) {
             case Some(found) => found
             case None => {
                 net_stack.tcp_abort(stack, connection)
-                release_memory(service, stream_index, memory)
+                release_memory(memory)
                 continue
             }
         }

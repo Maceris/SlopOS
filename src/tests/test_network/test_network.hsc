@@ -14,6 +14,10 @@
  *   its IPv6 address, which QEMU never connects, passed over for its IPv4 one as Happy Eyeballs does; the same name
  *   refused through a connection allowing public addresses only, as it's answered with a private one; and a name
  *   that doesn't exist.
+ * - with tls=<port> and a trust store, TLS (13f) to the TLS peer there, by the names the DNS peer gives it: its RSA
+ *   and its P-256 certificates checked against the trust store's root, and its echo of what's written; and refused for
+ *   a certificate for another name, one expired and one from a root that isn't trusted. Then, once the echo on 7 is
+ *   done, TLS served on port 443 as machine.slopos.test (identity.hsc), echoing what the development machine sends.
  *
  * A connection refused isn't among them: QEMU's user-mode network doesn't answer a SYN for a closed port on the
  * development machine at all, so the stack's retries would run a minute to a timeout. net_stack's hosted tests check
@@ -28,6 +32,8 @@ import text_buffer from "std"
 import slop_os from "std/os"
 import net_address from "std/os/slop_os"
 import network from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
+import tls from "std"
 import connector from "../../protocols/connector"
 import service_kit from "../../libraries/service_kit"
 
@@ -46,15 +52,18 @@ OPEN_TRIES :: 60
  * @param log The debug log its lines go to.
  * @param network A connector to the network service.
  * @param command_line The kernel's command line: tcp_echo=<port> and udp_echo=<port>.
+ * @param trust The trust store, read only; null without a system volume.
  * @return 0, whatever it found, which its lines say; 2 without a network service or its peers' ports.
  */
-main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, command_line: slop_os.Memory?) -> int {
+main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, command_line: slop_os.Memory?,
+    trust: os.Channel[read_only_dir.ReadOnlyDir]?) -> int {
     startup :: slop_os.startup_block()
     dialing :: network or_return 2
     text :: service_kit.text_of(startup, command_line or_return 2) or_else ""
     tcp_echo :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tcp_echo=") or_else "") or_else 0)
     udp_echo :: cast[u16](service_kit.number_of(service_kit.word_after(text, "udp_echo=") or_else "") or_else 0)
     tcp_sink :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tcp_sink=") or_else "") or_else 0)
+    tls_peer :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tls=") or_else "") or_else 0)
     if tcp_echo == 0 || udp_echo == 0 {
         runtime.log_info("no peers' ports on the command line")
         return 2
@@ -67,7 +76,13 @@ main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, co
     if service_kit.word_after(text, "dns=") is_some {
         use_names(service, tcp_echo)
     }
+    if tls_peer != 0 {
+        use_tls(service, trust, tls_peer)
+    }
     serve_echo(service)
+    if tls_peer != 0 {
+        serve_tls(service)
+    }
     if tcp_sink != 0 {
         measure_send(service, net_address.Endpoint.{address = peer, port = tcp_sink})
     }
@@ -88,14 +103,7 @@ use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
     startup :: slop_os.startup_block()
     port :: os.port_for(startup.budget, service.end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
-    // QEMU's ranges, 10.0.2.0/24 and fec0::/64, by TCP
-    site := net_address.Address.{family = .V6}
-    site.bytes[0] = 0xfe
-    site.bytes[1] = 0xc0
-    ranges := network.Policy.{connect_count = 2}
-    ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP, 0, 65535)
-    ranges.connect[1] = network.range_rule(site, 64, network.TRANSPORT_TCP, 0, 65535)
-    local :: network.narrow(service.end, port, &ranges) or_return void
+    local :: qemu_ranges(service, port) or_return void
     storage : u8[200]
     line := text_buffer.make(storage)
     match net.resolve(local, PEER_NAME) {
@@ -158,6 +166,24 @@ use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
         case Ok(found) => runtime.log_info("missing.slopos.test resolved to % addresses", found.count)
         case Error(failure) => runtime.log_info("missing.slopos.test: %", failure)
     }
+}
+
+/**
+ * Narrow a connection to QEMU's ranges, 10.0.2.0/24 and fec0::/64, by TCP: names resolving to them are reached only
+ * through rules covering them (the rebinding rule), as they aren't public.
+ *
+ * @param service The connection to the network service.
+ * @param port A port bound to it.
+ * @return The narrowed connection, the caller's; null if it wasn't made.
+ */
+qemu_ranges :: fn(service: os.Channel[network.Network], port: slop_os.Port) -> os.Channel[network.Network]? {
+    site := net_address.Address.{family = .V6}
+    site.bytes[0] = 0xfe
+    site.bytes[1] = 0xc0
+    ranges := network.Policy.{connect_count = 2}
+    ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP, 0, 65535)
+    ranges.connect[1] = network.range_rule(site, 64, network.TRANSPORT_TCP, 0, 65535)
+    return network.narrow(service.end, port, &ranges)
 }
 
 /**
@@ -426,4 +452,146 @@ serve_echo :: fn(service: os.Channel[network.Network]) {
     net.close_listener(&listener)
     address :: accepted.remote.address.bytes
     runtime.log_info("echoed % bytes back to %.%.%.%", echoed, address[0], address[1], address[2], address[3])
+}
+
+/**
+ * Reach the TLS peer by each of its names, its certificate checked against the trust store: the RSA and P-256 ones
+ * reached, what's written echoed; the rest refused, each for its reason.
+ *
+ * @param service The connection to the network service, which allows everything; narrowed to QEMU's ranges.
+ * @param trust The trust store; with none, that's logged and nothing's tried.
+ * @param port The TLS peer's port.
+ */
+use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_dir.ReadOnlyDir]?, port: u16) {
+    loaded :: match trust {
+        case Some(store) => net.load_anchors(store)
+        case None => null
+    }
+    anchors :: match loaded {
+        case Some(found) => found
+        case None => {
+            runtime.log_info("no trust anchors")
+            return void
+        }
+    }
+    defer runtime.free(anchors)
+    runtime.log_info("% bytes of trust anchors", anchors.count)
+    startup :: slop_os.startup_block()
+    port_for_narrowing :: os.port_for(startup.budget, service.end) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port_for_narrowing))
+    local :: qemu_ranges(service, port_for_narrowing) or_return void
+    for name in string.["rsa.slopos.test", "ecdsa.slopos.test"] {
+        match net.connect_tls(local, name, port, net.anchor_bytes(anchors)) {
+            case Ok(found) => {
+                stream := found
+                message :: "hello over TLS"
+                written :: net.write_tls(&stream, string_bytes(message))
+                back : u8[64]
+                got := cast[usize](0)
+                loop {
+                    at :: got
+                    if at >= string_bytes(message).count || at >= back.count {
+                        break
+                    }
+                    count :: net.read_tls(&stream, back[at..<back.count]) or_else 0
+                    if count == 0 {
+                        break
+                    }
+                    got = at + count
+                }
+                while true
+                whole :: written == string_bytes(message).count && got == written && string_of(&back[0], got) == message
+                runtime.log_info("% reached over TLS, its certificate checked, %", name, if whole { "its echo whole" } else { "its echo wrong" })
+                net.close_tls(&stream)
+            }
+            case Error(failure) => log_tls_failure(name, failure)
+        }
+    }
+    for name in string.["wrong.slopos.test", "expired.slopos.test", "stranger.slopos.test"] {
+        match net.connect_tls(local, name, port, net.anchor_bytes(anchors)) {
+            case Ok(found) => {
+                stream := found
+                net.close_tls(&stream)
+                runtime.log_info("% was reached over TLS", name)
+            }
+            case Error(failure) => log_tls_failure(name, failure)
+        }
+    }
+}
+
+/**
+ * Log why a TLS connection failed: the network's failure, its name being wrong, or its certificate's verdict and the
+ * alert.
+ *
+ * @param name The host's name.
+ * @param failure Why.
+ */
+log_tls_failure :: fn(name: string, failure: net.TlsFailure) {
+    match failure.network {
+        case Some(why) => runtime.log_info("% wasn't reached: %", name, why)
+        case None => {
+            if failure.wrong_name {
+                runtime.log_info("% refused over TLS: its certificate's for another name, alert %", name, failure.alert)
+            }
+            else {
+                runtime.log_info("% refused over TLS: %, alert %", name, failure.certificate, failure.alert)
+            }
+        }
+    }
+}
+
+/** The identity test_network's TLS server is, its chain where a connection can keep pointing at it. */
+Served :: struct {
+    chain : u8[4096],
+}
+
+/**
+ * Serve TLS on port 443 as machine.slopos.test, once: echo back what's read, until the peer's closed.
+ *
+ * @param service The connection to the network service.
+ */
+serve_tls :: fn(service: os.Channel[network.Network]) {
+    served :: runtime.new(Served)
+    defer runtime.free(served)
+    if MACHINE_CHAIN.count > served.chain.count {
+        runtime.log_info("machine.slopos.test's chain doesn't fit")
+        return void
+    }
+    for byte, i in MACHINE_CHAIN {
+        if i < served.chain.count {
+            served.chain[i] = byte
+        }
+    }
+    identity := tls.identity_of(.P256, tls.range(served.chain, 0, MACHINE_CHAIN.count), MACHINE_KEY[0..<MACHINE_KEY.count])
+    listener := match net.listen(service, 443) {
+        case Ok(found) => found
+        case Error(failure) => {
+            runtime.log_info("couldn't listen on 443: %", failure)
+            return void
+        }
+    }
+    runtime.log_info("serving TLS on 443")
+    accepted := net.accept_tls(&listener, &identity)
+    net.close_listener(&listener)
+    stream := match accepted {
+        case Ok(found) => found
+        case Error(failure) => {
+            log_tls_failure("TLS on 443", failure)
+            return void
+        }
+    }
+    buffer : u8[1024]
+    echoed := cast[usize](0)
+    loop {
+        count :: net.read_tls(&stream, buffer[0..<buffer.count]) or_else 0
+        if count == 0 {
+            break
+        }
+        if count <= buffer.count {
+            echoed += net.write_tls(&stream, buffer[0..<count])
+        }
+    }
+    while true
+    net.close_tls(&stream)
+    runtime.log_info("served TLS as machine.slopos.test, echoing % bytes", echoed)
 }

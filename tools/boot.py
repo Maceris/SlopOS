@@ -42,6 +42,7 @@ import os
 import re
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -67,6 +68,8 @@ KERNEL_FLAGS = [
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_PACKAGE = ROOT / "src" / "build"
+# The TLS boot tests' test authority (decisions/0188, 13f): its root, and the peers' chains and keys
+TLS_PEERS = ROOT / "tools" / "tls_peers"
 # SlopOS needs x86-64-v3 (knowledge/decisions/0003), which QEMU's default CPU model lacks
 DEFAULT_CPU = "max"
 
@@ -494,10 +497,19 @@ class NetworkPeers:
     And a DNS server (13e), on a free loopback UDP port that replaces {dns}: peer.slopos.test is the development
     machine, 10.0.2.2 and QEMU's fec0::2 for it; any other name doesn't exist. QEMU's own DNS at 10.0.2.3 isn't used,
     as it asks the Internet.
+
+    And TLS (13f): a TLS 1.3 echo server on a free loopback port that replaces {tls}, serving the certificate of the name
+    the client asks for (SNI) from tools/tls_peers' test authority: rsa, ecdsa, wrong, expired and stranger.slopos.test,
+    which the DNS peer gives as 10.0.2.2; and a forward to the machine's port 443, which this connects to once the serial
+    output says the machine serves TLS there, checking machine.slopos.test's certificate against the authority's root
+    and the echo of what it sends.
     """
 
     LISTENING = "[user] test_network: listening on 7"
     SENT = 40000
+    SERVING_TLS = "[user] test_network: serving TLS on 443"
+    TLS_SENT = b"hello from the development machine"
+    TLS_NAMES = ["rsa", "ecdsa", "wrong", "expired", "stranger"]
 
     def __init__(self, serial: Path):
         self.serial = serial
@@ -513,15 +525,29 @@ class NetworkPeers:
         self.dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.dns.bind(("127.0.0.1", 0))
         self.forward = free_port()
-        for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.serve_dns, self.connect_in):
+        self.tls = socket.socket()
+        self.tls.bind(("127.0.0.1", 0))
+        self.tls.listen()
+        self.tls_forward = free_port()
+        self.tls_contexts = {}
+        for peer in self.TLS_NAMES:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
+            context.load_cert_chain(TLS_PEERS / f"{peer}.pem")
+            self.tls_contexts[f"{peer}.slopos.test"] = context
+        self.tls_context = self.tls_contexts["ecdsa.slopos.test"]
+        self.tls_context.sni_callback = self.choose_certificate
+        for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.serve_dns, self.connect_in, self.serve_tls,
+                      self.connect_in_tls):
             threading.Thread(target=serve, daemon=True).start()
 
     def words(self, command_line: str) -> str:
         return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1])) \
-            .replace("{tcp_sink}", str(self.sink.getsockname()[1])).replace("{dns}", str(self.dns.getsockname()[1]))
+            .replace("{tcp_sink}", str(self.sink.getsockname()[1])).replace("{dns}", str(self.dns.getsockname()[1])) \
+            .replace("{tls}", str(self.tls.getsockname()[1]))
 
     def qemu_arguments(self) -> list[str]:
-        return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7",
+        return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7,hostfwd=tcp:127.0.0.1:{self.tls_forward}-:443",
                 "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]
 
     def serve_tcp(self) -> None:
@@ -572,7 +598,8 @@ class NetworkPeers:
                 return
 
     # The names the DNS peer knows: each kind's records' data
-    NAMES = {"peer.slopos.test": {1: [bytes([10, 0, 2, 2])], 28: [bytes([0xfe, 0xc0] + [0] * 13 + [2])]}}
+    NAMES = {"peer.slopos.test": {1: [bytes([10, 0, 2, 2])], 28: [bytes([0xfe, 0xc0] + [0] * 13 + [2])]},
+             **{f"{peer}.slopos.test": {1: [bytes([10, 0, 2, 2])]} for peer in TLS_NAMES}}
 
     def serve_dns(self) -> None:
         while True:
@@ -605,6 +632,54 @@ class NetworkPeers:
         answers = b"".join(b"\xc0\x0c" + kind.to_bytes(2, "big") + (1).to_bytes(2, "big") + (300).to_bytes(4, "big")
                            + len(data).to_bytes(2, "big") + data for data in found)
         return header + query[12:end] + answers
+
+    def choose_certificate(self, connection: ssl.SSLObject, name: str | None, _: ssl.SSLContext) -> None:
+        connection.context = self.tls_contexts.get(name or "", self.tls_context)
+
+    def serve_tls(self) -> None:
+        while True:
+            try:
+                connection, _ = self.tls.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.echo_tls, args=(connection,), daemon=True).start()
+
+    def echo_tls(self, connection: socket.socket) -> None:
+        """Echo over TLS until the client's close_notify, then send one; a client that refuses the handshake ends it."""
+        try:
+            with self.tls_context.wrap_socket(connection, server_side=True) as secure:
+                while True:
+                    data = secure.recv(65536)
+                    if not data:
+                        break
+                    secure.sendall(data)
+                secure.unwrap()
+        except (OSError, ssl.SSLError):
+            pass
+
+    def connect_in_tls(self) -> None:
+        while True:
+            written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+            if self.SERVING_TLS in written:
+                break
+            time.sleep(0.2)
+        context = ssl.create_default_context(cafile=str(TLS_PEERS / "root.pem"))
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        try:
+            with socket.create_connection(("127.0.0.1", self.tls_forward), timeout=60) as connection:
+                with context.wrap_socket(connection, server_hostname="machine.slopos.test") as secure:
+                    secure.sendall(self.TLS_SENT)
+                    back = bytearray()
+                    while len(back) < len(self.TLS_SENT):
+                        data = secure.recv(65536)
+                        if not data:
+                            break
+                        back += data
+                    secure.unwrap()
+            if bytes(back) != self.TLS_SENT:
+                self.problem = f"the machine's TLS echo on port 443 gave {len(back)} bytes back of {len(self.TLS_SENT)}, or other bytes"
+        except (OSError, ssl.SSLError) as error:
+            self.problem = f"the machine's TLS on port 443 failed: {error}"
 
     def connect_in(self) -> None:
         while True:
@@ -1118,6 +1193,9 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
     for program in programs:
         shutil.copy(program, system / "modules" / program.name)
     copy_zones(system / "zoneinfo")
+    # The trust store (decisions/0188, 13f), with the TLS boot tests' test root
+    (system / "trust").mkdir()
+    shutil.copy(TLS_PEERS / "root.pem", system / "trust" / "slopos_test_root.pem")
     # The bundle store, with a bundle for every program outside the boot set, which the supervisor loads from it, and
     # with debug_files each one's debug file too (decisions/0185), which a test that debugs asks for
     store_builder = next(image_builder.parent.glob("store_builder*"))

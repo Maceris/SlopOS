@@ -244,13 +244,15 @@ open_by_name :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], p
         _ = slop_os.handle_close(cast[slop_os.Handle](pending.memory))
         return .Refused(.NoRoom)
     }
-    bytes :: take_memory(service, index, pending.memory) or_return .Refused(.BadMemory)
+    bytes :: take_memory(pending.memory) or_return .Refused(.BadMemory)
     stream :: &service.serving.streams[index]
     stream.bytes = bytes
+    stream.memory = pending.memory
     stream.race = race
     // The first address that has a route
     if !start_attempt(service, stack, index) {
-        release_memory(service, index, pending.memory)
+        release_memory(pending.memory)
+        stream.memory = cast[slop_os.Memory](slop_os.NO_HANDLE)
         stream.race = Race.{}
         return .Refused(.NoRoute)
     }
@@ -259,7 +261,8 @@ open_by_name :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], p
         case None => {
             abort_attempts(stack, &stream.race)
             stream.race = Race.{}
-            release_memory(service, index, pending.memory)
+            release_memory(pending.memory)
+            stream.memory = cast[slop_os.Memory](slop_os.NO_HANDLE)
             return .Refused(.NoRoom)
         }
     }
@@ -301,7 +304,7 @@ start_attempt :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], 
         }
         to :: race.candidates[race.next_candidate]
         race.next_candidate += 1
-        match net_stack.tcp_connect(stack, to, race.port, rings_at(service, index, stream.bytes)) {
+        match net_stack.tcp_connect(stack, to, race.port, rings_of(stream.memory, stream.bytes)) {
             case Some(connection) => {
                 race.attempts[place] = connection
                 race.attempt_to[place] = endpoint_of(to, race.port)

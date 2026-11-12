@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a to 13e built, 13f and 13g to come
+Status: accepted, chosen with the project's owner; 13a to 13f built, 13g to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -316,3 +316,48 @@ Built in two parts: names (13e1) and the clock's floor (13e2).
   first, reached by name at 10.0.2.2 after QEMU never connects its IPv6 address, refused through a public-only
   connection, and a missing name; and the floor, the first boot's real-time clock in 2030 saved, the second's in 2001
   starting at the build time and going forward to 2030.
+
+## As Built: 13f
+Built in three parts: TLS 1.3 in Hemera's `std/tls` (13f1, 13f2) and its use on SlopOS (13f3).
+- **`std/tls`**, Freestanding: a `Connection` is a state machine its caller feeds what arrives (`received`) and takes
+  what to send from (`output`, `sent`); nothing in it waits, allocates or makes a system call, so it's tested in
+  memory and runs over SlopOS's TCP alike. Some 300 KiB, so on the heap. The suites TLS_AES_128_GCM_SHA256,
+  TLS_AES_256_GCM_SHA384 and TLS_CHACHA20_POLY1305_SHA256; X25519 and P-256 with HelloRetryRequest; signatures ECDSA
+  on P-256 and P-384, RSA-PSS (and PKCS #1 in certificates) and Ed25519, of which a server signs with P-256 or
+  Ed25519. KeyUpdate both ways, close_notify, compatibility mode's ChangeCipherSpec. **Verification is part of
+  connecting**: `client(connection, host, anchors, now)` checks the chain with 13d's `x509_verify_chain` and the leaf
+  with `x509_matches_host`, refusing with the alert for the verdict (bad_certificate, certificate_expired, unknown_ca,
+  ...); `client_unverified` is the function of another name. No resumption, no 0-RTT, no client certificates (a client
+  asked for one sends none). A server takes an `Identity` (`identity_of(kind, chain, key)`), and a suite or group to
+  insist on, for tests. A server whose identity has no chain ends with internal_error rather than send an empty
+  Certificate, which OpenSSL refuses (`LENGTH_MISMATCH`), as the boot test found.
+- **`std/net`'s TLS** (`tls_stream.hsc`, SlopOS only): `connect_tls(network, host, port, anchors)` connects by name
+  (or an IPv4 address's text) and runs the handshake to its end; `accept_tls(listener, identity)` serves one;
+  `read_tls`, `write_tls`, `close_tls`, which waits until the peer's acknowledged everything before closing the TCP
+  connection, as closing one that hasn't ended resets it and could lose the close_notify. A failure is a `TlsFailure`:
+  the TCP connection's, or the alert, the certificate's verdict and whether the name was wrong.
+- **The trust store is a capability**, as planned: `load_anchors(trust)` reads every file of a read-only directory,
+  PEM (each CERTIFICATE) or DER, into anchors, up to 256 KiB of them. The system volume's `trust` directory is it; the
+  supervisor narrows it to a `read_only_dir` (`trust_store`) and gives it to programs that take one, test_network for
+  now, and records it as served by the supervisor so the system records check. The boot disk's holds the test root.
+- **Found, the network service:** a stream's rings were the program's memory mapped into the service, through a
+  duplicate handle, which doesn't own the memory (`0054`): a program that closed its stream with data still to send
+  destroyed the memory, and the service faulted resending from it, so any program could crash the network. The stack
+  now copies to and from a stream's memory through the kernel (`memory_read`, `memory_write`), as stream readers do
+  (`0165`), and nothing's mapped: a copy that fails resets that connection only. A copy is a system call per segment,
+  which costs nothing measurable: `tcp_send_4mib` took 264 ms on x86-64 and 688 ms on AArch64, against 282 ms and
+  750 ms mapped, wall time on the same host.
+- **Tests:** hosted (Hemera's `tls` scenario, 9 tests): RFC 8448's Simple 1-RTT Handshake replayed as a client, every
+  secret, record and the application data matching (its 1024-bit RSA key let through by a flag only the replay sets,
+  as 13d refuses keys under 2048 bits), and as a server up to its ServerHello; a client and a server in memory over each
+  suite, Ed25519, a HelloRetryRequest, data both ways, KeyUpdate and close_notify; chains refused as expired, for
+  another name, from an unknown root and signed by another key; a changed record refused; a server without a chain;
+  and random bytes. Boot, on both architectures, from a disk (the trust store's on the system volume): boot.py serves a
+  TLS 1.3 echo choosing its certificate by SNI from `tools/tls_peers`' test authority (`make_authority.py`, Python's
+  cryptography): test_network reaches `rsa.slopos.test` and `ecdsa.slopos.test` by name, their chains checked against
+  the trust store and their echoes whole, and refuses `wrong.slopos.test` (alert 42), `expired.slopos.test` (45) and
+  `stranger.slopos.test` (48); then serves TLS on port 443 as `machine.slopos.test`, which boot.py's Python client
+  verifies against the root, its echo checked, closing with close_notify both ways.
+- **For the owner:** Python's ssl (OpenSSL 3.0) refused the test authority's certificates without key identifiers
+  (Authority and Subject Key Identifier), so `make_authority.py` adds them; `std/crypto` doesn't need them. The service
+  copying rather than mapping is a change to 13c's design, made here for the crash.

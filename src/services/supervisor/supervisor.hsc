@@ -58,6 +58,7 @@ import slop_os from "std/os"
 import terminal from "std/os/slop_os"
 import network from "std/os/slop_os"
 import dir from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
 import files from "std/os/slop_os"
 import process_manager from "std/os/slop_os"
 import read_only_file from "std/os/slop_os"
@@ -372,6 +373,8 @@ TestNetworkGrants :: struct {
     network : os.Channel[connector.Connector]?,
     /** A read-only copy of the kernel's command line, for the peers' ports. */
     command_line : slop_os.Memory?,
+    /** The trust store, the system volume's "trust" directory, read only; null without a system volume. */
+    trust : os.Channel[read_only_dir.ReadOnlyDir]?,
 }
 
 /** What the terminal service is given (terminal_service.main); its handles move to the service at its launch. */
@@ -3275,6 +3278,34 @@ keep_time :: fn(supervisor: ptr[mut Supervisor]) {
 }
 
 /**
+ * Give the trust store (decisions/0188, 13f): the system volume's "trust" directory, made if it isn't there, read only,
+ * whose files are the roots a TLS connection's certificate is checked against.
+ *
+ * @param supervisor The supervisor, with a system volume.
+ * @return A read-only connection to it, the caller's; null without a system volume, or if it couldn't be opened.
+ */
+trust_store :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[read_only_dir.ReadOnlyDir]? {
+    directory :: system_directory(supervisor, "trust") or_return null
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](directory.end))
+    port :: os.port_for(supervisor.block.budget, directory.end) or_return null
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    os.begin[dir.Request](&out)^ = .Narrow
+    if dir.send_request(directory.end, port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    match dir.receive_response(directory.end, port, &into, true) {
+        case Received => {}
+        case _ => return null
+    }
+    return match os.message_of[dir.Response](&into)^ {
+        case Narrowed(made) => made
+        case _ => null
+    }
+}
+
+/**
  * Lend a CPU budget to a dir connection, with Lend, and wait for the answer.
  *
  * @param supervisor The supervisor, whose budget pays for the port the answer is waited on.
@@ -4546,7 +4577,8 @@ start_test_network :: fn(supervisor: ptr[mut Supervisor]) {
         return void
     }
     service :: service_named(supervisor, "test_network") or_return void
-    grants := TestNetworkGrants.{log = duplicate_log(supervisor), network = connector_to(supervisor, supervisor.network)}
+    grants := TestNetworkGrants.{log = duplicate_log(supervisor), network = connector_to(supervisor, supervisor.network),
+        trust = trust_store(supervisor)}
     match supervisor.command_line {
         case Some(text) => {
             text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
