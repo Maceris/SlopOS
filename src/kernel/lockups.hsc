@@ -47,6 +47,36 @@ check_lockups :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
             arch.spin_hint()
         }
     }
+    check_others(kernel, cpu, now)
+}
+
+/**
+ * While this CPU waits on the others with interrupts off, as a TLB shootdown does for their flushes, note that it's
+ * making progress and check them itself: its ticks don't come, and a stuck CPU it waits on would otherwise stop it
+ * too, with nothing left ticking to see either (called in the wait's loop).
+ *
+ * @param kernel The kernel.
+ * @param cpu The calling CPU, which waits.
+ */
+check_lockups_while_waiting :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) {
+    now :: arch.counter()
+    intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
+    check_others(kernel, cpu, now)
+}
+
+/**
+ * Check every other CPU ticked within LOCKUP_SECONDS, but those idle without ticking, and report the first that
+ * didn't, stopping the kernel.
+ *
+ * @param kernel The kernel.
+ * @param cpu The calling CPU, which isn't checked.
+ * @param now The counter now.
+ */
+check_others :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
+    // Before the counter's frequency is known, there's no telling how long a CPU hasn't ticked
+    if kernel.counter_frequency == 0 {
+        return void
+    }
     limit :: LOCKUP_SECONDS * kernel.counter_frequency
     per_cpus :: kernel.per_cpus
     for address, index in per_cpus {

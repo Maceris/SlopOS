@@ -21,7 +21,9 @@ import shootdowns from "shootdowns"
  * flushes when the IPI takes it from idle, or while it waits for a shootdown of its own to start,
  * so two CPUs starting shootdowns at once don't wait on each other. Since the kernel runs with
  * interrupts disabled, a CPU holding a lock another waits for could wait for that one forever, so
- * a shootdown starts with no other lock held. Its handshake is the shootdowns package's.
+ * a shootdown starts with no other lock held. Its handshake is the shootdowns package's. While it
+ * waits, interrupts off, its ticks don't come, so it checks the other CPUs for lockups itself
+ * (lockups.hsc): one stuck with interrupts off never flushes, and would stop it too.
  */
 
 /** The kernel's one TLB shootdown at a time: the batch being flushed and who hasn't flushed it yet. */
@@ -36,8 +38,9 @@ Shootdown :: struct {
  * Flush a batch from every online CPU's TLB, this one's included, and return once they all have.
  *
  * Waits for any other shootdown to finish first, flushing for it meanwhile, so two CPUs starting shootdowns at once
- * don't wait on each other. Each other online CPU is sent a TlbFlush IPI and spun on until it has flushed. Called with
- * no lock held, since a CPU holding one another CPU waits for, with interrupts off, would never take the IPI.
+ * don't wait on each other. Each other online CPU is sent a TlbFlush IPI and spun on until it has flushed, a CPU
+ * that's stuck and never does reported as a lockup, which stops the kernel. Called with no lock held, since a CPU
+ * holding one another CPU waits for, with interrupts off, would never take the IPI.
  *
  * @param kernel The kernel, whose shootdown state and online CPUs are used.
  * @param batch The TLB entries to flush, copied before the IPIs go, so it needn't outlive the call.
@@ -46,6 +49,7 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
     cpu :: per_cpu()
     loop {
         flush_for_shootdown(cpu)
+        check_lockups_while_waiting(kernel, cpu)
         arch.spin_hint()
     }
     while !shootdowns.try_start(&kernel.shootdown.handshake)
@@ -70,6 +74,7 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
     }
     arch.flush_tlb(&kernel.shootdown.batch)
     loop {
+        check_lockups_while_waiting(kernel, cpu)
         arch.spin_hint()
     }
     while !shootdowns.all_flushed(&kernel.shootdown.handshake)

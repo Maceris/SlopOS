@@ -11,7 +11,8 @@ import test_kit from "../../test_kit"
  * Float math's tiers (decisions/0190), each "perf: math_<function>_<tier> <nanoseconds>" for a thousand values from
  * -10 to 10, as a renderer's shading gives them: std/math's f32 one at a time (f32), eight at a time (f32x8),
  * std/math/fast's eight at a time (fast_f32x8), and the same in f64 with four lanes (f64, f64x4, fast_f64x4). Under
- * -icount they're instruction counts, which only arithmetic moves.
+ * -icount they're instruction counts, which only arithmetic moves: each tier runs once before it's measured, so its
+ * code's pages are touched and their faults aren't counted.
  */
 
 /** How many values each tier is measured on. */
@@ -42,6 +43,9 @@ keep :: fn(value: f64) {
  */
 time_f32 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]], function: (fn(x: f32) -> f32)) {
     sum := 0.0
+    for value in values^ {
+        sum += cast[f64](function(value))
+    }
     start :: test_kit.clock_now()
     for value in values^ {
         sum += cast[f64](function(value))
@@ -56,10 +60,15 @@ time_f32x8 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUE
     function: (fn(x: vector[f32, 8]) -> vector[f32, 8])) {
 
     sum := 0.0
-    start :: test_kit.clock_now()
-    for i in 0..<MATH_VALUES / 8 {
-        results :: bit_cast[f32[8]](function(bit_cast[vector[f32, 8]](cast[ptr[f32[8]]](&values[i * 8])^)))
-        sum += cast[f64](results[0] + results[7])
+    start := test_kit.clock_now()
+    for pass in 0..<2 {
+        if pass == 1 {
+            start = test_kit.clock_now()
+        }
+        for i in 0..<MATH_VALUES / 8 {
+            results :: bit_cast[f32[8]](function(bit_cast[vector[f32, 8]](cast[ptr[f32[8]]](&values[i * 8])^)))
+            sum += cast[f64](results[0] + results[7])
+        }
     }
     took :: test_kit.clock_now() - start
     keep(sum)
@@ -69,6 +78,9 @@ time_f32x8 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUE
 /** The same in f64, one value at a time. */
 time_f64 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]], function: (fn(x: f64) -> f64)) {
     sum := 0.0
+    for value in values^ {
+        sum += function(cast[f64](value))
+    }
     start :: test_kit.clock_now()
     for value in values^ {
         sum += function(cast[f64](value))
@@ -83,11 +95,16 @@ time_f64x4 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUE
     function: (fn(x: vector[f64, 4]) -> vector[f64, 4])) {
 
     sum := 0.0
-    start :: test_kit.clock_now()
-    for i in 0..<MATH_VALUES / 4 {
-        narrow :: bit_cast[vector[f32, 4]](cast[ptr[f32[4]]](&values[i * 4])^)
-        results :: bit_cast[f64[4]](function(cast[vector[f64, 4]](narrow)))
-        sum += results[0] + results[3]
+    start := test_kit.clock_now()
+    for pass in 0..<2 {
+        if pass == 1 {
+            start = test_kit.clock_now()
+        }
+        for i in 0..<MATH_VALUES / 4 {
+            narrow :: bit_cast[vector[f32, 4]](cast[ptr[f32[4]]](&values[i * 4])^)
+            results :: bit_cast[f64[4]](function(cast[vector[f64, 4]](narrow)))
+            sum += results[0] + results[3]
+        }
     }
     took :: test_kit.clock_now() - start
     keep(sum)

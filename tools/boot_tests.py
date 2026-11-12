@@ -151,11 +151,11 @@ BOOT_DISK_BASE = [
     "--timeout=120",
     "--command-line=test_exit test_services no_disk_check",
     "--disk=SlopOS disk check: from the host",
-    "--expect-line=[user] virtio_blk: serving 206848 blocks",
-    "--expect-line=[user] partition_server: 4 partitions on a disk of 206848 blocks",
+    "--expect-line=[user] virtio_blk: serving 272384 blocks",
+    "--expect-line=[user] partition_server: 4 partitions on a disk of 272384 blocks",
     "--expect-line=[user] storage_manager: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
     "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 131072 blocks from 6144",
-    "--expect-line=[user] storage_manager: disk 0 partition 3: SlopOS system, 65536 blocks from 137216",
+    "--expect-line=[user] storage_manager: disk 0 partition 3: SlopOS system, 131072 blocks from 137216",
     "--expect-line=[user] storage_manager: started a FAT server for disk 0 partition 2",
     "--expect-line=[user] fat_server: serving a FAT32 volume of 128992 clusters of 512 bytes",
     "--expect-line=[user] fat_server: FSInfo's free count is the FAT's",
@@ -181,9 +181,9 @@ TEST_DEBUG_CRASH_LINE = 85
 # The line of test_debug.hsc the debugger breaks at, where its values are all made and kept in memory
 TEST_DEBUG_BREAK_LINE = 61
 # BOOT_DISK_BASE with the programs' debug files in the store (decisions/0185), on a disk boot.py makes bigger for them
-WITH_DEBUG_FILES = [argument.replace("serving 206848 blocks", "serving 305152 blocks")
-                    .replace("partitions on a disk of 206848 blocks", "partitions on a disk of 305152 blocks")
-                    .replace("SlopOS system, 65536 blocks", "SlopOS system, 163840 blocks") for argument in BOOT_DISK_BASE]
+WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 370688 blocks")
+                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 370688 blocks")
+                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 229376 blocks") for argument in BOOT_DISK_BASE]
 
 # What the disk check says, and writes, which the tests of booting a disk itself check
 DISK_CHECK_LINES = [

@@ -1002,7 +1002,7 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 # The disk the image builder makes to boot from, in 512-byte sectors (decisions/0088): the disk check's two partitions
 # where make_disk has them, the EFI system partition with the bootloader, the generations, the modules and the disk
 # check's files, and a SlopOS container whose system volume holds the modules
-BOOT_DISK_SECTORS = 206848
+BOOT_DISK_SECTORS = 272384
 # The programs the bootloader loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
 BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "storage_manager", "partition_server",
@@ -1010,7 +1010,9 @@ BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", 
 # The system configuration, which the build writes beside the programs
 SYSTEM_RECORDS = "system.records"
 BOOT_ESP_SECTORS = 131072
-BOOT_SYSTEM_SECTORS = 65536
+# 64 MiB: every program twice, as modules and in the bundle store, generation 1's objects and a staged generation's,
+# with room to grow (31 MiB of 32 was full on 2026-11-11, and a staged generation didn't fit)
+BOOT_SYSTEM_SECTORS = 131072
 # With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185)
 DEBUG_FILES_SECTORS = 98304
 
