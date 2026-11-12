@@ -1452,7 +1452,7 @@ TESTS = [
     program_test("gives an entry's parameters that aren't handles as values", "test_values", 1),
     program_test("streams typed records and bytes between programs, with backpressure", "test_streams", 1),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager", 3),
-    program_test("measures the kernel's benchmarks", "test_perf", 4),
+    program_test("measures the kernel's benchmarks", "test_perf", 5),
     program_test("drives a device from user mode with the platform capability", "test_devices", 3, "test_device"),
     # QEMU's edu device, its DMA reaching all of memory, which starts at 1 GiB on virt
     program_test("drives a PCIe device's MSI and DMA from user mode", "test_msi_dma", 2,

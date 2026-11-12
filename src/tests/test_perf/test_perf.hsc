@@ -8,7 +8,9 @@
  * - page_fault: a touch of a page of anonymous memory nothing has touched: per page;
  * - thread_create: a thread made, started, ended, and seen to end: per thread;
  * - process_create: a copy of the program launched through the process manager, ending at once as one given nothing
- *   it needs does, and seen to end: per process.
+ *   it needs does, and seen to end: per process;
+ * - math_<function>_<tier>: float math's sin, exp and log in each tier (decisions/0190; float_math.hsc): per thousand
+ *   values.
  */
 package test_perf
 
