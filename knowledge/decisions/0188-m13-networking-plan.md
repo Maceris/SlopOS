@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a to 13f built, 13g to come
+Status: accepted, chosen with the project's owner; 13a to 13f built, 13g and 13h to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -114,6 +114,28 @@ Seven stages, each with an as-built record:
 - **13g, NTP with NTS** in the clock service (RFC 5905, 8915), through its own narrowed network connection: NTS-KE over
   `std/tls`, then authenticated NTP, the clock stepped or slewed.
   - **Tests:** the clock set from chrony on the Linux test VM over NTS, and a forged answer refused.
+- **13h, a security review of M13's code**, added 2026-11-12 by the project's owner, after 13f found that any program
+  could crash the network service (its streams' memory mapped through a handle that didn't own it). A pass over all of
+  it, looking for vulnerabilities and bugs:
+  - **What's read:** the virtio-net driver; the stack (`src/net_stack`: Ethernet, ARP, IPv4 and IPv6, ICMP, neighbour
+    discovery, DHCPv4, SLAAC, TCP, UDP, DNS); the network service (its protocols, policies, Happy Eyeballs, streams,
+    listeners and sockets); `std/net`, `std/tls` and 13d's crypto (X.509, DER, PEM, RSA, P-256, AES-GCM); and NTS, 13g.
+  - **What's looked for:** memory safety past what Hemera proves (use after free, a handle or memory another process
+    can destroy, reads through rawptr and views of others' memory); anything a peer on the network can do with crafted
+    packets (remote code execution, crashes, hangs, unbounded memory or CPU, state that grows without limit, SYN and
+    fragment floods, amplification); anything a program can do to the service or to other programs through the
+    protocols (crashing it, starving others, escaping its policy, reaching an address the rebinding rule should
+    refuse, keeping resources after it's gone); DNS cache poisoning and spoofed answers; TLS's state machine (messages
+    out of order, downgrades, truncation, renegotiation-like tricks, alerts), its certificate checks, and secrets in
+    constant time; and integer overflow in lengths, sequence numbers and windows.
+  - **Testing better:** fuzz targets for `tools/fuzz.py` (`hemera --fuzz`) where input comes from outside: frames into
+    the stack, TCP segments into a connection in each state, DHCP, router advertisements and DNS answers, the
+    network protocols' messages from a program, TLS records and handshake messages from a peer, DER and X.509, and
+    PEM; and tests for each bug found, hosted where it can be, booted where it can't.
+  - **What comes of it:** each finding fixed, or recorded with why not; a written account in this decision's As Built
+    for 13h, what was read, found and fixed, and what's left.
+  - **Tests:** the new fuzz targets run clean for a set time each; the new tests; and M13's full suites after it, as
+    its last stage.
 
 13d is Hemera's and needs nothing of 13a to 13c, so it may be built alongside them.
 
