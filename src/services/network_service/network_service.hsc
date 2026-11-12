@@ -12,6 +12,10 @@
  * data is in the program's memory, mapped here at an address slot of the connection's, MAX_MEMORY each, so addresses
  * are reused as connections come and go.
  *
+ * Names are resolved by the stack's resolver, 13e (names.hsc): Resolve gives a name's addresses, and OpenName connects
+ * to them as Happy Eyeballs does. Its DNS servers are DHCP's and routers', or dns=<address>:<port> on the kernel's
+ * command line in their place.
+ *
  * With test_ping on the kernel's command line, it pings the IPv4 router once it has a lease, and the IPv6 router once
  * it has a global address, and logs their answers.
  */
@@ -88,8 +92,12 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
     service.nic = cast[slop_os.Channel](slop_os.NO_HANDLE)
     service.port = slop_os.port_create(startup.budget) or_return 2
     _ = service_kit.watch_stop(service.port)
+    text := ""
     match command_line {
-        case Some(memory) => service.test_ping = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_ping")
+        case Some(memory) => {
+            text = service_kit.text_of(startup, memory) or_else ""
+            service.test_ping = service_kit.has_word(text, "test_ping")
+        }
         case None => {}
     }
     if !start_serving(service, clients) {
@@ -99,6 +107,10 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
         case Some(dialing) => take_nic(service, dialing)
         case None => runtime.log_info("no network interface")
     }
+    match service.stack {
+        case Some(stack) => configure_dns(stack, text)
+        case None => {}
+    }
     into := os.Incoming.{}
     loop {
         take_answers(service, &into)
@@ -106,6 +118,7 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
         match service.stack {
             case Some(stack) => {
                 net_stack.tick(stack, now())
+                race_on(service, stack)
                 pump(service, stack)
             }
             case None => {}
@@ -301,7 +314,9 @@ pump :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
             request(service, .Send(net.Frame.{slot = slot, length = cast[u32](length)}))
         }
     }
-    deadline :: net_stack.next_deadline(stack)
+    stack_deadline :: net_stack.next_deadline(stack)
+    racing :: race_deadline(service)
+    deadline :: if racing < stack_deadline { racing } else { stack_deadline }
     if deadline != ~cast[u64](0) {
         _ = slop_os.port_set_timer(service.port, TIMER_KEY, deadline)
     }
@@ -355,6 +370,10 @@ report :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], happene
         }
         case Ended(ended) => {
             connection_ended(service, ended)
+            return void
+        }
+        case Resolved(lookup) => {
+            lookup_done(service, stack, lookup)
             return void
         }
         case EchoReplied(echo) => {
@@ -449,6 +468,8 @@ Stream :: struct {
     ending : tcp_stream.Ending,
     final : tcp_stream.Progress,
     remote : net_address.Endpoint,
+    /** For a connection by name, its addresses' race (names.hsc); not racing for any other. */
+    race : Race,
 }
 
 /** A listening port a program holds. */
@@ -487,6 +508,8 @@ Serving :: struct {
     streams : Stream[STREAMS],
     listeners : ListenerSlot[LISTENERS],
     sockets : SocketSlot[SOCKETS],
+    /** Resolves and OpenNames waiting for their lookups (names.hsc). */
+    pending : Pending[PENDING],
     /** Each stream's address slot, MAX_MEMORY apart, from slots on; 0 if they couldn't be reserved. */
     slots : u64,
 }
@@ -566,6 +589,7 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 continue
             }
             case _ => {
+                drop_lookups(service, index)
                 service_kit.drop_client(&serving.clients, index)
                 return void
             }
@@ -596,6 +620,29 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 answer_network(service, end, if allowed { another_connection(service, wanted) } else { network.Response.Refused(.NotAllowed) })
             }
             case Copy => answer_network(service, end, another_connection(service, policy^))
+            case Resolve(asked) => {
+                if !network.allows_resolve(policy) {
+                    answer_network(service, end, .Refused(.NotAllowed))
+                    continue
+                }
+                v4 :: cast[u8](asked.kinds) & 1 != 0
+                v6 :: cast[u8](asked.kinds) & 2 != 0
+                match start_lookup(service, index, end, os.items(into, asked.name), v4, v6, false, 0, cast[slop_os.Memory](slop_os.NO_HANDLE)) {
+                    case Some(refusal) => answer_network(service, end, .Refused(refusal))
+                    case None => {}
+                }
+            }
+            case OpenName(named) => {
+                if !network.allows_resolve(policy) {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](named.memory))
+                    answer_network(service, end, .Refused(.NotAllowed))
+                    continue
+                }
+                match start_lookup(service, index, end, os.items(into, named.name), true, true, true, named.port, named.memory) {
+                    case Some(refusal) => answer_network(service, end, .Refused(refusal))
+                    case None => {}
+                }
+            }
             case Connect(connection) => {
                 /*
                  * Through the listener, the first client: everything allowed, as the supervisor gives the listener only
@@ -945,7 +992,13 @@ serve_stream :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 net_stack.tcp_finish(stack, stream.connection)
             }
             case Abort => if !stream.ended {
-                net_stack.tcp_abort(stack, stream.connection)
+                if stream.race.racing {
+                    abort_attempts(stack, &stream.race)
+                    stream.race.racing = false
+                }
+                else {
+                    net_stack.tcp_abort(stack, stream.connection)
+                }
             }
             case Describe => {
                 out := os.Outgoing.{}
@@ -977,10 +1030,11 @@ free_stream_entry :: fn(service: ptr[mut Service], index: usize) {
     stream :: &service.serving.streams[index]
     if !stream.ended {
         match service.stack {
-            case Some(stack) => net_stack.tcp_abort(stack, stream.connection)
+            case Some(stack) => if stream.race.racing { abort_attempts(stack, &stream.race) } else { net_stack.tcp_abort(stack, stream.connection) }
             case None => {}
         }
     }
+    stream.race = Race.{}
     _ = slop_os.port_unbind(service.port, STREAM_KEY + cast[u64](index))
     _ = slop_os.handle_close(cast[slop_os.Handle](stream.end))
     stream.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -998,8 +1052,8 @@ free_stream_entry :: fn(service: ptr[mut Service], index: usize) {
  * @return The stream's index; null if no stream has it.
  */
 stream_of :: fn(service: ptr[Service], connection: u32) -> usize? {
-    for each, i in service.serving.streams {
-        if cast[slop_os.Handle](each.end) != slop_os.NO_HANDLE && !each.ended && each.connection == connection {
+    for &each, i in service.serving.streams {
+        if cast[slop_os.Handle](each.end) != slop_os.NO_HANDLE && !each.ended && (each.connection == connection || is_attempt(each, connection)) {
             return i
         }
     }
@@ -1017,7 +1071,12 @@ take_stack_news :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]
     loop {
         connection :: net_stack.take_changed(stack) or_break
         match stream_of(service, connection) {
-            case Some(index) => answer_watch(service, index)
+            case Some(index) => {
+                if index < service.serving.streams.count && service.serving.streams[index].race.racing {
+                    attempt_changed(service, stack, index, connection)
+                }
+                answer_watch(service, index)
+            }
             case None => {}
         }
     }
@@ -1041,6 +1100,13 @@ connection_ended :: fn(service: ptr[mut Service], ended: net_stack.TcpEnded) {
         return void
     }
     stream :: &service.serving.streams[index]
+    if stream.race.racing {
+        stack :: service.stack or_return void
+        if !attempt_ended(service, stack, index, ended) {
+            answer_watch(service, index)
+            return void
+        }
+    }
     connected :: ended.why == .Closed || ended.why == .Reset || ended.why == .Aborted
     stream.final = tcp_stream.Progress.{delivered = ended.delivered, acknowledged = ended.acknowledged, connected = connected,
         peer_finished = ended.why == .Closed, ending = ending_of(ended.why)}

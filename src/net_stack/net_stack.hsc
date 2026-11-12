@@ -16,6 +16,8 @@
  * The network layer for one Ethernet interface: addresses by DHCPv4 and SLAAC, neighbours by ARP and neighbour
  * discovery, and pings, as a state machine driven by frames, time and its caller's requests.
  *
+ * Names are looked up by the resolver (dns.hsc), over the stack's own UDP.
+ *
  * SPEC: RFC 826 (ARP), RFC 791 (IPv4), RFC 792 (ICMP), RFC 1122 (hosts), RFC 2131 and 2132 (DHCP), RFC 8200 (IPv6),
  *     RFC 4443 (ICMPv6), RFC 4861 (neighbour discovery), RFC 4862 (SLAAC), RFC 7217 (stable interface identifiers),
  *     RFC 4291 (IPv6 addressing), RFC 1071 (the Internet checksum)
@@ -160,6 +162,8 @@ Event :: union {
     Incoming(TcpIncoming),
     /** A TCP connection ended: its number's no longer good, or, closed, in TIME-WAIT. */
     Ended(TcpEnded),
+    /** A lookup's done, by its number: take_resolution gives its result (dns.hsc). */
+    Resolved(u32),
 }
 
 // ---- Its state
@@ -309,6 +313,9 @@ Stack :: struct {
     /** How many times TCP's retransmitted on duplicate acknowledgements or SACK, and on its timer, for tests. */
     fast_retransmits : u64,
     timeouts : u64,
+
+    // Names
+    resolver : Resolver,
 }
 
 /** How the stack is set up. */
@@ -392,6 +399,7 @@ tick :: fn(stack: ptr[mut Stack], now: u64) {
     tick_neighbours(stack, false)
     tick_ipv6(stack)
     tick_tcp(stack)
+    tick_dns(stack)
     for &ping in stack.pings {
         if ping.active && now >= ping.sent + PING_LIFE {
             ping.active = false
@@ -435,6 +443,10 @@ next_deadline :: fn(stack: ptr[Stack]) -> u64 {
         if each.active && each.sent + PING_LIFE < soonest {
             soonest = each.sent + PING_LIFE
         }
+    }
+    dns :: dns_deadline(stack)
+    if dns < soonest {
+        soonest = dns
     }
     return tcp_deadline(stack, soonest)
 }

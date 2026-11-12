@@ -485,6 +485,10 @@ class NetworkPeers:
     {tcp_sink} in the kernel's command line and what's typed and expected; and a forward from a free loopback port to the
     machine's port 7, which this connects to once the serial output says the machine listens there, sending bytes and
     checking they come back. A virtio NIC on that network is added to QEMU's arguments.
+
+    And a DNS server (13e), on a free loopback UDP port that replaces {dns}: peer.slopos.test is the development
+    machine, 10.0.2.2 and QEMU's fec0::2 for it; any other name doesn't exist. QEMU's own DNS at 10.0.2.3 isn't used,
+    as it asks the Internet.
     """
 
     LISTENING = "[user] test_network: listening on 7"
@@ -501,13 +505,15 @@ class NetworkPeers:
         self.sink = socket.socket()
         self.sink.bind(("127.0.0.1", 0))
         self.sink.listen()
+        self.dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.dns.bind(("127.0.0.1", 0))
         self.forward = free_port()
-        for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.connect_in):
+        for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.serve_dns, self.connect_in):
             threading.Thread(target=serve, daemon=True).start()
 
     def words(self, command_line: str) -> str:
         return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1])) \
-            .replace("{tcp_sink}", str(self.sink.getsockname()[1]))
+            .replace("{tcp_sink}", str(self.sink.getsockname()[1])).replace("{dns}", str(self.dns.getsockname()[1]))
 
     def qemu_arguments(self) -> list[str]:
         return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7",
@@ -559,6 +565,41 @@ class NetworkPeers:
                 self.udp.sendto(data, sender)
             except OSError:
                 return
+
+    # The names the DNS peer knows: each kind's records' data
+    NAMES = {"peer.slopos.test": {1: [bytes([10, 0, 2, 2])], 28: [bytes([0xfe, 0xc0] + [0] * 13 + [2])]}}
+
+    def serve_dns(self) -> None:
+        while True:
+            try:
+                query, sender = self.dns.recvfrom(512)
+            except OSError:
+                return
+            answer = self.answer_dns(query)
+            if answer is not None:
+                self.dns.sendto(answer, sender)
+
+    @classmethod
+    def answer_dns(cls, query: bytes) -> bytes | None:
+        """An answer to a query of one question: its records from NAMES, or NXDOMAIN; None for one that isn't read."""
+        if len(query) < 12:
+            return None
+        labels, at = [], 12
+        while at < len(query) and query[at] != 0:
+            length = query[at]
+            labels.append(query[at + 1:at + 1 + length].decode("ascii", "replace").lower())
+            at += 1 + length
+        end = at + 5
+        if end > len(query):
+            return None
+        kind = int.from_bytes(query[at + 1:at + 3], "big")
+        records = cls.NAMES.get(".".join(labels))
+        code = 0 if records is not None else 3
+        found = records.get(kind, []) if records is not None else []
+        header = query[0:2] + bytes([0x81, 0x80 | code]) + (1).to_bytes(2, "big") + len(found).to_bytes(2, "big") + bytes(4)
+        answers = b"".join(b"\xc0\x0c" + kind.to_bytes(2, "big") + (1).to_bytes(2, "big") + (300).to_bytes(4, "big")
+                           + len(data).to_bytes(2, "big") + data for data in found)
+        return header + query[12:end] + answers
 
     def connect_in(self) -> None:
         while True:

@@ -8,7 +8,12 @@
  * - a listener on port 7, which echoes back what the development machine sends through QEMU's forward, once it says
  *   it's listening;
  * - with tcp_sink=<port>, how long SINK_BYTES take to send to the sink there, as "perf: tcp_send_4mib <nanoseconds>",
- *   which tools/perf_tests.py reports.
+ *   which tools/perf_tests.py reports;
+ * - with dns=<address>:<port>, which the network service asks for names (13e), names: peer.slopos.test resolved to the
+ *   development machine's addresses, IPv6's first, and reached by name through a connection allowing QEMU's ranges,
+ *   its IPv6 address, which QEMU never connects, passed over for its IPv4 one as Happy Eyeballs does; the same name
+ *   refused through a connection allowing public addresses only, as it's answered with a private one; and a name
+ *   that doesn't exist.
  *
  * A connection refused isn't among them: QEMU's user-mode network doesn't answer a SYN for a closed port on the
  * development machine at all, so the stack's retries would run a minute to a timeout. net_stack's hosted tests check
@@ -19,6 +24,7 @@ package test_network
 import runtime from "base"
 import net from "std"
 import os from "std"
+import text_buffer from "std"
 import slop_os from "std/os"
 import net_address from "std/os/slop_os"
 import network from "std/os/slop_os"
@@ -58,11 +64,120 @@ main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, co
     peer :: net_address.v4(10, 0, 2, 2)
     echo_tcp(service, net_address.Endpoint.{address = peer, port = tcp_echo})
     echo_udp(service, net_address.Endpoint.{address = peer, port = udp_echo})
+    if service_kit.word_after(text, "dns=") is_some {
+        use_names(service, tcp_echo)
+    }
     serve_echo(service)
     if tcp_sink != 0 {
         measure_send(service, net_address.Endpoint.{address = peer, port = tcp_sink})
     }
     return 0
+}
+
+/** The name the development machine's DNS peer answers with its addresses: fec0::2 and 10.0.2.2. */
+PEER_NAME :: "peer.slopos.test"
+
+/**
+ * Resolve the peer's name, reach its echo by name through a connection allowing QEMU's ranges, and be refused it
+ * through one allowing public addresses only; and resolve a name that doesn't exist.
+ *
+ * @param service The connection to the network service, which allows everything.
+ * @param tcp_echo The echo peer's port.
+ */
+use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
+    startup :: slop_os.startup_block()
+    port :: os.port_for(startup.budget, service.end) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    // QEMU's ranges, 10.0.2.0/24 and fec0::/64, by TCP
+    site := net_address.Address.{family = .V6}
+    site.bytes[0] = 0xfe
+    site.bytes[1] = 0xc0
+    ranges := network.Policy.{connect_count = 2}
+    ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP, 0, 65535)
+    ranges.connect[1] = network.range_rule(site, 64, network.TRANSPORT_TCP, 0, 65535)
+    local :: network.narrow(service.end, port, &ranges) or_return void
+    storage : u8[200]
+    line := text_buffer.make(storage)
+    match net.resolve(local, PEER_NAME) {
+        case Ok(found) => {
+            text_buffer.append_format(&line, "% resolves to", PEER_NAME)
+            for i in 0..<found.count {
+                if i < found.addresses.count {
+                    text_buffer.append(&line, if i == 0 { " " } else { " and " })
+                    append_address(&line, found.addresses[i])
+                }
+            }
+            runtime.log_info("%", text_buffer.as_string(&line))
+        }
+        case Error(failure) => runtime.log_info("% wasn't resolved: %", PEER_NAME, failure)
+    }
+    match net.open_name(local, PEER_NAME, tcp_echo) {
+        case Ok(found) => {
+            tcp := found
+            info :: net.describe(&tcp)
+            message :: "hello by name"
+            _ = net.write(&tcp, string_bytes(message))
+            net.finish(&tcp)
+            back : u8[64]
+            got := cast[usize](0)
+            loop {
+                at :: got
+                if at >= back.count {
+                    break
+                }
+                count :: net.read(&tcp, back[at..<back.count]) or_else 0
+                if count == 0 {
+                    break
+                }
+                got = at + count
+            }
+            while true
+            line = text_buffer.make(storage)
+            text_buffer.append_format(&line, "% reached by name at ", PEER_NAME)
+            match info {
+                case Some(described) => append_address(&line, described.remote.address)
+                case None => text_buffer.append(&line, "an unknown address")
+            }
+            text_buffer.append(&line, if got == string_bytes(message).count && string_of(&back[0], got) == message { ", its echo whole" } else { ", its echo wrong" })
+            runtime.log_info("%", text_buffer.as_string(&line))
+            net.close(&tcp)
+        }
+        case Error(failure) => runtime.log_info("% wasn't reached by name: %", PEER_NAME, failure)
+    }
+    public := network.public_only()
+    outward :: network.narrow(service.end, port, &public) or_return void
+    match net.open_name(outward, PEER_NAME, tcp_echo) {
+        case Ok(found) => {
+            tcp := found
+            net.close(&tcp)
+            runtime.log_info("% was reached through a public-only connection", PEER_NAME)
+        }
+        case Error(failure) => runtime.log_info("% refused through a public-only connection: %", PEER_NAME, failure)
+    }
+    match net.resolve(local, "missing.slopos.test") {
+        case Ok(found) => runtime.log_info("missing.slopos.test resolved to % addresses", found.count)
+        case Error(failure) => runtime.log_info("missing.slopos.test: %", failure)
+    }
+}
+
+/**
+ * Append an address: dotted decimal for IPv4, eight groups in hexadecimal for IPv6.
+ *
+ * @param line Where.
+ * @param address The address.
+ */
+append_address :: fn(line: ptr[mut text_buffer.TextBuffer], address: net_address.Address) {
+    b :: address.bytes
+    if address.family == .V4 {
+        text_buffer.append_format(line, "%.%.%.%", b[0], b[1], b[2], b[3])
+        return void
+    }
+    for group in cast[usize](0)..<8 {
+        if group > 0 {
+            text_buffer.append(line, ":")
+        }
+        text_buffer.append_format(line, "%{x}", (cast[u32](b[group * 2]) << 8) | cast[u32](b[group * 2 + 1]))
+    }
 }
 
 /**

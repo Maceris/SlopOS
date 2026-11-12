@@ -33,6 +33,8 @@ OPTION_SOURCE_LINK : u8 : 1
 OPTION_TARGET_LINK : u8 : 2
 /** Neighbour discovery's option for a prefix. */
 OPTION_PREFIX : u8 : 3
+/** Neighbour discovery's recursive DNS server option (RFC 8106). */
+OPTION_RDNSS : u8 : 25
 /** Neighbour discovery's option for the link's MTU. */
 OPTION_MTU : u8 : 5
 /** The hop limit neighbour discovery's messages are sent and checked with. */
@@ -407,6 +409,17 @@ receive_advertisement :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) 
         }
         if byte_at(options, at) == OPTION_PREFIX && length == 32 {
             take_prefix(stack, part(options, at, at + length))
+        }
+        // Recursive DNS servers (RFC 8106), each 16 bytes after the option's 8, while their lifetime isn't 0
+        if byte_at(options, at) == OPTION_RDNSS && length >= 24 && u32_at(options, at + 4) != 0 {
+            with {
+                server := at + 8
+            }
+            loop {
+                learn_dns_server(stack, .V6(ipv6_at(options, server)))
+                server += 16
+            }
+            while server + 16 <= at + length
         }
         at += length
     }

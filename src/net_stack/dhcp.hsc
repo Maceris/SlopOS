@@ -418,6 +418,9 @@ bind :: fn(stack: ptr[mut Stack], answer: DhcpAnswer) {
     stack.prefix_length = if answer.prefix_length != 0 { answer.prefix_length } else { cast[u8](24) }
     stack.router = answer.router
     stack.dns = answer.dns
+    if !is_zero_ipv4(answer.dns) {
+        learn_dns_server(stack, .V4(answer.dns))
+    }
     if !is_zero_ipv4(answer.server) {
         stack.dhcp_server = answer.server
     }

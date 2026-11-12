@@ -263,11 +263,18 @@ TESTS = [
         "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]),
     # Programs on the network (decisions/0188, 13c): test_network, through the network service and std/net, echoes TCP
     # and UDP off peers on this machine, and echoes back what this machine sends to its port 7 through QEMU's forward,
-    # which boot.py checks (--network-peers); the peers' ports change each time
+    # which boot.py checks (--network-peers); the peers' ports change each time. Names (13e): the DNS peer's name for
+    # this machine resolved, IPv6 first, and reached by name, its IPv6 address, which QEMU never connects, passed over
+    # for IPv4 (Happy Eyeballs); refused through a public-only connection, as it's private; and a name that doesn't exist
     ("reaches peers over TCP and UDP, and serves one, through the network service", 7, [WITH_PROGRAMS, "--network-peers",
-        "--command-line=test_exit test_services test_settle=10 test_network tcp_echo={tcp_echo} udp_echo={udp_echo}",
+        "--command-line=test_exit test_services test_settle=10 test_network tcp_echo={tcp_echo} udp_echo={udp_echo} dns=10.0.2.2:{dns}",
         "--expect-line-start=[user] test_network: TCP echo of 65536 bytes from 10.0.2.2:",
         "--expect-line-start=[user] test_network: UDP echo from 10.0.2.2:",
+        "--expect-line-start=[user] network: the DNS server is 10.0.2.2, port ",
+        "--expect-line=[user] test_network: peer.slopos.test resolves to fec0:0:0:0:0:0:0:2 and 10.0.2.2",
+        "--expect-line=[user] test_network: peer.slopos.test reached by name at 10.0.2.2, its echo whole",
+        "--expect-line=[user] test_network: peer.slopos.test refused through a public-only connection: NotAllowed",
+        "--expect-line=[user] test_network: missing.slopos.test: NoSuchName",
         "--expect-line=[user] test_network: listening on 7",
         "--expect-line=[user] test_network: echoed 40000 bytes back to 10.0.2.2",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),

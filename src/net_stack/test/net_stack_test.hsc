@@ -27,6 +27,9 @@ LEASED_V4 :: net_stack.Ipv4.{bytes = u8.[10, 0, 2, 15]}
 /** The prefix the router advertises: fd00:5105::/64. */
 PREFIX :: net_stack.Ipv6.{bytes = u8.[0xfd, 0, 0x51, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}
 
+/** The DNS server the router's advertisements name: fd00:5105::53. */
+RDNSS_V6 :: net_stack.Ipv6.{bytes = u8.[0xfd, 0, 0x51, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x53]}
+
 /** A frame on its way. */
 Flying :: struct {
     bytes : u8[net_stack.MAX_FRAME],
@@ -62,6 +65,12 @@ World :: struct {
     last_reply : u64,
     /** The host's lease losses and conflicts, which shouldn't happen. */
     trouble : u32,
+    /** The router's DNS server's socket, 0 while it has none (dns_test.hsc). */
+    dns_socket : u32,
+    /** How many queries it's answered. */
+    dns_queries : u32,
+    /** Whether it sends a forged answer, a wrong ID and address, before each true one. */
+    dns_spoof : bool,
 }
 
 /**
@@ -207,12 +216,12 @@ answer_dhcp :: fn(world: ptr[mut World], message: u8[]) {
 
 /**
  * Send a router advertisement from the router's link-local address to all nodes: a default router for 1800 s, with
- * PREFIX for autonomous configuration and its link-layer address.
+ * PREFIX for autonomous configuration, its link-layer address, and RDNSS_V6 as a DNS server.
  *
  * @param world The world.
  */
 advertise :: fn(world: ptr[mut World]) {
-    message : u8[56]
+    message : u8[80]
     bytes :: view_of(&message[0], message.count)
     net_stack.put_u8(bytes, 0, net_stack.ROUTER_ADVERTISEMENT)
     net_stack.put_u8(bytes, 4, 64)
@@ -227,6 +236,11 @@ advertise :: fn(world: ptr[mut World]) {
     net_stack.put_u32(bytes, 28, 86400)
     net_stack.put_u32(bytes, 32, 14400)
     net_stack.put_bytes(bytes, 40, view_of(&PREFIX.bytes[0], 16))
+    // A recursive DNS server, RDNSS_V6, for an hour
+    net_stack.put_u8(bytes, 56, net_stack.OPTION_RDNSS)
+    net_stack.put_u8(bytes, 57, 3)
+    net_stack.put_u32(bytes, 60, 3600)
+    net_stack.put_bytes(bytes, 64, view_of(&RDNSS_V6.bytes[0], 16))
     _ = net_stack.send_icmpv6(&world.router, world.router.link_local.address, net_stack.ALL_NODES, bytes, net_stack.DISCOVERY_HOP_LIMIT)
 }
 
@@ -291,6 +305,7 @@ take_events :: fn(world: ptr[mut World]) {
             case RouterFound(_) => {}
             case Incoming(_) => {}
             case Ended(_) => {}
+            case Resolved(_) => {}
         }
     }
     loop {
@@ -311,6 +326,8 @@ run :: fn(world: ptr[mut World], nanoseconds: u64) {
         deliver(world)
         net_stack.tick(&world.host, world.now)
         net_stack.tick(&world.router, world.now)
+        take_frames(world)
+        serve_dns(world)
         take_frames(world)
         take_events(world)
     }

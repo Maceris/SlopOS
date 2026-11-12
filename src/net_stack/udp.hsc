@@ -21,6 +21,8 @@ UdpSocket :: struct {
     port : u16,
     /** Whether it's marked as having datagrams waiting. */
     ready : bool,
+    /** Whether it's the resolver's, whose datagrams go to it at once rather than to the inbox (dns.hsc). */
+    resolver : bool,
 }
 
 /** A datagram waiting to be taken. */
@@ -76,6 +78,7 @@ udp_open :: fn(stack: ptr[mut Stack], port: u16) -> u32? {
             socket.active = true
             socket.port = chosen
             socket.ready = false
+            socket.resolver = false
             return (cast[u32](socket.generation) << 16) | cast[u32](i)
         }
     }
@@ -208,6 +211,10 @@ deliver_datagram :: fn(stack: ptr[mut Stack], from: IpAddress, from_port: u16, t
     for &socket, i in stack.sockets {
         if !socket.active || socket.port != to_port {
             continue
+        }
+        if socket.resolver {
+            dns_received(stack, (cast[u32](socket.generation) << 16) | cast[u32](i), from, from_port, payload)
+            return void
         }
         for &datagram in stack.inbox {
             if datagram.socket == 0 {
