@@ -1,6 +1,6 @@
 # 0191: M14, Remote Login, Planned
 
-Status: accepted, chosen with the project's owner; not started
+Status: accepted, chosen with the project's owner; 14a built
 Date: 2026-11-13
 Related: `0016` (users and encryption), `0018` (the powerbox), `0042` (unlocking), `0043` (the trusted path and remote
 login), `0136` to `0161` (M10's console, accounts and sessions), `0188` (M13, its 13h review's way of working),
@@ -101,3 +101,19 @@ In seven stages:
 - SSH sessions have no trusted path: a program in one can print a fake prompt, which is why their grants are set ahead
   of time (`0043`).
 - Encrypted private keys (bcrypt's KDF) aren't read: the client's key lives in the user's encrypted home instead.
+
+## As Built: 14a
+- **SHA-3 and SHAKE** (FIPS 202) in `std/crypto`: Keccak-f[1600]'s sponge on a secret state, so secrets can be
+  absorbed, with SHA3-256, SHA3-512, SHAKE128 and SHAKE256 over it. ML-KEM is made of them; nothing in `std` had them.
+- **ML-KEM-768** (FIPS 203): key pairs from their seeds, encapsulation, and decapsulation with implicit rejection chosen
+  without branching; the public key's modulus check and the secret key's hash check. Coefficients are u16s below q,
+  reduced by Barrett's method and compressed by multiplying, never by dividing; the NTT uses FIPS 203's tables. All of it
+  `#constant_time` where the secret key or the message is.
+- **`chacha20-poly1305@openssh.com`**, from `std`'s ChaCha20 and Poly1305: the length under its own key, readable from
+  a packet's first 4 bytes; the tag over the encrypted length and packet.
+- OpenSSH's key formats moved to 14b: they're SSH's wire encoding, so `std/ssh`'s.
+- **Tests:** hosted: SHA-3 and SHAKE against FIPS 202's answers (empty, "abc", a million a's absorbed in pieces);
+  ML-KEM-768 against NIST's ACVP vectors (25 key pairs, 25 encapsulations, 10 decapsulations, 5 of them rejections,
+  20 key checks) and 161 of Wycheproof's (40 left out, of sizes the types can't hold), and both sides agreeing for
+  drawn keys, a changed ciphertext not; OpenSSH's construction sealing and opening drawn packets, refusing a changed
+  byte or another sequence number. Its known answers come in 14b, against OpenSSH itself.
