@@ -9,6 +9,8 @@ import runtime from "base"
 import os from "std"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
+import compiler from "base"
+import crypto from "std"
 import log_line from "../../log_line"
 
 /** What an account's keys' file name ends with, its account's name before it. */
@@ -140,4 +142,85 @@ write_keys :: fn(service: ptr[mut Service], name: u8[], keys: u8[]) -> bool {
 /** A name's bytes as text, for the log. */
 name_text :: fn(name: u8[]) -> string {
     return if name.count > 0 { string_of(&name[0], name.count) } else { "" }
+}
+
+/** The most homes whose secrets are kept for key logins, each unlocked since the service started. */
+MAX_UNLOCKED_HOMES :: 32
+
+/**
+ * A home unlocked with its password since the service started (decisions/0042: from the first login until shutdown),
+ * its secret kept so a key login can open it.
+ */
+UnlockedHome :: struct {
+    /** The account's name, the first name_bytes bytes. */
+    name : u8[account_records.MAX_NAME_BYTES],
+    /** How many of name's bytes are the name: 0 for a place not in use. */
+    name_bytes : usize,
+    /** The home volume's secret; kept, not wiped, for as long as the service runs. */
+    secret : crypto.Key256,
+}
+
+/**
+ * Keep a home's secret once its password's unlocked it, for key logins; past MAX_UNLOCKED_HOMES, it isn't kept.
+ *
+ * @param service The service, whose unlocked homes it's added to, or whose place for the account's is written again.
+ * @param name The account's name.
+ * @param home The home's secret, copied.
+ */
+remember_home #constant_time :: fn(service: ptr[mut Service], name: u8[], home: ptr[crypto.Key256]) {
+    if name.count == 0 || name.count > account_records.MAX_NAME_BYTES {
+        return void
+    }
+    free := service.unlocked.count
+    for &kept, i in service.unlocked {
+        if kept.name_bytes == name.count && name.count <= kept.name.count && same(kept.name[0..<name.count], name) {
+            kept.secret = home^
+            return void
+        }
+        if kept.name_bytes == 0 && free == service.unlocked.count {
+            free = i
+        }
+    }
+    if free >= service.unlocked.count {
+        return void
+    }
+    place :: &service.unlocked[free]
+    for byte, i in name {
+        if i < place.name.count {
+            place.name[i] = byte
+        }
+    }
+    place.name_bytes = name.count
+    place.secret = home^
+}
+
+/**
+ * Open an account's home for one of its keys, if its password has unlocked it since the service started.
+ *
+ * @param service The service.
+ * @param name The account's name.
+ * @param blob The key, as SSH sends it, its signature checked by the asker.
+ * @return OpenedHome; HomeLocked for the account's key whose home isn't unlocked; WrongCredentials for no such account
+ *     or a key it doesn't have; Failed if its keys or volume couldn't be read or opened.
+ */
+open_home_by_key :: fn(service: ptr[mut Service], name: u8[], blob: u8[]) -> accounts.Response {
+    record := read_record(service, name) or_return .WrongCredentials
+    keys :: read_keys(service, name) or_return .Failed
+    defer free_keys(keys)
+    if !account_records.has_key(string_bytes(keys), blob) {
+        return .WrongCredentials
+    }
+    for &kept in service.unlocked {
+        if kept.name_bytes == name.count && name.count > 0 && name.count <= kept.name.count && same(kept.name[0..<name.count], name) {
+            return match open_volume_with(service, name, &kept.secret) {
+                case OpenedFiles(root) => {
+                    join_shares(service, &record, &kept.secret, root.end)
+                    log_line.write(service.log, "account_service: opened %'s home for a key", name_text(name))
+                    accounts.Response.OpenedHome(root)
+                }
+                case _ => .Failed
+            }
+        }
+    }
+    return .HomeLocked
 }

@@ -128,6 +128,8 @@ Service :: struct {
     clients : Failures[service_kit.MAX_CLIENTS],
     /** The shares whose secrets are kept, opened at a member's login or made by their owner. */
     opened : OpenedShare[MAX_OPENED_SHARES],
+    /** The homes unlocked with their passwords since the service started, their secrets kept for key logins. */
+    unlocked : UnlockedHome[MAX_UNLOCKED_HOMES],
 }
 
 /** A share's secret, kept once it's opened. */
@@ -348,6 +350,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
             case ListKeys(name) => response^ = list_keys(service, os.items(into, name), &out)
             case AddKey(change) => response^ = add_key(service, os.items(into, change.name), os.items(into, change.key))
             case RemoveKey(change) => response^ = remove_key(service, os.items(into, change.name), os.items(into, change.key))
+            case OpenHomeByKey(login) => response^ = open_home_by_key(service, os.items(into, login.name), os.items(into, login.key))
             case Connect(connection) => {
                 match service_kit.add_client_index(connected, service.port, connection.end) {
                     case Some(added) => {
@@ -497,6 +500,7 @@ open_home :: fn(service: ptr[mut Service], client: usize, name: u8[], password: 
     home := account_records.unlock_home(&record, password) or_return failed(service, client, name)
     defer account_records.zero_key(&home)
     succeeded(service, client, name)
+    remember_home(service, name, &home)
     return match open_volume_with(service, name, &home) {
         case OpenedFiles(root) => {
             join_shares(service, &record, &home, root.end)

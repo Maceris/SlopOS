@@ -113,13 +113,16 @@ Shell :: struct {
  *     on its terminal.
  * @param cpu_budget Its session's CPU budget, which it may split, for a child of it for each program it starts
  *     (decisions/0187). Without it, they run on the shell's own.
+ * @param command One line to run in place of reading lines, as SSH's exec asks (decisions/0191): its values shown on
+ *     the terminal as a line's are, and then the shell ends. Without it, the shell reads lines.
  * @return 0 after exit, or when it's asked to stop on its lifecycle channel; 2 if the terminal couldn't be opened or
  *     a port couldn't be made; 3 when its terminal goes. For a script: 0 once it's run to its end, 1 for its error, 2
- *     if it couldn't be read.
+ *     if it couldn't be read. For a command: 0 if it ran without an error, 1 if it had one.
  */
 main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
     manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?,
-    script: os.Channel[read_only_file.ReadOnlyFile]?, cpu_budget: slop_os.CpuBudget?, network: os.Channel[network.Network]?) -> int {
+    script: os.Channel[read_only_file.ReadOnlyFile]?, cpu_budget: slop_os.CpuBudget?, network: os.Channel[network.Network]?,
+    command: string?) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
     shell.network = network
@@ -150,6 +153,13 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
         case Some(given) => return run_script(shell, given)
         case None => {}
     }
+    match command {
+        case Some(line) => {
+            runtime.log_info("running a command")
+            return if run_line(shell, line) { 0 } else { 1 }
+        }
+        case None => {}
+    }
     say(shell, "SlopOS shell")
     runtime.log_info("reading commands")
     editor := terminal.LineEditor.{}
@@ -171,7 +181,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
         match terminal.read_line(&editor, &shell.console, prompt_of(shell)) {
             case Line(line) => {
                 // The parse copies it, so nothing run keeps it
-                run_line(shell, line)
+                _ = run_line(shell, line)
                 runtime.free_array(bit_cast[u8[]](line))
                 save_history(shell, &editor)
             }
@@ -198,13 +208,14 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
  * @param shell The shell: its scope, functions and programs are used and changed as the statements run, and the
  *     values and errors are written on its terminal.
  * @param line The line, which the parse copies, so it's the caller's still.
+ * @return True if it ran without an error; false for the first error, shown.
  */
-run_line :: fn(shell: ptr[mut Shell], line: string) {
+run_line :: fn(shell: ptr[mut Shell], line: string) -> bool {
     tree :: match parse(line) {
         case Ok(made) => made
         case Error(error) => {
             show_error(shell, line, error.at, error.message)
-            return void
+            return false
         }
     }
     for statement in tree.children {
@@ -223,13 +234,14 @@ run_line :: fn(shell: ptr[mut Shell], line: string) {
             case Error(error) => {
                 if error.returning {
                     show_error(shell, line, error.at, "return is a function's, and this isn't in one")
-                    return void
+                    return false
                 }
                 show_error(shell, line, error.at, error.message)
-                return void
+                return false
             }
         }
     }
+    return true
 }
 
 /**

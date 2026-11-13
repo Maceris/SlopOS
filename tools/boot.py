@@ -525,6 +525,11 @@ class NetworkPeers:
     And NTS (13g): a forging NTS server, forged.slopos.test, its NTS-KE on a free port that replaces {nts_forged}, which
     gives keys and cookies honestly over TLS, but answers NTP with authenticators it can't make, as it hasn't the key; and
     nts.slopos.test, the address of the NTS server chrony serves on the Linux test VM (NTS_ADDRESS, --nts-server).
+
+    And SSH (decisions/0191, 14d): a forward to the machine's port 22, which, once the serial output says the SSH
+    service listens there and a key's been added, this logs in to with the development machine's OpenSSH, as admin: a
+    command run with the password, a wrong password refused, a command run with SSH_KEY, a shell on a terminal, and last
+    a command that fails (ssh_checks), whose end the SSH service logs.
     """
 
     LISTENING = "[user] test_network: listening on 7"
@@ -532,6 +537,9 @@ class NetworkPeers:
     SERVING_TLS = "[user] test_network: serving TLS on 443"
     TLS_SENT = b"hello from the development machine"
     TLS_NAMES = ["rsa", "ecdsa", "wrong", "expired", "stranger"]
+    SSH_LISTENING = "[user] ssh_service: listening on 22"
+    SSH_KEY_ADDED = "[user] terminal: keys: added a key"
+    SSH_CALLED = "{0}{1}"
 
     def __init__(self, serial: Path):
         self.serial = serial
@@ -551,6 +559,7 @@ class NetworkPeers:
         self.tls.bind(("127.0.0.1", 0))
         self.tls.listen()
         self.tls_forward = free_port()
+        self.ssh_forward = free_port()
         self.tls_contexts = {}
         for peer in self.TLS_NAMES:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -569,7 +578,7 @@ class NetworkPeers:
         self.nts_context.load_cert_chain(TLS_PEERS / "forged.pem")
         self.nts_context.set_alpn_protocols(["ntske/1"])
         for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.serve_dns, self.connect_in, self.serve_tls,
-                      self.connect_in_tls, self.serve_nts_ke, self.serve_forged_ntp):
+                      self.connect_in_tls, self.serve_nts_ke, self.serve_forged_ntp, self.ssh_checks):
             threading.Thread(target=serve, daemon=True).start()
 
     def words(self, command_line: str) -> str:
@@ -578,7 +587,8 @@ class NetworkPeers:
             .replace("{tls}", str(self.tls.getsockname()[1])).replace("{nts_forged}", str(self.nts_ke.getsockname()[1]))
 
     def qemu_arguments(self) -> list[str]:
-        return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7,hostfwd=tcp:127.0.0.1:{self.tls_forward}-:443",
+        return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7,hostfwd=tcp:127.0.0.1:{self.tls_forward}-:443,"
+                f"hostfwd=tcp:127.0.0.1:{self.ssh_forward}-:22",
                 "-device", "virtio-net-pci,netdev=n0,disable-legacy=on,iommu_platform=on"]
 
     def serve_tcp(self) -> None:
@@ -770,6 +780,57 @@ class NetworkPeers:
         except (OSError, ssl.SSLError) as error:
             self.problem = f"the machine's TLS on port 443 failed: {error}"
 
+    def ssh_checks(self) -> None:
+        """Log in to the machine over SSH with the development machine's OpenSSH, once it listens and has the key."""
+        while True:
+            written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+            if self.SSH_LISTENING in written and self.SSH_KEY_ADDED in written:
+                break
+            time.sleep(0.5)
+        ssh = shutil.which("ssh") or "C:/Windows/System32/OpenSSH/ssh.exe"
+        with tempfile.TemporaryDirectory(prefix="slopos-ssh-") as temporary:
+            folder = Path(temporary)
+            for name, password in (("right", "correct horse battery staple"), ("wrong", "not the password")):
+                (folder / f"{name}.cmd").write_text(f"@echo {password}\r\n", encoding="ascii")
+            key = folder / "key"
+            key.write_text(SSH_KEY, encoding="ascii", newline="\n")
+            base = [ssh, "-F", "none", "-p", str(self.ssh_forward), "-o", f"UserKnownHostsFile={folder / 'known_hosts'}",
+                    "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=60", "-o", "LogLevel=ERROR"]
+            password = ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no", "-o", "NumberOfPasswordPrompts=1"]
+
+            def run(arguments: list[str], askpass: str = "right", given: str | None = None) -> subprocess.CompletedProcess:
+                environment = dict(os.environ, SSH_ASKPASS=str(folder / f"{askpass}.cmd"), SSH_ASKPASS_REQUIRE="force", DISPLAY="none")
+                return subprocess.run(base + arguments, input=given, capture_output=True, text=True, timeout=240, env=environment)
+
+            try:
+                ran = run(password + ["admin@127.0.0.1", "test_shell_calls 3 after"])
+                if ran.returncode != 0 or self.SSH_CALLED.format("after", 3) not in ran.stdout:
+                    self.problem = f"a command run with the password gave {ran.returncode}: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                ran = run(password + ["admin@127.0.0.1", "test_shell_calls 3 after"], askpass="wrong")
+                if ran.returncode != 255:
+                    self.problem = f"a wrong password gave {ran.returncode}: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                ran = run(["-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "PreferredAuthentications=publickey",
+                           "admin@127.0.0.1", "test_shell_calls 4 key"])
+                if ran.returncode != 0 or self.SSH_CALLED.format("key", 4) not in ran.stdout:
+                    self.problem = f"a command run with the key gave {ran.returncode}: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                ran = run(password + ["-tt", "admin@127.0.0.1"], given="test_shell_calls 5 shell\rexit\r")
+                if self.SSH_CALLED.format("shell", 5) not in ran.stdout:
+                    self.problem = f"a shell on a terminal gave {ran.returncode}: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                # Last, so its end in the serial output says every check's run
+                ran = run(password + ["admin@127.0.0.1", "no_such_program"])
+                if ran.returncode != 1:
+                    self.problem = f"a command that fails gave {ran.returncode}: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                print("ssh: logged in with a password and a key, ran commands, and a shell on a terminal", flush=True)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                self.problem = f"OpenSSH couldn't log in: {error}"
+            if self.problem is not None:
+                print(f"ssh: {self.problem}", flush=True)
+
     def connect_in(self) -> None:
         while True:
             written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
@@ -791,6 +852,18 @@ class NetworkPeers:
                 self.problem = f"the machine's echo on port 7 gave {len(back)} bytes back of {len(sent)}, or other bytes"
         except OSError as error:
             self.problem = f"the machine's port 7 couldn't be reached through the forward: {error}"
+
+
+# The private key of the key boot_tests.py's SSH test types into key.pub on the machine (ssh-keygen -t ed25519 made it,
+# for the tests only)
+SSH_KEY = """-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACBHGbroFg4trZq0hMw+WeSf0EYbeqUurFwnc3lFuqiWNgAAAJDAYp01wGKd
+NQAAAAtzc2gtZWQyNTUxOQAAACBHGbroFg4trZq0hMw+WeSf0EYbeqUurFwnc3lFuqiWNg
+AAAEAkFA+yIfbogRYAP7cVmJVXuby0PjtTmg7ZIWYdCPhJ8EcZuugWDi2tmrSEzD5Z5J/Q
+Rht6pS6sXCdzeUW6qJY2AAAAC3ZlY3RvckB0ZXN0AQI=
+-----END OPENSSH PRIVATE KEY-----
+"""
 
 
 class PowerButton(Keyboard):

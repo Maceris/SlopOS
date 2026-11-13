@@ -1,6 +1,6 @@
 # 0191: M14, Remote Login, Planned
 
-Status: accepted, chosen with the project's owner; 14a to 14c built
+Status: accepted, chosen with the project's owner; 14a to 14d built
 Date: 2026-11-13
 Related: `0016` (users and encryption), `0018` (the powerbox), `0042` (unlocking), `0043` (the trusted path and remote
 login), `0136` to `0161` (M10's console, accounts and sessions), `0188` (M13, its 13h review's way of working),
@@ -164,3 +164,32 @@ In seven stages:
   same key with another comment, a line that isn't a key and one whose name isn't its key's refused; one removed by its
   fingerprint; at most 16. Boot, both architectures: a key typed into `key.pub` with the editor, `keys --add` allowed on
   the trusted path, listed, removed the same way, and the list empty again.
+
+## As Built: 14d
+- **The SSH service** (`src/services/ssh_service`) starts whenever there's a network and runs only when its settings
+  (owner system, name ssh: enabled, port 22) or `ssh` on the kernel's command line enable it; otherwise it ends at once,
+  and it's late, so the system is healthy without it. It serves every connection on one port, waiting on none, through
+  `std/net`'s new calls that don't wait (`ask_accept`, `take_accepted`, `listener_on`, `serve_on`, `poll`, `read_now`,
+  `write_now`, `is_done`). Limits: 10 connections, 3 from one address, 30 s to log in, std/ssh's 6 tries.
+- **Its host key** is made the first time and kept in its system directory, `ssh/host_key` (OpenSSH's text) and
+  `host_key.pub`; its fingerprint's logged. Showing it on the secure attention screen is left for 14g.
+- **Logins** go through the account service. A password opens the home as the console's does. A key query is answered
+  yes, so the client signs; a signed key is `OpenHomeByKey`, which the account service grants only for the account's
+  key and a home its password has unlocked since the boot, keeping that secret in memory (decisions/0042); otherwise
+  `HomeLocked`, and the key's refused, so OpenSSH's client goes on to the password. No `unlock` program.
+- **Sessions:** a shell or exec request starts one through the session manager, with the login's home, a terminal the
+  service serves, and a prompt connection of its own that refuses whatever's asked (decisions/0043). `SessionStart`
+  gained `command`, which the shell runs in place of reading lines, ending 0, or 1 for an error; `Wait` is answered
+  `Exited` with the first program's exit code, which becomes SSH's exit-status; then the service ends the session
+  (`EndSession`), as it does when the connection goes first.
+- **The terminal** (`src/remote_terminal`): the terminal protocol's requests turned into VT output at the client's
+  pty size, with no screen model, text made safe a cluster at a time; the line being typed drawn after the output and
+  taken away before more; window-change becomes a Resize event; without a pty, plain text with LF line breaks.
+  Input goes through `src/vt`'s decoder.
+- **Found on the way:** the supervisor kept programs for at most 32 services, by their places in the records, and a
+  33rd failed to launch (BadGrants): `MAX_LOADED` is the records' `MAX_SERVICES` now.
+- **Tests:** unit, `remote_terminal`: text made safe with CR LF, the line being typed drawn and taken away, a whole
+  screen's moves and clears at the client's size. Boot, both architectures, with the development machine's OpenSSH
+  through a QEMU forward (boot.py's `ssh_checks`): a command with the password, its output back; a wrong password
+  refused; a command with a key the console added; a shell on a terminal, typed into; a failing command's exit status
+  1. OpenSSH there is 9.5, so `curve25519-sha256`; the hybrid is tested against OpenSSH 10 on the Linux VM (14b).

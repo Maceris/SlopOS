@@ -68,7 +68,15 @@ SessionStart :: struct {
     terminal : os.Channel[terminal.Terminal],
     /** The trusted path's prompt connection, which moves to the session manager, for the session's powerbox. */
     prompts : os.Channel[prompt.Prompt],
+    /**
+     * A line for the shell to run in place of reading lines, as SSH's exec asks (decisions/0191), as UTF-8, at most
+     * COMMAND_BYTES; empty for a shell that reads lines on the terminal.
+     */
+    command : slop_os.Relative[u8],
 }
+
+/** The most bytes of a session's command: 4096. */
+COMMAND_BYTES :: 4096
 
 /** What the trusted path asks the session manager. */
 Request :: union {
@@ -110,6 +118,11 @@ Request :: union {
      * the idle ones asked to stop under memory pressure (decisions/0153). Answered with Noted.
      */
     Shown(u32),
+    /**
+     * Wait for a session's first program to end, by the session's number (decisions/0191). Answered with Exited once it
+     * has, at once if it has already; Refused for a session that isn't there. One waits at a time, per session.
+     */
+    Wait(u32),
 }
 
 /** What the session manager answers. */
@@ -127,6 +140,8 @@ Response :: union {
     Refused,
     /** Shown's answer. */
     Noted,
+    /** Wait's answer: how the session's first program ended, its exit code, or slop_os.EXIT_KILLED if it was killed. */
+    Exited(u64),
     /** The answer to a request the session manager doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }
@@ -147,6 +162,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case End(_) => true
         case Connect(_) => true
         case Shown(_) => true
+        case Wait(_) => true
     }
 }
 

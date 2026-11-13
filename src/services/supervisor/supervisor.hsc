@@ -101,6 +101,7 @@ import accounts from "../../protocols/accounts"
 import input_service from "../input_service"
 import network_service from "../network_service"
 import test_network from "../../tests/test_network"
+import ssh_service from "../ssh_service"
 import seat from "../../protocols/seat"
 import session from "../../protocols/session"
 import lifecycle from "std/os/slop_os"
@@ -379,6 +380,24 @@ TestNetworkGrants :: struct {
     command_line : slop_os.Memory?,
     /** The trust store, the system volume's "trust" directory, read only; null without a system volume. */
     trust : os.Channel[read_only_dir.ReadOnlyDir]?,
+}
+
+/** What the SSH service is given (ssh_service.main); its handles move to it at its launch. */
+SshGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the network service. */
+    network_service : os.Channel[connector.Connector]?,
+    /** A connector to the account service. */
+    accounts_service : os.Channel[connector.Connector]?,
+    /** A connection to the session manager. */
+    sessions : os.Channel[session.Session]?,
+    /** Its directory on the system volume, "ssh", for its host key. */
+    store : os.Channel[dir.Dir]?,
+    /** Its settings: whether it's enabled, and its port. */
+    settings : config_protocol.Config[ssh_service.SshSettings]?,
+    /** A read-only copy of the kernel's command line, where ssh enables it too. */
+    command_line : slop_os.Memory?,
 }
 
 /** What the terminal service is given (terminal_service.main); its handles move to the service at its launch. */
@@ -1046,8 +1065,8 @@ Loaded :: struct {
     from_store : bool,
 }
 
-/** The most services whose programs the supervisor keeps read, by their places in the system configuration. */
-MAX_LOADED :: 32
+/** The most services whose programs the supervisor keeps read, by their places in the system configuration: all it holds. */
+MAX_LOADED :: system_records.MAX_SERVICES
 
 /**
  * Start and supervise the system's services: the supervisor, which the root task starts.
@@ -1277,6 +1296,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         if test_network_client {
             start_test_network(&supervisor)
         }
+        start_ssh(&supervisor)
         start_hello(&supervisor, NOWHERE)
         if !no_disk_check {
             start_disk_check(&supervisor, storage_slot)
@@ -4712,6 +4732,37 @@ start_test_network :: fn(supervisor: ptr[mut Supervisor]) {
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "test_network"), service.budget,
         test_network.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => _ = place(supervisor, "test_network", kept(supervisor, launched), NOWHERE)
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/**
+ * Start the SSH service (decisions/0191, 14d) when there's a network: it ends at once unless its settings enable it,
+ * or ssh is on the kernel's command line.
+ *
+ * @param supervisor The supervisor.
+ */
+start_ssh :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.network == NOWHERE {
+        return void
+    }
+    service :: service_named(supervisor, "ssh") or_return void
+    grants := SshGrants.{log = duplicate_log(supervisor), network_service = connector_to(supervisor, supervisor.network),
+        accounts_service = connector_to(supervisor, supervisor.accounts), sessions = session_connection(supervisor),
+        store = system_directory(supervisor, "ssh"), settings = config_for[ssh_service.SshSettings](supervisor, "system", "ssh")}
+    match supervisor.command_line {
+        case Some(text) => {
+            text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](text), text_rights) {
+                case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
+                case Error(error) => {}
+            }
+        }
+        case None => {}
+    }
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "ssh"), service.budget,
+        ssh_service.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => _ = place(supervisor, "ssh", kept(supervisor, launched), NOWHERE)
         case Error(error) => failed(supervisor, service.name, error)
     }
 }

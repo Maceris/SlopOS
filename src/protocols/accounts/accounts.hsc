@@ -94,13 +94,14 @@ Recovery :: struct {
     new_password : slop_os.Relative[u8],
 }
 
-/** A key added to an account, or removed from it. */
+/** A key added to an account, removed from it, or logging in as it. */
 KeyChange :: struct {
     /** The account's name, as UTF-8. */
     name : slop_os.Relative[u8],
     /**
      * For AddKey, the key's line, as authorized_keys or a .pub file has it, at most account_records.KEY_LINE_BYTES;
-     * for RemoveKey, its fingerprint, SHA256: and 43 characters of base64.
+     * for RemoveKey, its fingerprint, SHA256: and 43 characters of base64; for OpenHomeByKey, its blob, as SSH sends
+     * it.
      */
     key : slop_os.Relative[u8],
 }
@@ -181,6 +182,13 @@ Request :: union {
     AddKey(KeyChange),
     /** Remove a public key from an account, by its fingerprint. Answered with Done, NoSuchKey, NoSuchAccount, or Failed. */
     RemoveKey(KeyChange),
+    /**
+     * Open an account's home volume for one of its public keys (decisions/0042, 0191), its key as SSH sends it (its
+     * blob), whose signature the asker has checked. A key can't unlock a home: it's opened only if its password has
+     * since the service started. Answered with OpenedHome; HomeLocked if the key's the account's but its home hasn't
+     * been unlocked; WrongCredentials for no such account or a key it doesn't have; or Failed.
+     */
+    OpenHomeByKey(KeyChange),
 }
 
 /** What the account service answers. */
@@ -235,6 +243,8 @@ Response :: union {
     KeyRefused,
     /** RemoveKey's answer when no key of the account's has the fingerprint. */
     NoSuchKey,
+    /** OpenHomeByKey's answer when the key's the account's, but its home hasn't been unlocked with its password yet. */
+    HomeLocked,
     /** The answer to a request the account service doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }
@@ -261,6 +271,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case ListKeys(_) => true
         case AddKey(_) => false
         case RemoveKey(_) => false
+        case OpenHomeByKey(_) => true
     }
 }
 

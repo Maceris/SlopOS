@@ -148,6 +148,8 @@ ShellGrants :: struct {
      * go to programs that take one. Null without a network.
      */
     network : os.Channel[network.Network]?,
+    /** One line to run in place of reading lines, as SSH's exec asks (decisions/0191); null to read lines. */
+    command : string?,
 }
 
 /**
@@ -268,6 +270,11 @@ Session :: struct {
     cpu_budget : slop_os.CpuBudget,
     /** Its share of a CPU, in millionths, as asked for; 0 for the default. */
     cpu_share : u64,
+    /** Whether its first program has ended, and how: its exit code, or EXIT_KILLED. */
+    first_ended : bool,
+    exit_code : u64,
+    /** The client waiting for its first program's end (Wait), its end the client's; NONE for none. */
+    waiter : slop_os.Channel,
 }
 
 /**
@@ -598,6 +605,7 @@ ended_in :: fn(sessions: ptr[mut Manager], packets: slop_os.Packet[], taken: usi
             program :: &sessions.programs[index]
             program.running = false
             runtime.log_info("% ended", name_of(program))
+            first_ended(sessions, program, packet.data[1])
             retire_ring(sessions, program.ring)
             program.ring = cast[slop_os.Memory](slop_os.NO_HANDLE)
             // Its process, its budget, given back to the session manager's, and its lifecycle channel closed
@@ -615,6 +623,42 @@ ended_in :: fn(sessions: ptr[mut Manager], packets: slop_os.Packet[], taken: usi
             program.faults = null
         }
     }
+}
+
+/**
+ * Note a session's first program's end, and answer the client waiting for it (Wait), if there is one.
+ *
+ * @param sessions The session manager.
+ * @param program The program that ended; one that's the session's powerbox or an installation isn't its first.
+ * @param code How it ended: its exit code, or EXIT_KILLED.
+ */
+first_ended :: fn(sessions: ptr[mut Manager], program: ptr[Program], code: u64) {
+    if program.installation || is_named(program, "powerbox") || cast[usize](program.session) >= sessions.sessions.count {
+        return void
+    }
+    made :: &sessions.sessions[cast[usize](program.session)]
+    made.first_ended = true
+    made.exit_code = code
+    if made.waiter != NONE {
+        out := os.Outgoing.{}
+        os.begin[session.Response](&out)^ = .Exited(code)
+        _ = session.send_response(made.waiter, sessions.port, &out)
+        made.waiter = NONE
+    }
+}
+
+/** Whether a program's name is the one given. */
+is_named :: fn(program: ptr[Program], name: string) -> bool {
+    given :: string_bytes(name)
+    if cast[usize](program.name_bytes) != given.count {
+        return false
+    }
+    for byte, i in given {
+        if i < program.name.count && program.name[i] != byte {
+            return false
+        }
+    }
+    return true
 }
 
 /**
@@ -682,8 +726,21 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
         response :: os.begin[session.Response](&out)
         match os.message_of[session.Request](into)^ {
             case Start(given) => response^ = start(sessions, os.items(into, given.user), os.items(into, given.layout), given.terminal, given.home,
-                given.prompts)
-            case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null, null)
+                given.prompts, os.items(into, given.command))
+            case Wait(number) => {
+                if cast[usize](number) >= sessions.sessions.count || !sessions.sessions[cast[usize](number)].in_use {
+                    response^ = .Refused
+                }
+                else if sessions.sessions[cast[usize](number)].first_ended {
+                    response^ = .Exited(sessions.sessions[cast[usize](number)].exit_code)
+                }
+                else {
+                    // Answered when it ends
+                    sessions.sessions[cast[usize](number)].waiter = end
+                    continue
+                }
+            }
+            case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null, null, u8.[])
             case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
                 count :: list(sessions, number, &programs)
@@ -726,7 +783,7 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
  *     or its first program didn't start.
  */
 start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?,
-    prompts: os.Channel[prompt.Prompt]?) -> session.Response {
+    prompts: os.Channel[prompt.Prompt]?, command: u8[]) -> session.Response {
     number := sessions.sessions.count
     for each, i in sessions.sessions {
         if !each.in_use {
@@ -747,7 +804,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         return .Refused
     }
     made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE,
-        powerbox_end = NONE, programs_end = NONE, cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
+        powerbox_end = NONE, programs_end = NONE, cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE), waiter = NONE}
     for byte, i in user {
         if i < made.user.count {
             made.user[i] = byte
@@ -779,7 +836,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         case Some(given) => _ = launch_powerbox(sessions, cast[u32](number), home, given)
         case None => {}
     }
-    if !launch_first(sessions, cast[u32](number), given_terminal, home) {
+    if command.count > session.COMMAND_BYTES || !launch_first(sessions, cast[u32](number), given_terminal, home, command) {
         close_session(sessions, cast[u32](number))
         return .Refused
     }
@@ -909,9 +966,10 @@ close_session :: fn(sessions: ptr[mut Manager], number: u32) {
  * @return Whether it started; not without the shell or echo's program, without room for another program, or if the
  *     launch failed.
  */
-launch_first :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
+launch_first :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?,
+    command: u8[]) -> bool {
     // The terminal stays the caller's when the shell doesn't start, so echo can have it
-    if !sessions.use_echo && launch_shell(sessions, number, given_terminal, home) {
+    if !sessions.use_echo && launch_shell(sessions, number, given_terminal, home, command) {
         return true
     }
     module :: sessions.echo_module or_return false
@@ -937,7 +995,8 @@ launch_first :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
  * @return Whether it started; not without a shell in the bundle store, without room for another program, or if the
  *     launch failed.
  */
-launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?) -> bool {
+launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?,
+    command: u8[]) -> bool {
     expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(shell.main)))}
     program := cast[slop_os.Memory](slop_os.NO_HANDLE)
     match bundle_named(sessions, "shell") {
@@ -950,6 +1009,19 @@ launch_shell :: fn(sessions: ptr[mut Manager], number: u32, given_terminal: os.C
     }
     prepared :: prepare(sessions, number, "shell") or_return false
     grants := ShellGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}
+    if command.count > 0 {
+        // Kept for as long as the session manager runs: the shell's grant is a view of it
+        copy, error :: runtime.new_array(u8, command.count)
+        if error != null {
+            return false
+        }
+        for byte, i in command {
+            if i < copy.count {
+                copy[i] = byte
+            }
+        }
+        grants.command = if copy.count > 0 { string_of(&copy[0], copy.count) } else { "" }
+    }
     if cast[usize](number) < sessions.sessions.count {
         grants.cpu_budget = budget_copy(sessions.sessions[cast[usize](number)].cpu_budget, true)
     }

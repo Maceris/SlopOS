@@ -56,6 +56,7 @@ import power from "../protocols/power"
 import powerbox from "../protocols/powerbox"
 import test_channels from "../tests/test_channels"
 import test_network from "../tests/test_network"
+import ssh_service from "../services/ssh_service"
 import test_control from "../tests/test_control"
 import test_devices from "../tests/test_devices"
 import test_memory from "../tests/test_memory"
@@ -103,12 +104,13 @@ CpuShare :: struct {
 
 /**
  * The services the system is healthy without, by name (decisions/0113, 0115): the test devices' drivers, and the disk
- * check, whose checks expect a disk as the image builder made it, not as a boot before left it.
+ * check, whose checks expect a disk as the image builder made it, not as a boot before left it; and remote login, which
+ * runs only when it's enabled.
  *
  * An os.Channel[P] a service takes is required, and an optional one optional. What isn't late, and is started, has to
  * be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is degraded.
  */
-LATE :: string.["edu_dma", "virtio_input", "disk_check"]
+LATE :: string.["edu_dma", "virtio_input", "disk_check", "ssh"]
 
 /**
  * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its
@@ -342,6 +344,12 @@ SERVICES :: Service.[
     Service.{name = "edu_dma", module = "edu_dma.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(edu_dma.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1234, device = 0x11e8,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = false},
+    /*
+     * Remote login (decisions/0191, 14d), started whenever there's a network; it runs only when the system configuration
+     * enables it, or ssh is on the kernel's command line. Each connection's state is some 900 KiB, made as it comes
+     */
+    Service.{name = "ssh", module = "ssh_service.elf", starter = .Supervisor, by_manager = true, budget = 12 * MIB,
+        entry = type_of(ssh_service.main), not_restarted = true},
 ]
 
 /**
