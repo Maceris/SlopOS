@@ -59,6 +59,11 @@ Proposed, for the stages to settle as they're built:
 - **Hashes mixed**: IDs hashed with a mixing finalizer and an ID stack, never derived by adding to a parent's (Ikala's
   `table1` and `table2` collided until mixed); a loop's items keyed explicitly, by index by default, a duplicate key
   told apart and reported.
+- **IDs made at compile time where they can be** (the owner's note, 2026-11-13): Hemera runs code at compile time
+  as Java and C can't, so a widget's ID from a literal label, or from its call site (`#caller_location`), is hashed
+  when the program's compiled, a constant; a loop's key is mixed into it at run time, one integer mix; only a label
+  built at run time is hashed at run time. Far less hashing per frame than Dear ImGui's, which hashes every label every
+  frame.
 - **Liveness, not collection**: each frame marks the IDs it saw; interaction state (active, focused, dragged) and kept
   widget state of an ID not seen is dropped, which the tree makes exact by comparing ID sets between frames.
 - **One heavy text state**: only the focused text field has an editing state (cursor, selection, undo); every other is
