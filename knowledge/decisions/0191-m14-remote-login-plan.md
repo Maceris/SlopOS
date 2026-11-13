@@ -289,3 +289,5 @@ In seven stages:
   unit tests for paths and packets. Messages are at most 4 KiB, so the pipe's chunks are 3 KiB. Found on the way: the
   program read again after one answer had filled its outbox, while requests that had come waited unanswered, and the
   client on them; it answers what's come before reading more.
+- **Full suites after the follow-up**, 2026-11-13: boot 283 of 283, both architectures (the root task's grants 88 with
+  sftp_server); unit tests 24 of 24; HemeraTest 209 of 209; Linux 75 of 75 on x86-64 and 73 of 73 on AArch64.
