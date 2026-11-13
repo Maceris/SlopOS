@@ -119,8 +119,14 @@ tick_ipv6 :: fn(stack: ptr[mut Stack]) {
     for &each in stack.globals {
         if each.state == .Tentative && now >= each.deadline {
             each.state = .Assigned
-            each.deadline = 0
+            each.deadline = each.valid_until
             event(stack, .AddressReady(Assigned.{address = each.address, prefix_length = each.prefix_length}))
+        }
+        // Its valid lifetime over, perhaps while it was checked: let go, or its deadline, past, would be the stack's
+        // next for ever
+        if each.state == .Assigned && each.deadline != 0 && now >= each.deadline {
+            event(stack, .AddressExpired(each.address))
+            each^ = Address6.{}
         }
     }
     for &router in stack.routers {
@@ -275,6 +281,13 @@ receive_ipv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
     if !is_for_us_v6(stack, destination) {
         return void
     }
+    // A multicast, loopback or own source is dropped, as an answer would go to a group or back to this host (RFC 4443
+    // §4.2, RFC 4861 §7.1.1); ::, from duplicate detection's solicitations, is taken
+    loopback := Ipv6.{}
+    loopback.bytes[15] = 1
+    if source.bytes[0] == 0xff || same_ipv6(source, loopback) || is_ours_v6(stack, source, false) {
+        return void
+    }
     next := byte_at(packet, 6)
     at := cast[usize](IPV6_HEADER)
     if next == NEXT_HOP_BY_HOP {
@@ -398,6 +411,14 @@ receive_advertisement :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) 
     if lifetime > 0 {
         add_router(stack, source, lifetime)
     }
+    // A lifetime of 0 says it's no longer a default router (RFC 4861 §6.3.4)
+    else {
+        for &router in stack.routers {
+            if same_ipv6(router.address, source) {
+                router^ = Router6.{}
+            }
+        }
+    }
     at := cast[usize](0)
     loop {
         if at + 2 > options.count {
@@ -416,7 +437,7 @@ receive_advertisement :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) 
                 server := at + 8
             }
             loop {
-                learn_dns_server(stack, .V6(ipv6_at(options, server)))
+                learn_dns_server(stack, .V6(ipv6_at(options, server)), from_router = true)
                 server += 16
             }
             while server + 16 <= at + length
@@ -486,7 +507,7 @@ take_prefix :: fn(stack: ptr[mut Stack], option: u8[]) {
     for &each in stack.globals {
         if each.state == .Free {
             each^ = Address6.{state = .Tentative, address = stable_address(stack, prefix, 0), prefix_length = 64,
-                deadline = stack.now + DAD_WAIT}
+                deadline = stack.now + DAD_WAIT, valid_until = ends}
             send_solicitation(stack, each.address, true)
             return void
         }

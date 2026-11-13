@@ -24,6 +24,7 @@
  */
 package net_stack
 
+import compiler from "base"
 import crypto from "std"
 
 // ---- Sizes
@@ -152,6 +153,8 @@ Event :: union {
     LeaseLost,
     /** An IPv6 address became the interface's. */
     AddressReady(Assigned),
+    /** A global IPv6 address's valid lifetime ended, its prefix not advertised again: it's no longer the interface's. */
+    AddressExpired(Ipv6),
     /** An address wanted was found in use by another, and isn't taken. */
     AddressConflict(IpAddress),
     /** An IPv6 router advertised itself, by its link-local address, and is a default router now. */
@@ -232,6 +235,8 @@ Address6 :: struct {
     prefix_length : u8,
     /** Tentative: when its check ends. Assigned: when it's no longer valid, 0 for never. */
     deadline : u64,
+    /** Tentative: when it'll no longer be valid, as its prefix was advertised, 0 for never; its deadline once assigned. */
+    valid_until : u64,
 }
 
 /** An IPv6 default router. */
@@ -257,9 +262,17 @@ Stack :: struct {
     mtu : u16,
     /** The time as the caller last gave it. */
     now : u64,
-    /** The random generator's state, from the caller's seed. */
-    random : u64,
-    /** A secret for stable IPv6 interface identifiers (RFC 7217), from the seed. */
+    /**
+     * The random generator: ChaCha20's keystream under the caller's key (next_random), which nothing seen on the
+     * network gives away, as DNS's IDs, ports and DHCP's transaction IDs mustn't be guessed. Its block, the words of it
+     * not yet drawn, the block's number and the nonce, which counts the times the number's gone round.
+     */
+    random_key : crypto.Key256,
+    random_block : u32[16],
+    random_left : usize,
+    random_counter : u32,
+    random_round : u64,
+    /** A secret for stable IPv6 interface identifiers (RFC 7217) and TCP's initial sequence numbers (RFC 6528). */
     secret : u8[32],
 
     outbox : Outgoing[OUTBOX],
@@ -268,6 +281,8 @@ Stack :: struct {
     events : Event[EVENTS],
     events_first : usize,
     events_count : usize,
+    /** Whether an event was dropped as the queue was full, since take_events_lost last said (13h). */
+    events_lost : bool,
     /** Frames dropped as the outbox was full. */
     dropped_frames : u64,
 
@@ -324,8 +339,11 @@ Setup :: struct {
     mac : Mac,
     /** The largest IP packet the link carries, in bytes, at least 1280 for IPv6; 1500 for Ethernet. */
     mtu : u16 = 1500,
-    /** The random generator's seed: different for each boot, so DHCP's transaction IDs and the IPv6 secret are. */
-    seed : u64,
+    /**
+     * The random generator's key, from a cryptographic source, different each boot: DNS's IDs and ports, DHCP's
+     * transaction IDs, TCP's ports and the secret all come from it, and can't be guessed without it.
+     */
+    key : u8[32],
     /** Whether to ask DHCP for an IPv4 address; without it, set_ipv4 sets one by hand. */
     dhcp : bool = true,
     /** Whether to take IPv6 addresses: the link-local one, and SLAAC's from routers. */
@@ -344,7 +362,9 @@ start :: fn(stack: ptr[mut Stack], setup: Setup, now: u64) {
     stack.mac = setup.mac
     stack.mtu = setup.mtu
     stack.now = now
-    stack.random = setup.seed | 1
+    for byte, i in setup.key {
+        stack.random_key[i] = byte
+    }
     stack.hop_limit = 64
     for &byte in stack.secret {
         byte^ = cast[u8](next_random(stack))
@@ -491,6 +511,19 @@ outbox_full :: fn(stack: ptr[Stack]) -> bool {
 }
 
 /**
+ * Tell whether an event's been dropped since this was last asked, the queue full: a lookup's Resolved or a
+ * connection's Ended may be among them, so what waits on one is to be looked at again.
+ *
+ * @param stack The stack, which forgets it once it's told.
+ * @return True if one was.
+ */
+take_events_lost :: fn(stack: ptr[mut Stack]) -> bool {
+    lost :: stack.events_lost
+    stack.events_lost = false
+    return lost
+}
+
+/**
  * Take the oldest event waiting.
  *
  * @param stack The stack, whose events give it up.
@@ -601,11 +634,21 @@ queue_frame :: fn(stack: ptr[mut Stack], to: Mac, kind: u16, payload: u8[]) {
 /**
  * Queue an event for the caller.
  *
+ * A quarter of the queue is kept from what a peer can make many of at will, Incoming and EchoReplied, which are only
+ * dropped then: the connection waits its accept wait out, unaccepted. Anything dropped is noted (take_events_lost),
+ * for the caller to look again at what it waits on.
+ *
  * @param stack The stack, whose events take it; it's dropped if they're full.
  * @param happened The event.
  */
 event :: fn(stack: ptr[mut Stack], happened: Event) {
-    if stack.events_count >= EVENTS {
+    flood :: match happened {
+        case Incoming(_) => true
+        case EchoReplied(_) => true
+        case _ => false
+    }
+    if stack.events_count >= EVENTS || (flood && stack.events_count >= EVENTS * 3 / 4) {
+        stack.events_lost = true
         return void
     }
     at :: (stack.events_first + stack.events_count) % EVENTS
@@ -616,18 +659,47 @@ event :: fn(stack: ptr[mut Stack], happened: Event) {
 }
 
 /**
- * Draw the random generator's next value (xorshift64*).
+ * Draw the random generator's next value: the next two words of ChaCha20's keystream under the stack's key, a block
+ * made each eight draws.
  *
  * @param stack The stack, whose generator moves on.
- * @return The value.
+ * @return The value, which can't be told from what's been drawn before without the key.
  */
 next_random :: fn(stack: ptr[mut Stack]) -> u64 {
-    x := stack.random
-    x = x ~ (x >> 12)
-    x = x ~ (x << 25)
-    x = x ~ (x >> 27)
-    stack.random = x
-    return x * 0x2545f4914f6cdd1d
+    if stack.random_left < 2 || stack.random_left > stack.random_block.count {
+        nonce : crypto.Nonce96
+        for i in 0..<8 {
+            nonce[i] = cast[u8](stack.random_round >> (8 * cast[u64](i)))
+        }
+        keystream(&stack.random_key, stack.random_counter, &nonce, &stack.random_block)
+        stack.random_counter += 1
+        if stack.random_counter == 0 {
+            stack.random_round += 1
+        }
+        stack.random_left = stack.random_block.count
+    }
+    stack.random_left -= 2
+    at :: stack.random_left
+    if at + 1 >= stack.random_block.count {
+        return 0
+    }
+    return (cast[u64](stack.random_block[at + 1]) << 32) | cast[u64](stack.random_block[at])
+}
+
+/**
+ * Make a block of the random generator's keystream, public by design: what's drawn from it is sent on the network,
+ * while the key it comes of stays secret.
+ *
+ * @param key The generator's key.
+ * @param counter The block's number.
+ * @param nonce The nonce.
+ * @param into Where the block's 16 words go.
+ */
+keystream #constant_time :: fn(key: ptr[crypto.Key256], counter: u32, nonce: ptr[crypto.Nonce96], into: ptr[mut u32[16]]) {
+    block :: crypto.chacha20_block(key, counter, nonce)
+    for &word, i in into^ {
+        word^ = compiler.declassify(cast[u32](block[i]))
+    }
 }
 
 // ---- Neighbours, for both families
@@ -649,16 +721,25 @@ find_neighbour :: fn(table: Neighbour[], address: Ipv6) -> usize? {
 }
 
 /**
- * Find an entry for a new neighbour: a free one, or else the one resolved that expires soonest.
+ * Find an entry for a new neighbour: a free one; or else the one resolved that expires soonest; or else, every one
+ * resolving, the one asked for most, nearest giving up. A default router's entry is kept out of it, so a peer making
+ * the stack resolve many addresses, as answering pings from made-up ones does, can't push out the router's, nor hold
+ * every entry resolving (13h).
  *
+ * @param stack The stack, whose routers are kept.
  * @param table The table.
- * @return Its index; null if every one is still resolving.
+ * @param v4 True for ARP's table, false for IPv6's.
+ * @return Its index; null if every entry is a router's.
  */
-free_neighbour :: fn(table: Neighbour[]) -> usize? {
+free_neighbour :: fn(stack: ptr[Stack], table: Neighbour[], v4: bool) -> usize? {
     oldest : usize? = null
+    asked : usize? = null
     for each, i in table {
         if each.state == .Free {
             return i
+        }
+        if is_router(stack, v4, each.address) {
+            continue
         }
         if each.state == .Resolved {
             match oldest {
@@ -668,8 +749,37 @@ free_neighbour :: fn(table: Neighbour[]) -> usize? {
                 case None => oldest = i
             }
         }
+        else {
+            match asked {
+                case Some(found) => if found < table.count && each.tries > table[found].tries {
+                    asked = i
+                }
+                case None => asked = i
+            }
+        }
     }
-    return oldest
+    return if oldest is_some { oldest } else { asked }
+}
+
+/**
+ * Tell whether an address is a default router's.
+ *
+ * @param stack The stack.
+ * @param v4 True for IPv4's router, its address in the first four bytes; false for IPv6's.
+ * @param address The address.
+ * @return True if it's one.
+ */
+is_router :: fn(stack: ptr[Stack], v4: bool, address: Ipv6) -> bool {
+    if v4 {
+        return !is_zero_ipv4(stack.router) && address.bytes[0] == stack.router.bytes[0] && address.bytes[1] == stack.router.bytes[1]
+            && address.bytes[2] == stack.router.bytes[2] && address.bytes[3] == stack.router.bytes[3]
+    }
+    for router in stack.routers {
+        if !is_zero_ipv6(router.address) && same_ipv6(router.address, address) {
+            return true
+        }
+    }
+    return false
 }
 
 /**
@@ -689,7 +799,7 @@ learn_neighbour :: fn(stack: ptr[mut Stack], v4: bool, address: Ipv6, mac: Mac, 
         if !create {
             return void
         }
-        index = free_neighbour(table)
+        index = free_neighbour(stack, table, v4)
     }
     at :: index or_return void
     if at >= table.count {
@@ -730,7 +840,7 @@ send_to_hop :: fn(stack: ptr[mut Stack], v4: bool, hop: Ipv6, packet: u8[]) -> b
     }
     index := find_neighbour(table, hop)
     if index is_none {
-        index = free_neighbour(table)
+        index = free_neighbour(stack, table, v4)
         match index {
             case Some(made) => if made < table.count {
                 table[made] = Neighbour.{state = .Resolving, address = hop, deadline = stack.now}
@@ -1093,6 +1203,21 @@ ipv4_of6 :: fn(held: Ipv6) -> Ipv4 {
  */
 is_zero_ipv4 :: fn(address: Ipv4) -> bool {
     return same_ipv4(address, Ipv4.{})
+}
+
+/**
+ * Tell whether the interface has a global IPv6 address, past its duplicate check.
+ *
+ * @param stack The stack; nothing in it changes.
+ * @return True if one of its global addresses is assigned.
+ */
+has_global_v6 :: fn(stack: ptr[Stack]) -> bool {
+    for each in stack.globals {
+        if each.state == .Assigned {
+            return true
+        }
+    }
+    return false
 }
 
 /**

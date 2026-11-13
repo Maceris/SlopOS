@@ -120,6 +120,14 @@ receive_ipv4 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
     protocol :: byte_at(packet, 9)
     source :: ipv4_at(packet, 12)
     destination :: ipv4_at(packet, 16)
+    /*
+     * A source no host sends from, broadcast, multicast, loopback or the interface's own, is dropped, as an answer to
+     * it would go to every host or back to this one (RFC 1122 §3.2.1.3); 0.0.0.0 only comes with UDP, from DHCP
+     */
+    if same_ipv4(source, LIMITED_BROADCAST) || source.bytes[0] >= 224 || source.bytes[0] == 127 || is_subnet_broadcast(stack, source)
+        || (!is_zero_ipv4(stack.ipv4) && same_ipv4(source, stack.ipv4)) || (is_zero_ipv4(source) && protocol != PROTOCOL_UDP) {
+        return void
+    }
     to_us :: !is_zero_ipv4(stack.ipv4) && same_ipv4(destination, stack.ipv4)
     broadcast :: same_ipv4(destination, LIMITED_BROADCAST) || is_subnet_broadcast(stack, destination)
     // Before an address is leased, DHCP's answers may come to the address offered

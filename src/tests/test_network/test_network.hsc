@@ -174,8 +174,9 @@ use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
 
 /**
  * Narrow a connection to QEMU's ranges: 10.0.2.0/24 by TCP and UDP, as NTP with the forging NTS server is UDP, and
- * fec0::/64 by TCP. Names resolving to them are reached only through rules covering them (the rebinding rule), as they
- * aren't public.
+ * fec0::/64 by TCP; and the test's names, *.slopos.test, which it resolves (13h: a policy of private ranges alone
+ * resolves nothing, as its lookups could carry out what nothing it allows would). Names resolving to the ranges are
+ * reached only through rules covering them (the rebinding rule), as they aren't public.
  *
  * @param service The connection to the network service.
  * @param port A port bound to it.
@@ -185,9 +186,10 @@ qemu_ranges :: fn(service: os.Channel[network.Network], port: slop_os.Port) -> o
     site := net_address.Address.{family = .V6}
     site.bytes[0] = 0xfe
     site.bytes[1] = 0xc0
-    ranges := network.Policy.{connect_count = 2}
+    ranges := network.Policy.{connect_count = 3}
     ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP | network.TRANSPORT_UDP, 0, 65535)
     ranges.connect[1] = network.range_rule(site, 64, network.TRANSPORT_TCP, 0, 65535)
+    ranges.connect[2] = network.name_rule("*.slopos.test", network.TRANSPORT_TCP | network.TRANSPORT_UDP, 0, 65535) or_else network.Rule.{}
     return network.narrow(service.end, port, &ranges)
 }
 

@@ -7,10 +7,15 @@ package net_stack
  * ICMP error.
  */
 
-/** How many UDP sockets the stack holds at once. */
-UDP_SOCKETS :: 16
+/**
+ * How many UDP sockets the stack holds at once: the network service gives programs 16 at most, so the resolver, a
+ * socket for each query, always has room for its lookups' (13h).
+ */
+UDP_SOCKETS :: 32
 /** How many datagrams wait to be taken, all sockets together. */
 UDP_INBOX :: 32
+/** How many of them one socket's may be: a flood to one port doesn't take the others' room (13h). */
+UDP_INBOX_PER_SOCKET :: 8
 /** The longest datagram payload it takes or sends: an Ethernet MTU less IPv4's and UDP's headers. */
 MAX_DATAGRAM :: 1472
 
@@ -214,6 +219,17 @@ deliver_datagram :: fn(stack: ptr[mut Stack], from: IpAddress, from_port: u16, t
         }
         if socket.resolver {
             dns_received(stack, (cast[u32](socket.generation) << 16) | cast[u32](i), from, from_port, payload)
+            return void
+        }
+        number :: (cast[u32](socket.generation) << 16) | cast[u32](i)
+        waiting := 0
+        for datagram in stack.inbox {
+            if datagram.socket == number {
+                waiting += 1
+            }
+        }
+        if waiting >= UDP_INBOX_PER_SOCKET {
+            stack.dropped_datagrams += 1
             return void
         }
         for &datagram in stack.inbox {

@@ -35,6 +35,8 @@ Pending :: struct {
     /** The client asking, by its index, and its end then, so an answer's dropped if the client's gone. */
     client : usize,
     end : slop_os.Channel,
+    /** The root it's charged to, the client's, as is the stream an OpenName makes. */
+    root : u64,
     /** Whether it's an OpenName, with the port and memory. */
     opening : bool,
     port : u16,
@@ -78,10 +80,21 @@ start_lookup :: fn(service: ptr[mut Service], client: usize, end: slop_os.Channe
     port: u16, memory: slop_os.Memory) -> network.Refusal? {
 
     refusal := network.Refusal.NoRoom
+    root :: if client < service.serving.client_root.count { service.serving.client_root[client] } else { cast[u64](0) }
+    held := cast[usize](0)
+    for each in service.serving.pending {
+        if each.active && each.root == root {
+            held += 1
+        }
+    }
     match service.stack {
         case Some(found) => {
             if name.count == 0 || name.count > network.MAX_NAME {
                 refusal = .BadName
+            }
+            // A channel's share, so one can't hold every lookup
+            else if held >= LOOKUPS_PER_ROOT {
+                refusal = .NoRoom
             }
             else if opening && port == 0 {
                 refusal = .BadEndpoint
@@ -92,8 +105,8 @@ start_lookup :: fn(service: ptr[mut Service], client: usize, end: slop_os.Channe
                         continue
                     }
                     lookup :: net_stack.resolve(found, name, v4, v6) or_break
-                    each^ = Pending.{active = true, lookup = lookup, client = client, end = end, opening = opening, port = port,
-                        memory = memory, name_length = name.count}
+                    each^ = Pending.{active = true, lookup = lookup, client = client, end = end, root = root, opening = opening,
+                        port = port, memory = memory, name_length = name.count}
                     for byte, i in name {
                         if i < each.name.count {
                             each.name[i] = byte
@@ -186,7 +199,7 @@ lookup_done :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], lo
                 made^ = .Resolved(os.append(&out, view_of(&addresses[0], count)))
             }
         }
-        _ = network.send_response(each.end, service.port, &out)
+        answered(service, each.end, network.send_response(each.end, service.port, &out, wait = false))
         return void
     }
 }
@@ -233,7 +246,7 @@ open_by_name :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], p
         _ = slop_os.handle_close(cast[slop_os.Handle](pending.memory))
         return .Refused(.NotAllowed)
     }
-    index :: match free_stream(service) {
+    index :: match free_stream(service, pending.root) {
         case Some(found) => found
         case None => {
             _ = slop_os.handle_close(cast[slop_os.Handle](pending.memory))

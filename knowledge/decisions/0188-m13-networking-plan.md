@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a to 13g built, 13h to come
+Status: accepted, chosen with the project's owner; 13a to 13h built
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -422,3 +422,112 @@ Built in three parts: TLS 1.3 in Hemera's `std/tls` (13f1, 13f2) and its use on 
   `/usr/sbin/chronyd` won't let it read a configuration in a home directory, so boot.py runs a copy of it. A UDP send a
   connection's policy refuses is dropped without an error, as a firewall drops it, which first hid that test_network's
   connection allowed only TCP.
+
+## As Built: 13h
+A review of M13's code, in six parts read side by side: the virtio-net driver and the stack's link and IP layers; TCP;
+DNS and the policies by name; the network service; TLS, TLS streams and NTS; and 13d's crypto. Each finding was traced
+end to end before it was taken. **No memory-safety bug was found**: every read of a packet goes through checked
+accessors or proven slices, and 13f's fix for streams' memory holds everywhere a ring is touched. What was found was
+availability and protocol bugs, two of them critical, and weak randomness.
+
+**Fixed, the network service:**
+- **Critical: any program could freeze the service** by not reading its answers: `os.send` waited, on the service's
+  only port, while the program's ring was full. std's `send` and every generated `send_<side>` and `answer_unsupported`
+  now take `wait`; the service answers without waiting, and a channel an answer can't be sent on is let go once its
+  serving's done (`answered`, `drop_broken`), as if its program had closed it.
+- **Critical: paged memory as a stream's** had the service's one thread wait on the program's pager in `memory_read`.
+  `take_memory` writes nothing to it first, which the kernel refuses for paged, boot-module and unwritable memory.
+- **A failed send leaked the handles it carried**, so a stream or listener could outlive everything: `send` closes
+  handles it couldn't send.
+- **Extra handles in a valid message stayed in the receiver's table**, for any SlopOS service: the generated validators
+  now refuse a message unless each handle it carries is named by exactly one of its fields (`index_takes`,
+  `every_handle_named`).
+- **One channel could take every shared resource**: streams, listeners, sockets and lookups. Each network channel is
+  charged for what's made through it: 16 streams, 4 listeners, 4 sockets, 2 lookups. By channel, not by program, as
+  the session manager hands every session and program a Narrow or Copy of one connection, and channels can be passed
+  on: charging by the connection the supervisor gave was tried first, and left the powerbox unable to grant a second
+  program. The listener is a flag, not "index 0".
+- **A UDP socket needed no policy**, and took the resolver's sockets: an ephemeral one needs a connect rule allowing
+  UDP, and the stack has 32 sockets to the service's 16.
+- **Resolving was a way out past any policy**: `allows_resolve(policy, name)` allows a name only under a public or
+  any rule, or a name rule covering it.
+- **A listener's waiting connections that had ended spent Accepts**, unanswered: they're taken off as they end, an
+  Accept whose connection's gone keeps its memory, and a consumed Accept is always answered.
+- Narrow could widen into special /24s within a public /16: a range is public only if no RFC 6890 range overlaps it
+  (`is_public_range`); 2001::/23 and 2002::/16 aren't public. Describe checks its connection's generation.
+- **A dropped event** (the stack's queue full) stranded a lookup or a stream: a quarter of the queue is kept from
+  Incoming and EchoReplied, what a peer makes at will, and a dropped event has the service look again (`catch_up`).
+
+**Fixed, the stack:**
+- **High: its random numbers could be predicted**: DNS's IDs and ports, TCP's ports and DHCP's transaction IDs came
+  from xorshift64* seeded with 64 bits, a few outputs giving its state away. It's ChaCha20's keystream under a 32-byte
+  key from the system's generator now. **High: TCP's initial sequence numbers** hashed the secret with FNV-1a, which
+  left 32 bits of it: BLAKE2b now, of the secret and the connection's addresses and ports (RFC 6528).
+- **An expired SLAAC address spun the service** for ever, its deadline in the past (and a first assignment never
+  expired): addresses keep their lifetime, and are let go when it ends (`AddressExpired`).
+- Spoofed pings could hold every neighbour entry resolving, and push out the router's: a new entry takes the one
+  resolved longest, or the one asked for most, never a default router's.
+- A router lifetime of 0 removes the router; an RA gives at most 2 DNS servers, none ::, loopback or multicast.
+- Packets from broadcast, multicast, loopback or the interface's own address are dropped, so nothing's answered to
+  them.
+- TCP: a backlog of 8 per listener, and 8 entries kept from incoming connections; a SYN-ACK sent 3 times, not 6; the
+  oldest TIME-WAIT reused when the table's full; FIN-WAIT-2 let go after 60 s with nothing from the peer; an
+  acknowledgement of what wasn't sent, or older than the peer's largest window, drops its segment (RFC 5961 §5); a
+  segment at a closed window still has its ACK taken; a FIN sent before a timeout is still counted as sent; a zero
+  window is probed for as long as the peer answers; a SYN-ACK has a window scale only if the SYN did; an MSS under 88
+  is raised to it.
+- DNS: a truncated answer without an address asks the next server; a query with no server fails rather than waits.
+- One socket's datagrams take at most 8 of the 32 waiting; DHCP's retry jitter can't land before now.
+- virtio-net: a received length out of range is answered as an empty frame, so its slot isn't lost; a used element
+  naming a descriptor that isn't an outstanding chain's head is passed over.
+
+**Fixed, std's TLS, NTS and crypto:**
+- **High: chain building took factorial time**: a hostile server's nine CAs of one name and key, each able to issue the
+  others, would hold a client for hours. The search has a budget of 64 steps and 64 signature checks, each pair
+  checked once, past which it's TOO_COMPLEX.
+- A wildcard SAN reaching a name in an excluded subtree is refused; an RSA exponent over 2^32 is refused; P-384's
+  check for the point at infinity read an unnormalized count.
+- **The clock could be stepped anywhere** by a server it trusts: never below its floor now (the build time or the time
+  saved), not by more than 1000 s once synchronized, and from at least 2 samples within 500 ms, so one who delays the
+  answers without the keys moves it by 250 ms at most.
+- **A silent NTS-KE server hung the clock service**: TCP connections and TLS streams take a deadline, and NTS-KE has
+  10 s.
+- A host name past 255 bytes is refused rather than matched cut short; a server whose ECDSA signature fails ends the
+  handshake rather than send zeros; a connection's secrets are zeroed before its memory's freed (`tls.forget`);
+  NTS-KE's Server record has to be a host's text, its Port record not 0.
+
+**Recorded, not fixed:**
+- Every SlopOS service but the network's still waits on clients as it answers; `wait = false` is there for each to
+  take up. The network driver's requests wait, but the driver's trusted.
+- The network service's 16 channels can all be taken by one program, by Copy, Narrow, or Connecting both ends of a
+  pair it made, which nothing frees while it lives. The protocol's lending (a connection's resources charged to the
+  budget its program gives) is the way to bound it, not yet built.
+- A listener takes connections from any peer, as listen rules name ports and not peers; whether incoming peers should
+  meet the connect rules is the policy's design, left as it is.
+- Happy Eyeballs' attempts share the stream's rings: two that connect in one round could both deliver into it before
+  the loser's aborted. The service should hold back delivery until the race is won.
+- "Public" includes the local network's own global IPv6 addresses (and a publicly numbered IPv4 network's), so a
+  public-only policy reaches the LAN by such addresses, by name too; the service would need the on-link prefixes.
+- Routers: an RA's addresses are kept first come, an RDNSS lifetime isn't honoured, and on-link is the address's /64,
+  not the prefix's L flag. DHCP's ACK and NAK aren't checked against the offer. Frames are parsed in the NIC's shared
+  memory, so a hostile device could change them as they're read (reads stay within bounds).
+- TCP has no keepalive, so an established connection whose peer vanishes lasts until its program ends it; challenge
+  ACKs and resets aren't rate limited; an exact RST ends TIME-WAIT (RFC 1337).
+- The DNS cache is shared, so a program can tell whether a name was looked up lately.
+- TLS: no KeyUpdate after AES-GCM's record limit; ChangeCipherSpec taken anywhere before the handshake ends; unknown
+  extensions in EncryptedExtensions ignored; a second ClientHello not compared with the first; test-only setups
+  (`client_after_hello`, `server_with_keys`) are ordinary functions.
+- X.509: rfc822Name constraints aren't applied to a subject's emailAddress, nor IPv4 constraints to IPv4-mapped IPv6;
+  PEM stops quietly at a block without its END; Ed25519's small-order keys are taken, as RFC 8032 allows.
+
+**Tests:** hosted, on Hemera's side: the tls scenario's changed flight (any byte flipped, the flight cut or added to,
+fed in any pieces) never connects, but for the ServerHello record's legacy_record_version, which RFC 8446 has ignored
+and which its first run found; NTS-KE responses of drawn records read within bounds; DER walked from any bytes, a
+chain with any byte changed never valid, PEM from any text; policies, a narrowed one never reaching what its parent
+can't (whose first run found that "by name" has to allow for the rebinding rule), and special ranges in public ones;
+chains made to be slow, and wildcards under exclusions, refused. On SlopOS's: frames of every kind with their
+checksums right, over hours, the stack's next deadline always ahead after a tick (which found an expired address's
+deadline left behind a tick); a hostile peer's segments into a live connection; answers of any bytes to a lookup's
+queries; a SYN flood held to the backlog; a quiet FIN-WAIT-2 let go; the validators' handle rule, with the network's
+protocols now among those fuzzed. Each fuzz target (`tools/fuzz.py`, which finds Hemera's scenarios too, as
+`hemera:<path>`) ran clean for 60 s.

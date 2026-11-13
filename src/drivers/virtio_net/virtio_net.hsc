@@ -486,13 +486,13 @@ take_received :: fn(driver: ptr[mut Driver]) {
             driver.given[slot] = false
         }
         written :: cast[u64](used.length)
-        if written <= HEADER_BYTES {
+        // A length the device shouldn't give is answered as an empty frame, so the client gives the slot again: left
+        // unanswered, each such slot would be lost, and receiving with them (13h)
+        if written <= HEADER_BYTES || written - HEADER_BYTES > cast[u64](net.SLOT_BYTES) {
+            answer_current(driver, .Received(net.Frame.{slot = slot, length = 0, flags = 0}))
             continue
         }
         length :: written - HEADER_BYTES
-        if length > cast[u64](net.SLOT_BYTES) {
-            continue
-        }
         header :: cast[ptr[Header]](driver.headers + cast[u64](slot) * HEADER_SPACING)
         flags := cast[u32](0)
         if header.flags & HEADER_DATA_VALID != 0 {

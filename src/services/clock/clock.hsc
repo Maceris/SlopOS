@@ -110,6 +110,11 @@ Clock :: struct {
     next_save : u64,
     /** The NTS server it keeps the time from, once a Synchronize's given one (nts.hsc). */
     syncing : Synchronizing,
+    /**
+     * The clock's floor, in seconds since 1970 UTC: the latest of when the generation was built and the time last saved
+     * (raise_to). NTS never steps the clock below it (13h), as certificates would be checked at a time gone by.
+     */
+    floor : i64,
 }
 
 /** The file the time's saved in, in Keep's directory: its seconds since 1970 UTC, in decimal. */
@@ -249,6 +254,9 @@ time_now :: fn(service: ptr[Clock]) -> i64? {
 raise_to :: fn(service: ptr[mut Clock], floor: i64, what: string) {
     if floor <= 0 {
         return void
+    }
+    if floor > service.floor {
+        service.floor = floor
     }
     current :: time_now(service) or_else 0
     if current >= floor * NANOSECONDS {

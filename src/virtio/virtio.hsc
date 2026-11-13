@@ -550,6 +550,21 @@ add_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
 }
 
 /**
+ * Tell whether a descriptor is free.
+ *
+ * @param queue The queue.
+ * @param id The descriptor's index; one past MAX_QUEUE_SIZE counts as free.
+ * @return True if it's free.
+ */
+is_free :: fn(queue: ptr[Queue], id: u16) -> bool {
+    word :: cast[usize](id) / 64
+    if word >= queue.free.count {
+        return true
+    }
+    return queue.free[word] & (cast[u64](1) << (cast[u64](id) % 64)) != 0
+}
+
+/**
  * Mark a descriptor free or taken.
  *
  * @param queue The queue.
@@ -607,21 +622,32 @@ first_free :: fn(queue: ptr[Queue]) -> u16? {
  *
  * It doesn't wait: a driver waits for the queue's interrupt, then takes until there's none.
  *
+ * A used element naming a descriptor that isn't the first of a chain the driver gave, out of the queue or free
+ * already, is passed over (13h): the device's word alone would otherwise free a chain still in flight.
+ *
  * @param queue The queue, set up, its device ring read and its finished descriptors freed.
  * @return The chain's first descriptor's index and how many bytes the device wrote; null if the device hasn't
  *     finished another.
  */
 take_used :: fn(queue: ptr[mut Queue]) -> Used? {
     used_index : u16 = bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](queue.page + queue.device_ring + 2)))
-    if used_index == queue.last_used {
-        return null
+    id := cast[u32](0)
+    length := cast[u32](0)
+    loop {
+        if used_index == queue.last_used {
+            return null
+        }
+        // The element is read after the index that says it's there
+        intrinsics.fence_sequentially_consistent()
+        element :: cast[ptr[UsedElement]](queue.page + queue.device_ring + 4 + cast[u64](queue.last_used % queue.size) * 8)
+        queue.last_used += 1
+        id = element.id
+        length = element.length
+        if id < cast[u32](queue.size) && !is_free(queue, cast[u16](id)) {
+            break
+        }
     }
-    // The element is read after the index that says it's there
-    intrinsics.fence_sequentially_consistent()
-    element :: cast[ptr[UsedElement]](queue.page + queue.device_ring + 4 + cast[u64](queue.last_used % queue.size) * 8)
-    queue.last_used += 1
-    id : u32 = element.id
-    length : u32 = element.length
+    while true
     // Each descriptor of the chain, followed through its next, free again
     at := cast[u16](id)
     for step in 0..<MAX_CHAIN {

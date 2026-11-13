@@ -1,7 +1,11 @@
 /**
  * The protocols' validators, as a hosted program (tools/unit_tests.py; decisions/0186, He): each protocol's
  * validate_request and validate_response, which os.protocol_code generates, judge any bytes without reading outside
- * them, and judge the same bytes the same way. hemera --fuzz guides it by coverage (tools/fuzz.py).
+ * them, and judge the same bytes the same way. hemera --fuzz guides it by coverage (tools/fuzz.py). The network's
+ * protocols, std's (network, tcp_stream, tcp_listener, datagrams) and net, are among them (decisions/0188, 13h).
+ *
+ * And a message's handles are each named by exactly one of its fields (13h): a handle no field names would be left
+ * in the receiver's table, which a sender could fill so.
  */
 package protocols_test
 
@@ -9,6 +13,10 @@ import runtime from "base"
 import os from "std"
 import slop_os from "std/os"
 import testing from "std"
+import network from "std/os/slop_os"
+import tcp_stream from "std/os/slop_os"
+import tcp_listener from "std/os/slop_os"
+import datagrams from "std/os/slop_os"
 import accounts from "../accounts"
 import block from "../block"
 import bundle_store from "../bundle_store"
@@ -20,6 +28,7 @@ import entropy from "../entropy"
 import events from "../events"
 import input from "../input"
 import links from "../links"
+import net from "../net"
 import partitions from "../partitions"
 import platform from "../platform"
 import power from "../power"
@@ -49,7 +58,7 @@ Judged :: struct {
 }
 
 /** How many protocols there are. */
-PROTOCOL_COUNT :: 28
+PROTOCOL_COUNT :: 33
 /** The most bytes a case's message has: a case reads at most testing.MAX_CASE_BYTES, its other draws among them. */
 MOST_MESSAGE_BYTES :: 1000
 
@@ -88,6 +97,11 @@ protocols :: fn() -> Judged[PROTOCOL_COUNT] {
         Judged.{name = "update", request = update.validate_request, response = update.validate_response},
         Judged.{name = "volume", request = volume.validate_request, response = volume.validate_response},
         Judged.{name = "watchdog", request = watchdog.validate_request, response = watchdog.validate_response},
+        Judged.{name = "net", request = net.validate_request, response = net.validate_response},
+        Judged.{name = "network", request = network.validate_request, response = network.validate_response},
+        Judged.{name = "tcp_stream", request = tcp_stream.validate_request, response = tcp_stream.validate_response},
+        Judged.{name = "tcp_listener", request = tcp_listener.validate_request, response = tcp_listener.validate_response},
+        Judged.{name = "datagrams", request = datagrams.validate_request, response = datagrams.validate_response},
     ]
 }
 
@@ -126,4 +140,28 @@ any_bytes_are_judged_without_reading_outside_them #test :: fn(t: ptr[mut testing
     second :: validate(message, cast[u32](message.count), handle_count)
     testing.expect(t, first == second, "the same bytes are judged the same way again")
     return .Ok
+}
+
+/** Each handle a message carries is named by one of its fields, once: none left over, none named twice. */
+handles_are_each_named_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    // Dialed names one handle, by its index in the batch, 0; Unavailable names none
+    dialed := os.Outgoing.{}
+    answer :: os.begin[connector.Response](&dialed)
+    answer^ = .Dialed(cast[slop_os.Channel](0))
+    message :: bytes_of(&dialed)
+    testing.expect(t, connector.validate_response(message, cast[u32](message.count), 1) == .Valid, "one handle, named")
+    testing.expect(t, connector.validate_response(message, cast[u32](message.count), 2) == .Invalid, "a second, named by nothing")
+    testing.expect(t, connector.validate_response(message, cast[u32](message.count), 0) == .Invalid, "a handle named that didn't come")
+    unavailable := os.Outgoing.{}
+    none :: os.begin[connector.Response](&unavailable)
+    none^ = .Unavailable
+    empty :: bytes_of(&unavailable)
+    testing.expect(t, connector.validate_response(empty, cast[u32](empty.count), 0) == .Valid, "no handles, none named")
+    testing.expect(t, connector.validate_response(empty, cast[u32](empty.count), 1) == .Invalid, "a handle with a message naming none")
+    return .Ok
+}
+
+/** A message being built, as the bytes it'd be sent as. */
+bytes_of :: fn(out: ptr[os.Outgoing]) -> u8[] {
+    return bit_cast[u8[]](usize.[cast[usize](out.used), cast[usize](cast[uintptr](&out.words[0]))])
 }

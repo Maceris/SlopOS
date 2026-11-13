@@ -226,7 +226,8 @@ send_dhcp :: fn(stack: ptr[mut Stack], kind: u8) {
         }
     }
     stack.dhcp_tries += 1
-    stack.dhcp_deadline = stack.now + wait - SECOND + next_random(stack) % (2 * SECOND)
+    // Within a second either way, but never before now: a wait under a second, near T2 or the lease's end, isn't moved
+    stack.dhcp_deadline = if wait >= SECOND { stack.now + wait - SECOND + next_random(stack) % (2 * SECOND) } else { stack.now + wait }
 }
 
 /**

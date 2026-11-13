@@ -99,8 +99,8 @@ make_world :: fn(seed: u64, faults: Faults) -> ptr[mut World] {
     world :: runtime.new(World)
     world.random = seed | 1
     world.faults = faults
-    net_stack.start(&world.host, net_stack.Setup.{mac = HOST_MAC, seed = seed * 3 + 1}, 0)
-    net_stack.start(&world.router, net_stack.Setup.{mac = ROUTER_MAC, seed = seed * 5 + 2, dhcp = false}, 0)
+    net_stack.start(&world.host, net_stack.Setup.{mac = HOST_MAC, key = key_of(seed * 3 + 1)}, 0)
+    net_stack.start(&world.router, net_stack.Setup.{mac = ROUTER_MAC, key = key_of(seed * 5 + 2), dhcp = false}, 0)
     net_stack.set_ipv4(&world.router, ROUTER_V4, 24, net_stack.Ipv4.{})
     return world
 }
@@ -301,6 +301,7 @@ take_events :: fn(world: ptr[mut World]) {
                 world.last_reply = world.now
             }
             case LeaseLost => world.trouble += 1
+            case AddressExpired(_) => world.global = false
             case AddressConflict(_) => world.trouble += 1
             case RouterFound(_) => {}
             case Incoming(_) => {}
@@ -332,6 +333,20 @@ run :: fn(world: ptr[mut World], nanoseconds: u64) {
         take_events(world)
     }
     while world.now < end
+}
+
+/**
+ * Make a stack's key from a seed, so a run replays.
+ *
+ * @param seed The seed.
+ * @return The key: the seed's bytes, repeated.
+ */
+key_of :: fn(seed: u64) -> u8[32] {
+    key : u8[32]
+    for i in 0..<32 {
+        key[i] = cast[u8](seed >> (8 * cast[u64](i % 8)))
+    }
+    return key
 }
 
 /**
@@ -425,7 +440,7 @@ takes_any_frame #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 any_frame : testing.Property : fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
     stack :: runtime.new(net_stack.Stack)
     defer runtime.free(stack)
-    net_stack.start(stack, net_stack.Setup.{mac = HOST_MAC, seed = 3}, 0)
+    net_stack.start(stack, net_stack.Setup.{mac = HOST_MAC, key = key_of(3)}, 0)
     net_stack.set_ipv4(stack, LEASED_V4, 24, ROUTER_V4)
     bytes :: testing.draw_bytes(source, net_stack.MAX_FRAME)
     frame : u8[net_stack.MAX_FRAME]

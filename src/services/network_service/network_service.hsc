@@ -124,6 +124,8 @@ main :: fn(log: slop_os.DebugLog?, nic: os.Channel[connector.Connector]?, comman
             }
             case None => {}
         }
+        // What couldn't be answered let go, once nothing's using it
+        drop_broken(service)
         if service_kit.stopping() {
             return 0
         }
@@ -203,7 +205,10 @@ take_nic :: fn(service: ptr[mut Service], dialing: os.Channel[connector.Connecto
         request(service, .Receive(slot))
     }
     stack :: runtime.new(net_stack.Stack)
-    net_stack.start(stack, net_stack.Setup.{mac = net_stack.Mac.{bytes = mac}, mtu = service.info.mtu, seed = random.next_u64()}, now())
+    // The stack's random generator's key, from the system's generator: what can't be guessed on the network comes of it
+    setup := net_stack.Setup.{mac = net_stack.Mac.{bytes = mac}, mtu = service.info.mtu}
+    random.fill(setup.key[0..<setup.key.count])
+    net_stack.start(stack, setup, now())
     service.stack = stack
     pump(service, stack)
 }
@@ -292,6 +297,10 @@ pump :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
         happened :: net_stack.take_event(stack) or_break
         report(service, stack, happened)
     }
+    // An event dropped, the queue full: whatever waits on one looked at again, so none waits for ever
+    if net_stack.take_events_lost(stack) {
+        catch_up(service, stack)
+    }
     take_stack_news(service, stack)
     if service.buffer != 0 && cast[slop_os.Handle](service.nic) != slop_os.NO_HANDLE {
         for &busy, index in service.sending {
@@ -320,6 +329,36 @@ pump :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
     deadline :: if racing < stack_deadline { racing } else { stack_deadline }
     if deadline != ~cast[u64](0) {
         _ = slop_os.port_set_timer(service.port, TIMER_KEY, deadline)
+    }
+}
+
+/**
+ * Look again at what waits on the stack's events, after some were dropped: each lookup that's done is answered, and
+ * each stream whose connection's gone ends, as their Resolved and Ended would have done.
+ *
+ * @param service The service.
+ * @param stack The stack.
+ */
+catch_up :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
+    for each in service.serving.pending {
+        if each.active {
+            lookup_done(service, stack, each.lookup)
+        }
+    }
+    for i in cast[usize](0)..<STREAMS {
+        if i >= service.serving.streams.count {
+            break
+        }
+        stream :: &service.serving.streams[i]
+        if cast[slop_os.Handle](stream.end) == slop_os.NO_HANDLE || stream.ended || stream.race.racing {
+            continue
+        }
+        status :: net_stack.tcp_status(stack, stream.connection)
+        if status.ended {
+            why :: if status.state == .TimeWait { net_stack.TcpEnding.Closed } else { net_stack.TcpEnding.Aborted }
+            connection_ended(service, net_stack.TcpEnded.{connection = stream.connection, why = why,
+                delivered = stream.watched.delivered, acknowledged = stream.watched.acknowledged})
+        }
     }
 }
 
@@ -354,6 +393,12 @@ report :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], happene
             if !assigned.link_local {
                 service.global_v6 = true
             }
+        }
+        case AddressExpired(address) => {
+            text_buffer.append(&line, "IPv6 address ")
+            append_v6(&line, address)
+            text_buffer.append(&line, " expired")
+            service.global_v6 = net_stack.has_global_v6(stack)
         }
         case AddressConflict(address) => {
             text_buffer.append(&line, "another has ")
@@ -440,6 +485,18 @@ LISTENERS :: 16
 SOCKETS :: 16
 /** The most Accepts a listener holds at once. */
 HELD_ACCEPTS :: 4
+/*
+ * What one network channel may hold at once (13h), charged to the channel it was asked through (its "root", a number
+ * each channel has of its own), so no one channel takes all of what's shared. Charged by channel, not by program: the
+ * session manager hands every session and program a Narrow or Copy of one connection, and channels can be passed on,
+ * so the service can't tell whose a channel is.
+ */
+/** TCP connections: streams opened, accepted or by name. */
+STREAMS_PER_ROOT :: 16
+LISTENERS_PER_ROOT :: 4
+SOCKETS_PER_ROOT :: 4
+/** Resolves and OpenNames waiting for their lookups. */
+LOOKUPS_PER_ROOT :: 2
 /** The largest memory a connection's rings take: 1 MiB, two rings of 512 KiB. */
 MAX_MEMORY : u64 : 1 << 20
 /** The smallest: two pages. */
@@ -471,6 +528,10 @@ Stream :: struct {
     remote : net_address.Endpoint,
     /** For a connection by name, its addresses' race (names.hsc); not racing for any other. */
     race : Race,
+    /** The root it's charged to. */
+    root : u64,
+    /** Whether an answer to it couldn't be sent, so it's let go once its serving's done (drop_broken). */
+    broken : bool,
 }
 
 /** A listening port a program holds. */
@@ -486,6 +547,10 @@ ListenerSlot :: struct {
     pending : u32[HELD_ACCEPTS],
     pending_remote : net_address.Endpoint[HELD_ACCEPTS],
     pending_count : usize,
+    /** Whether an answer to it couldn't be sent (drop_broken). */
+    broken : bool,
+    /** The root it's charged to, as are the streams it accepts. */
+    root : u64,
 }
 
 /** A UDP socket a program holds. */
@@ -498,6 +563,10 @@ SocketSlot :: struct {
     receiving : bool,
     /** The policy of the connection it was opened on, which each datagram sent or taken is checked against. */
     policy : network.Policy,
+    /** Whether an answer to it couldn't be sent (drop_broken). */
+    broken : bool,
+    /** The root it's charged to. */
+    root : u64,
 }
 
 /** What serving programs keeps: their channels and what each holds. */
@@ -511,6 +580,14 @@ Serving :: struct {
     sockets : SocketSlot[SOCKETS],
     /** Resolves and OpenNames waiting for their lookups (names.hsc). */
     pending : Pending[PENDING],
+    /** Whether an answer to each network channel couldn't be sent (drop_broken), by its index in clients. */
+    client_broken : bool[service_kit.MAX_CLIENTS],
+    /** The number each network channel's charged by, its own, by its index in clients (the PER_ROOT shares). */
+    client_root : u64[service_kit.MAX_CLIENTS],
+    /** Which is the listener, whose Connects are allowed everything, as only the supervisor holds it. */
+    client_listener : bool[service_kit.MAX_CLIENTS],
+    /** The next channel's number, from 1. */
+    next_root : u64,
 }
 
 /**
@@ -532,7 +609,8 @@ start_serving :: fn(service: ptr[mut Service], clients: os.Listener[network.Netw
     for &each in serving.sockets {
         each.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
     }
-    return add_network_client(service, clients.end, network.everything())
+    serving.next_root = 1
+    return add_network_client(service, clients.end, network.everything(), listener = true)
 }
 
 /**
@@ -583,7 +661,7 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
             case Received => {}
             case Empty => return void
             case Unsupported => {
-                _ = network.answer_unsupported(end, service.port)
+                answered(service, end, network.answer_unsupported(end, service.port, wait = false))
                 continue
             }
             case _ => {
@@ -596,10 +674,11 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
             return void
         }
         policy :: &serving.policies[index]
+        root :: if index < serving.client_root.count { serving.client_root[index] } else { cast[u64](0) }
         match os.message_of[network.Request](into)^ {
             case Open(open) => {
                 if network.allows_connect(policy, network.TRANSPORT_TCP, open.to) {
-                    answer_network(service, end, open_stream(service, open))
+                    answer_network(service, end, open_stream(service, open, root))
                 }
                 else {
                     _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
@@ -607,9 +686,10 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 }
             }
             case Listen(port) => answer_network(service, end, if network.allows_listen(policy, network.TRANSPORT_TCP, port) {
-                open_listener(service, port) } else { network.Response.Refused(.NotAllowed) })
-            case Udp(port) => answer_network(service, end, if port == 0 || network.allows_listen(policy, network.TRANSPORT_UDP, port) {
-                open_socket(service, port, policy) } else { network.Response.Refused(.NotAllowed) })
+                open_listener(service, port, root) } else { network.Response.Refused(.NotAllowed) })
+            // An ephemeral port needs a policy that sends UDP somewhere, as the socket is only for sending and answers
+            case Udp(port) => answer_network(service, end, if (port == 0 && sends_udp(policy)) || (port != 0 && network.allows_listen(policy, network.TRANSPORT_UDP, port)) {
+                open_socket(service, port, policy, root) } else { network.Response.Refused(.NotAllowed) })
             case Narrow(narrowing) => {
                 wanted := network.policy_of(os.items(into, narrowing.connect), os.items(into, narrowing.listen))
                     or_else network.Policy.{connect_count = network.MAX_RULES + 1}
@@ -619,7 +699,7 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
             }
             case Copy => answer_network(service, end, another_connection(service, policy^))
             case Resolve(asked) => {
-                if !network.allows_resolve(policy) {
+                if !network.allows_resolve(policy, os.items(into, asked.name)) {
                     answer_network(service, end, .Refused(.NotAllowed))
                     continue
                 }
@@ -631,7 +711,7 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 }
             }
             case OpenName(named) => {
-                if !network.allows_resolve(policy) {
+                if !network.allows_resolve(policy, os.items(into, named.name)) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](named.memory))
                     answer_network(service, end, .Refused(.NotAllowed))
                     continue
@@ -643,11 +723,12 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
             }
             case Connect(connection) => {
                 /*
-                 * Through the listener, the first client: everything allowed, as the supervisor gives the listener only
-                 * to who holds the network. Through any other connection, that connection's policy, so a Connect is
-                 * no way around a Narrow
+                 * Through the listener: everything allowed, as the supervisor gives the listener only to who holds the
+                 * network. Through any other connection, that connection's policy, so a Connect is no way around a
+                 * Narrow
                  */
-                given :: if index == 0 { network.everything() } else { policy^ }
+                listener :: index < serving.client_listener.count && serving.client_listener[index]
+                given :: if listener { network.everything() } else { policy^ }
                 if !add_network_client(service, connection.end, given) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
@@ -662,13 +743,24 @@ serve_client :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
  * @param service The service.
  * @param end The service's end of it.
  * @param policy What it allows.
- * @return True once it's served; false if there's no room, when end isn't taken.
+ * @param listener Whether it's the listener the supervisor connects programs through.
+ * @return True once it's served, with a number of its own to charge what it asks for to; false if there's no room,
+ *     when end isn't taken.
  */
-add_network_client :: fn(service: ptr[mut Service], end: slop_os.Channel, policy: network.Policy) -> bool {
+add_network_client :: fn(service: ptr[mut Service], end: slop_os.Channel, policy: network.Policy, listener: bool = false) -> bool {
     serving :: &service.serving
     index :: service_kit.add_client_index(&serving.clients, service.port, end) or_return false
     if index < serving.policies.count {
         serving.policies[index] = policy
+    }
+    if index < serving.client_root.count && index < serving.client_listener.count {
+        serving.client_root[index] = serving.next_root
+        serving.next_root += 1
+        serving.client_listener[index] = listener
+    }
+    // Its place's last channel may have broken, and gone another way before drop_broken
+    if index < serving.client_broken.count {
+        serving.client_broken[index] = false
     }
     return true
 }
@@ -695,7 +787,40 @@ another_connection :: fn(service: ptr[mut Service], policy: network.Policy) -> n
 }
 
 /**
- * Send an answer on a network channel; one that can't be sent is dropped, and what it carried closed.
+ * Count a root's streams: live ones charged to it.
+ *
+ * @param service The service.
+ * @param root The root.
+ * @return How many it holds.
+ */
+streams_of :: fn(service: ptr[Service], root: u64) -> usize {
+    count := cast[usize](0)
+    for each in service.serving.streams {
+        if cast[slop_os.Handle](each.end) != slop_os.NO_HANDLE && each.root == root {
+            count += 1
+        }
+    }
+    return count
+}
+
+/**
+ * Tell whether a policy sends UDP anywhere: what an ephemeral socket needs.
+ *
+ * @param policy The policy.
+ * @return True if a connect rule allows UDP.
+ */
+sends_udp :: fn(policy: ptr[network.Policy]) -> bool {
+    for rule, i in policy.connect {
+        if cast[u32](i) < policy.connect_count && rule.transports & network.TRANSPORT_UDP != 0 {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * Send an answer on a network channel, without waiting; one that can't be sent is dropped, what it carried closed, and
+ * the channel let go (answered).
  *
  * @param service The service.
  * @param end The channel.
@@ -705,7 +830,81 @@ answer_network :: fn(service: ptr[mut Service], end: slop_os.Channel, response: 
     out := os.Outgoing.{}
     made :: os.begin[network.Response](&out)
     made^ = response
-    _ = network.send_response(end, service.port, &out)
+    answered(service, end, network.send_response(end, service.port, &out, wait = false))
+}
+
+/**
+ * Take what sending an answer gave: one that couldn't be sent, as the program's not reading its answers, or its end's
+ * gone, marks the channel it was sent on broken, to be let go once serving's done (drop_broken). The service never
+ * waits on a program, which could hold it for as long as it liked.
+ *
+ * @param service The service.
+ * @param end The channel the answer was sent on: a network channel's, a stream's, a listener's or a socket's.
+ * @param result What sending gave: null if it was sent.
+ */
+answered :: fn(service: ptr[mut Service], end: slop_os.Channel, result: slop_os.ChannelError?) {
+    if result is_none {
+        return void
+    }
+    serving :: &service.serving
+    for each, i in serving.clients.ends {
+        if i < serving.clients.count && i < serving.client_broken.count && each == end {
+            serving.client_broken[i] = true
+            return void
+        }
+    }
+    for &stream in serving.streams {
+        if stream.end == end {
+            stream.broken = true
+            return void
+        }
+    }
+    for &slot in serving.listeners {
+        if slot.end == end {
+            slot.broken = true
+            return void
+        }
+    }
+    for &slot in serving.sockets {
+        if slot.end == end {
+            slot.broken = true
+            return void
+        }
+    }
+}
+
+/**
+ * Let go of every channel an answer couldn't be sent on, as each would be if its program had closed it: a network
+ * channel's lookups dropped, a stream's connection aborted, a listener's and a socket's closed.
+ *
+ * @param service The service.
+ */
+drop_broken :: fn(service: ptr[mut Service]) {
+    serving :: &service.serving
+    for i in cast[usize](0)..<serving.client_broken.count {
+        if serving.client_broken[i] {
+            serving.client_broken[i] = false
+            if i < serving.clients.count && cast[slop_os.Handle](serving.clients.ends[i]) != slop_os.NO_HANDLE {
+                drop_lookups(service, i)
+                service_kit.drop_client(&serving.clients, i)
+            }
+        }
+    }
+    for i in cast[usize](0)..<STREAMS {
+        if i < serving.streams.count && serving.streams[i].broken {
+            free_stream_entry(service, i)
+        }
+    }
+    for i in cast[usize](0)..<LISTENERS {
+        if i < serving.listeners.count && serving.listeners[i].broken {
+            close_listener_slot(service, i)
+        }
+    }
+    for i in cast[usize](0)..<SOCKETS {
+        if i < serving.sockets.count && serving.sockets[i].broken {
+            close_socket_slot(service, i)
+        }
+    }
 }
 
 /**
@@ -748,14 +947,20 @@ endpoint_of :: fn(address: net_stack.IpAddress, port: u16) -> net_address.Endpoi
 }
 
 /**
- * Take a program's memory for a stream: check its size.
+ * Take a program's memory for a stream: check its size, and that the stack can copy to and from it without waiting.
+ *
+ * Paged memory would have the service's one thread wait on the program's pager, for as long as the pager liked, and a
+ * boot module or a window that isn't writable can't take what arrives. Writing nothing to it tells: the kernel
+ * refuses those kinds (WrongKind) before it copies anything, and copies nothing for the rest.
  *
  * @param memory The memory, the service's now; closed if it won't do.
- * @return Its size; null if it isn't MIN_MEMORY to MAX_MEMORY, or a whole number of pairs of pages.
+ * @return Its size; null if it isn't MIN_MEMORY to MAX_MEMORY, or a whole number of pairs of pages, or isn't plain
+ *     writable memory.
  */
 take_memory :: fn(memory: slop_os.Memory) -> u64? {
     size :: slop_os.memory_size(memory) or_else 0
-    if size < MIN_MEMORY || size > MAX_MEMORY || size % (2 * PAGE) != 0 {
+    nothing : u8[1]
+    if size < MIN_MEMORY || size > MAX_MEMORY || size % (2 * PAGE) != 0 || (slop_os.memory_write(memory, 0, nothing[0..<0]) is_error) {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
     }
@@ -776,14 +981,19 @@ rings_of :: fn(memory: slop_os.Memory, bytes: u64) -> net_stack.TcpRings {
 }
 
 /**
- * Find a free stream entry.
+ * Find a free stream entry for a root, charged to it.
  *
  * @param service The service.
- * @return Its index; null if all are taken.
+ * @param root The root.
+ * @return Its index, its root set; null if all are taken, or the root holds STREAMS_PER_ROOT.
  */
-free_stream :: fn(service: ptr[Service]) -> usize? {
-    for each, i in service.serving.streams {
+free_stream :: fn(service: ptr[mut Service], root: u64) -> usize? {
+    if streams_of(service, root) >= STREAMS_PER_ROOT {
+        return null
+    }
+    for &each, i in service.serving.streams {
         if cast[slop_os.Handle](each.end) == slop_os.NO_HANDLE {
+            each.root = root
             return i
         }
     }
@@ -817,9 +1027,10 @@ make_stream_channel :: fn(service: ptr[mut Service], index: usize) -> os.Channel
  *
  * @param service The service.
  * @param open What Open asked.
+ * @param root The root it's charged to.
  * @return Opened with the connection's channel; or Refused.
  */
-open_stream :: fn(service: ptr[mut Service], open: network.OpenTo) -> network.Response {
+open_stream :: fn(service: ptr[mut Service], open: network.OpenTo, root: u64) -> network.Response {
     stack :: match service.stack {
         case Some(found) => found
         case None => {
@@ -838,7 +1049,7 @@ open_stream :: fn(service: ptr[mut Service], open: network.OpenTo) -> network.Re
         _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
         return .Refused(.BadEndpoint)
     }
-    index :: match free_stream(service) {
+    index :: match free_stream(service, root) {
         case Some(found) => found
         case None => {
             _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
@@ -929,7 +1140,7 @@ answer_watch :: fn(service: ptr[mut Service], index: usize) {
     out := os.Outgoing.{}
     made :: os.begin[tcp_stream.Response](&out)
     made^ = .Progress(progress)
-    _ = tcp_stream.send_response(stream.end, service.port, &out)
+    answered(service, stream.end, tcp_stream.send_response(stream.end, service.port, &out, wait = false))
 }
 
 /**
@@ -955,7 +1166,7 @@ serve_stream :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
             case Received => {}
             case Empty => break
             case Unsupported => {
-                _ = tcp_stream.answer_unsupported(end, service.port)
+                answered(service, end, tcp_stream.answer_unsupported(end, service.port, wait = false))
                 continue
             }
             case _ => {
@@ -990,13 +1201,15 @@ serve_stream :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 out := os.Outgoing.{}
                 made :: os.begin[tcp_stream.Response](&out)
                 index :: cast[usize](stream.connection & 0xffff)
-                port :: if index < stack.tcbs.count { stack.tcbs[index].local_port } else { cast[u16](0) }
+                // Its own connection's port only: the entry may be another's since this one ended
+                port :: if index < stack.tcbs.count && cast[u32](stack.tcbs[index].generation) == stream.connection >> 16 {
+                    stack.tcbs[index].local_port } else { cast[u16](0) }
                 local :: match stream.remote.address.family {
                     case .V4 => endpoint_of(.V4(stack.ipv4), port)
                     case _ => net_address.Endpoint.{port = port}
                 }
                 made^ = .Described(tcp_stream.StreamInfo.{local = local, remote = stream.remote, ring_bytes = stream.bytes / 2})
-                _ = tcp_stream.send_response(end, service.port, &out)
+                answered(service, end, tcp_stream.send_response(end, service.port, &out, wait = false))
             }
         }
     }
@@ -1021,6 +1234,7 @@ free_stream_entry :: fn(service: ptr[mut Service], index: usize) {
         }
     }
     stream.race = Race.{}
+    stream.broken = false
     _ = slop_os.port_unbind(service.port, STREAM_KEY + cast[u64](index))
     _ = slop_os.handle_close(cast[slop_os.Handle](stream.end))
     stream.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -1081,6 +1295,7 @@ take_stack_news :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]
  * @param ended The stack's Ended.
  */
 connection_ended :: fn(service: ptr[mut Service], ended: net_stack.TcpEnded) {
+    forget_pending(service, ended.connection)
     index :: stream_of(service, ended.connection) or_return void
     if index >= service.serving.streams.count {
         return void
@@ -1098,6 +1313,34 @@ connection_ended :: fn(service: ptr[mut Service], ended: net_stack.TcpEnded) {
         peer_finished = ended.why == .Closed, ending = ending_of(ended.why)}
     stream.ended = true
     answer_watch(service, index)
+}
+
+/**
+ * Take a connection that's ended off whichever listener's waiting list it's on, so no Accept is spent on it.
+ *
+ * @param service The service.
+ * @param connection The connection.
+ */
+forget_pending :: fn(service: ptr[mut Service], connection: u32) {
+    for &slot in service.serving.listeners {
+        with {
+            i := cast[usize](0)
+        }
+        loop {
+            if i < slot.pending.count && slot.pending[i] == connection {
+                for j in i + 1..<slot.pending_count {
+                    if j < slot.pending.count && j < slot.pending_remote.count {
+                        slot.pending[j - 1] = slot.pending[j]
+                        slot.pending_remote[j - 1] = slot.pending_remote[j]
+                    }
+                }
+                slot.pending_count -= 1
+                continue
+            }
+            i += 1
+        }
+        while i < slot.pending_count
+    }
 }
 
 /**
@@ -1122,20 +1365,29 @@ ending_of :: fn(why: net_stack.TcpEnding) -> tcp_stream.Ending {
  *
  * @param service The service.
  * @param port The port.
- * @return Listening with the listener's channel; or Refused.
+ * @param root The root it's charged to.
+ * @return Listening with the listener's channel; or Refused, NoRoom also once the root holds LISTENERS_PER_ROOT.
  */
-open_listener :: fn(service: ptr[mut Service], port: u16) -> network.Response {
+open_listener :: fn(service: ptr[mut Service], port: u16, root: u64) -> network.Response {
     startup :: slop_os.startup_block()
     stack :: service.stack or_return .Refused(.NoRoute)
     if port == 0 {
         return .Refused(.BadEndpoint)
     }
     index := cast[usize](LISTENERS)
+    held := cast[usize](0)
     for each, i in service.serving.listeners {
         if cast[slop_os.Handle](each.end) == slop_os.NO_HANDLE {
-            index = i
-            break
+            if index == LISTENERS {
+                index = i
+            }
         }
+        else if each.root == root {
+            held += 1
+        }
+    }
+    if held >= LISTENERS_PER_ROOT {
+        return .Refused(.NoRoom)
     }
     if index >= service.serving.listeners.count {
         return .Refused(.NoRoom)
@@ -1155,7 +1407,7 @@ open_listener :: fn(service: ptr[mut Service], port: u16) -> network.Response {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return .Refused(.NoRoom)
     }
-    service.serving.listeners[index] = ListenerSlot.{end = pair.b, listener = listener}
+    service.serving.listeners[index] = ListenerSlot.{end = pair.b, listener = listener, root = root}
     return .Listening(os.Channel[tcp_listener.TcpListener].{end = pair.a})
 }
 
@@ -1180,7 +1432,7 @@ serve_listener :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.I
             case Received => {}
             case Empty => break
             case Unsupported => {
-                _ = tcp_listener.answer_unsupported(end, service.port)
+                answered(service, end, tcp_listener.answer_unsupported(end, service.port, wait = false))
                 continue
             }
             case _ => {
@@ -1215,7 +1467,7 @@ answer_listener :: fn(service: ptr[mut Service], end: slop_os.Channel, response:
     out := os.Outgoing.{}
     made :: os.begin[tcp_listener.Response](&out)
     made^ = response
-    _ = tcp_listener.send_response(end, service.port, &out)
+    answered(service, end, tcp_listener.send_response(end, service.port, &out, wait = false))
 }
 
 /**
@@ -1302,7 +1554,7 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
         }
         slot.held_count -= 1
         end :: slot.end
-        stream_index :: match free_stream(service) {
+        stream_index :: match free_stream(service, slot.root) {
             case Some(found) => found
             case None => {
                 net_stack.tcp_abort(stack, connection)
@@ -1320,8 +1572,25 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
             }
         }
         if !net_stack.tcp_accept(stack, connection, rings_of(memory, bytes)) {
-            // It went before it was taken: the Accept's memory waits for the next
-            release_memory(memory)
+            // It went before it was taken: the Accept's memory waits for the next, first again
+            if slot.held_count < slot.held.count {
+                with {
+                    i := slot.held_count
+                }
+                loop {
+                    if i < slot.held.count {
+                        slot.held[i] = slot.held[i - 1]
+                    }
+                    i -= 1
+                }
+                while i > 0
+                slot.held[0] = memory
+                slot.held_count += 1
+            }
+            else {
+                release_memory(memory)
+                answer_listener(service, end, .Refused(.TooMany))
+            }
             continue
         }
         channel :: match make_stream_channel(service, stream_index) {
@@ -1329,6 +1598,7 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
             case None => {
                 net_stack.tcp_abort(stack, connection)
                 release_memory(memory)
+                answer_listener(service, end, .Refused(.TooMany))
                 continue
             }
         }
@@ -1352,17 +1622,26 @@ accept_pending :: fn(service: ptr[mut Service], index: usize) {
  *
  * @param service The service.
  * @param port The port, or 0 for an ephemeral one.
- * @return Bound with the socket's channel; or Refused.
+ * @param root The root it's charged to.
+ * @return Bound with the socket's channel; or Refused, NoRoom also once the root holds SOCKETS_PER_ROOT.
  */
-open_socket :: fn(service: ptr[mut Service], port: u16, policy: ptr[network.Policy]) -> network.Response {
+open_socket :: fn(service: ptr[mut Service], port: u16, policy: ptr[network.Policy], root: u64) -> network.Response {
     startup :: slop_os.startup_block()
     stack :: service.stack or_return .Refused(.NoRoute)
     index := cast[usize](SOCKETS)
+    held := cast[usize](0)
     for each, i in service.serving.sockets {
         if cast[slop_os.Handle](each.end) == slop_os.NO_HANDLE {
-            index = i
-            break
+            if index == SOCKETS {
+                index = i
+            }
         }
+        else if each.root == root {
+            held += 1
+        }
+    }
+    if held >= SOCKETS_PER_ROOT {
+        return .Refused(.NoRoom)
     }
     if index >= service.serving.sockets.count {
         return .Refused(.NoRoom)
@@ -1382,8 +1661,28 @@ open_socket :: fn(service: ptr[mut Service], port: u16, policy: ptr[network.Poli
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return .Refused(.NoRoom)
     }
-    service.serving.sockets[index] = SocketSlot.{end = pair.b, socket = socket, policy = policy^}
+    service.serving.sockets[index] = SocketSlot.{end = pair.b, socket = socket, policy = policy^, root = root}
     return .Bound(os.Channel[datagrams.Datagrams].{end = pair.a})
+}
+
+/**
+ * Close a socket whose channel's gone, or broken: the stack's socket closed, the channel closed, the slot freed.
+ *
+ * @param service The service.
+ * @param index The socket's index.
+ */
+close_socket_slot :: fn(service: ptr[mut Service], index: usize) {
+    if index >= service.serving.sockets.count {
+        return void
+    }
+    slot :: &service.serving.sockets[index]
+    match service.stack {
+        case Some(stack) => net_stack.udp_close(stack, slot.socket)
+        case None => {}
+    }
+    _ = slop_os.port_unbind(service.port, SOCKET_KEY + cast[u64](index))
+    _ = slop_os.handle_close(cast[slop_os.Handle](slot.end))
+    slot^ = SocketSlot.{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
 }
 
 /**
@@ -1408,14 +1707,11 @@ serve_socket :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
             case Received => {}
             case Empty => break
             case Unsupported => {
-                _ = datagrams.answer_unsupported(end, service.port)
+                answered(service, end, datagrams.answer_unsupported(end, service.port, wait = false))
                 continue
             }
             case _ => {
-                net_stack.udp_close(stack, slot.socket)
-                _ = slop_os.port_unbind(service.port, SOCKET_KEY + cast[u64](index))
-                _ = slop_os.handle_close(cast[slop_os.Handle](end))
-                slot^ = SocketSlot.{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+                close_socket_slot(service, index)
                 return void
             }
         }
@@ -1434,7 +1730,7 @@ serve_socket :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Inc
                 out := os.Outgoing.{}
                 made :: os.begin[datagrams.Response](&out)
                 made^ = .Described(endpoint_of(.V4(stack.ipv4), net_stack.udp_port(stack, slot.socket)))
-                _ = datagrams.send_response(end, service.port, &out)
+                answered(service, end, datagrams.send_response(end, service.port, &out, wait = false))
             }
         }
     }
@@ -1471,5 +1767,5 @@ answer_receive :: fn(service: ptr[mut Service], index: usize) {
     out := os.Outgoing.{}
     made :: os.begin[datagrams.Response](&out)
     made^ = .Datagram(datagrams.Arrived.{from = endpoint_of(got.from, got.from_port), bytes = os.append(&out, view_of(&payload[0], count))})
-    _ = datagrams.send_response(slot.end, service.port, &out)
+    answered(service, slot.end, datagrams.send_response(slot.end, service.port, &out, wait = false))
 }

@@ -3,6 +3,7 @@ package net_stack
 #if base.OS == .SlopOS {
     import slop_os from "std/os"
 }
+import crypto from "std"
 
 /*
  * TCP (RFC 9293), with window scaling and timestamps (RFC 7323), selective acknowledgements (RFC 2018) and loss
@@ -23,6 +24,15 @@ package net_stack
 
 /** How many TCP connections the stack holds at once. */
 TCP_CONNECTIONS :: 64
+/**
+ * How many of them incoming connections leave free, for connections made (tcp_connect) and accepted ones' peers: a
+ * flood of SYNs takes no more than the rest (13h).
+ */
+TCP_RESERVED :: 8
+/** How many connections one listener has waiting at once, Incoming or SYN-RECEIVED: its backlog (13h). */
+TCP_BACKLOG :: 8
+/** The smallest MSS a peer can ask for: smaller would have it make the stack send a great many tiny segments. */
+MIN_MSS : u32 : 88
 /** How many TCP listeners it holds at once. */
 TCP_LISTENERS :: 16
 /** How many SACK blocks each side keeps. */
@@ -57,6 +67,8 @@ MIN_RTO : u64 : 200_000_000
 MAX_RTO : u64 : 60 * SECOND
 /** How many times a SYN is sent before the connection's given up: 6, about a minute. */
 SYN_TRIES :: 6
+/** How many times a SYN-ACK is: 3, about 7 s, so a SYN from an address that doesn't answer holds its entry briefly. */
+PASSIVE_SYN_TRIES :: 3
 /** How many times data is retransmitted without progress before the connection's given up: 12. */
 DATA_TRIES :: 12
 /** The longest an acknowledgement is held, hoping to send it with data or for a second segment: 40 ms. */
@@ -65,6 +77,12 @@ DELAYED_ACK : u64 : 40_000_000
 TIME_WAIT : u64 : 60 * SECOND
 /** How long an incoming connection waits for tcp_accept before it's dropped: 5 s. */
 ACCEPT_WAIT : u64 : 5 * SECOND
+/**
+ * How long FIN-WAIT-2 waits with nothing from the peer, its own FIN acknowledged, before the connection's let go: 60 s,
+ * as Linux has it, or a peer that never finishes would hold its entry for ever (13h). Each segment from the peer starts
+ * it again, so a peer still sending, half closed, isn't cut off.
+ */
+FIN_WAIT_2 : u64 : 60 * SECOND
 
 // CUBIC (RFC 9438 §4)
 /** CUBIC's C, in thousandths: 0.4. */
@@ -209,6 +227,15 @@ Tcb :: struct {
     /** Whether the FIN's been sent, at fin_seq. */
     fin_sent : bool,
     fin_seq : u32,
+    /**
+     * Whether the FIN, sent, goes again after the data, as a timeout went back: it stays sent, so its acknowledgement
+     * is still counted as its own, not data's (13h).
+     */
+    fin_resend : bool,
+    /** The largest window the peer's advertised, scaled: how far below snd_una an acknowledgement may be (RFC 5961 §5). */
+    max_snd_wnd : u64,
+    /** Whether the peer's SYN had a window scale option, so a SYN-ACK has one too. */
+    peer_scales : bool,
     /** The largest segment it sends, from the peer's MSS option and the MTU. */
     mss : u32,
 
@@ -535,18 +562,34 @@ find_tcb :: fn(stack: ptr[mut Stack], connection: u32) -> ptr[mut Tcb]? {
 }
 
 /**
- * Find a free entry.
+ * Find a free connection entry: a free one, if more than reserve are; else the one in TIME-WAIT longest, whose
+ * connection's told as ended already (13h).
  *
  * @param stack The stack.
- * @return Its index; null if every one's taken.
+ * @param reserve How many free entries to leave: TCP_RESERVED for an incoming connection, 0 for one made.
+ * @return Its index; null if there's none to have.
  */
-free_tcb :: fn(stack: ptr[Stack]) -> usize? {
+free_tcb :: fn(stack: ptr[Stack], reserve: usize = 0) -> usize? {
+    free := cast[usize](0)
+    first : usize? = null
+    waiting : usize? = null
     for each, i in stack.tcbs {
         if each.state == .Free {
-            return i
+            free += 1
+            if first is_none {
+                first = i
+            }
+        }
+        else if each.state == .TimeWait {
+            match waiting {
+                case Some(found) => if found < stack.tcbs.count && each.deadline < stack.tcbs[found].deadline {
+                    waiting = i
+                }
+                case None => waiting = i
+            }
         }
     }
-    return null
+    return if free > reserve { first } else { waiting }
 }
 
 /**
@@ -683,7 +726,8 @@ ephemeral_port :: fn(stack: ptr[mut Stack], remote: IpAddress, remote_port: u16)
 
 /**
  * Make an initial sequence number: a keyed hash of the connection's ports and peer, plus a clock ticking every 4 µs
- * (RFC 6528).
+ * (RFC 6528). The hash is BLAKE2b of the stack's 32-byte secret and them, so another connection's numbers don't give
+ * away this one's.
  *
  * @param stack The stack, whose secret keys the hash.
  * @param remote The peer.
@@ -692,20 +736,25 @@ ephemeral_port :: fn(stack: ptr[mut Stack], remote: IpAddress, remote_port: u16)
  * @return The number.
  */
 initial_sequence :: fn(stack: ptr[Stack], remote: IpAddress, local_port: u16, remote_port: u16) -> u32 {
-    hash := cast[u64](0xcbf29ce484222325)
-    for byte in stack.secret {
-        hash = (hash ~ cast[u64](byte)) * 0x100000001b3
-    }
     address :: match remote {
         case V4(v4) => ipv6_of4(v4)
         case V6(v6) => v6
     }
-    for byte in address.bytes {
-        hash = (hash ~ cast[u64](byte)) * 0x100000001b3
+    input : u8[52]
+    for byte, i in stack.secret {
+        input[i] = byte
     }
-    hash = (hash ~ cast[u64](local_port)) * 0x100000001b3
-    hash = (hash ~ cast[u64](remote_port)) * 0x100000001b3
-    return cast[u32](hash) + cast[u32](stack.now / 4000)
+    for byte, i in address.bytes {
+        input[32 + i] = byte
+    }
+    input[48] = cast[u8](local_port >> 8)
+    input[49] = cast[u8](local_port)
+    input[50] = cast[u8](remote_port >> 8)
+    input[51] = cast[u8](remote_port)
+    hash : u8[8]
+    _ = crypto.blake2b(input[0..<input.count], hash[0..<hash.count])
+    keyed :: (cast[u32](hash[0]) << 24) | (cast[u32](hash[1]) << 16) | (cast[u32](hash[2]) << 8) | cast[u32](hash[3])
+    return keyed + cast[u32](stack.now / 4000)
 }
 
 // ---- Rings
@@ -896,7 +945,7 @@ send_syn :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], answering: bool) {
         put_u32(o, length + 8, if answering { tcb.ts_recent } else { cast[u32](0) })
         length += 12
     }
-    if !answering || tcb.send_scale != 0xff {
+    if !answering || tcb.peer_scales {
         put_u8(o, length, TCP_OPTION_NOP)
         put_u8(o, length + 1, TCP_OPTION_WINDOW_SCALE)
         put_u8(o, length + 2, 3)
@@ -1003,6 +1052,14 @@ tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
             }
             sent_any = true
             continue
+        }
+        // Sent again after a timeout went back, at its own place, the state already past it
+        if tcb.fin_resend && unsent == 0 {
+            tcb.fin_resend = false
+            send_segment(stack, tcb, tcb.fin_seq, TCP_FIN | TCP_ACK, nothing(), advertise(tcb))
+            tcb.snd_nxt = tcb.fin_seq + 1
+            sent_any = true
+            break
         }
         if tcb.finishing && !tcb.fin_sent && unsent == 0 {
             tcb.fin_sent = true
@@ -1416,7 +1473,17 @@ receive_tcp :: fn(stack: ptr[mut Stack], source: IpAddress, pseudo: u64, bytes: 
  * @param segment The SYN.
  */
 incoming :: fn(stack: ptr[mut Stack], listener: u32, source: IpAddress, segment: ptr[Segment]) {
-    index :: free_tcb(stack) or_return void
+    // The listener's backlog: past it, a SYN's dropped, as is one past the entries kept for connections made
+    waiting := cast[usize](0)
+    for each in stack.tcbs {
+        if each.listener == listener + 1 && (each.state == .Incoming || each.state == .SynReceived) {
+            waiting += 1
+        }
+    }
+    if waiting >= TCP_BACKLOG {
+        return void
+    }
+    index :: free_tcb(stack, TCP_RESERVED) or_return void
     if index >= stack.tcbs.count {
         return void
     }
@@ -1442,8 +1509,8 @@ take_syn_options :: fn(tcb: ptr[mut Tcb], segment: ptr[Segment]) {
     if segment.mss != 0 && segment.mss < tcb.mss {
         tcb.mss = segment.mss
     }
-    if tcb.mss < 64 {
-        tcb.mss = 64
+    if tcb.mss < MIN_MSS {
+        tcb.mss = MIN_MSS
     }
     tcb.sack = segment.sack_permitted
     tcb.timestamps = segment.has_timestamps
@@ -1452,6 +1519,7 @@ take_syn_options :: fn(tcb: ptr[mut Tcb], segment: ptr[Segment]) {
     }
     // 0xff until it's known whether the peer scales
     tcb.send_scale = if segment.window_scale >= 0 { cast[u8](segment.window_scale) } else { cast[u8](0xff) }
+    tcb.peer_scales = segment.window_scale >= 0
     tcb.cwnd = 10 * cast[u64](tcb.mss)
 }
 
@@ -1482,10 +1550,13 @@ segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
     if flags & TCP_FIN != 0 {
         length += 1
     }
-    acceptable :: if length == 0 {
+    /*
+     * At a zero window a segment at rcv_nxt is acceptable for its ACK and RST, its data and FIN dropped (RFC 9293
+     * §3.10.7.4), so the peer's acknowledgements aren't lost while this side's window is closed
+     */
+    closed :: window == 0 && length > 0
+    acceptable :: if length == 0 || window == 0 {
         if window == 0 { segment.seq == tcb.rcv_nxt } else { seq_le(tcb.rcv_nxt, segment.seq) && seq_lt(segment.seq, tcb.rcv_nxt + cast[u32](window)) }
-    } else if window == 0 {
-        false
     } else {
         last :: segment.seq + length - 1
         (seq_le(tcb.rcv_nxt, segment.seq) && seq_lt(segment.seq, tcb.rcv_nxt + cast[u32](window)))
@@ -1516,6 +1587,10 @@ segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
     if flags & TCP_ACK == 0 {
         return void
     }
+    // FIN-WAIT-2's limit is for a peer gone quiet: one still sending, half closed, keeps it
+    if tcb.state == .FinWait2 {
+        tcb.deadline = stack.now + FIN_WAIT_2
+    }
     if tcb.timestamps && segment.has_timestamps && seq_le(segment.seq, tcb.rcv_nxt) {
         tcb.ts_recent = segment.ts_value
     }
@@ -1524,6 +1599,7 @@ segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
             tcb.state = .Established
             tcb.snd_una = segment.ack
             tcb.snd_wnd = cast[u64](segment.window) << cast[u64](tcb.send_scale)
+            tcb.max_snd_wnd = tcb.snd_wnd
             tcb.snd_wl1 = segment.seq
             tcb.snd_wl2 = segment.ack
             tcb.rto_deadline = 0
@@ -1535,11 +1611,20 @@ segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
             return void
         }
     }
-    acknowledgement(stack, tcb, segment, data.count)
+    // An acknowledgement of what wasn't sent, or from too far back, ends it there: its data isn't taken (RFC 5961 §5)
+    if !acknowledgement(stack, tcb, segment, data.count) {
+        tcp_output(stack, tcb)
+        return void
+    }
     if tcb.state == .Free {
         return void
     }
-    take_data(stack, tcb, segment, data)
+    if closed {
+        tcb.ack_now = true
+    }
+    else {
+        take_data(stack, tcb, segment, data)
+    }
     if tcb.state == .Free {
         return void
     }
@@ -1583,6 +1668,7 @@ syn_sent_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Se
         tcb.state = .Established
         // A SYN-ACK's window isn't scaled
         tcb.snd_wnd = cast[u64](segment.window)
+        tcb.max_snd_wnd = tcb.snd_wnd
         tcb.snd_wl1 = segment.seq
         tcb.snd_wl2 = segment.ack
         tcb.rto_deadline = 0
@@ -1610,13 +1696,15 @@ syn_sent_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Se
  * @param tcb The connection.
  * @param segment The segment.
  * @param data_length Its data's length.
+ * @return False if the acknowledgement's not one to take, past what was sent or further back than the peer's largest
+ *     window, when an ACK's to be sent and the rest of the segment dropped; true otherwise.
  */
-acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment], data_length: usize) {
+acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment], data_length: usize) -> bool {
     ack :: segment.ack
-    if seq_lt(tcb.snd_max, ack) {
-        // It acknowledges what wasn't sent
+    if seq_lt(tcb.snd_max, ack) || seq_lt(ack, tcb.snd_una - cast[u32](if tcb.max_snd_wnd > 0x7fffffff { cast[u64](0x7fffffff) } else { tcb.max_snd_wnd })) {
+        // It acknowledges what wasn't sent, or is older than any window could make it: likely made up
         tcb.ack_now = true
-        return void
+        return false
     }
     take_sacks(tcb, segment)
     window :: cast[u64](segment.window) << cast[u64](tcb.send_scale)
@@ -1665,11 +1753,20 @@ acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
         tcb.snd_wnd = window
         tcb.snd_wl1 = segment.seq
         tcb.snd_wl2 = ack
+        if window > tcb.max_snd_wnd {
+            tcb.max_snd_wnd = window
+        }
+    }
+    // Answered while its window's closed: the peer's there, so probing goes on as long as it answers (RFC 9293 §3.8.6.1)
+    if tcb.snd_wnd == 0 {
+        tcb.retries = 0
     }
     fin_acked :: tcb.fin_sent && seq_le(tcb.fin_seq + 1, ack)
     if fin_acked {
+        tcb.fin_resend = false
         if tcb.state == .FinWait1 {
             tcb.state = .FinWait2
+            tcb.deadline = stack.now + FIN_WAIT_2
             mark(tcb)
         }
         else if tcb.state == .Closing {
@@ -1679,6 +1776,7 @@ acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
             end_tcb(stack, tcb, .Closed)
         }
     }
+    return true
 }
 
 /**
@@ -2109,6 +2207,10 @@ tick_tcp :: fn(stack: ptr[mut Stack]) {
             }
             continue
         }
+        if tcb.state == .FinWait2 && now >= tcb.deadline {
+            end_tcb(stack, tcb, .TimedOut)
+            continue
+        }
         if tcb.ack_deadline != 0 && now >= tcb.ack_deadline {
             tcb.ack_now = true
             tcp_output(stack, tcb)
@@ -2129,7 +2231,8 @@ tick_tcp :: fn(stack: ptr[mut Stack]) {
 retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
     tcb.retries += 1
     syn :: tcb.state == .SynSent || tcb.state == .SynReceived
-    if tcb.retries > (if syn { cast[u32](SYN_TRIES) } else { cast[u32](DATA_TRIES) }) {
+    tries :: if tcb.state == .SynReceived { cast[u32](PASSIVE_SYN_TRIES) } else if syn { cast[u32](SYN_TRIES) } else { cast[u32](DATA_TRIES) }
+    if tcb.retries > tries {
         send_reset(stack, tcb.remote, tcb.local_port, tcb.remote_port, tcb.snd_nxt)
         end_tcb(stack, tcb, .TimedOut)
         return void
@@ -2143,11 +2246,12 @@ retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
         return void
     }
     flight :: tcb.snd_max - tcb.snd_una
+    // A zero window: a byte probes it, each time the timer fires, as long as the peer answers (which resets retries)
+    if tcb.snd_wnd == 0 && tcb.written > tcb.acknowledged {
+        _ = send_data(stack, tcb, tcb.snd_una, 1)
+        return void
+    }
     if flight == 0 {
-        // A zero window: a byte probes it
-        if tcb.written > tcb.acknowledged {
-            _ = send_data(stack, tcb, tcb.snd_una, 1)
-        }
         return void
     }
     stack.timeouts += 1
@@ -2160,8 +2264,10 @@ retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
     }
     // Go back to the first unacknowledged byte; what follows goes again as the window opens
     tcb.snd_nxt = tcb.snd_una
-    // An unacknowledged FIN goes again after the data
-    tcb.fin_sent = false
+    // An unacknowledged FIN goes again after the data, still counted as sent
+    if tcb.fin_sent && seq_le(tcb.snd_una, tcb.fin_seq) {
+        tcb.fin_resend = true
+    }
     tcp_output(stack, tcb)
 }
 
@@ -2196,7 +2302,7 @@ tcp_deadline :: fn(stack: ptr[Stack], soonest: u64) -> u64 {
         if tcb.state == .Free {
             continue
         }
-        if (tcb.state == .Incoming || tcb.state == .TimeWait) && tcb.deadline < result {
+        if (tcb.state == .Incoming || tcb.state == .TimeWait || tcb.state == .FinWait2) && tcb.deadline < result {
             result = tcb.deadline
         }
         if tcb.rto_deadline != 0 && tcb.rto_deadline < result {

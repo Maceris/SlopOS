@@ -9,6 +9,10 @@ that failed, which the next run tries first. A finding is fixed, then kept as an
 
 SlopOS's programs are built first, for the targets that read one, like the ELF loader's (SLOPOS_PROGRAMS).
 
+The network's targets (decisions/0188, 13h) are the stack's, in src/net_stack/test, and, for what it's built on in
+Hemera's std, Hemera's own scenarios: TLS, NTS, X.509, DER and PEM, and the network policies. Those are found under
+Hemera's source, HEMERA_SOURCE, or else where the compiler's in it (apps/compiler/bin/<build>/hemera).
+
     tools/fuzz.py              every target
     tools/fuzz.py fat elf      the targets whose names have one of these in them
 
@@ -34,6 +38,16 @@ TARGETS = [
     ("aml_changed", "src/aml/test", "changed_tables_never_fault"),
     ("aml_qemu", "src/aml/test", "changed_qemu_dsdts_never_fault"),
     ("protocols", "src/protocols/test", "any_bytes_are_judged_without_reading_outside_them"),
+    # The network (decisions/0188, 13h)
+    ("frames", "src/net_stack/test", "takes_any_checksummed_frames"),
+    ("tcp_peer", "src/net_stack/test", "withstands_a_hostile_peer"),
+    ("dns_answers", "src/net_stack/test", "takes_any_answer"),
+    ("tls_flight", "hemera:apps/compiler/test/back_end/scenarios/tls", "refuses_a_changed_flight"),
+    ("nts_ke", "hemera:apps/compiler/test/back_end/scenarios/ntp", "reads_any_ke_records"),
+    ("der", "hemera:apps/compiler/test/back_end/scenarios/x509", "reads_any_der"),
+    ("x509_chain", "hemera:apps/compiler/test/back_end/scenarios/x509", "refuses_any_changed_chain"),
+    ("pem", "hemera:apps/compiler/test/back_end/scenarios/x509", "reads_any_pem"),
+    ("policy", "hemera:apps/compiler/test/back_end/scenarios/network_policy", "narrowing_never_widens"),
 ]
 
 # How much longer than its fuzzing a target may run, building aside, before it's taken as hung
@@ -47,6 +61,15 @@ def find_hemera() -> str:
     return found
 
 
+def package_path(hemera: str, package: str) -> Path:
+    """A target's package: SlopOS's, from its root; or Hemera's, hemera:<path>, from Hemera's source."""
+    if not package.startswith("hemera:"):
+        return ROOT / package
+    source = os.environ.get("HEMERA_SOURCE")
+    root = Path(source) if source else Path(hemera).resolve().parents[4]
+    return root / package.removeprefix("hemera:")
+
+
 def chosen(names: list) -> list:
     """The targets whose names have one of names in them; every target for none."""
     return [target for target in TARGETS if not names or any(name in target[0] for name in names)]
@@ -58,7 +81,7 @@ def fuzz(hemera: str, target: tuple, seconds: int, folder: Path, programs: Path,
     suffix = ".exe" if sys.platform == "win32" else ""
     program = built / f"{name}{suffix}"
     command = [hemera, f"--fuzz={test}", f"--fuzz-seconds={seconds}", f"--fuzz-folder={(folder / name).as_posix()}",
-               f"--output={program}", str(ROOT / package)]
+               f"--output={program}", str(package_path(hemera, package))]
     if subprocess.run(command).returncode != 0 or not program.exists():
         print(f"FAILED: {name} doesn't build for fuzzing")
         return False

@@ -103,8 +103,8 @@ make_pair :: fn(seed: u64, faults: Faults) -> ptr[mut Pair] {
     pair :: runtime.new(Pair)
     pair.random = seed | 1
     pair.faults = faults
-    net_stack.start(&pair.a, net_stack.Setup.{mac = FIRST_MAC, seed = seed * 3 + 1, dhcp = false}, 0)
-    net_stack.start(&pair.b, net_stack.Setup.{mac = SECOND_MAC, seed = seed * 5 + 2, dhcp = false}, 0)
+    net_stack.start(&pair.a, net_stack.Setup.{mac = FIRST_MAC, key = key_of(seed * 3 + 1), dhcp = false}, 0)
+    net_stack.start(&pair.b, net_stack.Setup.{mac = SECOND_MAC, key = key_of(seed * 5 + 2), dhcp = false}, 0)
     net_stack.set_ipv4(&pair.a, FIRST_V4, 24, net_stack.Ipv4.{})
     net_stack.set_ipv4(&pair.b, SECOND_V4, 24, net_stack.Ipv4.{})
     pair.listener = net_stack.tcp_listen(&pair.b, LISTEN_PORT) or_else 0
@@ -507,5 +507,63 @@ recovers_a_lost_segment_without_the_timer #test :: fn(t: ptr[mut testing.T]) -> 
     testing.expect_eq(t, pair.apps[1].wrong, 0, "as written")
     testing.expect(t, pair.a.fast_retransmits >= 1, "the lost segment was sent again on duplicate acknowledgements")
     testing.expect_eq(t, pair.a.timeouts, 0, "and never on the timer")
+    return .Ok
+}
+
+/**
+ * A flood of SYNs to a listener takes no more than its backlog, and leaves room to connect out (13h): each SYN from
+ * another port, as a flood from made-up addresses would be, none accepted.
+ */
+keeps_room_under_a_syn_flood #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    pair :: make_pair(17, Faults.{})
+    defer runtime.free(pair)
+    for port in cast[u16](20000)..<20100 {
+        segment : u8[20]
+        bytes :: view_of(&segment[0], segment.count)
+        net_stack.put_u16(bytes, 0, port)
+        net_stack.put_u16(bytes, 2, LISTEN_PORT)
+        net_stack.put_u32(bytes, 4, cast[u32](port) * 1000)
+        net_stack.put_u8(bytes, 12, 0x50)
+        net_stack.put_u8(bytes, 13, net_stack.TCP_SYN)
+        net_stack.put_u16(bytes, 14, 65535)
+        net_stack.send_tcp(&pair.a, .V4(SECOND_V4), bytes)
+        pair_frames(pair)
+        pair_deliver(pair)
+    }
+    run_pair(pair, 20 * MILLISECOND, false)
+    waiting := 0
+    for each in pair.b.tcbs {
+        if each.state == .Incoming || each.state == .SynReceived {
+            waiting += 1
+        }
+    }
+    testing.expect(t, waiting <= net_stack.TCP_BACKLOG, "no more waiting than the backlog")
+    second :: &pair.apps[1]
+    testing.expect(t, net_stack.tcp_connect(&pair.b, .V4(FIRST_V4), 9, rings_of(second)) is_some, "room to connect out")
+    return .Ok
+}
+
+/** A peer that acknowledges the FIN, then goes quiet without finishing, has the connection let go in a minute (13h). */
+ends_a_quiet_fin_wait_2 #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+    pair :: make_pair(19, Faults.{})
+    defer runtime.free(pair)
+    first :: &pair.apps[0]
+    // The first writes nothing and finishes; the second never does
+    pair.apps[1].finished = true
+    match net_stack.tcp_connect(&pair.a, .V4(SECOND_V4), LISTEN_PORT, rings_of(first)) {
+        case Some(connection) => {
+            first.connection = connection
+            first.open = true
+        }
+        case None => {
+            testing.fail(t, "a connection is made")
+            return .Ok
+        }
+    }
+    run_pair(pair, 5 * net_stack.SECOND, false)
+    status :: net_stack.tcp_status(&pair.a, first.connection)
+    testing.expect(t, !first.ended && status.state == .FinWait2, "in FIN-WAIT-2, its FIN acknowledged")
+    run_pair(pair, 70 * net_stack.SECOND, false)
+    testing.expect(t, first.ended && first.why == .TimedOut, "let go once the peer's been quiet a minute")
     return .Ok
 }

@@ -29,6 +29,19 @@ SYNC_INTERVAL : u64 : 1024 * 1_000_000_000
 /** How long after a failure it's tried again, first, and at most: doubling from 2 s to a minute. */
 RETRY_FIRST : u64 : 2_000_000_000
 RETRY_MOST : u64 : 64_000_000_000
+/**
+ * The longest round trip a sample may have and be used: its offset can be wrong by half of it, which one who delays
+ * the answers, without the keys, chooses, so a longer one could have the clock stepped (13h).
+ */
+MOST_DELAY : i64 : 500_000_000
+/** How many samples within MOST_DELAY a sync needs, so one answer alone doesn't move the clock. */
+FEWEST_SAMPLES :: 2
+/**
+ * The largest step taken once the clock's synchronized: past it, the clock is left and the step logged, as ntpd's
+ * panic threshold has it, so a server gone wrong can't move a clock that's been right (13h).
+ */
+MOST_STEP : i64 : 1000 * 1_000_000_000
+
 /** How many exchanges a synchronization makes, the one with the least delay taken. */
 SAMPLES :: 4
 /** How long an exchange waits for its answer. */
@@ -186,14 +199,17 @@ synchronize :: fn(service: ptr[mut Clock]) -> bool {
         }
     }
     best := ntp.Sample.{}
-    have := false
+    have := 0
     for exchange in 0..<SAMPLES {
         match net.nts_query(syncing.network, name, &syncing.session, QUERY_TIMEOUT) {
             case Ok(sample) => {
-                if !have || sample.delay < best.delay {
+                if sample.delay < 0 || sample.delay > MOST_DELAY {
+                    continue
+                }
+                if have == 0 || sample.delay < best.delay {
                     best = sample
                 }
-                have = true
+                have += 1
             }
             case Error(problem) => {
                 log_problem(name, "NTP", problem)
@@ -205,7 +221,10 @@ synchronize :: fn(service: ptr[mut Clock]) -> bool {
             }
         }
     }
-    if !have {
+    if have < FEWEST_SAMPLES {
+        if have > 0 {
+            runtime.log_warn("% gave too few answers within % ms to be taken", name, MOST_DELAY / 1_000_000)
+        }
         return false
     }
     adjust(service, name, best)
@@ -225,6 +244,18 @@ adjust :: fn(service: ptr[mut Clock], name: string, sample: ntp.Sample) {
     line := text_buffer.make(storage)
     if sample.offset >= STEP_NANOSECONDS || sample.offset <= -STEP_NANOSECONDS {
         current :: time_now(service) or_else 0
+        // Never below the floor, nor, once synchronized, by more than MOST_STEP
+        if current + sample.offset < service.floor * NANOSECONDS {
+            runtime.log_warn("%'s time is before the clock's floor: not taken", name)
+            return void
+        }
+        if syncing.synchronized && (sample.offset > MOST_STEP || sample.offset < -MOST_STEP) {
+            text_buffer.append_format(&line, "%'s time is off by ", name)
+            append_milliseconds(&line, sample.offset)
+            text_buffer.append(&line, ", past the most a synchronized clock's stepped: not taken")
+            runtime.log_warn("%", text_buffer.as_string(&line))
+            return void
+        }
         syncing.slew = 0
         if !set(service, current + sample.offset) {
             return void

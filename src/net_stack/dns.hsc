@@ -88,7 +88,15 @@ DnsServer :: struct {
     port : u16,
     /** Whether it's configured, rather than learned from DHCP or a router. */
     configured : bool,
+    /** Whether a router's RDNSS option gave it, which anyone on the link can send. */
+    from_router : bool,
 }
+
+/**
+ * How many of the servers routers' advertisements may give: the rest are kept for DHCP's, so that one advertisement
+ * naming many can't take every place.
+ */
+ROUTER_DNS_SERVERS :: 2
 
 /** Where a query is. */
 QueryState :: enum {
@@ -177,18 +185,44 @@ set_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, port: u16) -> bo
 }
 
 /**
- * Learn a server from DHCP or a router's RDNSS option; ignored once any is configured, or if it's known.
+ * Learn a server from DHCP or a router's RDNSS option; ignored once any is configured, or if it's known. A router may
+ * give ROUTER_DNS_SERVERS at most, none of them ::, loopback or multicast.
  *
  * @param stack The stack.
  * @param address Its address.
+ * @param from_router Whether a router's advertisement gave it.
  */
-learn_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress) {
+learn_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, from_router: bool = false) {
+    routers := 0
     for server in stack.resolver.servers {
         if server.active && (server.configured || same_address(server.address, address)) {
             return void
         }
+        if server.active && server.from_router {
+            routers += 1
+        }
     }
-    _ = add_dns_server(stack, address, DNS_PORT, false)
+    if from_router {
+        match address {
+            case V6(v6) => {
+                loopback := Ipv6.{}
+                loopback.bytes[15] = 1
+                if is_zero_ipv6(v6) || same_ipv6(v6, loopback) || v6.bytes[0] == 0xff {
+                    return void
+                }
+            }
+            case V4(v4) => {}
+        }
+        if routers >= ROUTER_DNS_SERVERS {
+            return void
+        }
+    }
+    for &server in stack.resolver.servers {
+        if !server.active {
+            server^ = DnsServer.{active = true, address = address, port = DNS_PORT, from_router = from_router}
+            return void
+        }
+    }
 }
 
 /** Keep a server in a free place; false if there's none. */
@@ -489,7 +523,15 @@ start_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Que
 
 /** Send a query's next try, of its server, with a new ID, and set when it's next due. */
 send_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Query], v6: bool) {
-    server :: server_at(stack, query.server) or_return void
+    server :: match server_at(stack, query.server) {
+        case Some(found) => found
+        // No server to ask: it fails now, rather than wait for a deadline it'd never move (13h)
+        case None => {
+            query.outcome = .Failed
+            query.state = .Done
+            return void
+        }
+    }
     query.id = cast[u16](next_random(stack))
     message : u8[MAX_NAME + 2 + 12 + 4]
     length :: build_query(view_of(&message[0], message.count), query.id, view_of(&lookup.name[0], lookup.name_length),
@@ -606,13 +648,24 @@ take_answer :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Que
         return false
     }
     code :: flags & 0xf
+    // Truncated (TC): what fitted is taken if it has an address; otherwise it's no answer, and the next server's asked,
+    // as there's no TCP to ask again by, rather than its absence be kept as no address (13h)
+    truncated :: flags & 0x0200 != 0
+    if truncated && code == 0 {
+        read_addresses(message, question_end + 4, u16_at(message, 6), name, kind, query)
+        if query.count > 0 {
+            query.outcome = .Found
+            query.state = .Done
+            return true
+        }
+    }
     if code == 3 {
         query.outcome = .NoSuchName
         query.state = .Done
         return true
     }
-    if code != 0 {
-        // SERVFAIL, REFUSED or the like: the next server, at once, while tries are left
+    if code != 0 || truncated {
+        // SERVFAIL, REFUSED, truncated or the like: the next server, at once, while tries are left
         if query.tries >= DNS_TRIES {
             query.outcome = .Failed
             query.state = .Done
