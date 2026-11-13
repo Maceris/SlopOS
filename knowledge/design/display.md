@@ -132,6 +132,10 @@ Decided when M15 and M16 are planned:
 
 ## 8. Open Questions
 
+Settled 2026-11-13 (`../decisions/0192`): the UI library's API is immediate mode, building a tree each frame that's laid
+out and then drawn; windows float, the identity band their title bar; the typeface is Noto Sans and Noto Sans Mono; the
+canvas, fonts and the UI library's core go in Hemera's `std`, the widgets that speak SlopOS's protocols in SlopOS.
+
 - Whether the identity band is always on, or only on windows that ask for input (a video player full screen).
 - How much of the UI library belongs in Hemera's `std` and how much in SlopOS. Proposed: fonts, rasterizing and the
   canvas (§6) in `std`; the widgets that speak SlopOS protocols (manifests, the powerbox) in SlopOS.

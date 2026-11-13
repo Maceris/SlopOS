@@ -124,7 +124,8 @@ Open, from `design/display.md` (2026-10-24):
 - **Scope**: software composition only, Latin text and simple shaping first, a small UI library for the first
   programs.
 - **Where fonts and rasterizing live**: Hemera's `std` (general-purpose) or SlopOS. Proposed 2026-11-10: fonts and
-  a 2D canvas in `std`, the manifest-driven widgets in SlopOS (`display.md` §6).
+  a 2D canvas in `std`, the manifest-driven widgets in SlopOS (`display.md` §6). Settled 2026-11-13 (`decisions/0192`),
+  with the UI library's core in `std` too.
 
 ## Lessons
 

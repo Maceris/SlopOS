@@ -547,7 +547,10 @@ client on SlopOS; **14g** a security review of M14's code, then its full suites.
 
 ## M15 — Display and Input (L3, L4, L6)
 
-Design: `design/display.md`.
+Design: `design/display.md`. Planned 2026-11-13 (`decisions/0192`): a UI library whose API is immediate mode, building
+a tree each frame that's laid out and then drawn; floating windows; Noto Sans and Noto Sans Mono; in seven stages,
+**15a** the canvas and fonts in `std`, **15b** virtio-gpu and the pointer, **15c** the compositor and surfaces, **15d**
+the UI library, **15e** the programs, **15f** the trusted layer, **15g** a security review and the full suites.
 
 - **virtio-gpu** (2D) and the `display` protocol.
 - **The compositor**: clients draw into their own buffers and never see each other's pixels or input; screen
@@ -610,4 +613,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | M13 | planned 2026-11-10 (`decisions/0188`): 13a to 13g, and 13h, a security review, added 2026-11-12; 13a built, virtio-net and the `net` protocol; 13b built, the network layer: DHCPv4, SLAAC, ARP, neighbour discovery and pings; 13c built, TCP, UDP, the `Network` protocol and its policies, about 20 MiB/s to the development machine; 13d built, the crypto TLS needs in Hemera's `std`; 13e built, names (a resolver in the stack, Happy Eyeballs, policies by name and the rebinding rule) and the clock's floor; 13f built, TLS 1.3 in `std/tls`, `std/net`'s TLS streams and the trust store as a capability, and the network service copying streams' memory rather than mapping it; 13g built, NTP with NTS in the clock service, from the command line's `nts=`, with ALPN and the exporter in `std/tls` and `std/ntp`; 13h built, the security review: no memory-safety bug, the service no longer waits on programs nor takes paged memory, shares per channel, the stack's randomness and ISNs keyed, chain building budgeted, the clock's steps bounded, and fuzz targets for frames, TCP, DNS, TLS, NTS-KE, DER, X.509, PEM and policies |
 | Linear Algebra | decided 2026-11-10 (`decisions/0189`), scheduled 2026-11-11 between M13's 13c and 13e: L1 to L4; done 2026-11-11: float intrinsics, std/math and correctly rounded parsing (L1), arrays as vectors with swizzles (L2), matrices (L3), std/linear_algebra (L4); L5, f32's own, vector and fast float math (`decisions/0190`), 2026-11-11 |
 | M14 | built 2026-11-13 (`decisions/0191`), 14a to 14g: SHA-3, ML-KEM-768 and OpenSSH's ChaCha20-Poly1305; `std/ssh`, tested against OpenSSH; accounts' public keys and `keys`; the SSH service, its sessions' terminals served from `remote_terminal`; SFTP and scp; `ssh` and `ssh_keygen`; a security review, its high finding fixed. Its full suites passed 2026-11-13; what the review left, and three changes from the plan, for the owner (0191's As Built) |
-| M15–M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| M15 | planned 2026-11-13 (`decisions/0192`): 15a to 15g, an immediate-mode UI library with a tree each frame, floating windows, the terminal, launcher, typed-data viewer and the trusted layer in the GUI; not started |
+| M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), its stages proposed until it starts; not started |
