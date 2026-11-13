@@ -346,6 +346,7 @@ accept :: fn(service: ptr[mut Service], address: net_address.Address) {
     remote.serial = service.next_serial
     remote.starting_terminal = NONE
     remote.starting_prompts = NONE
+    remote.pipe_end = NONE
     remote.started_at = slop_os.clock_monotonic() or_else 0
     remote.terminal_end = NONE
     remote.prompts_end = NONE
@@ -425,12 +426,8 @@ take_events :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
             case ChannelRequest(number) => channel_request(service, remote, number)
             case WindowChanged(number) => window_changed(remote)
             case ChannelData(number) => channel_input(remote, number)
-            case ChannelEof(number) => {
-                // SFTP's client has finished: its channel's closed once its answers are sent
-                if remote.sftp is_some {
-                    remote.exited = true
-                }
-            }
+            // The client's finished: SFTP's program reads Ended, once it's read what came
+            case ChannelEof(number) => remote.client_finished = true
             case ChannelClosed(number) => {
                 remote.has_channel = false
                 end_session(remote)

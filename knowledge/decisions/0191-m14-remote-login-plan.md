@@ -270,3 +270,22 @@ In seven stages:
 - **Places for logged-in users,** so peers still logging in can't take them all; IPv6 peers counted by their /64; one
   key exchange before logging in. **Sessions get a generation**, which Wait and EndSession check, so a reused number
   never ends another's session.
+
+## As Built: after M14 (2026-11-13)
+- **Strict key exchange required** (std/ssh): a peer without it is refused; and a server takes one key exchange
+  before its client's logged in. Tests in std/ssh's scenario for both.
+- **Remote tries count apart:** the accounts protocol's `Remote` marks the SSH service's connection, and the account
+  service keeps each account's remote wrong tries apart from the console's; the SSH service also slows each address
+  (each IPv6 /64) after 3 wrong passwords, a second doubling to five minutes.
+- **No waiting in the SSH service's loop** (`ssh_service/requests.hsc`): one connection each to the account service and
+  the session manager, bound to its port; requests queued with their connection's place and serial, and answers taken
+  as they come, undone for a connection that's gone (a home closed, a session ended).
+- **Places and sessions:** at most 5 of the 8 places for connections not logged in. Session numbers carry their
+  place's generation (the session manager's `number_of`, `place_of`), so List, EndSession, Shown and Wait never reach a
+  session that reused the place.
+- **SFTP is a program:** `sftp_server`, the one program of a session the session manager starts with `StartSftp`,
+  given only the user's home and a `pipe`, a new protocol of bytes, which the SSH service serves from the channel:
+  Read held until bytes come or the client's finished, Write onto the channel. Its SFTP is `src/sftp`, a library, with
+  unit tests for paths and packets. Messages are at most 4 KiB, so the pipe's chunks are 3 KiB. Found on the way: the
+  program read again after one answer had filled its outbox, while requests that had come waited unanswered, and the
+  client on them; it answers what's come before reading more.

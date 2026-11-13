@@ -32,6 +32,8 @@ import network from "std/os/slop_os"
 import schema from "std"
 import strings from "std"
 import echo from "../../apps/echo"
+import sftp_server from "../../apps/sftp_server"
+import pipe from "../../protocols/pipe"
 import shell from "../../apps/shell"
 import programs from "../../protocols/programs"
 import powerbox_service from "../powerbox_service"
@@ -743,6 +745,7 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
                     continue
                 }
             }
+            case StartSftp(given) => response^ = start_sftp(sessions, os.items(into, given.user), given.home, given.stream)
             case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null, null, u8.[])
             case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
@@ -851,6 +854,69 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
     if sessions.test_installations && user.count > 0 {
         sessions.test_installations = false
         sessions.checking = number
+    }
+    return .Started(number_of(sessions, number))
+}
+
+/** What sftp_server is given (sftp_server.main). */
+SftpGrants :: struct {
+    /** The user's home, SFTP's root, which moves to it. */
+    home : os.Channel[dir.Dir],
+    /** Its pipe to the SSH service, which moves to it. */
+    stream : os.Channel[pipe.Pipe],
+}
+
+/** The SFTP program's memory: its state, two 40 KiB packets' room, and its files. */
+SFTP_BUDGET : u64 : 4 * 1024 * 1024
+
+/**
+ * Make an SFTP session (decisions/0191): its one program sftp_server, from the bundle store, given the home and the
+ * pipe, with nothing else of a session's.
+ *
+ * @return Started with its number; Refused without room, a user's name too long, or if sftp_server didn't start, the
+ *     home and the pipe then closed.
+ */
+start_sftp :: fn(sessions: ptr[mut Manager], user: u8[], home: os.Channel[dir.Dir], stream: os.Channel[pipe.Pipe]) -> session.Response {
+    number := sessions.sessions.count
+    for each, i in sessions.sessions {
+        if !each.in_use {
+            number = i
+            break
+        }
+    }
+    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(sftp_server.main)))}
+    program := cast[slop_os.Memory](slop_os.NO_HANDLE)
+    match bundle_named(sessions, "sftp_server") {
+        case Some(found) => program = program_of(sessions, found, expected) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+        case None => {}
+    }
+    if number >= sessions.sessions.count || user.count == 0 || user.count > USER_BYTES || cast[slop_os.Handle](program) == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](stream.end))
+        return .Refused
+    }
+    sessions.generations[number] = (sessions.generations[number] + 1) & 0xffffff
+    made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE,
+        powerbox_end = NONE, programs_end = NONE, cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE), waiter = NONE}
+    for byte, i in user {
+        if i < made.user.count {
+            made.user[i] = byte
+        }
+    }
+    sessions.sessions[number] = made
+    runtime.log_info("an SFTP session for %", string_of(&user[0], user.count))
+    maybe :: prepare(sessions, cast[u32](number), "sftp_server")
+    if maybe is_none {
+        close_session(sessions, cast[u32](number))
+        _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](stream.end))
+        return .Refused
+    }
+    prepared :: maybe or_return .Refused
+    if !placed(sessions, cast[u32](number), "sftp_server", prepared, os.launch(sessions.manager, sessions.manager_port, "sftp_server",
+        program, SFTP_BUDGET, sftp_server.main, SftpGrants.{home = home, stream = stream}, prepared.options), false) {
+        close_session(sessions, cast[u32](number))
+        return .Refused
     }
     return .Started(number_of(sessions, number))
 }

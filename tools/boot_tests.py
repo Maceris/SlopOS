@@ -1223,7 +1223,8 @@ TESTS = [
         "--expect-line=[user] ssh_service: admin logged in with a key",
         "--expect-line=[user] ssh_service: a password refused",
         "--expect-line=[user] ssh_service: a session ended with 1",
-        "--expect-line=[user] ssh_service: SFTP for admin",
+        "--expect-line=[user] ssh_service: started a session for admin for SFTP",
+        "--expect-line=[user] sessions: an SFTP session for admin",
         "--expect-console-contains=SSH host key: SHA256:",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # The SSH client (decisions/0191, 14f): ssh_keygen makes admin's key, keys adds it, then ssh logs in with it to the

@@ -5,6 +5,7 @@ import slop_os from "std/os"
 import dir from "std/os/slop_os"
 import terminal from "std/os/slop_os"
 import prompt from "../prompt"
+import pipe from "../pipe"
 
 /*
  * What the trusted path asks of the session manager (decisions/0136, 0139, 0150). Start makes a session once someone's
@@ -75,6 +76,16 @@ SessionStart :: struct {
     command : slop_os.Relative[u8],
 }
 
+/** An SFTP session to make (decisions/0191): its user, their home, and the pipe its program's stream is on. */
+SftpStart :: struct {
+    /** The user's name, as UTF-8, at most 32 bytes. */
+    user : slop_os.Relative[u8],
+    /** The root of the user's home volume, which moves to the session manager, for the SFTP program. */
+    home : os.Channel[dir.Dir],
+    /** The SFTP program's end of the pipe to the SSH service, which moves to the session manager, for it. */
+    stream : os.Channel[pipe.Pipe],
+}
+
 /** The most bytes of a session's command: 4096. */
 COMMAND_BYTES :: 4096
 
@@ -123,6 +134,11 @@ Request :: union {
      * has, at once if it has already; Refused for a session that isn't there. One waits at a time, per session.
      */
     Wait(u32),
+    /**
+     * Make a session whose one program is sftp_server, given only the user's home and a pipe (decisions/0191): no
+     * terminal, powerbox or installations. Answered with Started and its number, or Refused.
+     */
+    StartSftp(SftpStart),
 }
 
 /** What the session manager answers. */
@@ -163,6 +179,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Connect(_) => true
         case Shown(_) => true
         case Wait(_) => true
+        case StartSftp(_) => false
     }
 }
 
