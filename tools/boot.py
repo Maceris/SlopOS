@@ -70,6 +70,24 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD_PACKAGE = ROOT / "src" / "build"
 # The TLS boot tests' test authority (decisions/0188, 13f): its root, and the peers' chains and keys
 TLS_PEERS = ROOT / "tools" / "tls_peers"
+# The Linux test VM chrony serves NTS on for the NTS boot tests (13g, --nts-server), as ssh reaches it, its key, and its
+# address, which nts.slopos.test is
+NTS_HOST = os.environ.get("SLOPOS_NTS_HOST", "claude@192.168.159.128")
+NTS_KEY = Path(os.environ.get("SLOPOS_NTS_KEY", str(Path.home() / ".ssh" / "hemera_linux_vm")))
+NTS_ADDRESS = os.environ.get("SLOPOS_NTS_ADDRESS", NTS_HOST.rpartition("@")[2])
+# chrony's configuration there, run unprivileged: NTS-KE on 4460 with nts.slopos.test's certificate, NTP on an
+# unprivileged port its NTS-KE names, serving its own clock as stratum 3, and setting nothing
+CHRONY_CONF = """pidfile {home}/chronyd.pid
+driftfile {home}/drift
+ntsdumpdir {home}
+ntsservercert {home}/nts.crt
+ntsserverkey {home}/nts.key
+ntsport 4460
+port 11123
+cmdport 0
+allow all
+local stratum 3
+"""
 # SlopOS needs x86-64-v3 (knowledge/decisions/0003), which QEMU's default CPU model lacks
 DEFAULT_CPU = "max"
 
@@ -503,6 +521,10 @@ class NetworkPeers:
     which the DNS peer gives as 10.0.2.2; and a forward to the machine's port 443, which this connects to once the serial
     output says the machine serves TLS there, checking machine.slopos.test's certificate against the authority's root
     and the echo of what it sends.
+
+    And NTS (13g): a forging NTS server, forged.slopos.test, its NTS-KE on a free port that replaces {nts_forged}, which
+    gives keys and cookies honestly over TLS, but answers NTP with authenticators it can't make, as it hasn't the key; and
+    nts.slopos.test, the address of the NTS server chrony serves on the Linux test VM (NTS_ADDRESS, --nts-server).
     """
 
     LISTENING = "[user] test_network: listening on 7"
@@ -537,14 +559,23 @@ class NetworkPeers:
             self.tls_contexts[f"{peer}.slopos.test"] = context
         self.tls_context = self.tls_contexts["ecdsa.slopos.test"]
         self.tls_context.sni_callback = self.choose_certificate
+        self.nts_ke = socket.socket()
+        self.nts_ke.bind(("127.0.0.1", 0))
+        self.nts_ke.listen()
+        self.nts_ntp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.nts_ntp.bind(("127.0.0.1", 0))
+        self.nts_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.nts_context.minimum_version = ssl.TLSVersion.TLSv1_3
+        self.nts_context.load_cert_chain(TLS_PEERS / "forged.pem")
+        self.nts_context.set_alpn_protocols(["ntske/1"])
         for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.serve_dns, self.connect_in, self.serve_tls,
-                      self.connect_in_tls):
+                      self.connect_in_tls, self.serve_nts_ke, self.serve_forged_ntp):
             threading.Thread(target=serve, daemon=True).start()
 
     def words(self, command_line: str) -> str:
         return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1])) \
             .replace("{tcp_sink}", str(self.sink.getsockname()[1])).replace("{dns}", str(self.dns.getsockname()[1])) \
-            .replace("{tls}", str(self.tls.getsockname()[1]))
+            .replace("{tls}", str(self.tls.getsockname()[1])).replace("{nts_forged}", str(self.nts_ke.getsockname()[1]))
 
     def qemu_arguments(self) -> list[str]:
         return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7,hostfwd=tcp:127.0.0.1:{self.tls_forward}-:443",
@@ -599,7 +630,9 @@ class NetworkPeers:
 
     # The names the DNS peer knows: each kind's records' data
     NAMES = {"peer.slopos.test": {1: [bytes([10, 0, 2, 2])], 28: [bytes([0xfe, 0xc0] + [0] * 13 + [2])]},
-             **{f"{peer}.slopos.test": {1: [bytes([10, 0, 2, 2])]} for peer in TLS_NAMES}}
+             **{f"{peer}.slopos.test": {1: [bytes([10, 0, 2, 2])]} for peer in TLS_NAMES},
+             "forged.slopos.test": {1: [bytes([10, 0, 2, 2])]},
+             "nts.slopos.test": {1: [bytes(int(part) for part in NTS_ADDRESS.split("."))]}}
 
     def serve_dns(self) -> None:
         while True:
@@ -656,6 +689,62 @@ class NetworkPeers:
                 secure.unwrap()
         except (OSError, ssl.SSLError):
             pass
+
+    @staticmethod
+    def ke_record(kind: int, body: bytes) -> bytes:
+        return kind.to_bytes(2, "big") + len(body).to_bytes(2, "big") + body
+
+    def serve_nts_ke(self) -> None:
+        while True:
+            try:
+                connection, _ = self.nts_ke.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.forge_keys, args=(connection,), daemon=True).start()
+
+    def forge_keys(self, connection: socket.socket) -> None:
+        """NTS-KE, honestly: NTPv4, AES-SIV-CMAC-256, eight cookies, and this machine's forging NTP server."""
+        try:
+            with self.nts_context.wrap_socket(connection, server_side=True) as secure:
+                asked = b""
+                # The client's records, to its End
+                while not any(asked[at:at + 4] == b"\x80\x00\x00\x00" for at in range(0, len(asked), 2)):
+                    data = secure.recv(4096)
+                    if not data:
+                        return
+                    asked += data
+                answer = self.ke_record(0x8001, bytes(2)) + self.ke_record(0x8004, (15).to_bytes(2, "big"))
+                answer += b"".join(self.ke_record(5, os.urandom(64)) for _ in range(8))
+                answer += self.ke_record(0x8006, b"10.0.2.2") + self.ke_record(0x8007, self.nts_ntp.getsockname()[1].to_bytes(2, "big"))
+                answer += self.ke_record(0x8000, b"")
+                secure.sendall(answer)
+                secure.unwrap()
+        except (OSError, ssl.SSLError):
+            pass
+
+    def serve_forged_ntp(self) -> None:
+        """Answer NTS's NTP as a forger does: the request's origin and identifier echoed, the authenticator made up."""
+        while True:
+            try:
+                request, sender = self.nts_ntp.recvfrom(2048)
+            except OSError:
+                return
+            if len(request) < 48:
+                continue
+            identifier, at = b"", 48
+            while at + 4 <= len(request):
+                kind, length = int.from_bytes(request[at:at + 2], "big"), int.from_bytes(request[at + 2:at + 4], "big")
+                if length < 4:
+                    break
+                if kind == 0x0104:
+                    identifier = request[at + 4:at + length]
+                at += length
+            now = int((time.time() + 2208988800) * (1 << 32)).to_bytes(8, "big")
+            header = bytes([0x24, 2, 6, 0xec]) + bytes(8) + b"FRGD" + now + request[40:48] + now + now
+            fields = (0x0104).to_bytes(2, "big") + (4 + len(identifier)).to_bytes(2, "big") + identifier
+            fields += (0x0404).to_bytes(2, "big") + (56).to_bytes(2, "big") + (16).to_bytes(2, "big") + (32).to_bytes(2, "big")
+            fields += os.urandom(48)
+            self.nts_ntp.sendto(header + fields, sender)
 
     def connect_in_tls(self) -> None:
         while True:
@@ -1253,6 +1342,38 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
             image.write(f"block {number}".encode())
 
 
+def start_nts_server() -> None:
+    """
+    Start chrony on the Linux test VM as the NTS server nts.slopos.test, if it isn't running there with this test
+    authority's certificate already: its certificate, key and configuration copied to ~/slopos-nts, and chronyd run
+    unprivileged (-U), setting no clock (-x). Two boots at once may ask; a lock there makes one start it.
+    """
+    home = "$HOME/slopos-nts"
+    files = {"nts.crt": (TLS_PEERS / "nts.crt").read_text(), "nts.key": (TLS_PEERS / "nts.key").read_text(),
+             "chrony.conf": CHRONY_CONF.format(home=f"/home/{NTS_HOST.partition('@')[0]}/slopos-nts")}
+    script = [f"set -e; mkdir -p {home}; cd {home}"]
+    for name, text in files.items():
+        script.append(f"cat > {name}.new <<'SLOPOS_EOF'\n{text}SLOPOS_EOF")
+    script.append("""chmod 600 nts.key.new
+exec 9>lock
+flock 9
+if [ -f chronyd.pid ] && kill -0 "$(cat chronyd.pid)" 2>/dev/null; then
+    if cmp -s nts.crt.new nts.crt && cmp -s chrony.conf.new chrony.conf; then exit 0; fi
+    kill "$(cat chronyd.pid)"; sleep 1
+fi
+for name in nts.crt nts.key chrony.conf; do mv "$name.new" "$name"; done
+# A copy of chronyd: AppArmor's profile for /usr/sbin/chronyd won't let it read a configuration in a home directory
+cp /usr/sbin/chronyd chronyd
+./chronyd -U -x -f "$PWD/chrony.conf" </dev/null >/dev/null 2>&1
+sleep 1""")
+    result = subprocess.run(["ssh", "-i", str(NTS_KEY), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", NTS_HOST, "bash -s"],
+                            input=("\n".join(script) + "\n").encode(), capture_output=True)
+    # As bytes: in text, Windows would end each line with \r\n, and bash would take the \r as part of each word
+    if result.returncode != 0:
+        sys.exit(f"boot.py: chrony couldn't be started on {NTS_HOST}:\n"
+                 f"{result.stdout.decode(errors='replace')}{result.stderr.decode(errors='replace')}")
+
+
 def disk_block_starts(path: Path, expected: str) -> bool:
     """Whether the image has a block starting with text, for an expectation written as N=text, N counting the disk's blocks."""
     number, _, text = expected.partition("=")
@@ -1314,6 +1435,9 @@ def main() -> int:
     parser.add_argument("--shut-down-when-done", action="store_true",
                         help="once every --expect-console-line is shown and every --console-input typed, type the secure "
                         "attention key and P, which shuts the system down (decisions/0180), rather than waiting out its settle")
+    parser.add_argument("--nts-server", action="store_true",
+                        help="start chrony on the Linux test VM (SLOPOS_NTS_HOST) as the NTS server nts.slopos.test, "
+                        "with the test authority's certificate (decisions/0188, 13g)")
     parser.add_argument("--network-peers", action="store_true",
                         help="a virtio NIC on QEMU's user-mode network, and echo peers on this machine for test_network: "
                         "{tcp_echo} and {udp_echo} in the command line are their ports, and port 7 on the machine is "
@@ -1426,6 +1550,8 @@ def main() -> int:
         # The kernel's own regions follow its command line; the image and the direct map, the generation's kaslr
         command_line = arguments.command_line + (" no_kaslr" if arguments.no_kaslr else "")
         serial = folder / "serial.txt"
+        if arguments.nts_server:
+            start_nts_server()
         peers = NetworkPeers(serial) if arguments.network_peers else None
         if peers is not None:
             command_line = peers.words(command_line)

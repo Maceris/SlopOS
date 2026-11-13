@@ -16,6 +16,9 @@
  * as one whose battery's flat is, is set forward to it, so certificates are checked against a time that may be late,
  * but never decades early. The time's saved in the directory a Keep gives, once the system volume's there, as a file
  * of its seconds (SAVED_FILE): read then, every clock_setting.SAVE_MINUTES, after each Set, and as the service stops.
+ *
+ * And it keeps the time from an NTS server (13g, nts.hsc), once the supervisor's Synchronize has given it one, with a
+ * network connection allowing it and the trust store: stepped to it, or slewed.
  */
 //SPEC: Motorola MC146818A data sheet (registers 0x00 to 0x0b, update-in-progress, SET, DM and 24/12)
 //SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
@@ -105,6 +108,8 @@ Clock :: struct {
     keeping : bool,
     directory : os.Directory,
     next_save : u64,
+    /** The NTS server it keeps the time from, once a Synchronize's given one (nts.hsc). */
+    syncing : Synchronizing,
 }
 
 /** The file the time's saved in, in Keep's directory: its seconds since 1970 UTC, in decimal. */
@@ -123,8 +128,8 @@ SAVE_INTERVAL : u64 : cast[u64](clock_setting.SAVE_MINUTES) * 60 * 1_000_000_000
  *
  * @param rtc_ports An MC146818's two I/O ports, its index port then its data port, for x86's real-time clock.
  * @param rtc_registers A PL031's registers, one page of device memory, for Arm's; it's started counting if it wasn't.
- * @param clock_page The clock page, mapped readable and writable for the service's life; every program is given it
- *     read-only, as its grant "clock".
+ * @param clock The clock page, mapped readable and writable for the service's life; every program is given it
+ *     read-only, as its grant "clock", and the runtime maps it read-only here too, which time.now reads, as TLS does.
  * @param clients The listener of the clock_setting protocol its first client connects on; who holds a connection can
  *     set the time, and further clients come as Connect requests.
  * @param command_line The kernel's command line, read for built=<seconds>, when the running generation was built: the
@@ -132,14 +137,14 @@ SAVE_INTERVAL : u64 : cast[u64](clock_setting.SAVE_MINUTES) * 60 * 1_000_000_000
  * @return Only on failing to start: 1 if the clock page can't be mapped, 2 if the PL031's registers can't be, 3 without
  *     a real-time clock, 4 without a port, and 5 if its first client can't be added. Serving, it doesn't return.
  */
-main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, clock_page: slop_os.Memory,
+main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, clock: slop_os.Memory,
     clients: os.Listener[clock_setting.ClockSetting], command_line: slop_os.Memory?) -> int {
     block :: slop_os.startup_block()
     service := Clock.{}
     service.rtc.ports = rtc_ports
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     page_address :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 1
-    slop_os.memory_map(clock_page, block.space, page_address, 0, PAGE, read_write) or_return 1
+    slop_os.memory_map(clock, block.space, page_address, 0, PAGE, read_write) or_return 1
     service.page = cast[ptr[mut runtime.SlopOsClockPage]](page_address)
     match rtc_registers {
         case Some(registers) => {
@@ -198,6 +203,8 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
             save(&service)
             schedule_save(&service, port)
         }
+        synchronize_if_due(&service, port)
+        slew_if_due(&service, port)
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
     }
@@ -371,6 +378,8 @@ serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], in
                 response :: os.begin[clock_setting.Response](&out)
                 done :: set(service, utc)
                 if done {
+                    // A time set by hand ends any slew toward NTS's
+                    service.syncing.slew = 0
                     save(service)
                 }
                 response^ = if done { .Done } else { .Refused }
@@ -380,6 +389,13 @@ serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], in
                 out := os.Outgoing.{}
                 response :: os.begin[clock_setting.Response](&out)
                 response^ = if keep(service, port, directory.end) { .Done } else { .Refused }
+                _ = clock_setting.send_response(end, port, &out)
+            }
+            case Synchronize(asked) => {
+                taken :: take_synchronize(service, port, asked, into)
+                out := os.Outgoing.{}
+                response :: os.begin[clock_setting.Response](&out)
+                response^ = if taken { .Done } else { .Refused }
                 _ = clock_setting.send_response(end, port, &out)
             }
             case Connect(connection) => {

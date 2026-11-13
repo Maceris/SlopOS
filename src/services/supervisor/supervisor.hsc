@@ -57,6 +57,7 @@ import text_buffer from "std"
 import slop_os from "std/os"
 import terminal from "std/os/slop_os"
 import network from "std/os/slop_os"
+import net_address from "std/os/slop_os"
 import dir from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import files from "std/os/slop_os"
@@ -247,8 +248,11 @@ ClockGrants :: struct {
     rtc_ports : slop_os.IoPortRange?,
     /** The real-time clock's registers, as the platform service claimed them; null where it has I/O ports. */
     rtc_registers : slop_os.Memory?,
-    /** A handle to the clock page, readable and writable, which the clock service writes the time on. */
-    clock_page : slop_os.Memory,
+    /**
+     * A handle to the clock page, readable and writable, which the clock service writes the time on; named "clock", as
+     * every program's read-only one is, so the runtime reads the time from it in the clock service too.
+     */
+    clock : slop_os.Memory,
     /** The listener the supervisor sets the time through; the supervisor keeps its other end. */
     clients : os.Listener[clock_setting.ClockSetting],
     /** A copy of the kernel's command line, read for built=, the clock's floor (decisions/0188, 13e). */
@@ -819,6 +823,14 @@ Supervisor :: struct {
     system_generation : u64,
     /** Whether the system volume's connection closed, and it's to be opened again. */
     system_lost : bool,
+    /**
+     * Whether the clock's to be given its NTS server again (synchronize_clock), once the first NIC's been dialed
+     * clock_sync_dials times: the network service dials it before it serves anyone, and the supervisor can't wait on
+     * the network service while it waits on the supervisor for that.
+     */
+    clock_sync_due : bool,
+    /** The first NIC's dials (dials_of) that make clock_sync_due's synchronize_clock safe. */
+    clock_sync_dials : u32,
     /**
      * Its end of the terminal service's power connection (decisions/0180), bound under POWER_KEY, replaced each time the
      * terminal service starts; null before it has, or once the terminal service's end is gone.
@@ -1444,6 +1456,13 @@ wait_and_handle_until :: fn(supervisor: ptr[mut Supervisor], deadline: u64) {
     serve_power(supervisor)
     for i in 0..<supervisor.connector_count {
         serve_connector(supervisor, i)
+    }
+    // The clock given its NTS server, once the network service has its NIC and serves, and there's a system volume and
+    // a clock
+    if supervisor.clock_sync_due && supervisor.first_nic != NOWHERE && supervisor.system != NONE
+        && supervisor.clock_setting != NONE && dials_of(supervisor, supervisor.first_nic) >= supervisor.clock_sync_dials {
+        supervisor.clock_sync_due = false
+        synchronize_clock(supervisor)
     }
     // Opened again once the storage manager serves it again, tried again a little later until then
     if supervisor.system_lost && !supervisor.system_opening && is_running(supervisor, supervisor.storage_slot) {
@@ -3278,6 +3297,98 @@ keep_time :: fn(supervisor: ptr[mut Supervisor]) {
 }
 
 /**
+ * Have the clock keep the time from an NTS server (decisions/0188, 13g): the kernel's command line's nts=<name>, or
+ * nts=<name>:<port> for an NTS-KE port other than 4460, given with a connection to the network service allowing what NTS
+ * needs, TCP to public addresses' NTS-KE port and UDP to public addresses, and the trust store. nts_range=<address>/<bits> allows a range besides, TCP and UDP, for a test's
+ * server on a private network. Nothing's done without nts=, a clock service, a network service or a system volume.
+ * What fails is logged.
+ *
+ * @param supervisor The supervisor.
+ */
+synchronize_clock :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.clock_setting == NONE || supervisor.network == NOWHERE || supervisor.system == NONE {
+        return void
+    }
+    memory :: supervisor.command_line or_return void
+    text :: service_kit.text_of(supervisor.block, memory) or_else ""
+    server :: service_kit.word_after(text, "nts=") or_return void
+    policy := network.Policy.{connect_count = 2}
+    ke_port := cast[u16](4460)
+    named :: string_bytes(server)
+    for byte, i in named {
+        if byte == 0x3a && i + 1 < named.count {
+            ke_port = cast[u16](service_kit.number_of(string_of(&named[i + 1], named.count - i - 1)) or_else 4460)
+        }
+    }
+    policy.connect[0] = network.Rule.{scope = network.SCOPE_PUBLIC, transports = network.TRANSPORT_TCP, first_port = ke_port,
+        last_port = ke_port}
+    policy.connect[1] = network.Rule.{scope = network.SCOPE_PUBLIC, transports = network.TRANSPORT_UDP, first_port = 1, last_port = 65535}
+    match service_kit.word_after(text, "nts_range=") {
+        case Some(range) => match range_rule_of(range) {
+            case Some(rule) => {
+                policy.connect[2] = rule
+                policy.connect_count = 3
+            }
+            case None => log_line.write(supervisor.log, "supervisor: nts_range=% isn't an IPv4 range", range)
+        }
+        case None => {}
+    }
+    end :: match dial(supervisor, supervisor.network) {
+        case Some(found) => found
+        case None => {
+            log_line.write(supervisor.log, "supervisor: no network connection for the clock's NTS")
+            return void
+        }
+    }
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](end))
+    port :: os.port_for(supervisor.block.budget, end) or_return void
+    defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    narrowed :: match network.narrow(end, port, &policy) {
+        case Some(found) => found
+        case None => {
+            log_line.write(supervisor.log, "supervisor: the clock's network connection couldn't be narrowed")
+            return void
+        }
+    }
+    trust :: match trust_store(supervisor) {
+        case Some(found) => found
+        case None => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](narrowed.end))
+            log_line.write(supervisor.log, "supervisor: no trust store for the clock's NTS")
+            return void
+        }
+    }
+    if !clock_setting.synchronize(supervisor.clock_setting, supervisor.clock_setting_port, server, narrowed, trust) {
+        log_line.write(supervisor.log, "supervisor: the clock won't keep the time from %", server)
+    }
+}
+
+/**
+ * Read an IPv4 range, as nts_range= gives it: an address, a slash and how many of its bits the range shares.
+ *
+ * @param text The range, like "192.168.159.0/24".
+ * @return A rule allowing TCP and UDP to every port in it; null if it isn't one.
+ */
+range_rule_of :: fn(text: string) -> network.Rule? {
+    bytes :: string_bytes(text)
+    slash := bytes.count
+    for byte, i in bytes {
+        if byte == 0x2f && slash == bytes.count {
+            slash = i
+        }
+    }
+    if slash == 0 || slash + 1 >= bytes.count {
+        return null
+    }
+    address :: net_address.parse_v4(string_of(&bytes[0], slash)) or_return null
+    bits :: service_kit.number_of(string_of(&bytes[slash + 1], bytes.count - slash - 1)) or_return null
+    if bits > 32 {
+        return null
+    }
+    return network.range_rule(address, cast[u8](bits), network.TRANSPORT_TCP | network.TRANSPORT_UDP, 1, 65535)
+}
+
+/**
  * Give the trust store (decisions/0188, 13f): the system volume's "trust" directory, made if it isn't there, read only,
  * whose files are the roots a TLS connection's certificate is checked against.
  *
@@ -4011,7 +4122,7 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     pair :: os.channel_for[clock_setting.ClockSetting](supervisor.block.budget, 0) or_return void
     page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
     page :: slop_os.handle_duplicate(cast[slop_os.Handle](supervisor.clock_page), page_rights) or_return void
-    grants := ClockGrants.{clock_page = cast[slop_os.Memory](page),
+    grants := ClockGrants.{clock = cast[slop_os.Memory](page),
         clients = os.Listener[clock_setting.ClockSetting].{end = pair.a}, command_line = command_line_copy(supervisor)}
     if cast[slop_os.Handle](rtc.ports) != slop_os.NO_HANDLE {
         grants.rtc_ports = rtc.ports
@@ -4042,9 +4153,14 @@ start_clock :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     supervisor.clock_setting = pair.b
     supervisor.clock_setting_port = os.port_for(supervisor.block.budget, pair.b) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-    // Started again with the system volume there, it keeps the time there again
+    // Started again with the system volume there, it keeps the time there again, and from its NTS server
     if supervisor.system != NONE {
         keep_time(supervisor)
+        // Unless a network service started since hasn't dialed its NIC yet, which is waited for
+        if !supervisor.clock_sync_due && supervisor.first_nic != NOWHERE {
+            supervisor.clock_sync_due = true
+            supervisor.clock_sync_dials = dials_of(supervisor, supervisor.first_nic)
+        }
     }
     slot :: place(supervisor, "clock", launched, again)
     if slot >= supervisor.started.count {
@@ -4557,6 +4673,10 @@ start_network :: fn(supervisor: ptr[mut Supervisor], again: usize) {
                 supervisor.started[slot].listener = pair.b
                 supervisor.started[slot].speaks = .Network
                 supervisor.network = slot
+                // The clock's NTS server is reached through it, so it's given a connection again, once this network
+                // service has dialed its NIC
+                supervisor.clock_sync_due = true
+                supervisor.clock_sync_dials = dials_of(supervisor, supervisor.first_nic) + 1
             }
         }
         case Error(error) => {

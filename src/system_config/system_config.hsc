@@ -240,9 +240,11 @@ SERVICES :: Service.[
         entry = type_of(events_service.main)},
     /*
      * The real-time clock's driver, next, so everything after it is given the clock page it keeps (decisions/0093).
-     * Its stack, image, heap chunks and events ring come to about 1 MiB, before the page tables its space needs
+     * Its stack, image, heap chunks and events ring come to about 1 MiB, before the page tables its space needs; and
+     * for NTS (decisions/0188, 13g), TLS's state, some 300 KiB, the trust anchors, up to 256 KiB, and a trust store's
+     * file read, as much again
      */
-    Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
+    Service.{name = "clock", boot_set = true, module = "clock.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(clock_service.main)},
     /*
      * The firmware's AML, where there's ACPI (decisions/0182, P3): its interpreter's namespace takes up to 4 MiB, an

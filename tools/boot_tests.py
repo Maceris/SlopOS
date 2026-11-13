@@ -843,6 +843,19 @@ TESTS = [
         "--expect-line=[user] test_network: stranger.slopos.test refused over TLS: UNKNOWN_ISSUER, alert 48",
         "--expect-line=[user] test_network: serving TLS on 443",
         "--expect-line=[user] test_network: served TLS as machine.slopos.test, echoing 34 bytes"])),
+    # NTS (decisions/0188, 13g): the clock keeps the time from chrony on the Linux test VM over NTS, nts.slopos.test
+    # (--nts-server), its certificate checked against the trust store: the real-time clock set to 2026-01-01 and raised to
+    # the generation's build time, the clock's behind, so it's stepped. test_network does NTS with boot.py's forging server,
+    # which gives keys honestly but can't seal its NTP answers, and refuses them
+    ("keeps the time from an NTS server, and refuses a forged answer", 7,
+     with_before_qemu([argument.replace("test_services no_disk_check", "test_services no_disk_check test_settle=10 test_network "
+                                        "tcp_echo={tcp_echo} udp_echo={udp_echo} dns=10.0.2.2:{dns} nts_forged={nts_forged} "
+                                        "nts=nts.slopos.test nts_range=192.168.159.0/24")
+                       .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE], ["--network-peers", "--nts-server",
+        "--expect-line=[user] test_network: forged.slopos.test gave NTS keys and 8 cookies",
+        "--expect-line=[user] test_network: forged.slopos.test's NTP answer refused: Forged",
+        "--expect-line=[user] clock: NTS keys from nts.slopos.test, 8 cookies",
+        "--expect-line-start=[user] clock: stepped to nts.slopos.test's time by +"]) + ["-rtc", "base=2026-01-01T00:00:00"]),
     # The system's crash reports (decisions/0185, 12g): test_crash crashes the update service, which the supervisor
     # reports in its source; crashes system, once the administrator allows reading the log, reads it back as a typed
     # record and names its frames through the update service's files

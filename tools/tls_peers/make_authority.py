@@ -1,5 +1,5 @@
 """
-Makes the TLS boot tests' test authority (decisions/0188, 13f), with Python's cryptography package:
+Makes the TLS and NTS boot tests' test authority (decisions/0188, 13f and 13g), with Python's cryptography package:
 
     python -I tools/tls_peers/make_authority.py
 
@@ -11,6 +11,9 @@ sign the leaves tools/boot.py's TLS peer serves, each chosen by the name the cli
 - wrong.slopos.test: a valid leaf, but for other.slopos.test;
 - expired.slopos.test: a leaf that expired at 2021-01-01;
 - stranger.slopos.test: a leaf from another root, which isn't trusted.
+
+For NTS (13g), under the P-256 intermediate: nts.slopos.test's chain and key, nts.crt and nts.key, which chrony on the
+Linux test VM serves NTS-KE with; and forged.slopos.test's, forged.pem, which boot.py's forging NTS server serves.
 
 And machine.slopos.test's P-256 chain and key, SlopOS's own server's identity, which test_network serves on port 443
 and boot.py's client checks against the root: written to src/tests/test_network/identity.hsc as constants.
@@ -88,6 +91,14 @@ peers["expired"] = (expired_key, [certificate("expired.slopos.test", expired_key
                                               end=datetime.datetime(2021, 1, 1, tzinfo=datetime.timezone.utc)), ec_middle])
 stranger_key = ec.generate_private_key(ec.SECP256R1())
 peers["stranger"] = (stranger_key, [certificate("stranger.slopos.test", stranger_key, other_root.subject, other_key, names=["stranger.slopos.test"])])
+
+nts_key = ec.generate_private_key(ec.SECP256R1())
+nts_chain = [certificate("nts.slopos.test", nts_key, ec_middle.subject, ec_middle_key, names=["nts.slopos.test"]), ec_middle]
+(HERE / "nts.crt").write_bytes(pem(*nts_chain))
+(HERE / "nts.key").write_bytes(key_pem(nts_key))
+forged_key = ec.generate_private_key(ec.SECP256R1())
+peers["forged"] = (forged_key, [certificate("forged.slopos.test", forged_key, ec_middle.subject, ec_middle_key,
+                                            names=["forged.slopos.test"]), ec_middle])
 
 (HERE / "root.pem").write_bytes(pem(root))
 for peer, (key, chain) in peers.items():

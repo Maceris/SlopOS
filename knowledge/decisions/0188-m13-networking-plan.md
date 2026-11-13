@@ -1,6 +1,6 @@
 # 0188: M13, Networking, Planned
 
-Status: accepted, chosen with the project's owner; 13a to 13f built, 13g and 13h to come
+Status: accepted, chosen with the project's owner; 13a to 13g built, 13h to come
 Date: 2026-11-10
 Related: `0013` (capabilities don't cross the network), `0014` (servers authorize by connection), `0037` and `0130`
 (lending), `0073` (MSIs), `0080` to `0083` (IOMMUs), `0093` (the clock service), `0165` (streams), `0170` (the shell's
@@ -383,3 +383,42 @@ Built in three parts: TLS 1.3 in Hemera's `std/tls` (13f1, 13f2) and its use on 
 - **For the owner:** Python's ssl (OpenSSL 3.0) refused the test authority's certificates without key identifiers
   (Authority and Subject Key Identifier), so `make_authority.py` adds them; `std/crypto` doesn't need them. The service
   copying rather than mapping is a change to 13c's design, made here for the crash.
+
+## As Built: 13g
+- **`std/tls`** gained what NTS-KE needs: ALPN (RFC 7301), offered by a client (`client(..., protocol)`) and chosen by a
+  server, which refuses a client offering only others with no_application_protocol; a client refuses an answer it
+  didn't offer or doesn't match; `protocol_agreed` says whether they did. And the exporter (RFC 8446 §7.5,
+  `export_keying_material`), from exporter_master_secret, checked against RFC 8448's. It exports after a clean close
+  too, close_notify either way, as NTS-KE servers close once they've answered, but not after a failed handshake.
+- **`std/ntp`**, Freestanding: NTP's header and 32.32 timestamps, an exchange's offset and delay (RFC 5905 §8), and NTS
+  (RFC 8915): NTS-KE's records, asked for and read, with NTPv4 and AES-SIV-CMAC-256 or nothing; the keys exported; and
+  requests with a unique identifier, the last cookie, placeholders asking for enough to have 8 again, and an
+  authenticator sealing the header and fields; an answer is checked against its request's origin and identifier, then
+  opened with the server's key, its new cookies kept. A NAK, which may come unauthenticated, is told apart.
+- **`std/net`** (SlopOS): `nts_establish` (NTS-KE over a TLS stream offering `ntske/1`) and `nts_query`, which keeps
+  waiting until its deadline past forged answers and NAKs, as anyone can send one ahead of the server's, and says which
+  it had. `receive_from` takes a deadline.
+- **The clock service** keeps the time from an NTS server once the supervisor's `Synchronize` gives it a name, a
+  connection to the network service and the trust store: every 1024 s it takes keys if it has no cookies, then 4
+  samples, keeping the one with the least delay; an offset of 128 ms or more is stepped (the real-time clock with it),
+  a smaller one slewed, 0.5 ms a second, by publishing the clock page again. A failure is logged and tried again after
+  2 s, doubling to 64 s.
+- **The supervisor** gives it from the kernel's command line: `nts=<name>[:<port>]`, through a connection narrowed to
+  TCP to public addresses on the NTS-KE port and UDP to public addresses, and `nts_range=<address>/<bits>` besides,
+  for a test's server on a private network.
+- **Found, a deadlock:** the supervisor first gave the clock its connection right after launching the network service,
+  which dials its NIC through a connector only the supervisor's loop answers, while the supervisor waited on the
+  network service. It's given once the NIC's been dialed. **Found, the clock's time:** the clock service had its page as
+  the grant `clock_page`, so the runtime, which reads the time from the grant `clock`, couldn't: `time.now` failed
+  there, and TLS checked certificates against 1970. It's `clock` now, mapped read-only by the runtime as everywhere.
+- **Tests:** hosted (Hemera's `ntp` scenario, 5 tests: timestamps and samples; NTS-KE records; requests and answers,
+  the server played with known keys, forged, NAKed and others' answers told apart; no request without a cookie; random
+  bytes), and the `tls` scenario's ALPN and exporter. Boot, on both architectures: chrony 4.6.1 on the Linux test VM,
+  started by boot.py (`--nts-server`) as `nts.slopos.test` with the test authority's certificate, unprivileged and
+  setting no clock, serves its own clock; the machine's real-time clock is set to 2026-01-01, so the clock is behind,
+  takes keys and 8 cookies, and is stepped to chrony's time. test_network does NTS-KE with boot.py's forging server,
+  which gives keys honestly but can't seal its answers, and refuses them as forged.
+- **For the owner:** chrony has to be installed on the test VM (`apt install chrony`). Debian's AppArmor profile for
+  `/usr/sbin/chronyd` won't let it read a configuration in a home directory, so boot.py runs a copy of it. A UDP send a
+  connection's policy refuses is dropped without an error, as a firewall drops it, which first hid that test_network's
+  connection allowed only TCP.

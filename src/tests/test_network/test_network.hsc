@@ -18,6 +18,8 @@
  *   and its P-256 certificates checked against the trust store's root, and its echo of what's written; and refused for
  *   a certificate for another name, one expired and one from a root that isn't trusted. Then, once the echo on 7 is
  *   done, TLS served on port 443 as machine.slopos.test (identity.hsc), echoing what the development machine sends.
+ * - with nts_forged=<port> too, NTS (13g) with forged.slopos.test, boot.py's forging server: NTS-KE on that port gives
+ *   keys and cookies, and its NTP answers, which it can't seal with the server's key it doesn't have, are refused.
  *
  * A connection refused isn't among them: QEMU's user-mode network doesn't answer a SYN for a closed port on the
  * development machine at all, so the stack's retries would run a minute to a timeout. net_stack's hosted tests check
@@ -34,6 +36,7 @@ import net_address from "std/os/slop_os"
 import network from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import tls from "std"
+import ntp from "std"
 import connector from "../../protocols/connector"
 import service_kit from "../../libraries/service_kit"
 
@@ -64,6 +67,7 @@ main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, co
     udp_echo :: cast[u16](service_kit.number_of(service_kit.word_after(text, "udp_echo=") or_else "") or_else 0)
     tcp_sink :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tcp_sink=") or_else "") or_else 0)
     tls_peer :: cast[u16](service_kit.number_of(service_kit.word_after(text, "tls=") or_else "") or_else 0)
+    nts_forged :: cast[u16](service_kit.number_of(service_kit.word_after(text, "nts_forged=") or_else "") or_else 0)
     if tcp_echo == 0 || udp_echo == 0 {
         runtime.log_info("no peers' ports on the command line")
         return 2
@@ -76,8 +80,8 @@ main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, co
     if service_kit.word_after(text, "dns=") is_some {
         use_names(service, tcp_echo)
     }
-    if tls_peer != 0 {
-        use_tls(service, trust, tls_peer)
+    if tls_peer != 0 || nts_forged != 0 {
+        use_tls(service, trust, tls_peer, nts_forged)
     }
     serve_echo(service)
     if tls_peer != 0 {
@@ -169,8 +173,9 @@ use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
 }
 
 /**
- * Narrow a connection to QEMU's ranges, 10.0.2.0/24 and fec0::/64, by TCP: names resolving to them are reached only
- * through rules covering them (the rebinding rule), as they aren't public.
+ * Narrow a connection to QEMU's ranges: 10.0.2.0/24 by TCP and UDP, as NTP with the forging NTS server is UDP, and
+ * fec0::/64 by TCP. Names resolving to them are reached only through rules covering them (the rebinding rule), as they
+ * aren't public.
  *
  * @param service The connection to the network service.
  * @param port A port bound to it.
@@ -181,7 +186,7 @@ qemu_ranges :: fn(service: os.Channel[network.Network], port: slop_os.Port) -> o
     site.bytes[0] = 0xfe
     site.bytes[1] = 0xc0
     ranges := network.Policy.{connect_count = 2}
-    ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP, 0, 65535)
+    ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP | network.TRANSPORT_UDP, 0, 65535)
     ranges.connect[1] = network.range_rule(site, 64, network.TRANSPORT_TCP, 0, 65535)
     return network.narrow(service.end, port, &ranges)
 }
@@ -455,14 +460,15 @@ serve_echo :: fn(service: os.Channel[network.Network]) {
 }
 
 /**
- * Reach the TLS peer by each of its names, its certificate checked against the trust store: the RSA and P-256 ones
- * reached, what's written echoed; the rest refused, each for its reason.
+ * Check TLS and NTS against peers on the development machine, certificates checked against the trust store: the TLS
+ * peer by each of its names (reach_tls_peers), and the forging NTS server (refuse_forged_time).
  *
  * @param service The connection to the network service, which allows everything; narrowed to QEMU's ranges.
  * @param trust The trust store; with none, that's logged and nothing's tried.
- * @param port The TLS peer's port.
+ * @param port The TLS peer's port; 0 for none.
+ * @param nts_forged The forging NTS server's NTS-KE port; 0 for none.
  */
-use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_dir.ReadOnlyDir]?, port: u16) {
+use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_dir.ReadOnlyDir]?, port: u16, nts_forged: u16) {
     loaded :: match trust {
         case Some(store) => net.load_anchors(store)
         case None => null
@@ -480,8 +486,25 @@ use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_
     port_for_narrowing :: os.port_for(startup.budget, service.end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port_for_narrowing))
     local :: qemu_ranges(service, port_for_narrowing) or_return void
+    if port != 0 {
+        reach_tls_peers(local, net.anchor_bytes(anchors), port)
+    }
+    if nts_forged != 0 {
+        refuse_forged_time(local, net.anchor_bytes(anchors), nts_forged)
+    }
+}
+
+/**
+ * Reach the TLS peer by each of its names: the RSA and P-256 ones reached, what's written echoed; the rest refused, each
+ * for its reason.
+ *
+ * @param service The connection to the network service, narrowed to QEMU's ranges.
+ * @param anchors The trust anchors.
+ * @param port The TLS peer's port.
+ */
+reach_tls_peers :: fn(service: os.Channel[network.Network], anchors: u8[], port: u16) {
     for name in string.["rsa.slopos.test", "ecdsa.slopos.test"] {
-        match net.connect_tls(local, name, port, net.anchor_bytes(anchors)) {
+        match net.connect_tls(service, name, port, anchors) {
             case Ok(found) => {
                 stream := found
                 message :: "hello over TLS"
@@ -508,7 +531,7 @@ use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_
         }
     }
     for name in string.["wrong.slopos.test", "expired.slopos.test", "stranger.slopos.test"] {
-        match net.connect_tls(local, name, port, net.anchor_bytes(anchors)) {
+        match net.connect_tls(service, name, port, anchors) {
             case Ok(found) => {
                 stream := found
                 net.close_tls(&stream)
@@ -516,6 +539,31 @@ use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_
             }
             case Error(failure) => log_tls_failure(name, failure)
         }
+    }
+}
+
+/**
+ * Run NTS with boot.py's forging server: its NTS-KE gives keys and cookies, but it can't seal its NTP answers with the
+ * key that comes from the TLS connection, so they're to be refused.
+ *
+ * @param service The connection to the network service, narrowed to QEMU's ranges.
+ * @param anchors The trust anchors.
+ * @param port Its NTS-KE port.
+ */
+refuse_forged_time :: fn(service: os.Channel[network.Network], anchors: u8[], port: u16) {
+    session :: runtime.new(ntp.Session)
+    defer runtime.free(session)
+    name :: "forged.slopos.test"
+    match net.nts_establish(service, name, anchors, session, port) {
+        case Some(problem) => {
+            runtime.log_info("% gave no NTS keys: %", name, problem.why)
+            return void
+        }
+        case None => runtime.log_info("% gave NTS keys and % cookies", name, session.cookie_count)
+    }
+    match net.nts_query(service, name, session, 2_000_000_000) {
+        case Ok(sample) => runtime.log_info("%'s time was taken: its NTP answer wasn't refused", name)
+        case Error(problem) => runtime.log_info("%'s NTP answer refused: %", name, problem.why)
     }
 }
 
