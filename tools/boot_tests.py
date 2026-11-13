@@ -1208,7 +1208,7 @@ TESTS = [
     # home unlocked by the console's login), a shell on a terminal, a file through sftp and scp both ways (14e), and a
     # command that fails, its exit status 1
     ("logs in over SSH with a password and a key, runs commands and a shell, and moves files with sftp and scp", 7,
-     with_before_qemu([argument.replace("test_services", "test_services ssh test_settle=400").replace("--timeout=120", "--timeout=600")
+     with_before_qemu([argument.replace("test_services", "test_services ssh ssh_checks test_settle=400").replace("--timeout=120", "--timeout=600")
                        for argument in BOOT_DISK_BASE], ["--network-peers",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\wedit key.pub\\r\\p\\p"
@@ -1224,6 +1224,27 @@ TESTS = [
         "--expect-line=[user] ssh_service: a password refused",
         "--expect-line=[user] ssh_service: a session ended with 1",
         "--expect-line=[user] ssh_service: SFTP for admin",
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # The SSH client (decisions/0191, 14f): ssh_keygen makes admin's key, keys adds it, then ssh logs in with it to the
+    # machine's own SSH service, out to 10.0.2.2 and back through QEMU's forward: a private address, which the powerbox
+    # allows; its host key shown and trusted; the command's output shown. Again, allowed again, the host key's known, and
+    # not asked about
+    ("logs in with ssh to an SSH server, trusting its host key once", 7,
+     with_before_qemu([argument.replace("test_services", "test_services ssh test_settle=400").replace("--timeout=120", "--timeout=600")
+                       for argument in BOOT_DISK_BASE], ["--network-peers",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wssh_keygen\\r\\p\\p\\p"
+        "keys --add .ssh/id_ed25519.pub\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p"
+        "ssh admin@10.0.2.2 \"test_shell_calls 3 after\" --port {ssh}\\r\\p\\p\\p\\e[3;7~\\w\\r\\wyes\\r\\p\\p\\p\\p\\p"
+        "ssh admin@10.0.2.2 \"test_shell_calls 4 again\" --port {ssh}\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p\\p\\p\\p",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=  Let a key log in as you", "--console-input-after=  Reach the network",
+        "--console-input-after=Trust it? (yes or no) ", "--console-input-after=  Reach the network",
+        "--expect-line=[user] ssh_service: admin logged in with a key",
+        "--expect-console-contains=after3",
+        "--expect-console-contains=again4",
+        "--expect-line=[user] ssh_service: a session ended with 0",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Scripts (decisions/0179, 11e6): each run in a shell of its own, given only what its param line says. report.shell
     # is given a pattern and a count, lists its here and searches it; into.shell lists a second directory it's given as

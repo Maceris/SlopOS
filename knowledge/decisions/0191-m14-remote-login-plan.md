@@ -1,6 +1,6 @@
 # 0191: M14, Remote Login, Planned
 
-Status: accepted, chosen with the project's owner; 14a to 14d built
+Status: accepted, chosen with the project's owner; 14a to 14f built
 Date: 2026-11-13
 Related: `0016` (users and encryption), `0018` (the powerbox), `0042` (unlocking), `0043` (the trusted path and remote
 login), `0136` to `0161` (M10's console, accounts and sessions), `0188` (M13, its 13h review's way of working),
@@ -209,3 +209,17 @@ In seven stages:
   closed: it's marked as having none to end.
 - **Tests:** the SSH boot test, both architectures: a 300 KB file put with sftp, listed, got back the same, a directory
   made and the file moved into it; then scp there and back, the same bytes.
+
+## As Built: 14f
+- **`ssh_keygen`** makes an Ed25519 key in `.ssh` beneath the shell's directory, the home: `id_ed25519` (OpenSSH's
+  text, unencrypted, as the home is) and `id_ed25519.pub`; a key that's there is kept. It gives the fingerprint.
+- **`ssh user@address "command" [--port N]`** runs a command on another computer and gives back its exit status, its
+  output shown on the terminal. It logs in with `.ssh/id_ed25519`, or the password, asked for on the terminal and not
+  shown. A host key it hasn't met is shown by its fingerprint and asked about, an empty answer asked again, and kept in
+  `.ssh/known_hosts` (`address keytype base64`) once trusted; one that's changed is refused (`HostKeyChanged`). An
+  address the session's network doesn't allow is asked of the powerbox, as `connect` does.
+- **Changed from the plan:** commands only, not an interactive shell: SlopOS's terminal shows text made safe, never
+  another program's escape sequences, so another computer's terminal can't be shown on it. For the owner's review.
+- **Tests:** boot, both architectures: `ssh_keygen`, `keys --add`, then `ssh` to the machine's own SSH service through
+  QEMU's forward (a private address, allowed through the powerbox), the host key trusted and the output shown; again,
+  the host key known and not asked about. Against OpenSSH's `sshd`, `std/ssh`'s client is tested on the Linux VM (14b).

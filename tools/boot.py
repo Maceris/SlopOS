@@ -526,7 +526,9 @@ class NetworkPeers:
     gives keys and cookies honestly over TLS, but answers NTP with authenticators it can't make, as it hasn't the key; and
     nts.slopos.test, the address of the NTS server chrony serves on the Linux test VM (NTS_ADDRESS, --nts-server).
 
-    And SSH (decisions/0191, 14d): a forward to the machine's port 22, which, once the serial output says the SSH
+    And SSH (decisions/0191, 14d): a forward to the machine's port 22, from a free loopback port that replaces {ssh}
+    (which the machine reaches at 10.0.2.2, back to itself); with ssh_checks on its command line, once the serial output
+    says the SSH
     service listens there and a key's been added, this logs in to with the development machine's OpenSSH, as admin: a
     command run with the password, a wrong password refused, a command run with SSH_KEY, a shell on a terminal, a file
     put, listed and got with sftp and copied there and back with scp (14e), and last a command that fails (ssh_checks),
@@ -561,6 +563,7 @@ class NetworkPeers:
         self.tls.listen()
         self.tls_forward = free_port()
         self.ssh_forward = free_port()
+        self.ssh_wanted = threading.Event()
         self.tls_contexts = {}
         for peer in self.TLS_NAMES:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -583,9 +586,12 @@ class NetworkPeers:
             threading.Thread(target=serve, daemon=True).start()
 
     def words(self, command_line: str) -> str:
+        if "ssh_checks" in command_line.split():
+            self.ssh_wanted.set()
         return command_line.replace("{tcp_echo}", str(self.tcp.getsockname()[1])).replace("{udp_echo}", str(self.udp.getsockname()[1])) \
             .replace("{tcp_sink}", str(self.sink.getsockname()[1])).replace("{dns}", str(self.dns.getsockname()[1])) \
-            .replace("{tls}", str(self.tls.getsockname()[1])).replace("{nts_forged}", str(self.nts_ke.getsockname()[1]))
+            .replace("{tls}", str(self.tls.getsockname()[1])).replace("{nts_forged}", str(self.nts_ke.getsockname()[1])) \
+            .replace("{ssh}", str(self.ssh_forward))
 
     def qemu_arguments(self) -> list[str]:
         return ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{self.forward}-:7,hostfwd=tcp:127.0.0.1:{self.tls_forward}-:443,"
@@ -783,6 +789,7 @@ class NetworkPeers:
 
     def ssh_checks(self) -> None:
         """Log in to the machine over SSH with the development machine's OpenSSH, once it listens and has the key."""
+        self.ssh_wanted.wait()
         while True:
             written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
             if self.SSH_LISTENING in written and self.SSH_KEY_ADDED in written:
