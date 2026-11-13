@@ -248,3 +248,7 @@ In seven stages:
   - Unauthenticated connections share the 8 places with logged-in ones; IPv6 addresses aren't grouped by /64.
   - Session numbers are reused, so a session ended from the console while its SSH connection lives could, in a narrow
     window, have its number's next session ended as that connection closes.
+- **M14's full suites**, 2026-11-13: boot 283 of 283, both architectures (after the SSH service was kept off boots
+  with no system volume, the debug files' images given 64 MiB, and the root task's grant count updated); unit tests 23
+  of 23; Hemera's HemeraTest 209 of 209; Linux 75 of 75 on x86-64 and 73 of 73 on AArch64, OpenSSH's interop among them;
+  the SSH fuzz targets two minutes each, nothing found.
