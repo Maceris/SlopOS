@@ -35,6 +35,13 @@ Remote :: struct {
     address : net_address.Address,
     /** The service's port, which its ends are bound to; its keys on it start at key. */
     port : slop_os.Port,
+    /** Its place among the service's connections, and its serial, which no other connection has (requests.hsc). */
+    slot : usize,
+    serial : u64,
+    /** While its session's start is asked: the terminal's and prompts' ends it'll have, and whether it's a command. */
+    starting_terminal : slop_os.Channel,
+    starting_prompts : slop_os.Channel,
+    starting_command : bool,
     /** Its keys on the service's port start here. */
     key : u64,
     started_at : u64,
@@ -95,7 +102,10 @@ channel_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number
     }
     if (kind == .Shell || kind == .Exec) && !remote.started && remote.has_channel && number == remote.channel {
         command :: if kind == .Exec { ssh.request_text(request) } else { u8.[] }
-        ssh.answer_request(&remote.conn, start_session(service, remote, command))
+        // Answered once the session manager has
+        if !start_session(service, remote, command) {
+            ssh.answer_request(&remote.conn, false)
+        }
         return void
     }
     ssh.answer_request(&remote.conn, false)
@@ -142,10 +152,10 @@ channel_input :: fn(remote: ptr[mut Remote], number: u32) {
 }
 
 /**
- * Start a connection's session: its home, a terminal and a prompt connection of the service's, and the command if
- * there's one.
+ * Ask for a connection's session to be started: its home, a terminal and a prompt connection of the service's, and the
+ * command if there's one. The session manager's answer finishes it (session_started), or refuses it (start_failed).
  *
- * @return True once it's started.
+ * @return True once it's asked; false if it couldn't be.
  */
 start_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote], command: u8[]) -> bool {
     if remote.home == NONE || command.count > session.COMMAND_BYTES {
@@ -162,33 +172,40 @@ start_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote], command:
         prompts = os.Channel[prompt.Prompt].{end = prompts.b}, command = os.append(&out, command)})
     // The home, the terminal's and prompts' other ends move with it
     remote.home = NONE
-    into := os.Incoming.{}
-    number := cast[u32](0)
-    started := false
-    if session.send_request(service.sessions_end, service.sessions_port, &out) == null {
-        match session.receive_response(service.sessions_end, service.sessions_port, &into, true) {
-            case Received => {
-                match os.message_of[session.Response](&into)^ {
-                    case Started(given) => {
-                        number = given
-                        started = true
-                    }
-                    case _ => {}
-                }
-            }
-            case _ => {}
-        }
-    }
-    if !started {
-        _ = slop_os.handle_close(cast[slop_os.Handle](terminals.a))
-        _ = slop_os.handle_close(cast[slop_os.Handle](prompts.a))
-        log_line.write(service.log, "ssh_service: the session couldn't be started")
+    remote.starting_terminal = terminals.a
+    remote.starting_prompts = prompts.a
+    remote.starting_command = command.count > 0
+    if !send_sessions(service, &out, Waiting.{asked = .Start, slot = remote.slot, serial = remote.serial}) {
+        start_failed(service, remote)
         return false
     }
+    return true
+}
+
+/** The session manager couldn't start a connection's session: its ends closed, and the request refused. */
+start_failed :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+    for end in slop_os.Channel.[remote.starting_terminal, remote.starting_prompts] {
+        if end != NONE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](end))
+        }
+    }
+    remote.starting_terminal = NONE
+    remote.starting_prompts = NONE
+    log_line.write(service.log, "ssh_service: the session couldn't be started")
+    ssh.answer_request(&remote.conn, false)
+}
+
+/** The session manager's started a connection's session: its terminal, prompts and end served, and the request allowed. */
+session_started :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number: u32) {
+    budget :: slop_os.startup_block().budget
+    terminals_a :: remote.starting_terminal
+    prompts_a :: remote.starting_prompts
+    remote.starting_terminal = NONE
+    remote.starting_prompts = NONE
     remote.started = true
     remote.session = number
-    remote.terminal_end = terminals.a
-    remote.prompts_end = prompts.a
+    remote.terminal_end = terminals_a
+    remote.prompts_end = prompts_a
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     _ = slop_os.port_bind(service.port, cast[slop_os.Handle](remote.terminal_end), signals, remote.key + TERMINAL_KEY, .Persistent)
     _ = slop_os.port_bind(service.port, cast[slop_os.Handle](remote.prompts_end), signals, remote.key + PROMPTS_KEY, .Persistent)
@@ -204,8 +221,8 @@ start_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote], command:
         case None => {}
     }
     log_line.write(service.log, "ssh_service: started a session for % %", text_of(ssh.user_of(&remote.conn)),
-        if command.count > 0 { "to run a command" } else { "with a shell" })
-    return true
+        if remote.starting_command { "to run a command" } else { "with a shell" })
+    ssh.answer_request(&remote.conn, true)
 }
 
 /**
@@ -405,10 +422,7 @@ stop_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     remote.stopped = true
     out := os.Outgoing.{}
     os.begin[session.Request](&out)^ = .EndSession(remote.session)
-    if session.send_request(service.sessions_end, service.sessions_port, &out) == null {
-        into := os.Incoming.{}
-        _ = session.receive_response(service.sessions_end, service.sessions_port, &into, true)
-    }
+    _ = send_sessions(service, &out, Waiting.{asked = .End})
 }
 
 /** End a connection's session: its terminal closed, which ends its programs, and its prompts and wait. */

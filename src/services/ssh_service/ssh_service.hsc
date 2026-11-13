@@ -32,10 +32,18 @@ import service_kit from "../../libraries/service_kit"
 
 /** The most connections at once: each some 1 MiB, its rings and SFTP's state among it, in the service's budget. */
 MAX_CONNECTIONS :: 8
-/** The most connections from one address at once. */
+/** The most connections from one address at once; IPv6's counted by their /64s. */
 MAX_FROM_ONE :: 3
+/** The most connections not yet logged in, so the rest are kept for those that have. */
+MAX_LOGGING_IN :: 5
 /** How long a connection has to log in, in seconds. */
 AUTH_SECONDS : u64 : 30
+/** How many addresses' wrong passwords are counted; past them, the oldest's count gives way. */
+COUNTED_ADDRESSES :: 32
+/** Wrong passwords from an address before each next one waits, a second at first, doubling to MAX_ADDRESS_WAIT. */
+ADDRESS_FREE_FAILURES : u32 : 3
+MAX_ADDRESS_WAIT : u64 : 300 * 1000000000
+
 /** The listener's key on the service's port; each connection's keys follow, KEYS_EACH of them. */
 LISTENER_KEY : u64 : 1
 FIRST_KEY : u64 : 16
@@ -67,12 +75,28 @@ Service :: struct {
     asking : bool,
     /** The account service's connector, dialed for each question; and the session manager. */
     accounts_dialing : slop_os.Channel,
-    /** The one connection to the account service, NONE until it's dialed, and a port bound to it. */
+    /** The one connection to the account service, NONE until it's dialed, and a port bound to it for sending. */
     accounts_end : slop_os.Channel,
     accounts_answers : slop_os.Port,
+    /** What's been asked of the account service and the session manager, waiting for their answers (requests.hsc). */
+    accounts_queue : Queue,
+    sessions_queue : Queue,
+    /** The serial the next connection's given. */
+    next_serial : u64,
     sessions_end : slop_os.Channel,
     sessions_port : slop_os.Port,
     remotes : Slot[MAX_CONNECTIONS],
+    /** Addresses' wrong passwords in a row, and when each may try again. */
+    counted : AddressFailures[COUNTED_ADDRESSES],
+}
+
+/** An address's wrong passwords in a row, and when it may try again. */
+AddressFailures :: struct {
+    address : net_address.Address,
+    count : u32,
+    next : u64,
+    /** When it was last counted; 0 for a place not in use. */
+    used : u64,
 }
 
 /** A place for a connection. */
@@ -102,6 +126,10 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
     service.accounts_end = NONE
     service.sessions_end = (sessions or_return 2).end
     service.sessions_port = os.port_for(startup.budget, service.sessions_end) or_return 2
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(service.port, cast[slop_os.Handle](service.sessions_end), signals, SESSIONS_KEY, .Persistent) is_error {
+        return 2
+    }
     match net.listen(root, asked.port) {
         case Ok(made) => service.listener = made
         case Error(failure) => {
@@ -119,6 +147,8 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
             return 0
         }
         take_accepted(service)
+        take_accounts(service)
+        take_sessions(service)
         now :: slop_os.clock_monotonic() or_else 0
         for &slot, i in service.remotes {
             match slot.remote {
@@ -283,11 +313,15 @@ take_accepted :: fn(service: ptr[mut Service]) {
 accept :: fn(service: ptr[mut Service], address: net_address.Address) {
     free := service.remotes.count
     from_there := cast[usize](0)
+    logging_in := cast[usize](0)
     for &slot, i in service.remotes {
         match slot.remote {
             case Some(remote) => {
                 if same_address(remote.address, address) {
                     from_there += 1
+                }
+                if !remote.authenticated {
+                    logging_in += 1
                 }
             }
             case None => {
@@ -297,7 +331,7 @@ accept :: fn(service: ptr[mut Service], address: net_address.Address) {
             }
         }
     }
-    if free >= service.remotes.count || from_there >= MAX_FROM_ONE {
+    if free >= service.remotes.count || from_there >= MAX_FROM_ONE || logging_in >= MAX_LOGGING_IN {
         log_line.write(service.log, "ssh_service: refused a connection: too many")
         net.close(&service.pending)
         return void
@@ -307,6 +341,11 @@ accept :: fn(service: ptr[mut Service], address: net_address.Address) {
     remote.address = address
     remote.key = FIRST_KEY + cast[u64](free) * KEYS_EACH
     remote.port = service.port
+    remote.slot = free
+    service.next_serial += 1
+    remote.serial = service.next_serial
+    remote.starting_terminal = NONE
+    remote.starting_prompts = NONE
     remote.started_at = slop_os.clock_monotonic() or_else 0
     remote.terminal_end = NONE
     remote.prompts_end = NONE
@@ -404,8 +443,15 @@ take_events :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
     return any
 }
 
-/** A password offered: the account service opens the home with it, or doesn't. */
+/** A password offered: the account service opens the home with it, or doesn't; an address trying too often waits. */
 log_in_with_password :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+    now :: slop_os.clock_monotonic() or_else 0
+    counted :: counted_of(service, remote.address, now)
+    if counted.next > now {
+        log_line.write(service.log, "ssh_service: too many wrong passwords from an address")
+        ssh.answer_authentication(&remote.conn, false)
+        return void
+    }
     name :: ssh.user_of(&remote.conn)
     offered :: ssh.offered_password_of(&remote.conn)
     password : u8[ssh.PASSWORD_BYTES]
@@ -421,12 +467,53 @@ log_in_with_password :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     for &byte in password {
         byte^ = 0
     }
-    into := os.Incoming.{}
-    allowed :: ask_accounts(service, &out, &into) && opened_home(service, remote, &into, "a password")
+    sent :: send_accounts(service, &out, Waiting.{asked = .Password, slot = remote.slot, serial = remote.serial})
     for i in 0..<out.words.count {
         out.words[i] = 0
     }
+    if !sent {
+        ssh.answer_authentication(&remote.conn, false)
+    }
+}
+
+/** The account service's answer to a password: the login answered, and the address's wrong tries counted. */
+password_answered :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[mut os.Incoming]) {
+    now :: slop_os.clock_monotonic() or_else 0
+    counted :: counted_of(service, remote.address, now)
+    allowed :: opened_home(service, remote, into, "a password")
+    if allowed {
+        counted^ = AddressFailures.{address = remote.address, used = now}
+    }
+    else {
+        counted.count += 1
+        if counted.count > ADDRESS_FREE_FAILURES {
+            wait := cast[u64](1000000000)
+            for i in ADDRESS_FREE_FAILURES + 1..<counted.count {
+                if wait < MAX_ADDRESS_WAIT {
+                    wait *= 2
+                }
+            }
+            counted.next = now + (if wait < MAX_ADDRESS_WAIT { wait } else { MAX_ADDRESS_WAIT })
+        }
+    }
     ssh.answer_authentication(&remote.conn, allowed)
+}
+
+/** An address's count of wrong passwords: its own, or the oldest place's, given to it. */
+counted_of :: fn(service: ptr[mut Service], address: net_address.Address, now: u64) -> ptr[mut AddressFailures] {
+    oldest := cast[usize](0)
+    for &each, i in service.counted {
+        if each.used != 0 && same_address(each.address, address) {
+            each.used = now
+            return each
+        }
+        if each.used < service.counted[oldest].used {
+            oldest = i
+        }
+    }
+    place :: &service.counted[oldest]
+    place^ = AddressFailures.{address = address, used = now}
+    return place
 }
 
 /**
@@ -442,9 +529,9 @@ log_in_with_key :: fn(service: ptr[mut Service], remote: ptr[mut Remote], signed
     request :: os.begin[accounts.Request](&out)
     request^ = .OpenHomeByKey(accounts.KeyChange.{name = os.append(&out, ssh.user_of(&remote.conn)),
         key = os.append(&out, ssh.blob_of(ssh.offered_key_of(&remote.conn)))})
-    into := os.Incoming.{}
-    allowed :: ask_accounts(service, &out, &into) && opened_home(service, remote, &into, "a key")
-    ssh.answer_authentication(&remote.conn, allowed)
+    if !send_accounts(service, &out, Waiting.{asked = .Key, slot = remote.slot, serial = remote.serial}) {
+        ssh.answer_authentication(&remote.conn, false)
+    }
 }
 
 /** Take the account service's answer to a login: true, the home kept, for OpenedHome. */
@@ -467,41 +554,17 @@ opened_home :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[
     return false
 }
 
-/**
- * Ask the account service one thing, on the service's one connection to it, dialed the first time and again if it's
- * gone, and wait for its answer. One connection, so the account service counts every wrong try from SSH as one
- * client's, and slows them all down together.
- */
-ask_accounts :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
-    budget :: slop_os.startup_block().budget
-    if service.accounts_end == NONE {
-        port :: os.port_for(budget, service.accounts_dialing) or_return false
-        defer slop_os.handle_close(cast[slop_os.Handle](port))
-        connection :: connector.dial[accounts.Accounts](service.accounts_dialing, port) or_return false
-        service.accounts_answers = os.port_for(budget, connection.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-        if cast[slop_os.Handle](service.accounts_answers) == slop_os.NO_HANDLE {
-            _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
-            return false
-        }
-        service.accounts_end = connection.end
-    }
-    if accounts.send_request(service.accounts_end, service.accounts_answers, out) == null {
-        match accounts.receive_response(service.accounts_end, service.accounts_answers, into, true) {
-            case Received => return true
-            case _ => {}
-        }
-    }
-    // Gone: dialed again for the next
-    _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_answers))
-    _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_end))
-    service.accounts_end = NONE
-    return false
-}
-
 /** Close a connection: its session ended, its home and channels closed. */
 close_remote :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     stop_session(service, remote)
     end_session(remote)
+    for end in slop_os.Channel.[remote.starting_terminal, remote.starting_prompts] {
+        if end != NONE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](end))
+        }
+    }
+    remote.starting_terminal = NONE
+    remote.starting_prompts = NONE
     if remote.home != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](remote.home))
         remote.home = NONE
@@ -510,9 +573,10 @@ close_remote :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     log_line.write(service.log, "ssh_service: a connection closed")
 }
 
-/** Whether two addresses are the same. */
+/** Whether two addresses are the same peer's: the same IPv4 address, or the same IPv6 /64, which one peer may have all of. */
 same_address :: fn(a: net_address.Address, b: net_address.Address) -> bool {
-    return a.family == b.family && ssh.same(a.bytes[0..<16], b.bytes[0..<16])
+    width :: if a.family == .V6 { cast[usize](8) } else { cast[usize](16) }
+    return a.family == b.family && ssh.same(ssh.range(a.bytes[0..<16], 0, width), ssh.range(b.bytes[0..<16], 0, width))
 }
 
 /** Zero a connection's memory, its keys among it, before it's given back. */

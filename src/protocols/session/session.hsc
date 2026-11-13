@@ -10,7 +10,7 @@ import prompt from "../prompt"
  * What the trusted path asks of the session manager (decisions/0136, 0139, 0150). Start makes a session once someone's
  * logged in: whose it is, its home volume's root, and a terminal connection for its programs, which its first program
  * is started with; StartWithoutUser makes the one session of a boot with no accounts; each is answered with the
- * session's number. List, for a session by its number, is answered with its programs running, their memory, and
+ * session's number, which is never another session's, its place's generation in it. List, for a session by its number, is answered with its programs running, their memory, and
  * whether each answered a Ping on its lifecycle channel; End asks one, by the index List gave it, to stop, then ends it
  * after a grace period, and it isn't started again; EndSession does that for every program of a session, which ends it
  * (decisions/0151). Shown tells it which session the console shows, NO_SESSION for none, as on the login screen: the

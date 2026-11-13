@@ -189,6 +189,11 @@ Request :: union {
      * been unlocked; WrongCredentials for no such account or a key it doesn't have; or Failed.
      */
     OpenHomeByKey(KeyChange),
+    /**
+     * Mark this connection as a remote front end's, the SSH service's (decisions/0191): its wrong passwords count against
+     * an account apart from the console's, so guessing remotely slows only remote logins. Answered with Done.
+     */
+    Remote,
 }
 
 /** What the account service answers. */
@@ -272,6 +277,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case AddKey(_) => false
         case RemoveKey(_) => false
         case OpenHomeByKey(_) => true
+        case Remote => true
     }
 }
 

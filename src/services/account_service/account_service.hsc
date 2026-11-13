@@ -96,8 +96,10 @@ Tracked :: struct {
     name : u8[account_records.MAX_NAME_BYTES],
     /** How many of name's bytes are the name. */
     name_bytes : usize,
-    /** Its wrong attempts in a row. */
+    /** Its wrong attempts in a row, from the console's clients. */
     failures : Failures,
+    /** Its wrong attempts in a row from remote front ends' clients (Remote), counted apart. */
+    remote_failures : Failures,
     /** When it was first counted, on the monotonic clock; 0 for a place not in use. The oldest gives way first. */
     used : u64,
 }
@@ -124,6 +126,8 @@ Service :: struct {
     count : u32,
     /** The account names whose wrong attempts are counted. */
     tracked : Tracked[TRACKED],
+    /** Whether each client is a remote front end's (Remote), by client index; false again for a new client. */
+    remote : bool[service_kit.MAX_CLIENTS],
     /** Each client's wrong attempts, by client index; started again when the index is given to a new client. */
     clients : Failures[service_kit.MAX_CLIENTS],
     /** The shares whose secrets are kept, opened at a member's login or made by their owner. */
@@ -310,6 +314,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 service_kit.drop_client(connected, index)
                 if index < service.clients.count {
                     service.clients[index] = Failures.{}
+                    service.remote[index] = false
                 }
                 return void
             }
@@ -350,12 +355,19 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
             case ListKeys(name) => response^ = list_keys(service, os.items(into, name), &out)
             case AddKey(change) => response^ = add_key(service, os.items(into, change.name), os.items(into, change.key))
             case RemoveKey(change) => response^ = remove_key(service, os.items(into, change.name), os.items(into, change.key))
+            case Remote => {
+                if index < service.remote.count {
+                    service.remote[index] = true
+                }
+                response^ = .Done
+            }
             case OpenHomeByKey(login) => response^ = open_home_by_key(service, os.items(into, login.name), os.items(into, login.key))
             case Connect(connection) => {
                 match service_kit.add_client_index(connected, service.port, connection.end) {
                     case Some(added) => {
                         if added < service.clients.count {
                             service.clients[added] = Failures.{}
+                            service.remote[added] = false
                         }
                     }
                     case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -1370,8 +1382,9 @@ limited :: fn(service: ptr[mut Service], client: usize, name: u8[]) -> accounts.
     }
     match tracked_of(service, name, false) {
         case Some(tracked) => {
-            if tracked.failures.next > now && tracked.failures.next - now > wait {
-                wait = tracked.failures.next - now
+            counted :: counted_for(service, client, tracked)
+            if counted.next > now && counted.next - now > wait {
+                wait = counted.next - now
             }
         }
         case None => {}
@@ -1394,10 +1407,23 @@ failed :: fn(service: ptr[mut Service], client: usize, name: u8[]) -> accounts.R
         count(&service.clients[client], CLIENT_FREE_FAILURES, now)
     }
     match tracked_of(service, name, true) {
-        case Some(tracked) => count(&tracked.failures, ACCOUNT_FREE_FAILURES, now)
+        case Some(tracked) => count(counted_for(service, client, tracked), ACCOUNT_FREE_FAILURES, now)
         case None => {}
     }
     return .WrongCredentials
+}
+
+/**
+ * An account's count of wrong attempts that a client's tries go to: the remote count for a remote front end's client,
+ * the console's for the rest.
+ *
+ * @param service The service, whose remote clients are known.
+ * @param client The client's index.
+ * @param tracked The account's counts.
+ * @return The count the client's tries go to.
+ */
+counted_for :: fn(service: ptr[Service], client: usize, tracked: ptr[mut Tracked]) -> ptr[mut Failures] {
+    return if client < service.remote.count && service.remote[client] { &tracked.remote_failures } else { &tracked.failures }
 }
 
 /**
@@ -1435,7 +1461,7 @@ succeeded :: fn(service: ptr[mut Service], client: usize, name: u8[]) {
         service.clients[client] = Failures.{}
     }
     match tracked_of(service, name, false) {
-        case Some(tracked) => tracked.failures = Failures.{}
+        case Some(tracked) => counted_for(service, client, tracked)^ = Failures.{}
         case None => {}
     }
 }

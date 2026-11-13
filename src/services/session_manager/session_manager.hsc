@@ -426,6 +426,8 @@ Manager :: struct {
     network_port : slop_os.Port,
     /** The sessions, by number. */
     sessions : Session[MAX_SESSIONS],
+    /** Each session place's generation, counted up each time it's taken, kept in its sessions' numbers (number_of). */
+    generations : u32[MAX_SESSIONS],
     /** Every session's programs, the first count of them in use or once used. */
     programs : Program[MAX_PROGRAMS],
     /** The finding connections, scripts' shells' (decisions/0179, 11e6). */
@@ -727,7 +729,8 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
         match os.message_of[session.Request](into)^ {
             case Start(given) => response^ = start(sessions, os.items(into, given.user), os.items(into, given.layout), given.terminal, given.home,
                 given.prompts, os.items(into, given.command))
-            case Wait(number) => {
+            case Wait(given) => {
+                number :: place_of(sessions, given)
                 if cast[usize](number) >= sessions.sessions.count || !sessions.sessions[cast[usize](number)].in_use {
                     response^ = .Refused
                 }
@@ -743,13 +746,13 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
             case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null, null, u8.[])
             case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
-                count :: list(sessions, number, &programs)
+                count :: list(sessions, place_of(sessions, number), &programs)
                 response^ = .Programs(os.append(&out, programs[0..<count]))
             }
             case End(which) => response^ = end_program(sessions, cast[usize](which), "on the trusted path's request")
-            case EndSession(number) => response^ = end_session(sessions, number)
+            case EndSession(number) => response^ = end_session(sessions, place_of(sessions, number))
             case Shown(number) => {
-                shown(sessions, number)
+                shown(sessions, place_of(sessions, number))
                 response^ = .Noted
             }
             case Connect(connection) => {
@@ -803,6 +806,9 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         }
         return .Refused
     }
+    if number < sessions.generations.count {
+        sessions.generations[number] = (sessions.generations[number] + 1) & 0xffffff
+    }
     made := Session.{in_use = true, user_bytes = user.count, locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE), apps = NONE,
         powerbox_end = NONE, programs_end = NONE, cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE), waiter = NONE}
     for byte, i in user {
@@ -846,7 +852,31 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         sessions.test_installations = false
         sessions.checking = number
     }
-    return .Started(cast[u32](number))
+    return .Started(number_of(sessions, number))
+}
+
+/**
+ * A session's number, as clients know it: its place, in the low 8 bits, and its place's generation above them, so a
+ * number given once is never another session's (decisions/0191).
+ */
+number_of :: fn(sessions: ptr[Manager], place: usize) -> u32 {
+    generation :: if place < sessions.generations.count { sessions.generations[place] } else { cast[u32](0) }
+    return (generation << 8) | cast[u32](place)
+}
+
+/**
+ * A session's place, from its number as clients know it: NO_SESSION kept as it is, and a number from a generation
+ * before, or past the places, given as one past them, which is no session.
+ */
+place_of :: fn(sessions: ptr[Manager], number: u32) -> u32 {
+    if number == session.NO_SESSION {
+        return number
+    }
+    place :: number & 0xff
+    if cast[usize](place) >= sessions.generations.count || sessions.generations[cast[usize](place)] != number >> 8 {
+        return cast[u32](MAX_SESSIONS)
+    }
+    return place
 }
 
 /**
