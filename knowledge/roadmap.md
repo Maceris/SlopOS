@@ -537,6 +537,14 @@ its 13e, which then goes on. In 0189's order:
 - **The native remote protocol** later: typed values, capabilities, prompts outside the stream, unlocking from the
   client (`0042`, `0043`).
 
+Planned 2026-11-13 (`decisions/0191`), with the project's owner: an SSH server and a client, `mlkem768x25519-sha256`
+beside `curve25519-sha256`, each session's terminal served by the SSH service rather than the console's terminal
+service, and SFTP with scp over it; no port or agent forwarding; the native protocol after M15 and M16. In seven
+stages: **14a** crypto for SSH in Hemera's `std` (ML-KEM-768, OpenSSH's ChaCha20-Poly1305, OpenSSH's key formats);
+**14b** `std/ssh`, both roles, tested in memory and against OpenSSH; **14c** accounts' public keys and the host key;
+**14d** the SSH service: login, sessions, terminals, commands, locked homes; **14e** SFTP and scp; **14f** the `ssh`
+client on SlopOS; **14g** a security review of M14's code, then its full suites.
+
 ## M15 — Display and Input (L3, L4, L6)
 
 Design: `design/display.md`.
@@ -601,4 +609,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Before M13 | planned 2026-11-09 (`decisions/0187`), in three parts: C1 sessions' CPU budgets, split from the scheduler's for each session and the shell's for each job; C2 Hemera's atomics intercepted in a test build, with a model checker in `std/testing`; C3 R6's schedule exploration of the kernel's lock-free code on it. Done 2026-11-10: each session and each program the shell starts on a CPU budget of its own (C1); Hemera's atomics routed to a model checker with weak memory, in `std/testing` (C2); the handle entry's tag and the shootdown's handshake in packages of their own, checked, a lookup's torn read found and fixed (C3) |
 | M13 | planned 2026-11-10 (`decisions/0188`): 13a to 13g, and 13h, a security review, added 2026-11-12; 13a built, virtio-net and the `net` protocol; 13b built, the network layer: DHCPv4, SLAAC, ARP, neighbour discovery and pings; 13c built, TCP, UDP, the `Network` protocol and its policies, about 20 MiB/s to the development machine; 13d built, the crypto TLS needs in Hemera's `std`; 13e built, names (a resolver in the stack, Happy Eyeballs, policies by name and the rebinding rule) and the clock's floor; 13f built, TLS 1.3 in `std/tls`, `std/net`'s TLS streams and the trust store as a capability, and the network service copying streams' memory rather than mapping it; 13g built, NTP with NTS in the clock service, from the command line's `nts=`, with ALPN and the exporter in `std/tls` and `std/ntp`; 13h built, the security review: no memory-safety bug, the service no longer waits on programs nor takes paged memory, shares per channel, the stack's randomness and ISNs keyed, chain building budgeted, the clock's steps bounded, and fuzz targets for frames, TCP, DNS, TLS, NTS-KE, DER, X.509, PEM and policies |
 | Linear Algebra | decided 2026-11-10 (`decisions/0189`), scheduled 2026-11-11 between M13's 13c and 13e: L1 to L4; done 2026-11-11: float intrinsics, std/math and correctly rounded parsing (L1), arrays as vectors with swizzles (L2), matrices (L3), std/linear_algebra (L4); L5, f32's own, vector and fast float math (`decisions/0190`), 2026-11-11 |
-| M14–M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
+| M14 | planned 2026-11-13 (`decisions/0191`): 14a to 14g, SSH server and client, ML-KEM hybrid, SFTP; not started |
+| M15–M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), each milestone's stages proposed until it starts; not started |
