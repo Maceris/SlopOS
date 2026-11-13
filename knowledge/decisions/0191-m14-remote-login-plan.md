@@ -1,6 +1,6 @@
 # 0191: M14, Remote Login, Planned
 
-Status: accepted, chosen with the project's owner; 14a built
+Status: accepted, chosen with the project's owner; 14a and 14b built
 Date: 2026-11-13
 Related: `0016` (users and encryption), `0018` (the powerbox), `0042` (unlocking), `0043` (the trusted path and remote
 login), `0136` to `0161` (M10's console, accounts and sessions), `0188` (M13, its 13h review's way of working),
@@ -117,3 +117,30 @@ In seven stages:
   20 key checks) and 161 of Wycheproof's (40 left out, of sizes the types can't hold), and both sides agreeing for
   drawn keys, a changed ciphertext not; OpenSSH's construction sealing and opening drawn packets, refusing a changed
   byte or another sequence number. Its known answers come in 14b, against OpenSSH itself.
+
+## As Built: 14b
+- **`std/ssh`**, Freestanding, a state machine like `std/tls`'s: the caller feeds what arrives, takes what to send and
+  answers events (a host key to trust, a password or key to judge, a channel request). Its buffers are its own
+  (`Connection`, about 800 KB with its 4 channels, so callers allocate it); nothing in it waits or calls the system.
+- **Transport:** `mlkem768x25519-sha256` and `curve25519-sha256`, strict key exchange both ways (sequence numbers reset
+  at NEWKEYS, anything unexpected before it fatal), `chacha20-poly1305@openssh.com` and `aes256-gcm@openssh.com`, a
+  key exchange again after 1 GiB either way or when the peer starts one, with messages held meanwhile. A server's
+  EXT_INFO (`server-sig-algs`) goes as its first packet under the first keys, as RFC 8308 allows.
+- **Authentication:** Ed25519, ECDSA P-256 and RSA (`rsa-sha2-256`, `-512`) users' keys, queries answered before a
+  signature's asked for, and passwords; 6 tries, then disconnection. The client tries its key, then asks its caller for
+  a password each time one's refused, until the server gives up.
+- **Channels:** sessions, a 64 KB window each, given back once half's read; `pty-req`, `shell`, `exec`, `subsystem`,
+  `window-change`, `signal`, `exit-status`. A channel closed both ways is freed only once what arrived on it is read.
+- **Keys:** `authorized_keys` lines, unencrypted `openssh-key-v1` Ed25519 private keys written and read, and SHA256
+  fingerprints.
+- **Found against OpenSSH:** a cipher that keeps the length apart (chacha20-poly1305 as well as GCM) pads the packet
+  without its length to the block, both ways; EXT_INFO after SERVICE_ACCEPT is refused by OpenSSH's client.
+- **Tests:** hosted, a client and a server in memory: key and password logins, a wrong password asked again until the
+  server ends it, an untrusted host key, 200 KB each way under every exchange and cipher with a key exchange midway, a
+  changed packet, a key ssh-keygen wrote read (its line and fingerprint ssh-keygen's) and written back; property tests
+  for any bytes to either side and as keys, which `tools/fuzz.py` fuzzes (`ssh_server`, `ssh_client`, `ssh_keys`).
+  Against OpenSSH 10.0 on the Linux test VM, x86-64 and AArch64 (Hemera's `linux_tests.py`, `openssh_interop`): its
+  `ssh` through a `ProxyCommand` running a Hemera server, under each exchange and cipher, a command, a megabyte through
+  `cat` with key exchanges every 256 KB, a password, a wrong one and an unauthorized key refused, ECDSA and RSA keys;
+  a Hemera client of `sshd -i` the same ways, an unknown host key refused; ssh-keygen reading a key Hemera wrote, and
+  their fingerprints agreeing.

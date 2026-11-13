@@ -48,6 +48,10 @@ TARGETS = [
     ("x509_chain", "hemera:apps/compiler/test/back_end/scenarios/x509", "refuses_any_changed_chain"),
     ("pem", "hemera:apps/compiler/test/back_end/scenarios/x509", "reads_any_pem"),
     ("policy", "hemera:apps/compiler/test/back_end/scenarios/network_policy", "narrowing_never_widens"),
+    # Remote login (decisions/0191)
+    ("ssh_server", "hemera:apps/compiler/test/back_end/scenarios/ssh", "takes_any_bytes"),
+    ("ssh_client", "hemera:apps/compiler/test/back_end/scenarios/ssh", "client_takes_any_bytes"),
+    ("ssh_keys", "hemera:apps/compiler/test/back_end/scenarios/ssh", "reads_any_keys"),
 ]
 
 # How much longer than its fuzzing a target may run, building aside, before it's taken as hung
