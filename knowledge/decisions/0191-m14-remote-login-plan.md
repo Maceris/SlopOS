@@ -252,3 +252,21 @@ In seven stages:
   with no system volume, the debug files' images given 64 MiB, and the root task's grant count updated); unit tests 23
   of 23; Hemera's HemeraTest 209 of 209; Linux 75 of 75 on x86-64 and 73 of 73 on AArch64, OpenSSH's interop among them;
   the SSH fuzz targets two minutes each, nothing found.
+
+## Settled after M14, with the project's owner (2026-11-13)
+- **A key login to a locked home** stays as built: the key's refused, and the client goes on to the password, which
+  unlocks the home. No `unlock` program.
+- **SFTP moves to a program in the user's session,** confined as OpenSSH's sftp-server is, so a fault in its parser
+  reaches only that user's session, not the service holding every connection. It needs a byte-stream channel between
+  the SSH service and the program, and a session started with it in place of a terminal.
+- **Keys change only from the console.** No grant for remote sessions: a session taken over remotely, or a program in
+  one, can't quietly add a key for lasting access.
+- **Strict key exchange is required** of every peer; one that doesn't offer it is refused (Terrapin).
+- **`ssh` runs commands only:** only SlopOS's own VT adapter writes escape sequences.
+- **The SSH service stops waiting in its loop:** requests to the account service and the session manager are sent, and
+  their answers taken as they come, under each connection's key.
+- **Remote tries count apart:** the account service counts wrong passwords from the SSH service apart from the
+  console's, so guessing over SSH slows only remote logins; the SSH service limits tries per address too.
+- **Places for logged-in users,** so peers still logging in can't take them all; IPv6 peers counted by their /64; one
+  key exchange before logging in. **Sessions get a generation**, which Wait and EndSession check, so a reused number
+  never ends another's session.
