@@ -276,6 +276,7 @@ serve_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool 
         match session.receive_response(remote.wait_end, service.port, &into, false) {
             case Received => {
                 match os.message_of[session.Response](&into)^ {
+                    case Refused => remote.stopped = true
                     case Exited(code) => {
                         remote.exited = true
                         remote.exit_code = code
@@ -294,6 +295,8 @@ serve_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool 
                 _ = slop_os.port_unbind(service.port, remote.key + WAIT_KEY)
                 _ = slop_os.handle_close(cast[slop_os.Handle](remote.wait_end))
                 remote.wait_end = NONE
+                // Its number may be another session's by the time this one closes
+                remote.stopped = true
             }
         }
     }
@@ -353,6 +356,10 @@ terminal_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into:
                 answer_read(remote, 0)
             }
         }
+    }
+    // Output cut short could end inside a sequence, which the next could finish as the program likes: it's dropped
+    if out.truncated {
+        return void
     }
     add_pending(remote, string_bytes(text_buffer.as_string(&out)))
 }

@@ -1224,6 +1224,7 @@ TESTS = [
         "--expect-line=[user] ssh_service: a password refused",
         "--expect-line=[user] ssh_service: a session ended with 1",
         "--expect-line=[user] ssh_service: SFTP for admin",
+        "--expect-console-contains=SSH host key: SHA256:",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # The SSH client (decisions/0191, 14f): ssh_keygen makes admin's key, keys adds it, then ssh logs in with it to the
     # machine's own SSH service, out to 10.0.2.2 and back through QEMU's forward: a private address, which the powerbox

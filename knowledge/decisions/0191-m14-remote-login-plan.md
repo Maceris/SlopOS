@@ -1,6 +1,6 @@
 # 0191: M14, Remote Login, Planned
 
-Status: accepted, chosen with the project's owner; 14a to 14f built
+Status: accepted, chosen with the project's owner; built (14a to 14g)
 Date: 2026-11-13
 Related: `0016` (users and encryption), `0018` (the powerbox), `0042` (unlocking), `0043` (the trusted path and remote
 login), `0136` to `0161` (M10's console, accounts and sessions), `0188` (M13, its 13h review's way of working),
@@ -223,3 +223,28 @@ In seven stages:
 - **Tests:** boot, both architectures: `ssh_keygen`, `keys --add`, then `ssh` to the machine's own SSH service through
   QEMU's forward (a private address, allowed through the powerbox), the host key trusted and the output shown; again,
   the host key known and not asked about. Against OpenSSH's `sshd`, `std/ssh`'s client is tested on the Linux VM (14b).
+
+## As Built: 14g
+- **The host key's fingerprint** is on the console's secure attention screen: the SSH service writes its public key's
+  line to the system volume's `ssh_public`, which the terminal service reads, read only; it never sees `ssh`, where the
+  private key is.
+- **The security review** (an independent read of std/ssh, the SSH service, SFTP and the client) found, and these were
+  fixed:
+  - High: a client took NEWKEYS once it had sent its exchange, before it had keys, so a man in the middle could send
+    one in the clear and have it read the rest of the connection in the clear, unauthenticated, after its host key
+    check. NEWKEYS is taken only once this side has sent its own; a test sends one early.
+  - Each login dialed the account service afresh, so its count of wrong tries per client never reached its limit:
+    the SSH service keeps one connection.
+  - Output cut short in its buffer could end inside an escape sequence, for the program's next to finish: it's dropped.
+  - A USERAUTH_REQUEST carried an earlier request's offered key; the client's ML-KEM key, and a connection's memory as
+    it's freed, weren't wiped; SFTP closed the home's handle twice; a session whose wait failed could be ended later by
+    its number, by then another's. Room for 8 connections in the budget, not 10.
+- **Left open, for the owner:**
+  - The SSH service waits on the account service (Argon2id) and the session manager inside its one loop, so a peer
+    making many password tries slows every connection; asynchronous requests would fix it.
+  - Wrong tries over SSH count against the account as the console's do, so a remote peer can keep an account's console
+    login waiting.
+  - Peers that don't offer strict key exchange are still taken, as OpenSSH does, so Terrapin applies to them.
+  - Unauthenticated connections share the 8 places with logged-in ones; IPv6 addresses aren't grouped by /64.
+  - Session numbers are reused, so a session ended from the console while its SSH connection lives could, in a narrow
+    window, have its number's next session ended as that connection closes.

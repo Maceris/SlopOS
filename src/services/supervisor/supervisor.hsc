@@ -398,6 +398,8 @@ SshGrants :: struct {
     settings : config_protocol.Config[ssh_service.SshSettings]?,
     /** A read-only copy of the kernel's command line, where ssh enables it too. */
     command_line : slop_os.Memory?,
+    /** The system volume's "ssh_public" directory, where its host key's public key goes, for the trusted path to show. */
+    public : os.Channel[dir.Dir]?,
 }
 
 /** What the terminal service is given (terminal_service.main); its handles move to the service at its launch. */
@@ -420,6 +422,8 @@ TerminalGrants :: struct {
     accounts_service : os.Channel[connector.Connector]?,
     /** A connection to the supervisor, to ask for the system to shut down (decisions/0180); null if none could be made. */
     power : os.Channel[power_protocol.Power]?,
+    /** The SSH service's public directory, read only, for its host key's fingerprint (decisions/0191); null without one. */
+    ssh_public : os.Channel[read_only_dir.ReadOnlyDir]?,
     /** The listener for its clients; the supervisor keeps its other end, and dials it for connectors to it. */
     clients : os.Listener[terminal.Terminal],
 }
@@ -3415,8 +3419,8 @@ range_rule_of :: fn(text: string) -> network.Rule? {
  * @param supervisor The supervisor, with a system volume.
  * @return A read-only connection to it, the caller's; null without a system volume, or if it couldn't be opened.
  */
-trust_store :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[read_only_dir.ReadOnlyDir]? {
-    directory :: system_directory(supervisor, "trust") or_return null
+trust_store :: fn(supervisor: ptr[mut Supervisor], name: string = "trust") -> os.Channel[read_only_dir.ReadOnlyDir]? {
+    directory :: system_directory(supervisor, name) or_return null
     defer _ = slop_os.handle_close(cast[slop_os.Handle](directory.end))
     port :: os.port_for(supervisor.block.budget, directory.end) or_return null
     defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
@@ -4749,7 +4753,8 @@ start_ssh :: fn(supervisor: ptr[mut Supervisor]) {
     service :: service_named(supervisor, "ssh") or_return void
     grants := SshGrants.{log = duplicate_log(supervisor), network_service = connector_to(supervisor, supervisor.network),
         accounts_service = connector_to(supervisor, supervisor.accounts), sessions = session_connection(supervisor),
-        store = system_directory(supervisor, "ssh"), settings = config_for[ssh_service.SshSettings](supervisor, "system", "ssh")}
+        store = system_directory(supervisor, "ssh"), settings = config_for[ssh_service.SshSettings](supervisor, "system", "ssh"),
+        public = system_directory(supervisor, "ssh_public")}
     match supervisor.command_line {
         case Some(text) => {
             text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -4786,6 +4791,8 @@ start_terminal :: fn(supervisor: ptr[mut Supervisor], again: usize) {
         clients = os.Listener[terminal.Terminal].{end = pair.a}}
     // A connection to the session manager (decisions/0150), and the boot before's panic record
     grants.programs = session_connection(supervisor)
+    // The SSH service's host key, to show (decisions/0191)
+    grants.ssh_public = trust_store(supervisor, "ssh_public")
     grants.power = power_connection(supervisor)
     match supervisor.last_panic {
         case Some(record) => {

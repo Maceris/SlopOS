@@ -14,6 +14,7 @@ import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
 import prompt from "../../protocols/prompt"
+import read_only_dir from "std/os/slop_os"
 
 /**
  * Tell whether a request's kind changes the user's keys, which the elevation screen confirms.
@@ -148,4 +149,42 @@ describe_key :: fn(line: u8[], into: ptr[mut text_buffer.TextBuffer]) {
         text_buffer.append(into, string_of(&comment[0], count))
         text_buffer.append(into, ")")
     }
+}
+
+/**
+ * The SSH service's host key's fingerprint, from host_key.pub in its public directory.
+ *
+ * @param service The service.
+ * @return The fingerprint, SHA256:...; null without the directory or the file, or if it isn't a key's line.
+ */
+ssh_host_line :: fn(service: ptr[mut Service]) -> u8[50]? {
+    public :: service.ssh_public or_return null
+    port :: os.port_for(slop_os.startup_block().budget, public.end) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[read_only_dir.Request](&out)
+    request^ = .OpenReadOnlyFile(os.append(&out, string_bytes("host_key.pub")))
+    if read_only_dir.send_request(public.end, port, &out) is_some {
+        return null
+    }
+    answer := os.Incoming.{}
+    match read_only_dir.receive_response(public.end, port, &answer, true) {
+        case Received => {}
+        case _ => return null
+    }
+    channel :: match os.message_of[read_only_dir.Response](&answer)^ {
+        case OpenedReadOnlyFile(opened) => opened
+        case _ => return null
+    }
+    file, error :: os.file_on(channel.end, false)
+    if error != null {
+        return null
+    }
+    defer os.close(file)
+    text : u8[400]
+    count :: os.read(file, text[0..<400]) or_else 0
+    if count == 0 || count > text.count {
+        return null
+    }
+    return account_records.key_fingerprint(text[0..<count])
 }

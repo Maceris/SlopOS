@@ -5,9 +5,10 @@
  * boot, and starts a session for each through the session manager, serving its terminal itself (sessions.hsc).
  *
  * Its host key, Ed25519, is made the first time it starts, and kept in its system directory as host_key, OpenSSH's
- * private key text, with host_key.pub beside it; its fingerprint is logged as it starts.
+ * private key text, with host_key.pub beside it; its fingerprint is logged as it starts. The public key's line is also
+ * written to a directory of its own, which the trusted path reads to show it on the secure attention key's screen.
  *
- * Before authentication, at most MAX_CONNECTIONS connections at once, MAX_FROM_ONE from one address, AUTH_SECONDS to log
+ * At most MAX_CONNECTIONS connections at once, MAX_FROM_ONE from one address, AUTH_SECONDS to log
  * in, and std/ssh's tries; past them, a connection's closed. It serves every connection on one port, waiting on none.
  */
 package ssh_service
@@ -29,8 +30,8 @@ import connector from "../../protocols/connector"
 import session from "../../protocols/session"
 import service_kit from "../../libraries/service_kit"
 
-/** The most connections at once. */
-MAX_CONNECTIONS :: 10
+/** The most connections at once: each some 1 MiB, its rings and SFTP's state among it, in the service's budget. */
+MAX_CONNECTIONS :: 8
 /** The most connections from one address at once. */
 MAX_FROM_ONE :: 3
 /** How long a connection has to log in, in seconds. */
@@ -66,6 +67,9 @@ Service :: struct {
     asking : bool,
     /** The account service's connector, dialed for each question; and the session manager. */
     accounts_dialing : slop_os.Channel,
+    /** The one connection to the account service, NONE until it's dialed, and a port bound to it. */
+    accounts_end : slop_os.Channel,
+    accounts_answers : slop_os.Port,
     sessions_end : slop_os.Channel,
     sessions_port : slop_os.Port,
     remotes : Slot[MAX_CONNECTIONS],
@@ -77,7 +81,8 @@ Slot :: struct {
 }
 
 main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connector]?, accounts_service: os.Channel[connector.Connector]?,
-    sessions: os.Channel[session.Session]?, store: os.Channel[dir.Dir]?, settings: config.Config[SshSettings]?, command_line: slop_os.Memory?) -> int {
+    sessions: os.Channel[session.Session]?, store: os.Channel[dir.Dir]?, settings: config.Config[SshSettings]?, command_line: slop_os.Memory?,
+    public: os.Channel[dir.Dir]?) -> int {
     startup :: slop_os.startup_block()
     service :: runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -89,10 +94,12 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
         return 0
     }
     service.host = host_key(service, store) or_return 3
+    show_host_key(service, public)
     dialing :: network_service or_return 2
     dial_port :: os.port_for(startup.budget, dialing.end) or_return 2
     root :: connector.dial[network.Network](dialing.end, dial_port) or_return 2
     service.accounts_dialing = (accounts_service or_return 2).end
+    service.accounts_end = NONE
     service.sessions_end = (sessions or_return 2).end
     service.sessions_port = os.port_for(startup.budget, service.sessions_end) or_return 2
     match net.listen(root, asked.port) {
@@ -119,6 +126,7 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
                     pump(service, remote)
                     if remote.closing || (!remote.authenticated && now > remote.started_at + AUTH_SECONDS * 1000000000) {
                         close_remote(service, remote)
+                        wipe_remote(remote)
                         runtime.free(remote)
                         slot.remote = null
                     }
@@ -217,6 +225,23 @@ host_key #constant_time :: fn(service: ptr[mut Service], store: os.Channel[dir.D
     printed :: ssh.fingerprint(blob[0..<ssh.ED25519_BLOB_BYTES])
     log_line.write(service.log, "ssh_service: host key %", string_of(&printed[0], 50))
     return key
+}
+
+/** Write the host key's public key's line where the trusted path reads it, as host_key.pub in public. */
+show_host_key #constant_time :: fn(service: ptr[mut Service], public: os.Channel[dir.Dir]?) {
+    given :: public or_return void
+    directory, opened :: os.directory_on(given.end)
+    if opened != null {
+        return void
+    }
+    shown :: crypto.ed25519_public_key(&service.host)
+    blob :: ssh.ed25519_blob(&shown)
+    made :: ssh.parse_public_key(blob[0..<ssh.ED25519_BLOB_BYTES]) or_return void
+    line : u8[200]
+    length :: ssh.key_line(&made, "", line[0..<200])
+    if length > 0 && length <= line.count {
+        _ = os.write_entire_file_in(directory, "host_key.pub", string_of(&line[0], length))
+    }
 }
 
 /** Ask the listener for the next connection, unless one's asked for already. */
@@ -442,22 +467,35 @@ opened_home :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[
     return false
 }
 
-/** Ask the account service one thing, on a connection dialed for it, and wait for its answer. */
+/**
+ * Ask the account service one thing, on the service's one connection to it, dialed the first time and again if it's
+ * gone, and wait for its answer. One connection, so the account service counts every wrong try from SSH as one
+ * client's, and slows them all down together.
+ */
 ask_accounts :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
     budget :: slop_os.startup_block().budget
-    port :: os.port_for(budget, service.accounts_dialing) or_return false
-    defer slop_os.handle_close(cast[slop_os.Handle](port))
-    connection :: connector.dial[accounts.Accounts](service.accounts_dialing, port) or_return false
-    defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
-    answers :: os.port_for(budget, connection.end) or_return false
-    defer slop_os.handle_close(cast[slop_os.Handle](answers))
-    if accounts.send_request(connection.end, answers, out) != null {
-        return false
+    if service.accounts_end == NONE {
+        port :: os.port_for(budget, service.accounts_dialing) or_return false
+        defer slop_os.handle_close(cast[slop_os.Handle](port))
+        connection :: connector.dial[accounts.Accounts](service.accounts_dialing, port) or_return false
+        service.accounts_answers = os.port_for(budget, connection.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        if cast[slop_os.Handle](service.accounts_answers) == slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+            return false
+        }
+        service.accounts_end = connection.end
     }
-    match accounts.receive_response(connection.end, answers, into, true) {
-        case Received => return true
-        case _ => return false
+    if accounts.send_request(service.accounts_end, service.accounts_answers, out) == null {
+        match accounts.receive_response(service.accounts_end, service.accounts_answers, into, true) {
+            case Received => return true
+            case _ => {}
+        }
     }
+    // Gone: dialed again for the next
+    _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_answers))
+    _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_end))
+    service.accounts_end = NONE
+    return false
 }
 
 /** Close a connection: its session ended, its home and channels closed. */
@@ -475,6 +513,14 @@ close_remote :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
 /** Whether two addresses are the same. */
 same_address :: fn(a: net_address.Address, b: net_address.Address) -> bool {
     return a.family == b.family && ssh.same(a.bytes[0..<16], b.bytes[0..<16])
+}
+
+/** Zero a connection's memory, its keys among it, before it's given back. */
+wipe_remote :: fn(remote: ptr[mut Remote]) {
+    bytes :: view_of(cast[ptr[mut u8]](remote), size_of(Remote))
+    for &byte in bytes {
+        byte^ = 0
+    }
 }
 
 /** Bytes as text, for the log. */

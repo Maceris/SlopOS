@@ -44,6 +44,7 @@ import slop_os from "std/os"
 import text_buffer from "std"
 import unicode from "std"
 import terminal from "std/os/slop_os"
+import read_only_dir from "std/os/slop_os"
 import time from "std"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
@@ -276,6 +277,8 @@ Service :: struct {
      * (decisions/0180); null without one. Nothing's waited for on it.
      */
     power : os.Channel[power_protocol.Power]?,
+    /** The SSH service's public directory, read only, its host_key.pub shown on the secure attention key's screen. */
+    ssh_public : os.Channel[read_only_dir.ReadOnlyDir]?,
     /** Whether a shutdown or a restart's been asked for, which the secure attention key's screen then says. */
     shutting_down : bool,
     /** Whether what was asked for is a restart rather than a shutdown; meaningful once shutting_down is set. */
@@ -419,11 +422,12 @@ View :: struct {
 main :: fn(log: slop_os.DebugLog?, serial_line: os.Channel[connector.Connector]?, input: os.Channel[connector.Connector]?,
     framebuffer: slop_os.Memory?, framebuffer_layout: slop_os.Memory?, programs: os.Channel[session.Session]?,
     last_panic: slop_os.Memory?, accounts_service: os.Channel[connector.Connector]?, power: os.Channel[power_protocol.Power]?,
-    clients: os.Listener[terminal.Terminal]) -> int {
+    ssh_public: os.Channel[read_only_dir.ReadOnlyDir]?, clients: os.Listener[terminal.Terminal]) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     service.power = power
+    service.ssh_public = ssh_public
     service.serial_connector = NONE
     service.seat_connector = NONE
     service.line_end = NONE
@@ -1313,6 +1317,17 @@ draw_panel :: fn(service: ptr[mut Service]) {
             else if service.restarting { "Restarting." }
             else { "Shutting down." }
         screen.write_at(panel, help + 3, 2, said, plain)
+    }
+    // The SSH service's host key, for a user to check before trusting it from another computer (decisions/0191)
+    match ssh_host_line(service) {
+        case Some(printed) => {
+            storage : u8[96]
+            line := text_buffer.make(storage)
+            text_buffer.append(&line, "SSH host key: ")
+            text_buffer.append(&line, string_of(&printed[0], 50))
+            screen.write_at(panel, help + 4, 2, text_buffer.as_string(&line), plain)
+        }
+        case None => {}
     }
     redraw(service)
 }

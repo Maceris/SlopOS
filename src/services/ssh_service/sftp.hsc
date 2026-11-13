@@ -104,6 +104,8 @@ start_sftp :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
         return false
     }
     directory, opened :: os.directory_on(remote.home)
+    // The home's handle is the directory's now, or closed if that failed
+    remote.home = NONE
     if opened != null {
         return false
     }
