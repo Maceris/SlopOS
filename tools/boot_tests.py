@@ -181,9 +181,9 @@ TEST_DEBUG_CRASH_LINE = 85
 # The line of test_debug.hsc the debugger breaks at, where its values are all made and kept in memory
 TEST_DEBUG_BREAK_LINE = 61
 # BOOT_DISK_BASE with the programs' debug files in the store (decisions/0185), on a disk boot.py makes bigger for them
-WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 370688 blocks")
-                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 370688 blocks")
-                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 229376 blocks") for argument in BOOT_DISK_BASE]
+WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 403456 blocks")
+                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 403456 blocks")
+                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 262144 blocks") for argument in BOOT_DISK_BASE]
 
 # What the disk check says, and writes, which the tests of booting a disk itself check
 DISK_CHECK_LINES = [
@@ -224,7 +224,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 83 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 87 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",

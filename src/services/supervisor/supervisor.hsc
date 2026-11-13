@@ -4747,7 +4747,8 @@ start_test_network :: fn(supervisor: ptr[mut Supervisor]) {
  * @param supervisor The supervisor.
  */
 start_ssh :: fn(supervisor: ptr[mut Supervisor]) {
-    if supervisor.network == NOWHERE {
+    // Only with a system volume, where its program and host key are, and accounts to log in to
+    if supervisor.network == NOWHERE || supervisor.system == NONE || supervisor.accounts == NOWHERE {
         return void
     }
     service :: service_named(supervisor, "ssh") or_return void

@@ -1332,7 +1332,7 @@ BOOT_ESP_SECTORS = 131072
 # with room to grow (31 MiB of 32 was full on 2026-11-11, and a staged generation didn't fit)
 BOOT_SYSTEM_SECTORS = 131072
 # With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185)
-DEBUG_FILES_SECTORS = 98304
+DEBUG_FILES_SECTORS = 131072
 
 
 # The encrypted volume the image builder makes beside the system volume, and its passphrase, which the disk check
