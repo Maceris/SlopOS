@@ -1,6 +1,6 @@
 # 0191: M14, Remote Login, Planned
 
-Status: accepted, chosen with the project's owner; 14a and 14b built
+Status: accepted, chosen with the project's owner; 14a to 14c built
 Date: 2026-11-13
 Related: `0016` (users and encryption), `0018` (the powerbox), `0042` (unlocking), `0043` (the trusted path and remote
 login), `0136` to `0161` (M10's console, accounts and sessions), `0188` (M13, its 13h review's way of working),
@@ -144,3 +144,23 @@ In seven stages:
   `cat` with key exchanges every 256 KB, a password, a wrong one and an unauthorized key refused, ECDSA and RSA keys;
   a Hemera client of `sshd -i` the same ways, an unknown host key refused; ssh-keygen reading a key Hemera wrote, and
   their fingerprints agreeing.
+
+## As Built: 14c
+- **Keys are the account's, in the account service:** `<name>.keys` beside its record, a line each as
+  `authorized_keys` has them, without options, at most 16. `account_records`' `authorized_keys.hsc` reads a line with
+  `std/ssh`, writes it again in OpenSSH's form, its comment cut to printable ASCII, refuses the same key twice, and
+  removes one by its fingerprint. The accounts protocol gained `ListKeys`, `AddKey` and `RemoveKey`, naming the
+  account, as `Share` does: the trusted path asks them for the session's user.
+- **A program asks its powerbox** (`RequestKeys`: list, add, remove). Adding or removing is confirmed on the trusted
+  path's elevation screen, the key's fingerprint and comment shown, with the user's Enter, no password, as their own
+  network grant is; listing is answered at once. The terminal service asks the account service on a connection of its
+  own for these, waiting for the answer, so they can't be taken for another screen's.
+- **`keys`** lists the keys as records (kind, fingerprint, comment); `keys --add key.pub` adds a public key's file
+  beneath the shell's directory; `keys --remove SHA256:...` removes one.
+- **Changed from the plan:** the host key moves to 14d, made by the SSH service the first time it starts, which is what
+  uses it; its fingerprint on the secure attention screen comes with it. Remote sessions have no trusted path, so keys
+  are added from the console; a configured grant for remote sessions is 14d's to settle.
+- **Tests:** unit, `account_records`: a line added in OpenSSH's form, its comment cleaned; an ECDSA key after it; the
+  same key with another comment, a line that isn't a key and one whose name isn't its key's refused; one removed by its
+  fingerprint; at most 16. Boot, both architectures: a key typed into `key.pub` with the editor, `keys --add` allowed on
+  the trusted path, listed, removed the same way, and the list empty again.

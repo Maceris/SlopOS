@@ -268,6 +268,14 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                     case None => continue
                 }
             }
+            case RequestKeys(asked) => {
+                kind :: if asked.change == .Add { prompt.Kind.AddKey } else if asked.change == .Remove { prompt.Kind.RemoveKey }
+                    else { prompt.Kind.ListKeys }
+                match ask(box, index, kind, false, os.items(into, asked.purpose), os.items(into, asked.key), u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
             case RequestTrace(purpose) => {
                 match ask(box, index, .Trace, false, os.items(into, purpose), u8.[], u8.[]) {
                     case Some(answer) => response^ = answer
@@ -383,6 +391,7 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
         else if kind == .Debug || kind == .DebugOther { "debugger" }
         else if kind == .Trace { "trace" } else if kind == .SystemLog { "read of the system's log" }
         else if kind == .Network { "network connection" }
+        else if kind == .AddKey { "key added" } else if kind == .RemoveKey { "key removed" } else if kind == .ListKeys { "list of keys" }
         else if kind == .File { if write { "file to write" } else { "file to read" } }
         else { if write { "directory to write in" } else { "directory to read" } })
     return null
@@ -467,6 +476,11 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
                 network_allowed(box)
                 return void
             }
+            if box.waiting.kind == .AddKey || box.waiting.kind == .RemoveKey {
+                runtime.log_info("the user % a key", if box.waiting.kind == .AddKey { "added" } else { "removed" })
+                answer(box, .Done)
+                return void
+            }
             runtime.log_info("the administrator allowed a %", if box.waiting.kind == .Restart { "restart" } else { "shutdown" })
             answer(box, .Allowed)
         }
@@ -478,6 +492,7 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
             runtime.log_info("the administrator allowed a trace")
             answer(box, .TraceGranted(given))
         }
+        case KeysListed(listed) => answer_listed(box, os.items(into, listed))
         case AccountMade(made) => {
             name :: os.items(into, made)
             who :: name_of(box, box.waiting.client)
@@ -879,6 +894,24 @@ answer_made :: fn(box: ptr[mut Box], name: u8[]) {
     out := os.Outgoing.{}
     response :: os.begin[powerbox.Response](&out)
     response^ = .AccountMade(os.append(&out, name))
+    _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
+}
+
+/**
+ * Answer the waiting request, a list of the user's keys, with them, unless the program that asked has gone.
+ *
+ * @param box The powerbox, whose waiting request is answered and no longer waiting.
+ * @param keys The keys, a line each.
+ */
+answer_listed :: fn(box: ptr[mut Box], keys: u8[]) {
+    box.has_waiting = false
+    index :: box.waiting.client
+    if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
+        return void
+    }
+    out := os.Outgoing.{}
+    response :: os.begin[powerbox.Response](&out)
+    response^ = .KeysListed(os.append(&out, keys))
     _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
 }
 

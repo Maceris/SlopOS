@@ -1175,6 +1175,33 @@ TESTS = [
         "--expect-console-line=saved: true", "--expect-console-line=lines: 3", "--expect-console-line=bytes: 30 B",
         "--expect-console-line=a line in a file", "--expect-console-line=second line",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # Public keys (decisions/0191, 14c): a key's line typed into key.pub with the editor, then keys --add asks the
+    # powerbox, the secure attention key shows its fingerprint and Enter allows it; keys lists it; keys --remove, allowed
+    # the same way, takes it out, and the list is empty again
+    ("adds, lists and removes the keys that log in over SSH, each change allowed on the trusted path", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
+                       for argument in BOOT_DISK_BASE], [
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\wedit key.pub\\r\\p\\p"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEcZuugWDi2tmrSEzD5Z5J/QRht6pS6sXCdzeUW6qJY2 vector@test\\p\\x13\\p\\x11\\p\\p"
+        "keys --add key.pub\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p"
+        "keys\\r\\p\\p\\p"
+        "keys --remove SHA256:bBEtczzyIjtfN3fYz88H8A1mtM1727e1zgfHXEs8XyI\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p"
+        "keys\\r\\p\\p\\ptest_shell_calls 3 after\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--console-input-after=  Let a key log in as you", "--console-input-after=  Stop a key logging in as you",
+        "--expect-line=[user] powerbox: keys asks for a key added",
+        "--expect-line=[user] terminal: keys: added a key",
+        "--expect-line=[user] account_service: added a key to admin",
+        "--expect-console-contains=keys asks to let SHA256:bBEtczzyIjtfN3fYz88H8A1mtM1727e1zgfHXEs8XyI (vector@",
+        "--expect-console-line=kind         fingerprint                                         comment",
+        "--expect-console-line=ssh-ed25519  SHA256:bBEtczzyIjtfN3fYz88H8A1mtM1727e1zgfHXEs8XyI  vector@test",
+        "--expect-console-contains=keys asks to stop SHA256:bBEtczzyIjtfN3fYz88H8A1mtM1727e1zgfHXEs8XyI logging",
+        "--expect-line=[user] terminal: keys: removed a key",
+        "--expect-line=[user] account_service: removed a key from admin",
+        "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none",
+        "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Scripts (decisions/0179, 11e6): each run in a shell of its own, given only what its param line says. report.shell
     # is given a pattern and a count, lists its here and searches it; into.shell lists a second directory it's given as
     # a handle; escape.shell can't view what's beyond its here, and ends at that line; a missing argument is refused

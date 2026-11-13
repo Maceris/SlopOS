@@ -17,6 +17,10 @@ import read_only_dir from "std/os/slop_os"
  * for next time", and the Choice says whether the user ticked it (decisions/0158). An Ask for an account is answered
  * on the trusted path's own screen, which asks for the administrator's password and the new account's, with the
  * account made.
+ *
+ * An account's public keys (decisions/0191, 14c): an Ask to add a key (its line as suggested) or remove one (its
+ * fingerprint as suggested) is confirmed on the trusted path's own screen, which has the account service do it for the
+ * session's user, answered Allowed once it's done; an Ask to list them is answered at once, with KeysListed.
  */
 Prompt :: struct {}
 
@@ -54,6 +58,12 @@ Kind :: enum #backed_by(u32) {
      * suggested: the user allows it, with no password, as it's their own program. Answered Allowed, or Refused.
      */
     Network = 10,
+    /** A public key added to the session's user's account, which logs in over SSH: its line is suggested. */
+    AddKey = 11,
+    /** A public key removed from the session's user's account: its fingerprint is suggested. */
+    RemoveKey = 12,
+    /** The session's user's public keys listed, answered at once with KeysListed, without asking the user. */
+    ListKeys = 13,
 }
 
 /** A request of one of the session's programs, for the user to answer. */
@@ -113,6 +123,8 @@ Response :: union {
     TraceGranted(os.Channel[trace.Trace]),
     /** Ask's answer for the system's log: the administrator allowed it, and this is an events connection. */
     LogGranted(os.Channel[events.Events]),
+    /** Ask's answer for ListKeys: the session's user's keys, a line each, each ended by a line break. */
+    KeysListed(slop_os.Relative[u8]),
     /** The answer to a request the trusted path doesn't know, as from a newer powerbox; every protocol has it. */
     Unsupported,
 }

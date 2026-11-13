@@ -117,6 +117,29 @@ NetworkRequest :: struct {
     listen : slop_os.Relative[network.Rule],
 }
 
+/** What RequestKeys asks to do with the session's user's public keys. */
+KeysChange :: enum #backed_by(u32) {
+    /** List them. */
+    List = 1,
+    /** Add one. */
+    Add = 2,
+    /** Remove one. */
+    Remove = 3,
+}
+
+/** The session's user's public keys, which log in over SSH (decisions/0191, 14c), as RequestKeys asks for them. */
+KeysRequest :: struct {
+    /** Why the program asks, in its own words, as UTF-8, up to PURPOSE_BYTES, shown to the user. */
+    purpose : slop_os.Relative[u8],
+    /** Whether they're listed, or one added or removed. */
+    change : KeysChange,
+    /**
+     * For Add, the key's line, as authorized_keys or a .pub file has it, at most account_records.KEY_LINE_BYTES; for
+     * Remove, its fingerprint, SHA256: and 43 characters of base64; empty for List.
+     */
+    key : slop_os.Relative[u8],
+}
+
 /** A program to debug (decisions/0185, 12f), as RequestDebug asks for it. */
 DebugRequest :: struct {
     /** The program's name, as the session runs it: an installation's, or "powerbox"; up to NAME_BYTES, as UTF-8. */
@@ -205,6 +228,13 @@ Request :: union {
      */
     RequestNetwork(NetworkRequest),
     /**
+     * List, add or remove the session's user's public keys, which log in as them over SSH (decisions/0191, 14c): an
+     * addition or removal the user allows on the trusted path, its key's fingerprint shown. Answered with KeysListed
+     * for List, at once; Done once a key's added or removed; or Refused, when the user refuses, the key isn't one, it's
+     * there already or the account has as many as it may, or there's no key of that fingerprint; at once with Busy.
+     */
+    RequestKeys(KeysRequest),
+    /**
      * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
      * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
      */
@@ -237,6 +267,8 @@ Response :: union {
     TraceGranted(os.Channel[trace.Trace]),
     /** RequestSystemLog's answer: a connection to the events service, which moves to the program. */
     LogGranted(os.Channel[events.Events]),
+    /** RequestKeys' answer for List: the keys, a line each, as authorized_keys has them, each ended by a line break. */
+    KeysListed(slop_os.Relative[u8]),
     /** RequestNetwork's answer: a network connection allowing what was asked, which moves to the program. */
     NetworkGranted(os.Channel[network.Network]),
     /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
@@ -262,6 +294,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case RequestTrace(_) => false
         case RequestSystemLog(_) => false
         case RequestNetwork(_) => false
+        case RequestKeys(_) => false
         case Serve(_) => false
     }
 }

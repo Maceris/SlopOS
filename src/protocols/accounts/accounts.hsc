@@ -20,6 +20,10 @@ import grant from "std/os/slop_os"
  * volume the first time, and adds a member, its secret sealed to their public key; Unshare takes one out, revokes every
  * link into the volume, and starts its next key generation. Each answers with a grant of the volume's root, for the
  * owner's link to it; the members' are made, or made again, when they next log in.
+ *
+ * Public keys (decisions/0191, 14c), which log in as an account over SSH: ListKeys, AddKey and RemoveKey, asked for by
+ * the trusted path for the session's user once they've allowed it, as sharing is. Keys are OpenSSH's lines, as
+ * authorized_keys has them, without options; one's removed by its fingerprint, SHA256:..., as ssh-keygen -l shows it.
  */
 
 /**
@@ -90,6 +94,17 @@ Recovery :: struct {
     new_password : slop_os.Relative[u8],
 }
 
+/** A key added to an account, or removed from it. */
+KeyChange :: struct {
+    /** The account's name, as UTF-8. */
+    name : slop_os.Relative[u8],
+    /**
+     * For AddKey, the key's line, as authorized_keys or a .pub file has it, at most account_records.KEY_LINE_BYTES;
+     * for RemoveKey, its fingerprint, SHA256: and 43 characters of base64.
+     */
+    key : slop_os.Relative[u8],
+}
+
 /** The bytes of the recovery code as text, XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, shown once: 29. */
 RECOVERY_TEXT_BYTES :: 29
 
@@ -157,6 +172,15 @@ Request :: union {
      * already has as many clients as it takes. Sent on the listener, and answered with nothing.
      */
     Connect(os.Channel[Accounts]),
+    /** List an account's public keys, by its name. Answered with KeysListed, NoSuchAccount, or Failed. */
+    ListKeys(slop_os.Relative[u8]),
+    /**
+     * Add a public key to an account. Answered with Done; KeyRefused for a line that isn't a key; AlreadyExists for a key
+     * it has, whatever its comment; Refused when it has account_records.MAX_KEYS; NoSuchAccount; or Failed.
+     */
+    AddKey(KeyChange),
+    /** Remove a public key from an account, by its fingerprint. Answered with Done, NoSuchKey, NoSuchAccount, or Failed. */
+    RemoveKey(KeyChange),
 }
 
 /** What the account service answers. */
@@ -202,6 +226,15 @@ Response :: union {
     NoSuchAccount,
     /** The answer when its records or volumes couldn't be read, written or made. */
     Failed,
+    /**
+     * ListKeys' answer: the account's keys, a line each, as authorized_keys has them, each ended by a line break; empty
+     * for none.
+     */
+    KeysListed(slop_os.Relative[u8]),
+    /** AddKey's answer when the line isn't a key the account service reads. */
+    KeyRefused,
+    /** RemoveKey's answer when no key of the account's has the fingerprint. */
+    NoSuchKey,
     /** The answer to a request the account service doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }
@@ -210,7 +243,8 @@ Response :: union {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return True for Describe, OpenHome and Connect; false for the rest, which make or change something.
+ * @return True for Describe, CheckAdministrator, OpenHome, Connect and ListKeys; false for the rest, which make or change
+ *     something.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
@@ -224,6 +258,9 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case ChangePassword(_) => false
         case Recover(_) => false
         case Connect(_) => true
+        case ListKeys(_) => true
+        case AddKey(_) => false
+        case RemoveKey(_) => false
     }
 }
 

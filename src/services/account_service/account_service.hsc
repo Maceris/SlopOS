@@ -19,6 +19,9 @@
  * or recovery code counts against its account and against the client that sent it: from the third in a row for an
  * account, or the fifth for a client, the next is heard only after a wait that doubles from a second, up to five
  * minutes. What counts is kept in memory, so a restart forgets it.
+ *
+ * Each account's public keys (decisions/0191, 14c), which log in as it over SSH, are in <name>.keys beside its record
+ * (keys.hsc): listed, added and removed for the trusted path, which names the session's user, as sharing does.
  */
 package account_service
 
@@ -342,6 +345,9 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 response^ = limited(service, index, name)
                     or_else recover(service, index, name, os.items(into, recovery.code), os.items(into, recovery.new_password))
             }
+            case ListKeys(name) => response^ = list_keys(service, os.items(into, name), &out)
+            case AddKey(change) => response^ = add_key(service, os.items(into, change.name), os.items(into, change.key))
+            case RemoveKey(change) => response^ = remove_key(service, os.items(into, change.name), os.items(into, change.key))
             case Connect(connection) => {
                 match service_kit.add_client_index(connected, service.port, connection.end) {
                     case Some(added) => {

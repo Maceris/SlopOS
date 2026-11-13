@@ -16,6 +16,7 @@ import text_buffer from "std"
 import terminal from "std/os/slop_os"
 import read_only_dir from "std/os/slop_os"
 import files from "std/os/slop_os"
+import account_records from "../../account_records"
 import prompt from "../../protocols/prompt"
 import screen from "../../screen"
 
@@ -53,6 +54,10 @@ Asked :: struct {
     suggested : u8[ENTRY_BYTES],
     /** How many bytes of suggested are used, 0 to ENTRY_BYTES; 0 for no suggestion. */
     suggested_count : usize,
+    /** For AddKey, the key's line, all of it, as suggested; its first key_line_count bytes. */
+    key_line : u8[account_records.KEY_LINE_BYTES],
+    /** How many bytes of key_line are used; a line longer than it isn't kept, and the request's refused. */
+    key_line_count : usize,
     /** What's asked for: a file or a directory, chosen in the chooser, or an account, made on the elevation screen. */
     kind : prompt.Kind,
     /** Whether the program asks to write what's chosen, not only read it; a file to write may be a new one. */
@@ -151,7 +156,14 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
         }
         match os.message_of[prompt.Request](into)^ {
             case Ask(asked) => {
+                if asked.kind == .ListKeys {
+                    list_keys(service, i, asked.home.end)
+                    continue
+                }
                 kept := Asked.{kind = asked.kind, write = asked.write, keep = asked.keep, home = asked.home.end}
+                if asked.kind == .AddKey {
+                    kept.key_line_count = copy_bytes(os.items(into, asked.suggested), kept.key_line[0..<kept.key_line.count])
+                }
                 kept.requester_count = copy_bytes(os.items(into, asked.requester), kept.requester[0..<kept.requester.count])
                 kept.purpose_count = copy_bytes(os.items(into, asked.purpose), kept.purpose[0..<kept.purpose.count])
                 kept.suggested_count = copy_bytes(os.items(into, asked.suggested), kept.suggested[0..<kept.suggested.count])
@@ -162,6 +174,7 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                     else if kept.kind == .ShutDown { "shutdown" } else if kept.kind == .Restart { "restart" }
                     else if kept.kind == .Debug || kept.kind == .DebugOther { "debugger" } else if kept.kind == .Trace { "trace" }
                     else if kept.kind == .SystemLog { "read of the system's log" } else if kept.kind == .Network { "network connection" }
+                    else if kept.kind == .AddKey { "key added" } else if kept.kind == .RemoveKey { "key removed" }
                     else { "file" })
                 if i == service.active && !service.attention && service.setup == .Off {
                     use_active(service)
@@ -186,6 +199,8 @@ append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) 
         else if asked.kind == .Debug || asked.kind == .DebugOther { " asks to debug a program" }
         else if asked.kind == .Trace { " asks to trace the system" } else if asked.kind == .SystemLog { " asks to read the system's log" }
         else if asked.kind == .Network { " asks to reach the network" }
+        else if asked.kind == .AddKey { " asks to add a key that logs in as you" }
+        else if asked.kind == .RemoveKey { " asks to remove a key" }
         else { " asks for a file" })
     text_buffer.append(status, ": Ctrl+Alt+Delete")
 }

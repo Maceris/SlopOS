@@ -2695,6 +2695,7 @@ setup_enter :: fn(service: ptr[mut Service]) {
         case .Confirm => {
             if service.elevating {
                 runtime.log_info("elevation: the user allowed %", if view(service).ask.kind == .Network { "a network connection" }
+                    else if view(service).ask.kind == .AddKey { "a key added" } else if view(service).ask.kind == .RemoveKey { "a key removed" }
                     else { "a debugger" })
                 end_elevation(service, true)
             }
