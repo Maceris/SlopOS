@@ -104,3 +104,30 @@ and atlas are the owner's own.
   powerbox. Boot tests: a client can't draw over the band or the layer; a prompt answered there.
 - **15g, a security review and the full suites**, with the input-to-photon latency test (`display.md` *Also
   proposed*).
+
+## As Built: 15a
+- **`std/fonts`**, a TrueType reader over a font's bytes, which it never copies: the table directory, `head`, `hhea`,
+  `maxp`, `hmtx`, `loca` and `glyf`; `cmap` formats 4 and 12, the Unicode subtable preferred; glyphs' outlines as
+  moves, lines and quadratic curves, composites to a depth of 8 with their offsets and scales; pair kerning from
+  `GPOS`'s `kern` feature (lookup types 2 and 9, pair formats 1 and 2) or else the old `kern` table. Layout: a line's
+  height, a string measured with its kerning, and text wrapped to a width at line breaks and spaces, a word wider than
+  the width split between its characters.
+  Every read is bounds-checked; a bad font gives no glyphs, never a fault. CFF outlines (`.otf`) aren't read: Noto
+  Sans and Noto Sans Mono are TrueType, and they're what M15 ships.
+- **`std/canvas`**, drawing into a BGRA premultiplied image: paths of lines, quadratic and cubic curves, rectangles,
+  ellipses and rounded rectangles; curves flattened to within a quarter pixel; rasterized by accumulating each edge's
+  signed area and coverage into cells, summed along a row (font-rs's method), non-zero or even-odd. Strokes are
+  polygons, each segment's quad with miter, round or bevel joins and butt, round or square caps, then filled non-zero;
+  dashes of up to 16 entries with an offset, walked at most 2^20 steps a stroke. Paints: solid, linear and radial
+  gradients of up to 8 stops interpolated premultiplied; images drawn nearest or bilinear through the inverse
+  transform. A stack of saved states (transform, clip rectangle); the damage, the union of what was drawn, taken by the
+  caller. Blending is one 4-lane vector a pixel. Text from a glyph cache of 1024 masks at a quarter-pixel's steps, in a
+  4 MB pool cleared when full; a transform that isn't a translation draws text as paths.
+- Where the plan differed: reference images became measured properties (a fill's coverage summed is its area, exact
+  for rectangles, within 1% for a circle at a quarter pixel's flattening; strokes' areas by cap; the cache's text
+  against the same glyphs drawn as paths), which don't need images kept in the tree. The metrics are checked against a
+  second reader of the fonts in Python, apart from `std/fonts`.
+- **Tests:** hosted scenarios `fonts` (7) and `canvas` (7) on Windows and Linux, with property tests for any bytes as a
+  font, a changed font, and any path, curve, stroke, dash and transform drawn (huge and NaN coordinates included);
+  fuzz targets `font_bytes`, `font_changed` and `canvas_paths` in `tools/fuzz.py`. The fuzzed path test found strokes
+  with dashes along huge paths making pieces without end; they're capped.

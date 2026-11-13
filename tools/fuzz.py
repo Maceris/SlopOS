@@ -52,6 +52,10 @@ TARGETS = [
     ("ssh_server", "hemera:apps/compiler/test/back_end/scenarios/ssh", "takes_any_bytes"),
     ("ssh_client", "hemera:apps/compiler/test/back_end/scenarios/ssh", "client_takes_any_bytes"),
     ("ssh_keys", "hemera:apps/compiler/test/back_end/scenarios/ssh", "reads_any_keys"),
+    # Display and input (decisions/0192)
+    ("font_bytes", "hemera:apps/compiler/test/back_end/scenarios/fonts", "reads_any_font_bytes"),
+    ("font_changed", "hemera:apps/compiler/test/back_end/scenarios/fonts", "reads_a_changed_font"),
+    ("canvas_paths", "hemera:apps/compiler/test/back_end/scenarios/canvas", "draws_any_path"),
 ]
 
 # How much longer than its fuzzing a target may run, building aside, before it's taken as hung
