@@ -361,7 +361,12 @@ take_events :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
             case ChannelRequest(number) => channel_request(service, remote, number)
             case WindowChanged(number) => window_changed(remote)
             case ChannelData(number) => channel_input(remote, number)
-            case ChannelEof(number) => {}
+            case ChannelEof(number) => {
+                // SFTP's client has finished: its channel's closed once its answers are sent
+                if remote.sftp is_some {
+                    remote.exited = true
+                }
+            }
             case ChannelClosed(number) => {
                 remote.has_channel = false
                 end_session(remote)

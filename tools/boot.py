@@ -528,8 +528,9 @@ class NetworkPeers:
 
     And SSH (decisions/0191, 14d): a forward to the machine's port 22, which, once the serial output says the SSH
     service listens there and a key's been added, this logs in to with the development machine's OpenSSH, as admin: a
-    command run with the password, a wrong password refused, a command run with SSH_KEY, a shell on a terminal, and last
-    a command that fails (ssh_checks), whose end the SSH service logs.
+    command run with the password, a wrong password refused, a command run with SSH_KEY, a shell on a terminal, a file
+    put, listed and got with sftp and copied there and back with scp (14e), and last a command that fails (ssh_checks),
+    whose end the SSH service logs.
     """
 
     LISTENING = "[user] test_network: listening on 7"
@@ -819,6 +820,33 @@ class NetworkPeers:
                 ran = run(password + ["-tt", "admin@127.0.0.1"], given="test_shell_calls 5 shell\rexit\r")
                 if self.SSH_CALLED.format("shell", 5) not in ran.stdout:
                     self.problem = f"a shell on a terminal gave {ran.returncode}: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                # SFTP (14e): a file put, listed, got back, a directory made, the file moved into it; then scp both ways
+                sent = os.urandom(300000)
+                (folder / "sent.bin").write_bytes(sent)
+                (folder / "batch").write_text("put sent.bin\nls\nget sent.bin back.bin\nmkdir folder\nrename sent.bin folder/moved.bin\n"
+                                              "ls folder\n", encoding="ascii")
+                sftp = shutil.which("sftp") or "C:/Windows/System32/OpenSSH/sftp.exe"
+                scp = shutil.which("scp") or "C:/Windows/System32/OpenSSH/scp.exe"
+                options = ["-F", "none", "-P", str(self.ssh_forward), "-o", f"UserKnownHostsFile={folder / 'known_hosts'}",
+                           "-o", "StrictHostKeyChecking=accept-new", "-o", "LogLevel=ERROR"] + password
+                environment = dict(os.environ, SSH_ASKPASS=str(folder / "right.cmd"), SSH_ASKPASS_REQUIRE="force", DISPLAY="none")
+                # The commands on its input: -b would be batch mode, which asks for no password
+                ran = subprocess.run([sftp, *options, "admin@127.0.0.1"], cwd=folder, capture_output=True,
+                                     input=(folder / "batch").read_text(encoding="ascii"),
+                                     text=True, timeout=240, env=environment)
+                back = (folder / "back.bin").read_bytes() if (folder / "back.bin").exists() else b""
+                if ran.returncode != 0 or back != sent or "moved.bin" not in ran.stdout:
+                    self.problem = f"sftp gave {ran.returncode}, {len(back)} bytes back: {ran.stdout!r} {ran.stderr!r}"
+                    return
+                ran = subprocess.run([scp, "-s", *options, str(folder / "sent.bin"), "admin@127.0.0.1:copied.bin"], cwd=folder,
+                                     capture_output=True, text=True, timeout=240, env=environment)
+                if ran.returncode == 0:
+                    ran = subprocess.run([scp, "-s", *options, "admin@127.0.0.1:copied.bin", str(folder / "again.bin")], cwd=folder,
+                                         capture_output=True, text=True, timeout=240, env=environment)
+                again = (folder / "again.bin").read_bytes() if (folder / "again.bin").exists() else b""
+                if ran.returncode != 0 or again != sent:
+                    self.problem = f"scp gave {ran.returncode}, {len(again)} bytes back: {ran.stdout!r} {ran.stderr!r}"
                     return
                 # Last, so its end in the serial output says every check's run
                 ran = run(password + ["admin@127.0.0.1", "no_such_program"])

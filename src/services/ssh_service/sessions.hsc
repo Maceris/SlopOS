@@ -74,6 +74,8 @@ Remote :: struct {
     finished : bool,
     /** Whether the session manager's been asked to end the session. */
     stopped : bool,
+    /** Its SFTP, for the sftp subsystem, in place of a session; null for none. */
+    sftp : ptr[mut Sftp]?,
 }
 
 /** Take a channel request: a pty's size, then a shell or a command, which starts the session. */
@@ -85,6 +87,10 @@ channel_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number
         remote.columns = request.columns
         remote.rows = request.rows
         ssh.answer_request(&remote.conn, true)
+        return void
+    }
+    if kind == .Subsystem && !remote.started && remote.has_channel && number == remote.channel {
+        ssh.answer_request(&remote.conn, ssh.is(ssh.request_text(request), "sftp") && start_sftp(service, remote))
         return void
     }
     if (kind == .Shell || kind == .Exec) && !remote.started && remote.has_channel && number == remote.channel {
@@ -109,6 +115,10 @@ window_changed :: fn(remote: ptr[mut Remote]) {
 
 /** Take what the client sent on its channel: input for the session's terminal. */
 channel_input :: fn(remote: ptr[mut Remote], number: u32) {
+    // SFTP's requests are taken as serve_session has room for their answers
+    if remote.sftp is_some {
+        return void
+    }
     chunk : u8[terminal.MAX_EVENT_TEXT]
     loop {
         // No more than its events and their text have room for, each byte an event at most: the rest waits on the channel
@@ -210,6 +220,10 @@ serve_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool 
     }
     moved := false
     into := os.Incoming.{}
+    match remote.sftp {
+        case Some(sftp) => moved = serve_sftp(remote, sftp)
+        case None => {}
+    }
     // The terminal's requests, while what they make has room
     loop {
         if remote.terminal_end == NONE || remote.pending_count > PENDING_BYTES / 2 {
@@ -378,7 +392,7 @@ answer_read :: fn(remote: ptr[mut Remote], count: usize) {
 
 /** Have the session manager end a connection's session, every program of it, once, if it was started. */
 stop_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
-    if !remote.started || remote.stopped {
+    if !remote.started || remote.stopped || (remote.sftp is_some) {
         return void
     }
     remote.stopped = true
@@ -392,6 +406,14 @@ stop_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
 
 /** End a connection's session: its terminal closed, which ends its programs, and its prompts and wait. */
 end_session :: fn(remote: ptr[mut Remote]) {
+    match remote.sftp {
+        case Some(sftp) => {
+            end_sftp(sftp)
+            runtime.free(sftp)
+            remote.sftp = null
+        }
+        case None => {}
+    }
     for end in slop_os.Channel.[remote.terminal_end, remote.prompts_end, remote.wait_end] {
         if end != NONE {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))

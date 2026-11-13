@@ -193,3 +193,19 @@ In seven stages:
   through a QEMU forward (boot.py's `ssh_checks`): a command with the password, its output back; a wrong password
   refused; a command with a key the console added; a shell on a terminal, typed into; a failing command's exit status
   1. OpenSSH there is 9.5, so `curve25519-sha256`; the hybrid is tested against OpenSSH 10 on the Linux VM (14b).
+
+## As Built: 14e
+- **SFTP version 3** (`ssh_service/sftp.hsc`), the `sftp` subsystem, served by the SSH service itself on the home the
+  login opened, its root "/": paths made relative to it, "." and ".." taken away, never above it. OPEN, CLOSE, READ,
+  WRITE, STAT, LSTAT, FSTAT, SETSTAT and FSETSTAT (OK, doing nothing: SlopOS's files have no owners or modes), OPENDIR,
+  READDIR, REMOVE, MKDIR, RMDIR, REALPATH and RENAME; files shown 0644, directories 0755. SlopOS's files have no seek,
+  so reads and writes follow each handle's position: a read from earlier opens the file again and reads on, a write
+  elsewhere is refused; sftp and scp go in order. **scp** is OpenSSH's over SFTP, as OpenSSH 9's is by default.
+- **Changed from the plan, for the owner's review:** SFTP runs in the SSH service, not as a program in the session.
+  A session's programs reach the terminal only through the terminal protocol, whose text is made safe, so SFTP's binary
+  packets can't go through it; serving it from the service needs no binary channel to a program. What it reaches is
+  only the login's home, as a program's would be, but its parser runs in the service that holds every connection.
+- **Found on the way:** an SFTP connection, which has no session, ended session 0, the console's, as its connection
+  closed: it's marked as having none to end.
+- **Tests:** the SSH boot test, both architectures: a 300 KB file put with sftp, listed, got back the same, a directory
+  made and the file moved into it; then scp there and back, the same bytes.

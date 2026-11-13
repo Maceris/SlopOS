@@ -1205,8 +1205,9 @@ TESTS = [
     # Remote login (decisions/0191, 14d): with ssh on the kernel's command line, the SSH service listens on 22, its host
     # key made; once the console's admin has added a key (as the keys test does), boot.py's NetworkPeers logs in with
     # the development machine's OpenSSH: a command with the password, a wrong one refused, a command with the key (the
-    # home unlocked by the console's login), a shell on a terminal, and a command that fails, its exit status 1
-    ("logs in over SSH with a password and a key, runs commands and a shell", 7,
+    # home unlocked by the console's login), a shell on a terminal, a file through sftp and scp both ways (14e), and a
+    # command that fails, its exit status 1
+    ("logs in over SSH with a password and a key, runs commands and a shell, and moves files with sftp and scp", 7,
      with_before_qemu([argument.replace("test_services", "test_services ssh test_settle=400").replace("--timeout=120", "--timeout=600")
                        for argument in BOOT_DISK_BASE], ["--network-peers",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
@@ -1222,6 +1223,7 @@ TESTS = [
         "--expect-line=[user] ssh_service: admin logged in with a key",
         "--expect-line=[user] ssh_service: a password refused",
         "--expect-line=[user] ssh_service: a session ended with 1",
+        "--expect-line=[user] ssh_service: SFTP for admin",
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Scripts (decisions/0179, 11e6): each run in a shell of its own, given only what its param line says. report.shell
     # is given a pattern and a count, lists its here and searches it; into.shell lists a second directory it's given as
