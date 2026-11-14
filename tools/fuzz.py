@@ -11,7 +11,7 @@ SlopOS's programs are built first, for the targets that read one, like the ELF l
 
 The network's targets (decisions/0188, 13h) are the stack's, in src/net_stack/test, and, for what it's built on in
 Hemera's std, Hemera's own scenarios: TLS, NTS, X.509, DER and PEM, and the network policies. Those are found under
-Hemera's source, HEMERA_SOURCE, or else where the compiler's in it (apps/compiler/bin/<build>/hemera).
+Hemera's source, HEMERA_SOURCE, or else where the compiler's in it (build/<preset>/bin/<configuration>/hemera).
 
     tools/fuzz.py              every target
     tools/fuzz.py fat elf      the targets whose names have one of these in them
