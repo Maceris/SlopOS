@@ -214,3 +214,39 @@ and atlas are the owner's own.
   - **Copy offers typed data, but only its text is pasted** (at most 128 bytes); pasting typed data is the
     typed-data viewer's, 15e.
   - `MAX_PARAMETERS` in the system records went from 256 to 320, as the services' parameters outgrew it.
+
+## As Built: 15d
+- **`std/ui`**, in Hemera's `std`, knowing nothing of SlopOS. A program describes its UI each frame between `begin`
+  (with that frame's `Input`) and `end`, which gives the frame's damage. The frame's events (Clicked, Toggled,
+  Changed, Submitted, Copied, Focused) are read after it; `paint` draws a region of the frame on a `std/canvas` canvas.
+- **The tree and layout as Clay's.**
+  - Boxes are sized per axis `Fit`, `Grow` (by weight, with a least and a most, in rounds), `Fixed` or `Percent`.
+  - Rows and columns have padding, gaps and alignment, laid out widths first, so text is wrapped to its width before
+    heights are found. Text's least width is its longest word.
+  - Scroll areas clip their children and scroll them by a kept offset, turned by the wheel over them.
+- **IDs**: a label's hash (FNV-1a, finalized) mixed with the parent's ID and an explicit key, never added. Two of one
+  ID under a parent are told apart and reported. `ui.key("Save")` runs at compile time (`#run`) for a constant.
+  Widgets hash their labels at run time, a short loop each; making every literal label's hash a compile-time constant
+  needs the compiler to fold a call on a constant argument, left for later.
+- **State by ID with liveness.** Each frame keeps every node's place and scroll in a table rebuilt from that frame's
+  IDs, so a widget not drawn loses its state. Only the focused text field has an editing state: its cursor,
+  selection, and up to 32 edits to undo and redo.
+- **Input is resolved against what the last frame showed.** Its widgets' visible rectangles, inside their clips, are
+  hit-tested with this frame's pointer, so hovering and pressing take effect in the frame the pointer moves, with no
+  frame of lag.
+  - A press focuses what takes focus; Tab and Shift+Tab move focus through the last frame's focusable widgets; Enter
+    activates a focused button or check box.
+- **Widgets**: labels, buttons, check boxes, scroll areas, virtualized lists (only the rows shown are made, the rest
+  stood in for by space above and below), and a one-line text field. The field takes typed and pasted text, arrows,
+  Home and End with Shift selecting, Backspace and Delete by whole UTF-8 characters, and select all, copy, cut, undo
+  and redo.
+- **Damage**: the frame's draw list (fills, edges, lines of text, clips) is compared with the last frame's by command;
+  what differs, where it is and where it was, is the damage. An unchanged frame has none.
+- **Selectors and accessibility**: `find` takes paths over names and roles (`//text=Save`, `list//role=listitem`),
+  and `middle_of` gives where to point. `accessible` gives the tree as a reader of the screen would get it: role,
+  name, place, focus and checked.
+- **Tests:** a hosted scenario `ui` (11) on Windows and Linux. Frames are driven by synthetic input, checking each
+  feature above, and frames are painted and their pixels checked. A property test takes any input across frames,
+  also the fuzz target `ui_input`.
+- Where the plan differed: frames are checked by measured layout and painted pixels rather than reference images, as
+  15a did. A multi-line text field is left for 15e's programs, which have none yet.

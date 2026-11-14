@@ -56,6 +56,7 @@ TARGETS = [
     ("font_bytes", "hemera:apps/compiler/test/back_end/scenarios/fonts", "reads_any_font_bytes"),
     ("font_changed", "hemera:apps/compiler/test/back_end/scenarios/fonts", "reads_a_changed_font"),
     ("canvas_paths", "hemera:apps/compiler/test/back_end/scenarios/canvas", "draws_any_path"),
+    ("ui_input", "hemera:apps/compiler/test/back_end/scenarios/ui", "takes_any_input"),
 ]
 
 # How much longer than its fuzzing a target may run, building aside, before it's taken as hung
