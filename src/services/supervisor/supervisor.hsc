@@ -67,6 +67,7 @@ import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
+import surface from "../../protocols/surface"
 import entropy from "../../protocols/entropy"
 import input from "../../protocols/input"
 import net from "../../protocols/net"
@@ -101,6 +102,7 @@ import account_service from "../account_service"
 import accounts from "../../protocols/accounts"
 import input_service from "../input_service"
 import network_service from "../network_service"
+import test_compositor from "../../tests/test_compositor"
 import test_display from "../../tests/test_display"
 import test_network from "../../tests/test_network"
 import ssh_service from "../ssh_service"
@@ -114,6 +116,7 @@ import edu_dma from "../../drivers/edu_dma"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_gpu from "../../drivers/virtio_gpu"
+import compositor from "../compositor"
 import virtio_input from "../../drivers/virtio_input"
 import virtio_net from "../../drivers/virtio_net"
 import virtio_rng from "../../drivers/virtio_rng"
@@ -231,6 +234,8 @@ Speaks :: enum {
     Input,
     /** A display's driver: the display protocol. */
     Display,
+    /** The compositor: the surface protocol. */
+    Surface,
     /** A NIC's driver: the net protocol. */
     Net,
     /** The network service: the network protocol. */
@@ -373,6 +378,26 @@ NetworkGrants :: struct {
     command_line : slop_os.Memory?,
     /** The listener programs' connections arrive on; the supervisor keeps its other end, and dials it for connectors. */
     clients : os.Listener[network.Network],
+}
+
+/** What the compositor is given (compositor.main); its handles move to it at its launch. */
+CompositorGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the first display's driver. */
+    display_connector : os.Channel[connector.Connector]?,
+    /** A connector to the input service, for the seat it borrows. */
+    seat_connector : os.Channel[connector.Connector]?,
+    /** Its clients' listener; the supervisor keeps the other end. */
+    clients : os.Listener[surface.Surface],
+}
+
+/** What the compositor's test client is given (test_compositor.main); its handles move to it at its launch. */
+TestCompositorGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the compositor. */
+    compositor : os.Channel[connector.Connector]?,
 }
 
 /** What the display's test client is given (test_display.main); its handles move to it at its launch. */
@@ -670,12 +695,16 @@ Modules :: struct {
     virtio_net : slop_os.Memory?,
     /** The virtio GPU driver's module. */
     virtio_gpu : slop_os.Memory?,
+    /** The compositor's module. */
+    compositor : slop_os.Memory?,
     /** The network service's module. */
     network : slop_os.Memory?,
     /** test_network's client's module. */
     test_network : slop_os.Memory?,
     /** test_display's client's module. */
     test_display : slop_os.Memory?,
+    /** test_compositor's client's module. */
+    test_compositor : slop_os.Memory?,
     /** The edu DMA test device's driver's module. */
     edu_dma : slop_os.Memory?,
     /** The storage manager's module. */
@@ -964,6 +993,8 @@ Supervisor :: struct {
     first_nic : usize,
     /** The first display's driver, by index in started; NOWHERE without one. */
     first_display : usize,
+    /** The compositor, by index in started; NOWHERE until it's started. */
+    compositor : usize,
     /** The terminal service, by index in started; NOWHERE until it's started. */
     terminal : usize,
     /** The input service, by index in started; NOWHERE until it's started. */
@@ -1135,9 +1166,11 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param virtio_rng_module The virtio entropy driver's program.
  * @param virtio_net_module The virtio network driver's program.
  * @param virtio_gpu_module The virtio GPU driver's program.
+ * @param compositor_module The compositor's program.
  * @param network_module The network service's program.
  * @param test_network_module test_network's client's program.
  * @param test_display_module test_display's client's program.
+ * @param test_compositor_module test_compositor's client's program.
  * @param edu_dma_module The edu DMA test device's driver's program.
  * @param storage_manager_module The storage manager's program; without it, or any of the four server modules below,
  *     there's no storage manager, and so no system volume.
@@ -1166,8 +1199,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     hello_module: slop_os.Memory?, platform_service: os.Channel[connector.Connector]?, entropy_service: os.Channel[connector.Connector]?,
     terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, sessions_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
-    virtio_net_module: slop_os.Memory?, virtio_gpu_module: slop_os.Memory?, network_module: slop_os.Memory?,
-    test_network_module: slop_os.Memory?, test_display_module: slop_os.Memory?, edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
+    virtio_net_module: slop_os.Memory?, virtio_gpu_module: slop_os.Memory?, compositor_module: slop_os.Memory?,
+    network_module: slop_os.Memory?, test_network_module: slop_os.Memory?, test_display_module: slop_os.Memory?,
+    test_compositor_module: slop_os.Memory?, edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[connector.Connector]?, clock_module: slop_os.Memory?,
     events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
@@ -1188,12 +1222,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager_connector = manager.end, root = root.end, platform_end = NONE,
         platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, first_nic = NOWHERE, first_display = NOWHERE, terminal = NOWHERE, input = NOWHERE, network = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, first_nic = NOWHERE, first_display = NOWHERE, compositor = NOWHERE, terminal = NOWHERE, input = NOWHERE, network = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, last_panic = last_panic, trace_end = NONE}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, power_button = power_button_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
-        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, virtio_net = virtio_net_module, virtio_gpu = virtio_gpu_module, network = network_module, test_network = test_network_module,
-        test_display = test_display_module, edu_dma = edu_dma_module,
+        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, virtio_net = virtio_net_module, virtio_gpu = virtio_gpu_module, compositor = compositor_module, network = network_module, test_network = test_network_module,
+        test_display = test_display_module, test_compositor = test_compositor_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -1241,6 +1275,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     test_network_client := false
     // The display's test client (decisions/0192, 15b)
     test_display_client := false
+    // The compositor (decisions/0192, 15c), with gui; its test client with test_compositor
+    gui := false
+    test_compositor_client := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -1249,6 +1286,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             test_restart = service_kit.has_word(text, "test_restart")
             test_network_client = service_kit.has_word(text, "test_network")
             test_display_client = service_kit.has_word(text, "test_display")
+            test_compositor_client = service_kit.has_word(text, "test_compositor")
+            gui = service_kit.has_word(text, "gui") || test_compositor_client
             test_dma_fault = service_kit.has_word(text, "test_dma_fault")
             test_clock = service_kit.has_word(text, "test_clock")
             test_events = service_kit.has_word(text, "test_events")
@@ -1335,6 +1374,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         }
         if test_display_client {
             start_test_display(&supervisor)
+        }
+        if gui {
+            start_compositor(&supervisor)
+        }
+        if test_compositor_client {
+            start_test_compositor(&supervisor)
         }
         start_ssh(&supervisor)
         start_hello(&supervisor, NOWHERE)
@@ -4339,7 +4384,8 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
     found := if name == "virtio_rng" { modules.virtio_rng } else if name == "virtio_console" { modules.virtio_console }
         else if name == "virtio_net" { modules.virtio_net } else if name == "network" { modules.network }
         else if name == "test_network" { modules.test_network } else if name == "test_display" { modules.test_display }
-        else if name == "virtio_gpu" { modules.virtio_gpu }
+        else if name == "virtio_gpu" { modules.virtio_gpu } else if name == "compositor" { modules.compositor }
+        else if name == "test_compositor" { modules.test_compositor }
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo } else if name == "input" { modules.input }
@@ -4754,6 +4800,56 @@ start_network :: fn(supervisor: ptr[mut Supervisor], again: usize) {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         }
+    }
+}
+
+/**
+ * Start the compositor (decisions/0192, 15c), with connectors to the first display's driver and the input service, and
+ * a listener for its clients, whose other end the supervisor keeps; only with gui or test_compositor on the command
+ * line, and a display.
+ *
+ * @param supervisor The supervisor, whose compositor is set to it once it's launched.
+ */
+start_compositor :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.first_display == NOWHERE {
+        log_line.write(supervisor.log, "supervisor: no display for the compositor")
+        return void
+    }
+    service :: service_named(supervisor, "compositor") or_return void
+    pair :: os.channel_for[surface.Surface](supervisor.block.budget, 0) or_return void
+    seat_connector :: if supervisor.input != NOWHERE { connector_to(supervisor, supervisor.input) } else { cast[MaybeConnector](null) }
+    grants :: CompositorGrants.{log = duplicate_log(supervisor), display_connector = connector_to(supervisor, supervisor.first_display),
+        seat_connector = seat_connector, clients = os.Listener[surface.Surface].{end = pair.a}}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "compositor"), service.budget,
+        compositor.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => {
+            slot :: place(supervisor, "compositor", kept(supervisor, launched), NOWHERE)
+            if slot < supervisor.started.count {
+                supervisor.started[slot].listener = pair.b
+                supervisor.started[slot].speaks = .Surface
+                supervisor.compositor = slot
+            }
+        }
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/**
+ * Start the compositor's test client (decisions/0192, 15c), with a connector to the compositor; only with
+ * test_compositor on the command line, and a compositor.
+ *
+ * @param supervisor The supervisor.
+ */
+start_test_compositor :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.compositor == NOWHERE {
+        return void
+    }
+    service :: service_named(supervisor, "test_compositor") or_return void
+    grants :: TestCompositorGrants.{log = duplicate_log(supervisor), compositor = connector_to(supervisor, supervisor.compositor)}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "test_compositor"), service.budget,
+        test_compositor.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => _ = place(supervisor, "test_compositor", kept(supervisor, launched), NOWHERE)
+        case Error(error) => failed(supervisor, service.name, error)
     }
 }
 
@@ -5557,6 +5653,7 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
         case .Block => (block.connect(entry.listener, port, budget) or_return null).end
         case .Input => (input.connect(entry.listener, port, budget) or_return null).end
         case .Display => (display.connect(entry.listener, port, budget) or_return null).end
+        case .Surface => (surface.connect(entry.listener, port, budget) or_return null).end
         case .Net => (net.connect(entry.listener, port, budget) or_return null).end
         case .Network => (network.connect(entry.listener, port, budget) or_return null).end
         case .Terminal => (terminal.connect(entry.listener, port, budget) or_return null).end

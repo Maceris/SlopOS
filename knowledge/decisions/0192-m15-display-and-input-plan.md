@@ -167,3 +167,50 @@ and atlas are the owner's own.
     protocol, and the GPU's screen is taken (`screendump`) and checked for the scene's colours and the click's mark.
     Then the power button ends the run.
   - The `display` protocol's validators are among those fuzzed.
+
+## As Built: 15c
+- **The `surface` protocol** (`src/protocols/surface`), as `display.md` §3 has it from its first version.
+  - Buffers are described by format, modifier and up to three planes; surfaces have a colour space and a scale (in
+    120ths); submissions carry FIFO or mailbox and a target time; subsurfaces are in the protocol.
+  - Events come through a held Read: Configure, focus, the pointer, buttons, wheels, keys with text, Released, Presented
+    and Paste. `Copy` offers typed data with a text form.
+  - M15 implements the simplest case of each: XRGB8888 or premultiplied ARGB8888, linear, one plane, sRGB, scale 1.
+    `CreateSubsurface` is answered `Refused(Unsupported)`; fences aren't sent, a submitted buffer being ready.
+- **The seat lent** (`seat` protocol):
+  - The reader (the terminal service) `Lend`s the seat at start, after setup or login, and when its secure attention
+    screen closes.
+  - While it's lent, keys and the pointer go to the other client that reads, the compositor. With no compositor,
+    keys go to the terminal service as before.
+  - The secure attention key, or a new keyboard's first key, takes the seat back, dropping what waited for the
+    borrower.
+  - The pointer reaches the seat as `PointerMotion`, `PointerPosition` (spread to 0..65535 from the device's axes),
+    `Button` and `Wheel`, only ever to a borrower.
+- **The compositor** (`src/services/compositor`) is started with `gui` or `test_compositor` on the command line and a
+  display.
+  - It composites in software into the display's buffer that isn't shown, over this frame's damage and the last's,
+    and presents it.
+  - Windows float, cascaded as they're made. Each has an identity band the client can't draw on: its title in Noto
+    Sans (`assets/fonts`, with OFL.txt), the focused one's blue, and a close box.
+  - A press raises and focuses a window; a drag of its band moves it; the close box sends CloseRequested.
+  - Keys go to the focused window; the pointer goes to the window it's over, in that window's units, with a button's
+    release to the window its press went to.
+  - Ctrl+Shift+V pastes what was last copied, as text, into the focused window; the compositor sees the gesture,
+    never a client.
+  - A buffer replaced is released once a frame without it is shown, and each submission's frame gets a Presented.
+- **Tests:** a boot test on both architectures (`--compositor`). test_compositor connects twice, two clients with a
+  window each. Then through QEMU's machine protocol:
+  - a key goes only to B, which is focused;
+  - a click on A raises it;
+  - a drag of B's band moves it;
+  - Ctrl+Shift+V pastes A's copy into B.
+  The screen is then checked for both windows where they ended up, their bands focused and not. The `surface`
+  protocol's validators are fuzzed with the rest.
+- Where the plan differed, for the end of M15:
+  - **The identity band shows the client's title, not the program's name and connection label.** A client's name
+    has to come from whoever connects it, the session manager starting GUI programs, which is 15e.
+  - **The firmware framebuffer as a display, and a console that hands the screen over, aren't built.** On QEMU
+    the console and the GUI are on different devices; on hardware with one framebuffer they'd share it. This needs
+    the console to give its framebuffer up while the seat is lent, and is left for a decision.
+  - **Copy offers typed data, but only its text is pasted** (at most 128 bytes); pasting typed data is the
+    typed-data viewer's, 15e.
+  - `MAX_PARAMETERS` in the system records went from 256 to 320, as the services' parameters outgrew it.

@@ -25,8 +25,8 @@ package system_records
 MAGIC : u64 : 0x32535953504f4c53
 /** The most services records hold: 48. */
 MAX_SERVICES :: 48
-/** The most parameters records hold, every service's together: 256. */
-MAX_PARAMETERS :: 256
+/** The most parameters records hold, every service's together: 320. */
+MAX_PARAMETERS :: 320
 /** The most protocols records say a starter serves itself: 8. */
 MAX_SERVED :: 8
 /** The bytes of a name's place, its zero included, so a name has at most 31 bytes. */

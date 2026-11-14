@@ -4,6 +4,10 @@
  * through the US layout, as the seat protocol. It sees every key first: Ctrl+Alt+Delete, the secure attention key,
  * goes to the trusted path as itself from any keyboard, and is never a key.
  *
+ * The terminal service, the reader, can lend the seat to another client that reads, the compositor (decisions/0192,
+ * 15c): while it's lent, keys and pointers go to the borrower. The secure attention key, or a new keyboard's first key,
+ * takes the seat back, what was waiting for the borrower dropped, so the trusted path always has it for those.
+ *
  * Keyboards there when it starts are the machine's own, and accepted. One found later, or every one with
  * test_new_keyboards on the kernel's command line, is new: its first key makes a random six-digit code, which the
  * terminal service shows on the status line, and nothing it types reaches anyone until that code is typed on it, and
@@ -69,6 +73,8 @@ Keyboard :: struct {
     accepted : bool,
     /** A new keyboard's six-digit code, 100000 to 999999; 0 until its first key, and once it's accepted. */
     code : u32,
+    /** Its absolute axes, as Describe answered when it was dialed; all 0 until then, or without them. */
+    axes : input.Axes,
     /** The digits of the code typed on it so far, as a number; 0 again after each Enter. */
     typed : u32,
 }
@@ -105,6 +111,12 @@ Service :: struct {
     reader : usize?,
     /** How many events the reader's Read held asks for, at least 1; 0 when it holds none. */
     held : u32,
+    /** Whether the reader has lent the seat. */
+    lent : bool,
+    /** The client that borrows the seat while it's lent, the other that sent a Read, by its index; null for none. */
+    borrower : usize?,
+    /** How many events the borrower's Read held asks for, at least 1; 0 when it holds none. */
+    borrower_held : u32,
 }
 
 /**
@@ -224,6 +236,10 @@ dial :: fn(service: ptr[mut Service], index: usize) {
     }
     keyboard.end = keys.end
     keyboard.modifiers = 0
+    out := os.Outgoing.{}
+    request :: os.begin[input.Request](&out)
+    request^ = .Describe
+    _ = input.send_request(keyboard.end, service.port, &out)
     read_keys(service, keyboard)
 }
 
@@ -281,6 +297,10 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                     }
                     case None => {}
                 }
+                if (service.borrower or_else connected.ends.count) == index {
+                    service.borrower = null
+                    service.borrower_held = 0
+                }
                 return void
             }
         }
@@ -293,6 +313,19 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                 if owned {
                     service.reader = index
                     service.held = if most == 0 { cast[u32](1) } else { most }
+                }
+                else {
+                    // Another client that reads borrows the seat while it's lent
+                    service.borrower = index
+                    service.borrower_held = if most == 0 { cast[u32](1) } else { most }
+                }
+            }
+            case Lend(lending) => {
+                if (service.reader or_else connected.ends.count) == index && service.lent != lending {
+                    service.lent = lending
+                    // What was waiting was for whoever had the seat
+                    service.count = 0
+                    service.text_count = 0
                 }
             }
             case SetLayout(name) => {
@@ -352,12 +385,17 @@ take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incomi
         match os.message_of[input.Response](into)^ {
             case Events(given) => {
                 for event in os.items(into, given) {
-                    if input.kind_of(event) == .Key {
+                    kind :: input.kind_of(event) or_else input.EventKind.Key
+                    if kind == .Key {
                         press(service, index, event.code, input.is_pressed(event))
+                    }
+                    else {
+                        point(service, index, kind, event)
                     }
                 }
                 read_keys(service, keyboard)
             }
+            case Described(axes) => keyboard.axes = axes
             case _ => {}
         }
     }
@@ -400,6 +438,50 @@ press :: fn(service: ptr[mut Service], index: usize, usage: u16, pressed: bool) 
     made.code = usage
     made.modifiers = keyboard.modifiers
     add(service, made, text)
+}
+
+/**
+ * Queue a pointer's event for the borrower, from an accepted device while the seat's lent to one; dropped otherwise.
+ *
+ * @param service The service, whose queue it goes in.
+ * @param index The device's index, below MAX_KEYBOARDS.
+ * @param kind The input protocol's kind: Motion, Position, Button or Wheel; a Key isn't one.
+ * @param event The device's event: a Position's x and y spread from its axes' range to 0 to seat.POSITION_MAX.
+ */
+point :: fn(service: ptr[mut Service], index: usize, kind: input.EventKind, event: input.Event) {
+    keyboard :: &service.keyboards[index % MAX_KEYBOARDS]
+    if !keyboard.accepted || !service.lent || (service.borrower is_none) {
+        return void
+    }
+    which :: cast[u8](index)
+    made := match kind {
+        case .Motion => seat.event_of(.PointerMotion, which)
+        case .Position => seat.event_of(.PointerPosition, which)
+        case .Button => seat.event_of(.Button, which)
+        case .Wheel => seat.event_of(.Wheel, which)
+        case .Key => return void
+    }
+    made.x = event.x
+    made.y = event.y
+    if kind == .Position {
+        made.x = spread(event.x, keyboard.axes.x_min, keyboard.axes.x_max)
+        made.y = spread(event.y, keyboard.axes.y_min, keyboard.axes.y_max)
+    }
+    if kind == .Button {
+        made.code = event.code
+        made.pressed = if input.is_pressed(event) { cast[u8](1) } else { cast[u8](0) }
+        made.modifiers = keyboard.modifiers
+    }
+    add(service, made, "")
+}
+
+/** An absolute axis's value spread from its range to 0 to seat.POSITION_MAX; taken as that range itself without one. */
+spread :: fn(value: i32, low: i32, high: i32) -> i32 {
+    if high <= low {
+        return if value < 0 { 0 } else if value > seat.POSITION_MAX { seat.POSITION_MAX } else { value }
+    }
+    clamped :: if value < low { low } else if value > high { high } else { value }
+    return cast[i32]((cast[i64](clamped) - cast[i64](low)) * cast[i64](seat.POSITION_MAX) / (cast[i64](high) - cast[i64](low)))
 }
 
 /**
@@ -472,6 +554,13 @@ type_code :: fn(service: ptr[mut Service], index: usize, usage: u16) {
  * @param text Its text, copied. The event is dropped if it or its text has no room in the queue.
  */
 add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
+    // The secure attention key and a new keyboard's code are the trusted path's: the seat comes back for them
+    if service.lent && (made.kind == cast[u8](seat.EventKind.SecureAttention) || made.kind == cast[u8](seat.EventKind.Waiting)) {
+        service.lent = false
+        service.count = 0
+        service.text_count = 0
+        runtime.log_info("the seat's back with the reader")
+    }
     bytes :: string_bytes(text)
     if service.count >= service.events.count || bytes.count > service.text.count - service.text_count {
         return void
@@ -501,15 +590,17 @@ add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
  * @param connected The clients, to find the reader's channel.
  */
 deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
-    if service.count == 0 || service.held == 0 {
+    borrowing :: service.lent && (service.borrower is_some)
+    held :: if borrowing { service.borrower_held } else { service.held }
+    if service.count == 0 || held == 0 {
         return void
     }
-    reader :: service.reader or_return void
+    reader :: (if borrowing { service.borrower } else { service.reader }) or_return void
     if reader >= connected.ends.count {
         return void
     }
     end :: connected.ends[reader]
-    count := if service.count < cast[usize](service.held) { service.count } else { cast[usize](service.held) }
+    count := if service.count < cast[usize](held) { service.count } else { cast[usize](held) }
     if count > seat.MAX_EVENTS {
         count = seat.MAX_EVENTS
     }
@@ -530,7 +621,12 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     if seat.send_response(end, service.port, &out) != null {
         return void
     }
-    service.held = 0
+    if borrowing {
+        service.borrower_held = 0
+    }
+    else {
+        service.held = 0
+    }
     // Those after moved to the front, their text with them
     left :: service.count - count
     for i in 0..<left {

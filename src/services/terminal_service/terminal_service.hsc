@@ -620,7 +620,25 @@ dial_seat :: fn(service: ptr[mut Service]) {
     }
     service.seat_end = keys.end
     service.seat_reading = false
+    // Read first: the input service takes a Lend only from its reader
     read_seat(service)
+    lend_seat(service)
+}
+
+/**
+ * Lend the seat to the compositor, if one reads it (decisions/0192, 15c), unless the trusted path's screen or setup is
+ * up: the secure attention key, or a new keyboard, brings it back.
+ *
+ * @param service The service; without the input service, nothing is sent.
+ */
+lend_seat :: fn(service: ptr[mut Service]) {
+    if service.seat_end == NONE || service.attention || service.setup != .Off {
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[seat.Request](&out)
+    request^ = .Lend(true)
+    _ = seat.send_request(service.seat_end, service.port, &out)
 }
 
 /**
@@ -1491,6 +1509,7 @@ leave_attention :: fn(service: ptr[mut Service]) {
     update_status(service)
     screen.show_panel(&view(service).screen, false)
     redraw(service)
+    lend_seat(service)
 }
 
 /**
@@ -1960,6 +1979,8 @@ take_seat_event :: fn(service: ptr[mut Service], event: seat.Event, text: u8[]) 
                 service.typed_count += 1
             }
         }
+        // The pointer's events are for the borrower, the compositor
+        case _ => {}
     }
 }
 
@@ -2379,6 +2400,7 @@ logged_in :: fn(service: ptr[mut Service], root: os.Channel[dir.Dir]) {
     service.field_count = 0
     service.password_count = 0
     service.setup = .Off
+    lend_seat(service)
     update_status(service)
     screen.show_panel(&view(service).screen, false)
     redraw(service)
@@ -3308,6 +3330,7 @@ abandon_login :: fn(service: ptr[mut Service]) {
     wipe(service.field[0..<service.field.count])
     service.field_count = 0
     service.setup = .Off
+    lend_seat(service)
     view(service).in_use = false
     switch_to(service, back)
 }
@@ -3353,6 +3376,7 @@ unlocked :: fn(service: ptr[mut Service]) {
     wipe(service.field[0..<service.field.count])
     service.field_count = 0
     service.setup = .Off
+    lend_seat(service)
     runtime.log_info("unlocked")
     update_status(service)
     screen.show_panel(&view(service).screen, false)

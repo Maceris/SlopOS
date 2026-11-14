@@ -11,6 +11,10 @@ import slop_os from "std/os"
  * held until there's an event. SetLayout chooses the keymap keys are typed through (decisions/0150), by its name, which
  * isn't answered; a name that isn't a layout's leaves the one there is. Connections arrive on the input service's
  * listener as Connects.
+ *
+ * The reader can lend the seat (decisions/0192, 15c): while it's lent, keys and the pointer go to the borrower, the
+ * other client that reads, the compositor, instead; the pointer goes only to a borrower. The secure attention key
+ * ends the lending, and goes to the reader as itself, the events waiting for the borrower dropped.
  */
 
 /**
@@ -47,7 +51,21 @@ EventKind :: enum #backed_by(u8) {
     Waiting = 3,
     /** Keyboard's code was typed: its keys come as Key events from now on. */
     Accepted = 4,
+    /** A relative pointer moved x across and y down, in the device's units; for the borrower only. */
+    PointerMotion = 5,
+    /**
+     * An absolute pointer is at x across and y down, each from 0 to POSITION_MAX across the device's range; for the
+     * borrower only.
+     */
+    PointerPosition = 6,
+    /** A pointer's button, code from 0 (left), went down or came up as pressed says; for the borrower only. */
+    Button = 7,
+    /** A wheel turned y notches, positive away from the user; for the borrower only. */
+    Wheel = 8,
 }
+
+/** The largest x and y a PointerPosition has: its device's range spread from 0 to this. */
+POSITION_MAX : i32 : 65535
 
 /** One event, plain data, as a Relative's elements are; kind_of tells its kind, and event_of makes one. */
 Event :: struct {
@@ -65,6 +83,12 @@ Event :: struct {
     text_start : u32,
     /** How many bytes of text the event has, as UTF-8; 0 for none. */
     text_bytes : u32,
+    /** For a PointerMotion or PointerPosition, across; 0 otherwise. */
+    x : i32,
+    /** For a PointerMotion or PointerPosition, down; for a Wheel, how far it turned; 0 otherwise. */
+    y : i32,
+    /** For a Button, 1 if it went down, 0 if it came up; 0 otherwise. */
+    pressed : u8,
 }
 
 /** Events, oldest first, and their text. */
@@ -93,6 +117,12 @@ Request :: union {
      * service already has as many clients as it takes. Sent on the listener, and answered with nothing.
      */
     Connect(os.Channel[Seat]),
+    /**
+     * From the reader: lend the seat to the borrower, or take it back. While it's lent, a borrower's Read is answered
+     * with the seat's keys and pointer, and the reader's only with the secure attention key, which takes it back.
+     * Answered with nothing.
+     */
+    Lend(bool),
 }
 
 /** What the input service answers. */
@@ -110,13 +140,14 @@ Response :: union {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Read, which asked again is another Read, taking other events; true for SetLayout and Connect.
+ * @return False for Read, which asked again is another Read, taking other events; true for SetLayout, Connect and Lend.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
         case SetLayout(_) => true
         case Connect(_) => true
+        case Lend(_) => true
     }
 }
 
@@ -146,6 +177,10 @@ kind_of :: fn(event: Event) -> EventKind? {
         case 2 => EventKind.SecureAttention
         case 3 => EventKind.Waiting
         case 4 => EventKind.Accepted
+        case 5 => EventKind.PointerMotion
+        case 6 => EventKind.PointerPosition
+        case 7 => EventKind.Button
+        case 8 => EventKind.Wheel
         case _ => null
     }
 }

@@ -24,6 +24,7 @@ import clock_setting from "../clock_setting"
 import config from "../config"
 import connector from "../connector"
 import display from "../display"
+import surface from "../surface"
 import container from "../container"
 import entropy from "../entropy"
 import events from "../events"
@@ -59,7 +60,7 @@ Judged :: struct {
 }
 
 /** How many protocols there are. */
-PROTOCOL_COUNT :: 34
+PROTOCOL_COUNT :: 35
 /** The most bytes a case's message has: a case reads at most testing.MAX_CASE_BYTES, its other draws among them. */
 MOST_MESSAGE_BYTES :: 1000
 
@@ -77,6 +78,7 @@ protocols :: fn() -> Judged[PROTOCOL_COUNT] {
         Judged.{name = "config", request = config.validate_request, response = config.validate_response},
         Judged.{name = "connector", request = connector.validate_request, response = connector.validate_response},
         Judged.{name = "display", request = display.validate_request, response = display.validate_response},
+        Judged.{name = "surface", request = surface.validate_request, response = surface.validate_response},
         Judged.{name = "container", request = container.validate_request, response = container.validate_response},
         Judged.{name = "entropy", request = entropy.validate_request, response = entropy.validate_response},
         Judged.{name = "events", request = events.validate_request, response = events.validate_response},

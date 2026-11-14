@@ -1011,6 +1011,117 @@ class DisplayTest(Keyboard):
             self.problem = f"the machine protocol failed: {error}"
 
 
+class CompositorTest(DisplayTest):
+    """
+    A virtio GPU, tablet and keyboard for the compositor and test_compositor (decisions/0192, 15c), driven through QEMU's
+    machine protocol once its windows are shown: B, focused, is typed into; A is clicked, which raises it; B's band is
+    dragged to move it, which raises it again; Ctrl+Shift+V pastes what A copied into B. Each step waits for the line
+    that says it happened. Then the screen's taken and checked (windows_drawn), and the power button ends the run.
+    """
+
+    SHOWN = "[user] test_compositor: windows shown"
+
+    def qemu_arguments(self) -> list[str]:
+        return super().qemu_arguments() + ["-device", "virtio-keyboard-pci,disable-legacy=on,iommu_platform=on,id=keyboard"]
+
+    @staticmethod
+    def tablet_value(pixel: int, size: int) -> int:
+        """The tablet's value that lands on a pixel: through the input service's spread to 0..65535, then the screen."""
+        for value in range(max(0, pixel * 32767 // size - 4), min(32768, pixel * 32767 // size + 8)):
+            if value * 65535 // 32767 * size // 65536 == pixel:
+                return value
+        return pixel * 32767 // size
+
+    def point(self, x: int, y: int) -> None:
+        self.command("input-send-event", {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": self.tablet_value(x, 1280)}},
+            {"type": "abs", "data": {"axis": "y", "value": self.tablet_value(y, 800)}}]})
+        time.sleep(0.2)
+
+    def button(self, down: bool) -> None:
+        self.command("input-send-event", {"events": [{"type": "btn", "data": {"down": down, "button": "left"}}]})
+        time.sleep(0.2)
+
+    def step(self, wanted: str, what: str) -> bool:
+        if self.wait_for(wanted, time.monotonic() + 60):
+            return True
+        self.problem = f"{what}: no line {wanted!r}"
+        return False
+
+    def drive(self) -> None:
+        try:
+            if not self.wait_for(self.SHOWN, time.monotonic() + 600):
+                self.problem = "test_compositor never showed its windows"
+                return
+            if not self.connect():
+                self.problem = "the machine protocol couldn't be reached"
+                return
+            time.sleep(0.5)
+            # B, on top and focused, typed into
+            self.key("b", True)
+            self.key("b", False)
+            if not self.step("[user] test_compositor: B typed b", "typing into B"):
+                return
+            # A, below, clicked where B doesn't cover it: raised and focused
+            self.point(70, 200)
+            self.button(True)
+            self.button(False)
+            if not self.step("[user] test_compositor: A pressed at 10, 112", "clicking A"):
+                return
+            # B's band, right of A, dragged down and right
+            self.point(365, 104)
+            self.button(True)
+            for x, y in ((465, 204), (565, 304), (765, 404)):
+                self.point(x, y)
+            self.button(False)
+            if not self.step("[user] compositor: moved 'B' to 490, 418", "dragging B"):
+                return
+            # Pasted into B, focused again, on the compositor's gesture
+            for key in ("ctrl", "shift", "v"):
+                self.key(key, True)
+            for key in ("v", "shift", "ctrl"):
+                self.key(key, False)
+            if not self.step("[user] test_compositor: B pasted from A", "pasting into B"):
+                return
+            time.sleep(1)
+            reply = self.ask("screendump", {"filename": str(self.screenshot), "device": "gpu"})
+            if "error" in reply:
+                self.problem = f"the screen couldn't be taken: {reply['error'].get('desc')}"
+                return
+            self.problem = windows_drawn(self.screenshot)
+            self.command("system_powerdown")
+        except OSError as error:
+            self.problem = f"the machine protocol failed: {error}"
+
+
+def windows_drawn(screenshot: Path) -> str | None:
+    """
+    Whether a screenshot shows the compositor's windows as CompositorTest left them: A red where it was, its band
+    unfocused, and B blue where it was dragged, its band focused, over the background. None if it does, or what's wrong.
+    """
+    return pixels_are(screenshot, [("the background", 20, 780, (38, 50, 56)), ("A", 200, 200, (255, 0, 0)),
+                                   ("A's band, unfocused", 200, 74, (96, 125, 139)), ("B, moved", 640, 500, (0, 0, 255)),
+                                   ("B's band, focused", 640, 404, (25, 118, 210))])
+
+
+def pixels_are(screenshot: Path, wanted: list) -> str | None:
+    """Whether a screenshot's pixels are as wanted, each (what, x, y, (red, green, blue)) within 8 a channel."""
+    data = screenshot.read_bytes()
+    if os.environ.get("SLOPOS_SCREENSHOT"):
+        Path(os.environ["SLOPOS_SCREENSHOT"]).write_bytes(data)
+    parts = data.split(b"\n", 3)
+    if len(parts) < 4 or parts[0] != b"P6":
+        return "the screenshot isn't a PPM"
+    width, _ = (int(value) for value in parts[1].split())
+    pixels = parts[3]
+    for what, x, y, expected in wanted:
+        at = (y * width + x) * 3
+        found = (pixels[at], pixels[at + 1], pixels[at + 2])
+        if any(abs(a - b) > 8 for a, b in zip(found, expected)):
+            return f"{what} at ({x}, {y}) is {found}, not {expected}"
+    return None
+
+
 def scene_drawn(screenshot: Path) -> str | None:
     """
     Whether a screenshot (QEMU's screendump, a PPM) shows test_display's scene: dark blue, a white square from (100, 100)
@@ -1658,6 +1769,9 @@ def main() -> int:
                         help="a virtio NIC on QEMU's user-mode network, and echo peers on this machine for test_network: "
                         "{tcp_echo} and {udp_echo} in the command line are their ports, and port 7 on the machine is "
                         "connected to and checked once it listens (decisions/0188)")
+    parser.add_argument("--compositor", action="store_true",
+                        help="a virtio GPU, tablet and keyboard for the compositor and test_compositor: its windows typed into, "
+                        "clicked, dragged and pasted into, and the screen checked, with --expect (decisions/0192, 15c)")
     parser.add_argument("--display", action="store_true",
                         help="a virtio GPU and a virtio tablet for test_display: once it shows its cursor, the tablet clicks in the "
                         "screen's middle, and once it says where, the screen is taken and checked for its scene, with --expect "
@@ -1812,8 +1926,8 @@ def main() -> int:
             extra += keyboard.qemu_arguments()
         screenshot = folder / "screen.ppm"
         display_test = None
-        if arguments.display:
-            display_test = DisplayTest(serial, folder / "display.ppm")
+        if arguments.display or arguments.compositor:
+            display_test = (CompositorTest if arguments.compositor else DisplayTest)(serial, folder / "display.ppm")
             extra += display_test.qemu_arguments()
             display_test.thread.start()
         if arguments.screen_after and aarch64:
