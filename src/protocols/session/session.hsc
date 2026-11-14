@@ -139,6 +139,25 @@ Request :: union {
      * terminal, powerbox or installations. Answered with Started and its number, or Refused.
      */
     StartSftp(SftpStart),
+    /**
+     * Make a session once someone's logged in on the GUI (decisions/0192), as Start does, whose first program is the
+     * launcher, given a connection to the compositor in place of a terminal: the session manager's own connector to it
+     * dialed. Its channels move to the session manager, which closes them if it refuses. Answered with Started, or
+     * Refused, as without a compositor.
+     */
+    StartGui(GuiStart),
+}
+
+/** A GUI session to make: its user, home and layout as Start's, and its powerbox's prompts. */
+GuiStart :: struct {
+    /** The user's name, as UTF-8, at most 32 bytes, or the session is refused. */
+    user : slop_os.Relative[u8],
+    /** The keyboard layout's name, as Start's. */
+    layout : slop_os.Relative[u8],
+    /** The root of the user's home volume, which moves to the session manager, for the session's programs. */
+    home : os.Channel[dir.Dir],
+    /** The trusted path's prompt connection, which moves to the session manager, for the session's powerbox. */
+    prompts : os.Channel[prompt.Prompt],
 }
 
 /** What the session manager answers. */
@@ -180,6 +199,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case Shown(_) => true
         case Wait(_) => true
         case StartSftp(_) => false
+        case StartGui(_) => false
     }
 }
 

@@ -632,7 +632,7 @@ dial_seat :: fn(service: ptr[mut Service]) {
  * @param service The service; without the input service, nothing is sent.
  */
 lend_seat :: fn(service: ptr[mut Service]) {
-    if service.seat_end == NONE || service.attention || service.setup != .Off {
+    if service.seat_end == NONE || service.attention || (service.setup != .Off && service.setup != .LoginName && service.setup != .LoginPassword) {
         return void
     }
     out := os.Outgoing.{}
@@ -2569,6 +2569,10 @@ setup_step :: fn(service: ptr[mut Service], step: SetupStep) {
     }
     service.setup = step
     draw_setup(service, true)
+    // The login screen lends the seat as a session does: the GUI's login is the trusted path's too
+    if step == .LoginName {
+        lend_seat(service)
+    }
 }
 
 /**

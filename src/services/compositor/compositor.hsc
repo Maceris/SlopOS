@@ -10,6 +10,10 @@
  * Each frame is drawn into the display's buffer that isn't shown, over the damage of this frame and the one before,
  * which is what that buffer missed, and presented with it. A client's buffer is read while it's shown, and released
  * once another replaces it and the frame without it is on the screen. The pointer is the display's cursor plane.
+ *
+ * The trusted layer (display.md §5): clients that connect through the trusted listener, which only trusted services
+ * are given, as login's, have windows above every other client's, centred, without a band. While one is shown it has
+ * the keyboard and the pointer: nothing below it is given input.
  */
 package compositor
 
@@ -95,6 +99,8 @@ ClientState :: struct {
     held : u32,
     /** The number its next surface gets, from 1. */
     next_surface : u32,
+    /** Whether it connected through the trusted listener, its windows then the trusted layer's. */
+    trusted : bool,
 }
 
 /** A window. */
@@ -119,6 +125,8 @@ Window :: struct {
     replaced : u32,
     /** Whether a frame of it waits to be shown, for its Presented. */
     submitted : bool,
+    /** Whether it's in the trusted layer, above every other client's, without a band. */
+    trusted : bool,
     /** Its title, the first title_count bytes. */
     title : u8[TITLE_BYTES],
     /** How many of title's bytes it has. */
@@ -188,11 +196,13 @@ Compositor :: struct {
  * @param display_connector A connector to the first display's driver.
  * @param seat_connector A connector to the input service, read as the seat's borrower.
  * @param clients Where the clients' connections arrive.
+ * @param trusted Where the trusted layer's clients' connections arrive, only trusted services' (display.md §5); null
+ *     for none.
  * @return 2 without a display, or when it can't be dialed, described or its buffers mapped; 3 when the font can't be
  *     read; 99 when its state can't be had. It doesn't return otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Connector]?, seat_connector: os.Channel[connector.Connector]?,
-    clients: os.Listener[surface.Surface]) -> int {
+    clients: os.Listener[surface.Surface], trusted: os.Listener[surface.Surface]?) -> int {
     startup :: slop_os.startup_block()
     made, error :: runtime.new_aligned(Compositor, align_of(Compositor))
     if error != null {
@@ -239,6 +249,19 @@ main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Conne
     }
     if !service_kit.add_client(&compositor.clients, compositor.port, clients.end) {
         return 2
+    }
+    match trusted {
+        case Some(listener) => {
+            match service_kit.add_client_index(&compositor.clients, compositor.port, listener.end) {
+                case Some(added) => {
+                    if added < compositor.states.count {
+                        compositor.states[added] = ClientState.{next_surface = 1, trusted = true}
+                    }
+                }
+                case None => {}
+            }
+        }
+        case None => {}
     }
     runtime.log_info("serving % by %", compositor.info.width, compositor.info.height)
     into := os.Incoming.{}
@@ -354,6 +377,11 @@ connect_seat :: fn(compositor: ptr[mut Compositor], dialer: os.Channel[connector
         return void
     }
     compositor.seat_end = channel.end
+    // The borrower, before it reads, so it's never taken for the reader
+    out := os.Outgoing.{}
+    request :: os.begin[seat.Request](&out)
+    request^ = .Borrow
+    _ = seat.send_request(compositor.seat_end, compositor.port, &out)
     read_seat(compositor)
 }
 
@@ -414,8 +442,9 @@ serve :: fn(compositor: ptr[mut Compositor], index: usize, into: ptr[mut os.Inco
                 answered = false
                 match service_kit.add_client_index(&compositor.clients, compositor.port, connection.end) {
                     case Some(added) => {
+                        // A trusted client's connections are trusted too
                         if added < compositor.states.count {
-                            compositor.states[added] = ClientState.{next_surface = 1}
+                            compositor.states[added] = ClientState.{next_surface = 1, trusted = compositor.states[index].trusted}
                         }
                     }
                     case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -519,7 +548,12 @@ create_window :: fn(compositor: ptr[mut Compositor], client: usize, spec: surfac
     state.next_surface += 1
     step :: cast[i32](compositor.order_count) * 30
     made := Window.{used = true, client = client, surface = id, x = 60 + step, y = 60 + BAND + step, width = spec.width,
-        height = spec.height}
+        height = spec.height, trusted = state.trusted}
+    if made.trusted {
+        // Centred, above everything
+        made.x = (cast[i32](compositor.info.width) - cast[i32](spec.width)) / 2
+        made.y = (cast[i32](compositor.info.height) - cast[i32](spec.height)) / 2
+    }
     for byte in title {
         if made.title_count < made.title.count {
             made.title[made.title_count] = byte
@@ -747,14 +781,32 @@ content_of :: fn(window: ptr[Window]) -> canvas.Rect {
     return canvas.Rect.{x0 = window.x, y0 = window.y, x1 = window.x + cast[i32](window.width), y1 = window.y + cast[i32](window.height)}
 }
 
-/** A window's band on the screen. */
+/** A window's band on the screen; none for the trusted layer's. */
 band_of :: fn(window: ptr[Window]) -> canvas.Rect {
+    if window.trusted {
+        return canvas.Rect.{}
+    }
     return canvas.Rect.{x0 = window.x, y0 = window.y - BAND, x1 = window.x + cast[i32](window.width), y1 = window.y}
 }
 
 /** A window and its band on the screen. */
 frame_of :: fn(window: ptr[Window]) -> canvas.Rect {
-    return canvas.union_of(band_of(window), content_of(window))
+    band :: band_of(window)
+    return if canvas.is_empty(band) { content_of(window) } else { canvas.union_of(band, content_of(window)) }
+}
+
+/** The trusted layer's topmost window shown, or NO_WINDOW when it shows none. */
+trusted_top :: fn(compositor: ptr[Compositor]) -> usize {
+    found := NO_WINDOW
+    for i in cast[usize](0)..<MAX_WINDOWS {
+        if i < compositor.order_count {
+            index :: compositor.order[i]
+            if index < MAX_WINDOWS && compositor.windows[index].used && compositor.windows[index].trusted && compositor.windows[index].buffer != 0 {
+                found = index
+            }
+        }
+    }
+    return found
 }
 
 /** A window's close box on the screen. */
@@ -778,13 +830,27 @@ add_damage :: fn(compositor: ptr[mut Compositor], rect: canvas.Rect) {
     compositor.damage = if canvas.is_empty(compositor.damage) { cut } else { canvas.union_of(compositor.damage, cut) }
 }
 
-/** The topmost window at a point, or NO_WINDOW. */
+/** The topmost window at a point, or NO_WINDOW; while the trusted layer shows a window, only its windows. */
 window_at :: fn(compositor: ptr[Compositor], x: i32, y: i32) -> usize {
+    layer :: trusted_top(compositor) < MAX_WINDOWS
+    for pass in cast[usize](0)..<2 {
+        // The trusted layer first, as it's drawn above
+        found :: window_in(compositor, x, y, pass == 0)
+        if found < MAX_WINDOWS || layer {
+            return found
+        }
+    }
+    return NO_WINDOW
+}
+
+/** The topmost window at a point of one layer, or NO_WINDOW. */
+window_in :: fn(compositor: ptr[Compositor], x: i32, y: i32, trusted: bool) -> usize {
     for i in cast[usize](0)..<MAX_WINDOWS {
         if i < compositor.order_count {
             at :: compositor.order_count - 1 - i
             index :: if at < compositor.order.count { compositor.order[at] } else { NO_WINDOW }
-            if index < MAX_WINDOWS && compositor.windows[index].buffer != 0 && inside(frame_of(&compositor.windows[index]), x, y) {
+            if index < MAX_WINDOWS && compositor.windows[index].buffer != 0 && compositor.windows[index].trusted == trusted
+                && inside(frame_of(&compositor.windows[index]), x, y) {
                 return index
             }
         }
@@ -859,12 +925,14 @@ take_event :: fn(compositor: ptr[mut Compositor], event: seat.Event, text: u8[])
             start :: cast[usize](event.text_start)
             end :: start + cast[usize](event.text_bytes)
             typed :: if start <= end && end <= text.count { text[start..<end] } else { text[0..<0] }
-            if compositor.focus >= MAX_WINDOWS {
+            layer :: trusted_top(compositor)
+            target :: if layer < MAX_WINDOWS { layer } else { compositor.focus }
+            if target >= MAX_WINDOWS {
                 return void
             }
-            window :: &compositor.windows[compositor.focus]
+            window :: &compositor.windows[target]
             paste :: terminal.CONTROL | terminal.SHIFT
-            if event.code == USAGE_V && event.modifiers & paste == paste {
+            if event.code == USAGE_V && event.modifiers & paste == paste && !window.trusted {
                 kept :: compositor.clipboard[0..<TITLE_BYTES]
                 pasted :: if compositor.clipboard_count <= kept.count { kept[0..<compositor.clipboard_count] } else { kept }
                 queue(compositor, window.client, surface.event_of(.Paste, window.surface), string_of_bytes(pasted))
@@ -1039,22 +1107,14 @@ deliver :: fn(compositor: ptr[mut Compositor], client: usize) {
     if count > surface.MAX_EVENTS {
         count = surface.MAX_EVENTS
     }
-    // The text of those given, which are first, fits MAX_TEXT, or they're given fewer
+    // The text of those given, which are first, up to where the next's starts; fewer given while it's past MAX_TEXT
     text_end := state.text_count
     loop {
-        if count <= 1 || count >= state.count {
-            break
-        }
-        if count < state.events.count {
-            text_end = cast[usize](state.events[count].text_start)
-        }
-        if text_end <= surface.MAX_TEXT {
+        text_end = if count < state.count && count < state.events.count { cast[usize](state.events[count].text_start) } else { state.text_count }
+        if count <= 1 || text_end <= surface.MAX_TEXT {
             break
         }
         count -= 1
-    }
-    if count == state.count {
-        text_end = state.text_count
     }
     if count > state.events.count || text_end > state.text.count || text_end > surface.MAX_TEXT {
         // One event with more text than an Input holds: dropped
@@ -1104,12 +1164,19 @@ composite :: fn(compositor: ptr[mut Compositor]) {
     }
     frame :: display.Frame.{buffer = next, damage = display.Rect.{x = cast[u32](region.x0), y = cast[u32](region.y0),
         width = cast[u32](region.x1 - region.x0), height = cast[u32](region.y1 - region.y0)}}
+    presented := false
     match ask(compositor, .Present(frame)) {
-        case Presented(_) => compositor.shown = next
-        case _ => return void
+        case Presented(_) => {
+            compositor.shown = next
+            presented = true
+        }
+        case _ => runtime.log_info("the display didn't present a frame; it's drawn again with the next")
     }
-    compositor.last_damage = compositor.damage
-    compositor.damage = canvas.Rect.{}
+    // Drawn either way: what was replaced isn't read again, and is released; an unpresented frame's damage stays
+    if presented {
+        compositor.last_damage = compositor.damage
+        compositor.damage = canvas.Rect.{}
+    }
     now :: slop_os.clock_monotonic() or_else 0
     for &window in compositor.windows {
         if !window.used {
@@ -1119,7 +1186,7 @@ composite :: fn(compositor: ptr[mut Compositor]) {
             release(compositor, window.client, window.replaced)
             window.replaced = 0
         }
-        if window.submitted {
+        if window.submitted && presented {
             window.submitted = false
             shown := surface.event_of(.Presented, window.surface)
             shown.time_ns = now
@@ -1136,11 +1203,15 @@ draw :: fn(compositor: ptr[mut Compositor], buffer: u32, region: canvas.Rect) {
     canvas.clip_rect(painter, cast[f32](region.x0), cast[f32](region.y0), cast[f32](region.x1 - region.x0), cast[f32](region.y1 - region.y0))
     canvas.fill_rect(painter, cast[f32](region.x0), cast[f32](region.y0), cast[f32](region.x1 - region.x0), cast[f32](region.y1 - region.y0),
         canvas.Paint.Solid(canvas.rgb(38, 50, 56)))
-    for i in cast[usize](0)..<MAX_WINDOWS {
-        if i < compositor.order_count {
-            index :: compositor.order[i]
-            if index < MAX_WINDOWS && compositor.windows[index].used && compositor.windows[index].buffer != 0 {
-                draw_window(compositor, buffer, index, region)
+    for pass in cast[usize](0)..<2 {
+        // Clients' windows, then the trusted layer's above them
+        for i in cast[usize](0)..<MAX_WINDOWS {
+            if i < compositor.order_count {
+                index :: compositor.order[i]
+                if index < MAX_WINDOWS && compositor.windows[index].used && compositor.windows[index].buffer != 0
+                    && compositor.windows[index].trusted == (pass == 1) {
+                    draw_window(compositor, buffer, index, region)
+                }
             }
         }
     }

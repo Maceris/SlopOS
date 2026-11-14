@@ -113,7 +113,7 @@ Service :: struct {
     held : u32,
     /** Whether the reader has lent the seat. */
     lent : bool,
-    /** The client that borrows the seat while it's lent, the other that sent a Read, by its index; null for none. */
+    /** The client that borrows the seat while it's lent, the one that sent Borrow, by its index; null for none. */
     borrower : usize?,
     /** How many events the borrower's Read held asks for, at least 1; 0 when it holds none. */
     borrower_held : u32,
@@ -310,19 +310,25 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
                     case Some(reader) => reader == index
                     case None => true
                 }
-                if owned {
+                if (service.borrower or_else connected.ends.count) == index {
+                    service.borrower_held = if most == 0 { cast[u32](1) } else { most }
+                }
+                else if owned {
                     service.reader = index
                     service.held = if most == 0 { cast[u32](1) } else { most }
                 }
-                else {
-                    // Another client that reads borrows the seat while it's lent
+            }
+            case Borrow => {
+                // The borrower's never the reader
+                if (service.reader or_else connected.ends.count) != index {
                     service.borrower = index
-                    service.borrower_held = if most == 0 { cast[u32](1) } else { most }
+                    runtime.log_info("the compositor borrows the seat")
                 }
             }
             case Lend(lending) => {
                 if (service.reader or_else connected.ends.count) == index && service.lent != lending {
                     service.lent = lending
+                    runtime.log_info(if lending { "lent the seat" } else { "took the seat back" })
                     // What was waiting was for whoever had the seat
                     service.count = 0
                     service.text_count = 0

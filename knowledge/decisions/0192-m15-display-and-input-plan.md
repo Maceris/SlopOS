@@ -261,3 +261,47 @@ Chosen with the project's owner after 15d:
 - **The console yields the firmware framebuffer while the seat's lent.** On a machine with one framebuffer the
   terminal service gives it to a framebuffer display driver for the compositor while the seat's lent, and takes it
   back, redrawing, on the secure attention key.
+
+## As Built so far: 15e and 15f (in progress)
+Built, compiled for both architectures, and tested as far as the compositor's boot test reaches:
+- **`src/gui_kit`**: a window on the compositor for a std/ui program.
+  - It opens on a connector or on a connection, with two buffers of its own memory, and turns the compositor's events
+    into std/ui's input. Keys are also kept raw, for a terminal.
+  - A frame is painted into the buffer the compositor isn't reading, over what that buffer missed, and submitted with
+    its damage. Copied text is offered to be pasted.
+  - When neither buffer's been released within 200 ms it paints the one given longest ago, rather than stall.
+- **`src/gui_programs`**: a GUI program's entry and grants (log, its own compositor connection, home, process manager,
+  programs). A bundle whose manifest hashes as that entry's type is a GUI program.
+- **The launcher** (`src/apps/launcher`): a GUI session's first program. It lists the bundle store's GUI programs,
+  itself left out, and starts the one chosen with its own compositor connection (`Connect`), process manager
+  connection and finding-only programs connection.
+- **The terminal window** (`src/apps/terminal_window`): it serves the terminal protocol to a shell it finds and
+  launches, keeping output in `src/screen`'s grid and drawing it in Noto Sans Mono. The window's keys, Ctrl+C as
+  Interrupt, and pastes go to the reader. Colours are kept in the cells but drawn plain.
+- **GUI sessions**: the session protocol's `StartGui`. The session manager now opens a session (`open_session`)
+  apart from starting its first program, and is given its own connector to the compositor, dialed for each GUI
+  session's launcher. The supervisor starts the compositor before the session manager when `gui` is on.
+- **The trusted layer**: the compositor's second listener, which only trusted services get. Its clients' windows
+  are centred, have no band, are drawn above every client's, and get the keyboard and pointer while one is shown.
+- **The greeter** (`src/services/greeter`): the GUI's login in the trusted layer: name, password (std/ui's new
+  secret field) and Log in. The account service opens the home; `StartGui` makes the session; the window's hidden
+  until the session's first program ends. The session's powerbox prompts are refused for now.
+- **The seat**: `Borrow` names the compositor the borrower outright, rather than taking whichever client reads second,
+  which broke once the compositor started before the terminal service. The console's login screen lends the seat too,
+  as the GUI's login is the trusted path's as well. The input service logs lending and borrowing.
+- **Fixed on the way**:
+  - virtio_gpu waits up to 10 s for a command, as an emulated device under load takes seconds.
+  - The compositor releases replaced buffers even when a present fails.
+  - Its `deliver` could send all the waiting text with fewer events.
+  - The supervisor's budget went from 320 to 352 MiB, its connectors from 16 to 32. The compositor's budget is
+    12 MiB, virtio_gpu's 20 MiB, the greeter's 6 MiB.
+
+**Not yet working, for the next session:** the GUI login boot test (`GuiLoginTest` in `tools/boot.py`; its entry is out
+of `boot_tests.py` until it passes).
+- Keys reach the greeter's window through the compositor, but after a few frames the greeter gets no more events, so
+  the login is never submitted. The same form passes in std/ui's hosted test (`fills_a_form_by_keyboard`).
+- Suspected: the greeter's held Read is lost between gui_kit and the compositor, or the compositor blocks sending to
+  it. Next step: instrument the compositor's serve and deliver for the trusted client.
+
+**Still to build:** the typed-data viewer; forms from manifests; the powerbox's prompts in the trusted layer; the console
+yielding the firmware framebuffer while the seat's lent; and 15g's review and full suites.

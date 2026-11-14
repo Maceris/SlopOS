@@ -13,7 +13,7 @@ import slop_os from "std/os"
  * listener as Connects.
  *
  * The reader can lend the seat (decisions/0192, 15c): while it's lent, keys and the pointer go to the borrower, the
- * other client that reads, the compositor, instead; the pointer goes only to a borrower. The secure attention key
+ * client that said it borrows (Borrow), the compositor, instead; the pointer goes only to a borrower. The secure attention key
  * ends the lending, and goes to the reader as itself, the events waiting for the borrower dropped.
  */
 
@@ -123,6 +123,11 @@ Request :: union {
      * Answered with nothing.
      */
     Lend(bool),
+    /**
+     * Be the borrower: the client the seat's lent to, whose Reads are answered while it's lent, never the reader, which
+     * ever client reads first. Sent by the compositor before it reads. Answered with nothing.
+     */
+    Borrow,
 }
 
 /** What the input service answers. */
@@ -148,6 +153,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
         case SetLayout(_) => true
         case Connect(_) => true
         case Lend(_) => true
+        case Borrow => true
     }
 }
 

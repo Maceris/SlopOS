@@ -42,8 +42,11 @@ BUFFERS :: 2
 CURSOR_SIZE : u32 : 64
 /** The cursor resource's ID; the scanout buffers' are 1 to BUFFERS. */
 CURSOR_RESOURCE : u32 : 100
-/** How long a control command is waited for before it's taken as failed: a second, in nanoseconds. */
-COMMAND_TIMEOUT : u64 : 1_000_000_000
+/**
+ * How long a control command is waited for before it's taken as failed: 10 seconds, in nanoseconds, as an emulated
+ * device under load can take seconds.
+ */
+COMMAND_TIMEOUT : u64 : 10_000_000_000
 
 // ---- The command page: the control command and its response, then the cursor commands' slots
 

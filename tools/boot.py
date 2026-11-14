@@ -1094,6 +1094,61 @@ class CompositorTest(DisplayTest):
             self.problem = f"the machine protocol failed: {error}"
 
 
+class GuiLoginTest(CompositorTest):
+    """
+    The GUI's login (decisions/0192, 15f), driven through QEMU's machine protocol once the greeter shows its window and
+    the console's first-boot setup has made the account: Tab to the name, the name, Tab to the password, the password
+    and Enter; then the launcher's window is waited for, its one program, the terminal, started with Tab and Enter, and
+    the power button ends the run.
+    """
+
+    SHOWN = "[user] greeter: showing the login window"
+    SET_UP = "[user] terminal: first-boot setup ended"
+    LISTED = "[user] launcher: lists "
+
+    def __init__(self, serial: Path, screenshot: Path, name: str, password: str):
+        super().__init__(serial, screenshot)
+        self.name = name
+        self.password = password
+
+    def press(self, qcode: str) -> None:
+        self.key(qcode, True)
+        self.key(qcode, False)
+
+    def drive(self) -> None:
+        try:
+            if not self.wait_for(self.SHOWN, time.monotonic() + 600) or not self.wait_for(self.SET_UP, time.monotonic() + 600):
+                self.problem = "the greeter never showed its window, or the account was never made"
+                return
+            if not self.connect():
+                self.problem = "the machine protocol couldn't be reached"
+                return
+            time.sleep(1)
+            self.press("tab")
+            for character in self.name:
+                qcode, _ = qcode_of(character)
+                self.press(qcode)
+            self.press("tab")
+            self.keyboard_line(self.password)
+            if not self.step(self.LISTED, "logging in"):
+                return
+            # Its one program, the terminal: Tab to its button, and Enter
+            time.sleep(2)
+            self.press("tab")
+            self.press("ret")
+            if not self.step("[user] terminal_window: started the shell", "starting the terminal"):
+                return
+            time.sleep(2)
+            self.problem = None
+            self.command("system_powerdown")
+        except OSError as error:
+            self.problem = f"the machine protocol failed: {error}"
+
+    def keyboard_line(self, line: str) -> None:
+        """A line typed, shift held where it's needed, and Enter."""
+        self.type_line(line)
+
+
 def windows_drawn(screenshot: Path) -> str | None:
     """
     Whether a screenshot shows the compositor's windows as CompositorTest left them: A red where it was, its band
@@ -1769,6 +1824,10 @@ def main() -> int:
                         help="a virtio NIC on QEMU's user-mode network, and echo peers on this machine for test_network: "
                         "{tcp_echo} and {udp_echo} in the command line are their ports, and port 7 on the machine is "
                         "connected to and checked once it listens (decisions/0188)")
+    parser.add_argument("--gui-login", nargs=2, metavar=("NAME", "PASSWORD"),
+                        help="a virtio GPU, tablet and keyboard for the greeter: once it shows its window and first-boot setup "
+                        "has made the account, log in as NAME with PASSWORD, and wait for the launcher, with --expect "
+                        "(decisions/0192, 15f)")
     parser.add_argument("--compositor", action="store_true",
                         help="a virtio GPU, tablet and keyboard for the compositor and test_compositor: its windows typed into, "
                         "clicked, dragged and pasted into, and the screen checked, with --expect (decisions/0192, 15c)")
@@ -1926,7 +1985,11 @@ def main() -> int:
             extra += keyboard.qemu_arguments()
         screenshot = folder / "screen.ppm"
         display_test = None
-        if arguments.display or arguments.compositor:
+        if arguments.gui_login:
+            display_test = GuiLoginTest(serial, folder / "display.ppm", arguments.gui_login[0], arguments.gui_login[1])
+            extra += display_test.qemu_arguments()
+            display_test.thread.start()
+        elif arguments.display or arguments.compositor:
             display_test = (CompositorTest if arguments.compositor else DisplayTest)(serial, folder / "display.ppm")
             extra += display_test.qemu_arguments()
             display_test.thread.start()

@@ -65,6 +65,14 @@ main :: fn(log: slop_os.DebugLog?, compositor: os.Channel[connector.Connector]?)
         _ = slop_os.port_wait(a.port, packets, (slop_os.clock_monotonic() or_else 0) + 10_000_000)
     }
     runtime.log_info("windows shown")
+    // A's second frame, from a second buffer: its first comes back once it's shown
+    if give_buffer(a, BUFFER + 1, 0, 0, 255) {
+        out := os.Outgoing.{}
+        request :: os.begin[surface.Request](&out)
+        request^ = .Submit(surface.Submission.{surface = a.window, buffer = BUFFER + 1, damage = surface.Rect.{width = WIDTH, height = HEIGHT},
+            mode = .Fifo})
+        _ = surface.send_request(a.end, a.port, &out)
+    }
     loop {
         take(a)
         take(b)
@@ -105,28 +113,8 @@ open :: fn(dialing: os.Channel[connector.Connector], first: bool, blue: u8, gree
         case _ => return null
     }
 
-    // Its pixels, in memory of its own, opaque
-    bytes :: cast[u64](4 * WIDTH * HEIGHT)
-    size :: (bytes + 4095) / 4096 * 4096
-    memory :: slop_os.memory_create(startup.budget, size) or_return null
-    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    if slop_os.memory_map(memory, startup.space, address, 0, size, read_write) is_error {
+    if !give_buffer(client, BUFFER, blue, green, red) {
         return null
-    }
-    pixels :: view_of(cast[ptr[mut u8]](address), cast[usize](bytes))
-    for at in cast[usize](0)..<pixels.count {
-        channel :: at % 4
-        pixels[at] = if channel == 0 { blue } else if channel == 1 { green } else if channel == 2 { red } else { cast[u8](255) }
-    }
-    added := os.Outgoing.{}
-    adding :: os.begin[surface.Request](&added)
-    adding^ = .AddBuffer(surface.NewBuffer.{id = BUFFER, memory = memory, description = surface.BufferDescription.{
-        format = surface.FORMAT_XRGB8888, modifier = surface.MODIFIER_LINEAR, width = WIDTH, height = HEIGHT, plane_count = 1,
-        planes = surface.Plane.[surface.Plane.{stride = 4 * WIDTH}, surface.Plane.{}, surface.Plane.{}]}})
-    match ask(client, &added) {
-        case Added(_) => {}
-        case _ => return null
     }
     submitted := os.Outgoing.{}
     submitting :: os.begin[surface.Request](&submitted)
@@ -137,6 +125,33 @@ open :: fn(dialing: os.Channel[connector.Connector], first: bool, blue: u8, gree
     }
     read_more(client)
     return client
+}
+
+/** Make a buffer of the window's size filled with a colour, and give it to the compositor by an id. */
+give_buffer :: fn(client: ptr[mut Client], id: u32, blue: u8, green: u8, red: u8) -> bool {
+    startup :: slop_os.startup_block()
+    bytes :: cast[u64](4 * WIDTH * HEIGHT)
+    size :: (bytes + 4095) / 4096 * 4096
+    memory :: slop_os.memory_create(startup.budget, size) or_return false
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return false
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    if slop_os.memory_map(memory, startup.space, address, 0, size, read_write) is_error {
+        return false
+    }
+    pixels :: view_of(cast[ptr[mut u8]](address), cast[usize](bytes))
+    for at in cast[usize](0)..<pixels.count {
+        channel :: at % 4
+        pixels[at] = if channel == 0 { blue } else if channel == 1 { green } else if channel == 2 { red } else { cast[u8](255) }
+    }
+    added := os.Outgoing.{}
+    adding :: os.begin[surface.Request](&added)
+    adding^ = .AddBuffer(surface.NewBuffer.{id = id, memory = memory, description = surface.BufferDescription.{
+        format = surface.FORMAT_XRGB8888, modifier = surface.MODIFIER_LINEAR, width = WIDTH, height = HEIGHT, plane_count = 1,
+        planes = surface.Plane.[surface.Plane.{stride = 4 * WIDTH}, surface.Plane.{}, surface.Plane.{}]}})
+    match ask(client, &added) {
+        case Added(_) => return true
+        case _ => return false
+    }
 }
 
 /**
@@ -193,6 +208,7 @@ take_event :: fn(client: ptr[mut Client], event: surface.Event, text: string) {
     kind :: surface.kind_of(event) or_return void
     match kind {
         case .Presented => client.shown = true
+        case .Released => runtime.log_info("% released buffer %", client.name, event.code)
         case .FocusIn => {
             if client.name == "A" && !client.copied {
                 client.copied = true

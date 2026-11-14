@@ -297,3 +297,27 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
 }
 
 #insert os.protocol_code(Request, Response)
+
+/**
+ * Make another connection to a session's programs: a channel for the protocol, one end sent in a Connect, which the
+ * session manager serves as one that only finds programs.
+ *
+ * @param end A programs connection, kept by the caller.
+ * @param port A port bound to end, waited on while end's ring is full.
+ * @param budget The memory budget that pays for the new channel.
+ * @return The caller's end of the new connection; null if it couldn't be made or sent, both its ends then closed.
+ */
+connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Programs]? {
+    pair :: os.channel_for[Programs](budget, 0) or_return null
+    out := os.Outgoing.{}
+    request :: os.begin[Request](&out)
+    request^ = .Connect(os.Channel[Programs].{end = pair.a})
+    match send_request(end, port, &out) {
+        case Some(error) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            return null
+        }
+        case None => return os.Channel[Programs].{end = pair.b}
+    }
+}

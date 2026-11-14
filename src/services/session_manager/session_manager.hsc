@@ -49,6 +49,8 @@ import events from "../../protocols/events"
 import powerbox from "../../protocols/powerbox"
 import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
+import surface from "../../protocols/surface"
+import gui_programs from "../../gui_programs"
 import service_kit from "../../libraries/service_kit"
 import crash_reports from "../../crash_reports"
 
@@ -373,6 +375,8 @@ Manager :: struct {
     port : slop_os.Port,
     /** Its connection to the process manager, dialed through the manager grant, which it launches through. */
     manager : os.Channel[process_manager.ProcessManager],
+    /** Its connector to the compositor, dialed for each GUI session's launcher; NONE without a compositor. */
+    compositor : slop_os.Channel,
     /** A port bound to manager, for the process manager's answers. */
     manager_port : slop_os.Port,
     /** echo's program, which each launch is given a copy of; null without one, when echo can't start. */
@@ -469,16 +473,26 @@ Manager :: struct {
  *     Connect.
  * @param cpu_budget The sessions' CPU budget, which it may split, for each session's (decisions/0187). Without it,
  *     every session runs on the session manager's own.
+ * @param network A connector to the network service (decisions/0188), the sessions' network. Without it, sessions have
+ *     none.
+ * @param compositor A connector to the compositor (decisions/0192), dialed for each GUI session's launcher. Without it,
+ *     StartGui is refused.
  * @return 1 if its port couldn't be made or bound to its budget's pressure; 2 if the process manager couldn't be
  *     dialed; 3 if the clients' listener couldn't be bound. It doesn't return otherwise.
  */
 main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], echo_module: slop_os.Memory?,
     events_service: os.Channel[events.Events]?, settings: os.Channel[config.ConfigValue]?, store: os.Channel[bundle_store.BundleStore]?,
     apps: os.Channel[dir.Dir]?, installation_list: config.Config[system_records.Installations]?, command_line: slop_os.Memory?,
-    clients: os.Listener[session.Session], cpu_budget: slop_os.CpuBudget?, network: os.Channel[connector.Connector]?) -> int {
+    clients: os.Listener[session.Session], cpu_budget: slop_os.CpuBudget?, network: os.Channel[connector.Connector]?,
+    compositor: os.Channel[connector.Connector]?) -> int {
     block :: slop_os.startup_block()
     sessions := runtime.new(Manager)
     sessions.network_end = NONE
+    sessions.compositor = NONE
+    match compositor {
+        case Some(given) => sessions.compositor = given.end
+        case None => {}
+    }
     match network {
         case Some(dialing) => take_network(sessions, dialing)
         case None => {}
@@ -746,6 +760,8 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
                 }
             }
             case StartSftp(given) => response^ = start_sftp(sessions, os.items(into, given.user), given.home, given.stream)
+            case StartGui(given) => response^ = start_gui(sessions, os.items(into, given.user), os.items(into, given.layout), given.home,
+                given.prompts)
             case StartWithoutUser(given) => response^ = start(sessions, u8.[], u8.[], given, null, null, u8.[])
             case List(number) => {
                 programs : session.Program[session.MAX_PROGRAMS]
@@ -790,6 +806,105 @@ serve :: fn(sessions: ptr[mut Manager], connected: ptr[mut service_kit.Clients],
  */
 start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal: os.Channel[terminal.Terminal], home: os.Channel[dir.Dir]?,
     prompts: os.Channel[prompt.Prompt]?, command: u8[]) -> session.Response {
+    number :: open_session(sessions, user, layout, home, prompts) or_else sessions.sessions.count
+    if number >= sessions.sessions.count {
+        _ = slop_os.handle_close(cast[slop_os.Handle](given_terminal.end))
+        return .Refused
+    }
+    if command.count > session.COMMAND_BYTES || !launch_first(sessions, cast[u32](number), given_terminal, home, command) {
+        close_session(sessions, cast[u32](number))
+        return .Refused
+    }
+    return started(sessions, number, user)
+}
+
+/**
+ * Make a GUI session (decisions/0192): as start does, but its first program's the launcher, given a connection to the
+ * compositor through the session manager's connector to it.
+ *
+ * @param sessions The session manager.
+ * @param user The user's name, copied, 1 to USER_BYTES bytes.
+ * @param layout The keyboard layout they logged in with.
+ * @param home The root of the user's home volume, which moves to the session.
+ * @param prompts The trusted path's prompt connection, which moves to the powerbox.
+ * @return Started with the session's number; Refused when there's no room, no compositor, the name's empty or too
+ *     long, or the launcher didn't start.
+ */
+start_gui :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], home: os.Channel[dir.Dir], prompts: os.Channel[prompt.Prompt]) -> session.Response {
+    if user.count == 0 || sessions.compositor == NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+        _ = slop_os.handle_close(cast[slop_os.Handle](prompts.end))
+        return .Refused
+    }
+    number :: open_session(sessions, user, layout, home, prompts) or_else sessions.sessions.count
+    if number >= sessions.sessions.count {
+        return .Refused
+    }
+    if !launch_launcher(sessions, cast[u32](number)) {
+        close_session(sessions, cast[u32](number))
+        return .Refused
+    }
+    return started(sessions, number, user)
+}
+
+/** What the launcher's given: a GUI program's grants (src/gui_programs). */
+LAUNCHER_BUDGET : u64 : 16 * 1024 * 1024
+
+/**
+ * Start the launcher, from the bundle store, as a GUI session's first program: a connection dialed through the
+ * session's connector to the compositor, its own to the process manager, and its programs connection.
+ *
+ * @return Whether it started; not without the launcher in the bundle store, a compositor to dial, or room.
+ */
+launch_launcher :: fn(sessions: ptr[mut Manager], number: u32) -> bool {
+    if cast[usize](number) >= sessions.sessions.count {
+        return false
+    }
+    expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(gui_programs.shape)))}
+    program := cast[slop_os.Memory](slop_os.NO_HANDLE)
+    match bundle_named(sessions, "launcher") {
+        case Some(found) => program = program_of(sessions, found, expected) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+        case None => {}
+    }
+    if cast[slop_os.Handle](program) == slop_os.NO_HANDLE {
+        runtime.log_info("no launcher in the bundle store")
+        return false
+    }
+    dialer :: sessions.compositor
+    port :: os.port_for(slop_os.startup_block().budget, dialer) or_return false
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    window :: connector.dial[surface.Surface](dialer, port) or_return false
+    prepared :: prepare(sessions, number, "launcher") or_return false
+    grants := gui_programs.GuiGrants.{log = duplicate_log(sessions.log), surface = window}
+    grants.manager = process_manager.connect(sessions.manager.end, sessions.manager_port, slop_os.startup_block().budget)
+    grants.programs = programs_connection(sessions, number)
+    return placed(sessions, number, "launcher", prepared, os.launch(sessions.manager, sessions.manager_port, "launcher", program,
+        LAUNCHER_BUDGET, gui_programs.shape, grants, prepared.options), false)
+}
+
+/** A session started: its installations started too, and the test of them noted; Started with its number. */
+started :: fn(sessions: ptr[mut Manager], number: usize, user: u8[]) -> session.Response {
+    start_installations(sessions, cast[u32](number))
+    check_session_cpu(sessions)
+    if sessions.test_installations && user.count > 0 {
+        sessions.test_installations = false
+        sessions.checking = number
+    }
+    return .Started(number_of(sessions, number))
+}
+
+/**
+ * Make a session, before its first program: its place, its user, locale and CPU budget, its apps directory and its
+ * powerbox.
+ *
+ * @param sessions The session manager.
+ * @param user The user's name, copied; empty for a boot with no accounts. One longer than USER_BYTES is refused.
+ * @param layout The keyboard layout they logged in with.
+ * @param home The root of the user's home volume, kept for the first program; closed when the session's refused.
+ * @param prompts The trusted path's prompt connection, which moves to the powerbox; closed when it's refused.
+ * @return The session's place; null when there's no room or the name's too long.
+ */
+open_session :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt]?) -> usize? {
     number := sessions.sessions.count
     for each, i in sessions.sessions {
         if !each.in_use {
@@ -798,7 +913,6 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         }
     }
     if number >= sessions.sessions.count || user.count > USER_BYTES {
-        _ = slop_os.handle_close(cast[slop_os.Handle](given_terminal.end))
         match home {
             case Some(root) => _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
             case None => {}
@@ -807,7 +921,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
             case Some(given) => _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
             case None => {}
         }
-        return .Refused
+        return null
     }
     if number < sessions.generations.count {
         sessions.generations[number] = (sessions.generations[number] + 1) & 0xffffff
@@ -845,17 +959,7 @@ start :: fn(sessions: ptr[mut Manager], user: u8[], layout: u8[], given_terminal
         case Some(given) => _ = launch_powerbox(sessions, cast[u32](number), home, given)
         case None => {}
     }
-    if command.count > session.COMMAND_BYTES || !launch_first(sessions, cast[u32](number), given_terminal, home, command) {
-        close_session(sessions, cast[u32](number))
-        return .Refused
-    }
-    start_installations(sessions, cast[u32](number))
-    check_session_cpu(sessions)
-    if sessions.test_installations && user.count > 0 {
-        sessions.test_installations = false
-        sessions.checking = number
-    }
-    return .Started(number_of(sessions, number))
+    return number
 }
 
 /** What sftp_server is given (sftp_server.main). */

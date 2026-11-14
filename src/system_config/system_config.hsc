@@ -45,6 +45,7 @@ import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
 import virtio_gpu from "../drivers/virtio_gpu"
 import compositor from "../services/compositor"
+import greeter from "../services/greeter"
 import virtio_input from "../drivers/virtio_input"
 import virtio_net from "../drivers/virtio_net"
 import virtio_rng from "../drivers/virtio_rng"
@@ -239,7 +240,7 @@ SERVICES :: Service.[
         entry = type_of(scheduler_service.main)},
     Service.{name = "platform", boot_set = true, module = "platform.elf", starter = .RootTask, by_manager = true, budget = 8 * MIB,
         entry = type_of(platform.main)},
-    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 320 * MIB,
+    Service.{name = "supervisor", boot_set = true, module = "supervisor.elf", starter = .RootTask, by_manager = true, budget = 352 * MIB,
         entry = type_of(supervisor.main)},
     // Every program's log records but the root task's and what it starts, first, so each is given a ring for them (decisions/0093)
     Service.{name = "events", boot_set = true, module = "events_service.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -281,8 +282,11 @@ SERVICES :: Service.[
         entry = type_of(network_service.main)},
     // The compositor (decisions/0192, 15c), started with gui or test_compositor on the kernel's command line and a display:
     // its clients' windows, mapped, and the frame's canvas in its budget
-    Service.{name = "compositor", module = "compositor.elf", starter = .Supervisor, by_manager = true, budget = 32 * MIB,
+    Service.{name = "compositor", module = "compositor.elf", starter = .Supervisor, by_manager = true, budget = 12 * MIB,
         entry = type_of(compositor.main), cpu = INTERACTIVE_CPU},
+    // The GUI's login (decisions/0192, 15f), in the compositor's trusted layer, started with gui
+    Service.{name = "greeter", module = "greeter.elf", starter = .Supervisor, by_manager = true, budget = 6 * MIB,
+        entry = type_of(greeter.main), cpu = INTERACTIVE_CPU},
     // The compositor's test client (decisions/0192, 15c), started only with test_compositor on the kernel's command line
     Service.{name = "test_compositor", module = "test_compositor.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(test_compositor.main), not_restarted = true},
@@ -351,7 +355,7 @@ SERVICES :: Service.[
         entry = type_of(virtio_input.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1052,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
     // A modern virtio GPU (virtio's device ID 16) in 2D mode; its two scanout buffers, up to 1920 by 1200, in its budget
-    Service.{name = "virtio_gpu", module = "virtio_gpu.elf", starter = .Supervisor, by_manager = true, budget = 24 * MIB,
+    Service.{name = "virtio_gpu", module = "virtio_gpu.elf", starter = .Supervisor, by_manager = true, budget = 20 * MIB,
         entry = type_of(virtio_gpu.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1050,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
     // A modern virtio network device (virtio's device ID 1); its queues, headers and the frames' buffer in its budget

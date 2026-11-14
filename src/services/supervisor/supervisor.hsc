@@ -117,6 +117,7 @@ import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_gpu from "../../drivers/virtio_gpu"
 import compositor from "../compositor"
+import greeter from "../greeter"
 import virtio_input from "../../drivers/virtio_input"
 import virtio_net from "../../drivers/virtio_net"
 import virtio_rng from "../../drivers/virtio_rng"
@@ -133,7 +134,7 @@ MAX_STARTED :: 24
  * The most connectors the supervisor serves, over its whole life: a connector's place isn't reused once its other end
  * is gone, and connector_to makes none past this many.
  */
-MAX_CONNECTORS :: 16
+MAX_CONNECTORS :: 32
 /**
  * The port key of the supervisor's end of connector i is this plus i, 0 to MAX_CONNECTORS - 1: bound for readable and
  * peer-closed. Below it, keys 0 to MAX_STARTED - 1 are what it started, each by its index in Supervisor.started.
@@ -390,6 +391,20 @@ CompositorGrants :: struct {
     seat_connector : os.Channel[connector.Connector]?,
     /** Its clients' listener; the supervisor keeps the other end. */
     clients : os.Listener[surface.Surface],
+    /** The trusted layer's listener; the supervisor keeps the other end, for the greeter. */
+    trusted : os.Listener[surface.Surface]?,
+}
+
+/** What the GUI's login is given (greeter.main); its handles move to it at its launch. */
+GreeterGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the account service. */
+    accounts_service : os.Channel[connector.Connector]?,
+    /** A connection to the session manager, as the terminal service's. */
+    sessions : os.Channel[session.Session]?,
+    /** Its connection to the compositor's trusted layer. */
+    trusted : os.Channel[surface.Surface]?,
 }
 
 /** What the compositor's test client is given (test_compositor.main); its handles move to it at its launch. */
@@ -513,6 +528,8 @@ SessionGrants :: struct {
      * scheduler service, or one that doesn't give it.
      */
     cpu_budget : slop_os.CpuBudget?,
+    /** A connector to the compositor (decisions/0192), for GUI sessions; null without one. */
+    compositor : os.Channel[connector.Connector]?,
 }
 
 /** What the disk check is given (disk_check.main); its handles move to it at its launch. */
@@ -995,6 +1012,8 @@ Supervisor :: struct {
     first_display : usize,
     /** The compositor, by index in started; NOWHERE until it's started. */
     compositor : usize,
+    /** The other end of the compositor's trusted listener, for the greeter; NONE once it's given, or without one. */
+    trusted_surface : slop_os.Channel,
     /** The terminal service, by index in started; NOWHERE until it's started. */
     terminal : usize,
     /** The input service, by index in started; NOWHERE until it's started. */
@@ -1222,7 +1241,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager_connector = manager.end, root = root.end, platform_end = NONE,
         platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, first_nic = NOWHERE, first_display = NOWHERE, compositor = NOWHERE, terminal = NOWHERE, input = NOWHERE, network = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, first_nic = NOWHERE, first_display = NOWHERE, compositor = NOWHERE, trusted_surface = NONE, terminal = NOWHERE, input = NOWHERE, network = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, last_panic = last_panic, trace_end = NONE}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, power_button = power_button_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
@@ -1361,6 +1380,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     if !supervisor.recovery {
         start_network(&supervisor, NOWHERE)
     }
+    // The compositor before the session manager, which dials it for GUI sessions (decisions/0192)
+    if gui && !supervisor.recovery {
+        start_compositor(&supervisor)
+    }
     // The session manager before the terminal service, which asks it to make sessions (decisions/0150)
     start_sessions(&supervisor, NOWHERE)
     start_terminal(&supervisor, NOWHERE)
@@ -1375,11 +1398,11 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
         if test_display_client {
             start_test_display(&supervisor)
         }
-        if gui {
-            start_compositor(&supervisor)
-        }
         if test_compositor_client {
             start_test_compositor(&supervisor)
+        }
+        else if gui {
+            start_greeter(&supervisor)
         }
         start_ssh(&supervisor)
         start_hello(&supervisor, NOWHERE)
@@ -4818,8 +4841,16 @@ start_compositor :: fn(supervisor: ptr[mut Supervisor]) {
     service :: service_named(supervisor, "compositor") or_return void
     pair :: os.channel_for[surface.Surface](supervisor.block.budget, 0) or_return void
     seat_connector :: if supervisor.input != NOWHERE { connector_to(supervisor, supervisor.input) } else { cast[MaybeConnector](null) }
-    grants :: CompositorGrants.{log = duplicate_log(supervisor), display_connector = connector_to(supervisor, supervisor.first_display),
+    grants := CompositorGrants.{log = duplicate_log(supervisor), display_connector = connector_to(supervisor, supervisor.first_display),
         seat_connector = seat_connector, clients = os.Listener[surface.Surface].{end = pair.a}}
+    // The trusted layer's listener, its other end kept for the greeter
+    match os.channel_for[surface.Surface](supervisor.block.budget, 0) {
+        case Ok(trusted) => {
+            grants.trusted = os.Listener[surface.Surface].{end = trusted.a}
+            supervisor.trusted_surface = trusted.b
+        }
+        case Error(error) => {}
+    }
     match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "compositor"), service.budget,
         compositor.main, grants, options_for(supervisor, service.name)) {
         case Ok(launched) => {
@@ -4830,6 +4861,27 @@ start_compositor :: fn(supervisor: ptr[mut Supervisor]) {
                 supervisor.compositor = slot
             }
         }
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/**
+ * Start the GUI's login (decisions/0192, 15f), with connectors to the account service and the session manager, and the
+ * compositor's trusted layer; only with a compositor, an account service and a session manager.
+ *
+ * @param supervisor The supervisor, whose trusted_surface moves to it.
+ */
+start_greeter :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.compositor == NOWHERE || supervisor.accounts == NOWHERE || supervisor.sessions == NOWHERE || supervisor.trusted_surface == NONE {
+        return void
+    }
+    service :: service_named(supervisor, "greeter") or_return void
+    grants :: GreeterGrants.{log = duplicate_log(supervisor), accounts_service = connector_to(supervisor, supervisor.accounts),
+        sessions = session_connection(supervisor), trusted = os.Channel[surface.Surface].{end = supervisor.trusted_surface}}
+    supervisor.trusted_surface = NONE
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "greeter"), service.budget,
+        greeter.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => _ = place(supervisor, "greeter", kept(supervisor, launched), NOWHERE)
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -5247,6 +5299,7 @@ start_sessions :: fn(supervisor: ptr[mut Supervisor], again: usize) {
     }
     grants := SessionGrants.{log = duplicate_log(supervisor), manager = manager, echo_module = echo_module,
         network = connector_to(supervisor, supervisor.network),
+        compositor = if supervisor.compositor != NOWHERE { connector_to(supervisor, supervisor.compositor) } else { cast[MaybeConnector](null) },
         events_service = events_connection(supervisor), store = store_connection(supervisor), apps = system_directory(supervisor, "apps"),
         installation_list = installations_for_sessions(supervisor), command_line = command_line_copy(supervisor),
         clients = os.Listener[session.Session].{end = pair.a}}
