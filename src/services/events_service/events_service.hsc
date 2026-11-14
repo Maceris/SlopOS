@@ -24,13 +24,13 @@
  */
 package events_service
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import random from "std"
-import schema from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import random from "std:random"
+import schema from "std:schema"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import log_line from "../../log_line"
 import service_kit from "../../libraries/service_kit"
 import events from "../../protocols/events"

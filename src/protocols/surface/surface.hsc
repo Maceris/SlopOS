@@ -1,7 +1,7 @@
 package surface
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The compositor's protocol (decisions/0192, 15c; design/display.md §3): a client's windows, each a surface the client

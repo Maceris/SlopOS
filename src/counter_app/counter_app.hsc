@@ -7,10 +7,10 @@
  */
 package counter_app
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 import config from "../protocols/config"
 import installations from "../installations"
 

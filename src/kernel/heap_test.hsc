@@ -1,7 +1,7 @@
 package kernel
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 
 /** How many blocks test_heap allocates at once. */
 HEAP_TEST_BLOCKS :: 200

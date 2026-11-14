@@ -11,9 +11,9 @@
  */
 package sftp
 
-import runtime from "base"
-import os from "std"
-import ssh from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import ssh from "std:ssh"
 
 // Requests and answers
 SSH_FXP_INIT : u8 : 1

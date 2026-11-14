@@ -1,11 +1,11 @@
 package disk_check
 
-import os from "std"
-import slop_os from "std/os"
-import testing from "std"
-import dir from "std/os/slop_os"
-import files from "std/os/slop_os"
-import grant from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import testing from "std:testing"
+import dir from "std:os/slop_os/dir"
+import files from "std:os/slop_os/files"
+import grant from "std:os/slop_os/grant"
 import test_kit from "../../test_kit"
 
 /*

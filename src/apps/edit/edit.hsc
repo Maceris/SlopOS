@@ -4,15 +4,15 @@
  */
 package edit
 
-import runtime from "base"
-import memory from "std"
-import os from "std"
-import strings from "std"
-import terminal from "std"
-import unicode from "std"
-import slop_os from "std/os"
-import file from "std/os/slop_os"
-import terminal as protocol from "std/os/slop_os"
+import runtime from "base:runtime"
+import memory from "std:memory"
+import os from "std:os"
+import strings from "std:strings"
+import terminal from "std:terminal"
+import unicode from "std:unicode"
+import slop_os from "std:os/slop_os"
+import file from "std:os/slop_os/file"
+import terminal as protocol from "std:os/slop_os/terminal"
 
 /** The most bytes of a file edit opens: 4 MiB. */
 MAX_FILE_BYTES : u64 : 4 * 1024 * 1024

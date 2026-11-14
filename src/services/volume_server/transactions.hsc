@@ -1,11 +1,11 @@
 package volume_server
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import file from "std/os/slop_os"
-import files from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import file from "std:os/slop_os/file"
+import files from "std:os/slop_os/files"
 import slopfs from "../../slopfs"
 import container from "../../protocols/container"
 

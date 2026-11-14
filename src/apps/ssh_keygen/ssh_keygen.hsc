@@ -7,10 +7,10 @@
  */
 package ssh_keygen
 
-import crypto from "std"
-import os from "std"
-import ssh from "std"
-import dir from "std/os/slop_os"
+import crypto from "std:crypto"
+import os from "std:os"
+import ssh from "std:ssh"
+import dir from "std:os/slop_os/dir"
 import file_tools from "../../file_tools"
 
 /** The key made: where, and its fingerprint. */

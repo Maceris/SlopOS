@@ -1,9 +1,9 @@
 package bootloader
 
-import uefi from "std/os"
+import uefi from "std:os/uefi"
 
 #if TARGET_ARCH == .x86_64 {
-    import x86_64 from "base/intrinsics"
+    import x86_64 from "base:intrinsics/x86_64"
 }
 
 /*
@@ -123,7 +123,7 @@ import uefi from "std/os"
     KERNEL_LINK_BASE : u64 : 0xffffffff80000000
 }
 #else {
-    import aarch64 from "base/intrinsics"
+    import aarch64 from "base:intrinsics/aarch64"
 
     /*
      * AArch64's: 4 KiB granules, 48-bit halves, TTBR1's root for the kernel half (the kernel image and the direct map)

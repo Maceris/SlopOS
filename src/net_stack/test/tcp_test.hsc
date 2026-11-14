@@ -5,8 +5,8 @@ package net_stack_test
  * send ring as room allows, and checks every byte it reads from its receive ring against the pattern its peer writes.
  */
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 import net_stack from ".."
 
 /** Each ring's size: 64 KiB. */

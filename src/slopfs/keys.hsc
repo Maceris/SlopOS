@@ -1,9 +1,9 @@
 package slopfs
 
-import compiler from "base"
-import runtime from "base"
-import crypto from "std"
-import random from "std"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import random from "std:random"
 
 /*
  * Encryption (roadmap 8e, design/storage.md §5, decisions/0042): an encrypted volume's every block, its tree's nodes

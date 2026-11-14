@@ -10,16 +10,16 @@
  */
 package acpi_service
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import service_kit from "../../libraries/service_kit"
-import text_buffer from "std"
+import text_buffer from "std:text_buffer"
 import aml from "../../aml"
 import acpi_tables from "../../acpi_tables"
 import platform from "../../protocols/platform"
-import power_protocol from "../../protocols/power"
+import power as power_protocol from "../../protocols/power"
 
 /** The most ranges of I/O ports kept, each as the platform service gave it. */
 MAX_PORT_GRANTS :: 64

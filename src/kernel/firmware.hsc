@@ -1,9 +1,9 @@
 package kernel
 
-import intrinsics from "base"
-import runtime from "base"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import boot_info from "../boot_info"
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 import frames from "frames"
 
 /*

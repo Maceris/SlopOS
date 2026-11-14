@@ -1,8 +1,8 @@
 package aml
 
-import memory from "std"
-import runtime from "base"
-import text_buffer from "std"
+import memory from "std:memory"
+import runtime from "base:runtime"
+import text_buffer from "std:text_buffer"
 
 /*
  * Running AML: a cursor over its bytecode, read term by term, each run as it's read (ACPI 6.5 §20). A table's AML is

@@ -1,7 +1,7 @@
 package kernel
 
-import intrinsics from "base"
-import runtime from "base"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import boot_info from "../boot_info"
 import frames from "frames"
 import slab from "slab"

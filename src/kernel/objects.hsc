@@ -1,10 +1,10 @@
 package kernel
 
-import compiler from "base"
-import intrinsics from "base"
-import runtime from "base"
-import concurrency from "std"
-import slop_os from "std/os"
+import compiler from "base:compiler"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
+import slop_os from "std:os/slop_os"
 import slab from "slab"
 import robustness from "../robustness"
 

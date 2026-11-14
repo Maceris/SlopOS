@@ -1,7 +1,7 @@
 package kernel
 
-import runtime from "base"
-import concurrency from "std"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 
 /*
  * CPU time (roadmap M4, knowledge/design/scheduling.md §2, decisions/0011, 0037): a priority, and

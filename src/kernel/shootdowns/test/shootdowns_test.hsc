@@ -6,9 +6,9 @@
  */
 package shootdowns_test
 
-import runtime from "base"
-import intrinsics from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import intrinsics from "base:intrinsics"
+import testing from "std:testing"
 import shootdowns from ".."
 
 /** How many CPUs there are. */

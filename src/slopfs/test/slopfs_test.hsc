@@ -7,10 +7,10 @@
  */
 package slopfs_test
 
-import compiler from "base"
-import runtime from "base"
-import maps from "std"
-import testing from "std"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import maps from "std:maps"
+import testing from "std:testing"
 import slopfs from ".."
 import hosted_faults from "../../robustness/hosted"
 

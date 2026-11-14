@@ -1,7 +1,7 @@
 package pipe
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * A byte stream between a program and what serves it (decisions/0191): the SSH service and the SFTP program a session

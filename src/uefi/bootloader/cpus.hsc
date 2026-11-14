@@ -1,11 +1,11 @@
 package bootloader
 
-import intrinsics from "base"
-import uefi from "std/os"
+import intrinsics from "base:intrinsics"
+import uefi from "std:os/uefi"
 import boot_protocol from "../../boot_protocol"
 
 #if TARGET_ARCH == .x86_64 {
-    import x86_64 from "base/intrinsics"
+    import x86_64 from "base:intrinsics/x86_64"
 }
 
 /*
@@ -270,7 +270,7 @@ import boot_protocol from "../../boot_protocol"
     }
 }
 #else {
-    import aarch64 from "base/intrinsics"
+    import aarch64 from "base:intrinsics/aarch64"
     import devicetree from "../../devicetree"
 
     /*

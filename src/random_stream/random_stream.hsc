@@ -11,8 +11,8 @@
  */
 package random_stream
 
-import compiler from "base"
-import crypto from "std"
+import compiler from "base:compiler"
+import crypto from "std:crypto"
 
 /** The bytes a block gives out, after its first 32 become the key. */
 BLOCK_OUTPUT : usize : 32

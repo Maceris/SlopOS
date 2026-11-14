@@ -1,6 +1,6 @@
 package bootloader
 
-import uefi from "std/os"
+import uefi from "std:os/uefi"
 import boot_info from "../../boot_info"
 import boot_protocol from "../../boot_protocol"
 

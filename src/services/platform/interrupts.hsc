@@ -1,6 +1,6 @@
 package platform
 
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 import acpi_tables from "../../acpi_tables"
 import devicetree from "../../devicetree"
 import log_line from "../../log_line"

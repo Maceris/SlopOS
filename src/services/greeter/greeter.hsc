@@ -9,11 +9,11 @@
  */
 package greeter
 
-import runtime from "base"
-import os from "std"
-import ui from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import ui from "std:ui"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import gui_kit from "../../gui_kit"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"

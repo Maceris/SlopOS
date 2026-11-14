@@ -1,6 +1,6 @@
 package slopfs
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /*
  * Sealing a volume again after it's given a new volume key (decisions/0181's F5, keys.hsc): its live tree walked in key

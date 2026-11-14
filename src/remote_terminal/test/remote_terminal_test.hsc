@@ -5,9 +5,9 @@
  */
 package remote_terminal_test
 
-import testing from "std"
-import text_buffer from "std"
-import terminal from "std/os/slop_os"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
+import terminal from "std:os/slop_os/terminal"
 import remote_terminal from ".."
 
 /** Whether what's in a buffer is the text expected, ~ ESC, ^ CR and | LF in it; if not, notes what it is. */

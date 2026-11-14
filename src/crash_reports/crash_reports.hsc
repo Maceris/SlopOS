@@ -14,11 +14,11 @@
  */
 package crash_reports
 
-import runtime from "base"
-import slop_os from "std/os"
-import os from "std"
-import lifecycle from "std/os/slop_os"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
+import os from "std:os"
+import lifecycle from "std:os/slop_os/lifecycle"
+import text_buffer from "std:text_buffer"
 
 /** The most frames a report's stack holds, the faulting one included; a deeper stack is cut. */
 MAX_FRAMES : u32 : 32

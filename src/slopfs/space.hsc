@@ -1,6 +1,6 @@
 package slopfs
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /*
  * The container's space in memory: the free extents, loaded from the space map at mount and kept as the transaction

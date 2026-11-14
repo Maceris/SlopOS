@@ -5,10 +5,10 @@
  */
 package gui_programs
 
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import process_manager from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import process_manager from "std:os/slop_os/process_manager"
 import programs from "../protocols/programs"
 import surface from "../protocols/surface"
 

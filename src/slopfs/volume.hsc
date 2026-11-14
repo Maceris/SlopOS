@@ -1,7 +1,7 @@
 package slopfs
 
-import runtime from "base"
-import crypto from "std"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
 
 /*
  * A volume (design/storage.md §3): one tree of its objects, each directory's entries and each file's chunks, keyed

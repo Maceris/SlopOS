@@ -4,8 +4,8 @@
  */
 package account_records_test
 
-import ssh from "std"
-import testing from "std"
+import ssh from "std:ssh"
+import testing from "std:testing"
 import account_records from ".."
 
 /** A key ssh-keygen -t ed25519 made, and its fingerprint as ssh-keygen -l gave it. */

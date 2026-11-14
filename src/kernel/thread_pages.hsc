@@ -1,7 +1,7 @@
 package kernel
 
-import intrinsics from "base"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import slop_os from "std:os/slop_os"
 import boot_info from "../boot_info"
 import frames from "frames"
 

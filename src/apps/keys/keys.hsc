@@ -10,14 +10,14 @@
  */
 package keys
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import stream from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import stream from "std:os/slop_os/stream"
 import account_records from "../../account_records"
 import file_tools from "../../file_tools"
-import powerbox_protocol from "../../protocols/powerbox"
+import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** One of the keys: its kind, its fingerprint, and its comment. */
 Key :: struct {

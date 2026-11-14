@@ -9,11 +9,11 @@
  */
 package scheduler
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import log_line from "../../log_line"
 import service_kit from "../../libraries/service_kit"
-import protocol from "../../protocols/scheduler"
+import scheduler as protocol from "../../protocols/scheduler"
 import system_records from "../../system_records"
 
 /**

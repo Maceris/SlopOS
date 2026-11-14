@@ -8,8 +8,8 @@ package net_stack_test
  * behind has its caller wake for ever.
  */
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 import net_stack from ".."
 
 /** The host's IPv6 router, link-local. */

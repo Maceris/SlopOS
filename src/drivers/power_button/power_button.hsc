@@ -8,13 +8,13 @@
 //SPEC: Arm PrimeCell GPIO (PL061) Technical Reference Manual, §3.3 (GPIODIR, GPIOIS, GPIOIBE, GPIOIEV, GPIOIE, GPIOMIS, GPIOIC)
 package power_button
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import service_kit from "../../libraries/service_kit"
 import platform from "../../protocols/platform"
-import power_protocol from "../../protocols/power"
+import power as power_protocol from "../../protocols/power"
 
 /** The registers' bytes. */
 REGISTERS : u64 : 4096

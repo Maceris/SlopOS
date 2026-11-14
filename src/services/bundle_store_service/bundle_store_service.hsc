@@ -17,14 +17,14 @@
  */
 package bundle_store_service
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import crypto from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import read_only_file from "std/os/slop_os"
-import files from "std/os/slop_os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import crypto from "std:crypto"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import read_only_file from "std:os/slop_os/read_only_file"
+import files from "std:os/slop_os/files"
 import service_kit from "../../libraries/service_kit"
 import bundle from "../../bundle"
 import bundle_store from "../../protocols/bundle_store"

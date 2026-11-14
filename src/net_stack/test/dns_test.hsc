@@ -1,7 +1,7 @@
 package net_stack_test
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 import net_stack from ".."
 
 /*

@@ -5,7 +5,7 @@
  */
 package library_interface_test
 
-import testing from "std"
+import testing from "std:testing"
 import library_interface from ".."
 
 // Where the made library's parts are

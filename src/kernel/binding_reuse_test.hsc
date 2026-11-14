@@ -1,15 +1,15 @@
 package kernel
 
-import intrinsics from "base"
-import maps from "std"
-import testing from "std"
-import text_buffer from "std"
+import intrinsics from "base:intrinsics"
+import maps from "std:maps"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
 
 #if TARGET_ARCH == .x86_64 {
-    import arch from "../arch/x86_64"
+    import arch_x86_64 as arch from "../arch/x86_64"
 }
 #else_if TARGET_ARCH == .arm64 {
-    import arch from "../arch/aarch64"
+    import arch_aarch64 as arch from "../arch/aarch64"
 }
 
 /*

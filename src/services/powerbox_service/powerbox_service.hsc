@@ -17,14 +17,14 @@
  */
 package powerbox_service
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import files from "std/os/slop_os"
-import lifecycle from "std/os/slop_os"
-import network from "std/os/slop_os"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import files from "std:os/slop_os/files"
+import lifecycle from "std:os/slop_os/lifecycle"
+import network from "std:os/slop_os/network"
+import text_buffer from "std:text_buffer"
 import powerbox from "../../protocols/powerbox"
 import programs from "../../protocols/programs"
 import prompt from "../../protocols/prompt"

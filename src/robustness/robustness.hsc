@@ -10,9 +10,9 @@
  */
 package robustness
 
-import compiler from "base"
-import intrinsics from "base"
-import runtime from "base"
+import compiler from "base:compiler"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 
 /** Whether the build set robustness=on, compiling the machinery in; without it, nothing can be made to fail. */
 ON :: #run compiler.target_setting("robustness", default = "off") == "on"

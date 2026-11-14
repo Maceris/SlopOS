@@ -1,9 +1,9 @@
 package supervisor
 
-import runtime from "base"
-import random from "std"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
+import runtime from "base:runtime"
+import random from "std:random"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 import log_line from "../../log_line"
 
 /*

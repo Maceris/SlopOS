@@ -4,7 +4,7 @@
  */
 package boot_info
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /**
  * A physical address: of memory regions, the kernel image, module contents, framebuffers and firmware tables. These

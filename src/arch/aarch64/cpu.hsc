@@ -8,12 +8,12 @@
  */
 package arch_aarch64
 
-import runtime from "base"
-import aarch64 from "base/intrinsics"
+import runtime from "base:runtime"
+import aarch64 from "base:intrinsics/aarch64"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 import devicetree from "../../devicetree"
-import concurrency from "std"
+import concurrency from "std:concurrency"
 
 /**
  * One CPU's architecture state (arch_interface.ArchCpu).

@@ -1,8 +1,8 @@
 package fat_test
 
-import runtime from "base"
-import os from "std"
-import testing from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import testing from "std:testing"
 import fat from ".."
 
 /*

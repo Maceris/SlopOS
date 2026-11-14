@@ -14,9 +14,9 @@
  */
 package remote_terminal
 
-import text_buffer from "std"
-import unicode from "std"
-import terminal from "std/os/slop_os"
+import text_buffer from "std:text_buffer"
+import unicode from "std:unicode"
+import terminal from "std:os/slop_os/terminal"
 import safe_text from "../safe_text"
 import vt from "../vt"
 

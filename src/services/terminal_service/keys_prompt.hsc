@@ -6,15 +6,15 @@
  */
 package terminal_service
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
 import prompt from "../../protocols/prompt"
-import read_only_dir from "std/os/slop_os"
+import read_only_dir from "std:os/slop_os/read_only_dir"
 
 /**
  * Tell whether a request's kind changes the user's keys, which the elevation screen confirms.

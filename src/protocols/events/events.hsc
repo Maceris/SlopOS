@@ -1,8 +1,8 @@
 package events
 
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 
 /*
  * The events service's protocol (roadmap 9a, decisions/0093, design/observability.md §2). Who starts a program asks for

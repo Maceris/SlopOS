@@ -1,7 +1,7 @@
 package scheduler
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The scheduler service's protocol (roadmap 9a, decisions/0037, 0093): the CPU budget a service runs on, by its name in

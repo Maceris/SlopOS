@@ -1,12 +1,12 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import schema from "std"
-import slop_os from "std/os"
-import stream from "std/os/slop_os"
-import terminal from "std"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import schema from "std:schema"
+import slop_os from "std:os/slop_os"
+import stream from "std:os/slop_os/stream"
+import terminal from "std:terminal"
 
 /*
  * Pipelines (design/shell.md §4, decisions/0172): a | b | c. Programs next to each other are connected straight:

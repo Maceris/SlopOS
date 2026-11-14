@@ -1,10 +1,10 @@
 package prompt
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import trace from "../trace"
 import events from "../events"
-import read_only_dir from "std/os/slop_os"
+import read_only_dir from "std:os/slop_os/read_only_dir"
 
 /**
  * The prompt protocol, for the channel between a session's powerbox and the trusted path, the terminal service: the

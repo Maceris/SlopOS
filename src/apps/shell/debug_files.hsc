@@ -1,10 +1,10 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import schema from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import schema from "std:schema"
+import slop_os from "std:os/slop_os"
 import programs from "../../protocols/programs"
 
 /*

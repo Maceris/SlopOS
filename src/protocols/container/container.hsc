@@ -1,7 +1,7 @@
 package container
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import slopfs from "../../slopfs"
 import block from "../block"
 

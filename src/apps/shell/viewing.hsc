@@ -1,14 +1,14 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import schema from "std"
-import text_buffer from "std"
-import terminal from "std"
-import unicode from "std"
-import slop_os from "std/os"
-import terminal as protocol from "std/os/slop_os"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import schema from "std:schema"
+import text_buffer from "std:text_buffer"
+import terminal from "std:terminal"
+import unicode from "std:unicode"
+import slop_os from "std:os/slop_os"
+import terminal as protocol from "std:os/slop_os/terminal"
 
 /*
  * Reading values (decisions/0179, 11e3): view, a file as a value, and page, a value a screen at a time. A typed

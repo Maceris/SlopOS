@@ -20,8 +20,8 @@
 //SPEC: ACPI 6.5, §5.4 (definition blocks), §19 (ASL), §20 (AML grammar)
 package aml
 
-import runtime from "base"
-import memory from "std"
+import runtime from "base:runtime"
+import memory from "std:memory"
 
 /** Why loading or evaluating failed. */
 Error :: enum {

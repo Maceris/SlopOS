@@ -6,10 +6,10 @@
  */
 package glyph_screen_test
 
-import runtime from "base"
-import testing from "std"
-import slop_os from "std/os"
-import terminal from "std/os/slop_os"
+import runtime from "base:runtime"
+import testing from "std:testing"
+import slop_os from "std:os/slop_os"
+import terminal from "std:os/slop_os/terminal"
 import glyph_screen from ".."
 import screen from "../../screen"
 

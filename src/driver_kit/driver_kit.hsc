@@ -4,8 +4,8 @@
  */
 package driver_kit
 
-import runtime from "base"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
 
 /**
  * Map device memory read/write into the process's own address space, as it is.

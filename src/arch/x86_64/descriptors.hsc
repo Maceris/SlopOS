@@ -1,7 +1,7 @@
 package arch_x86_64
 
-import runtime from "base"
-import x86_64 from "base/intrinsics"
+import runtime from "base:runtime"
+import x86_64 from "base:intrinsics/x86_64"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 

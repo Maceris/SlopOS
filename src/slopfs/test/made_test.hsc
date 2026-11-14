@@ -1,6 +1,6 @@
 package slopfs_test
 
-import testing from "std"
+import testing from "std:testing"
 import slopfs from ".."
 
 /*

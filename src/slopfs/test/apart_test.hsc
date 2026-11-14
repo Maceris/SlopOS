@@ -1,8 +1,8 @@
 package slopfs_test
 
-import runtime from "base"
-import maps from "std"
-import testing from "std"
+import runtime from "base:runtime"
+import maps from "std:maps"
+import testing from "std:testing"
 import slopfs from ".."
 
 /*

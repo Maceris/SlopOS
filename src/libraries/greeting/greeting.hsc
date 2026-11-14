@@ -4,7 +4,7 @@
  */
 package greeting
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /**
  * Add two integers, through the library, for a test that an export's call and result cross it.

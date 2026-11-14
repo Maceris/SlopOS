@@ -1,6 +1,6 @@
 package net_stack
 
-import crypto from "std"
+import crypto from "std:crypto"
 
 /*
  * IPv6 (RFC 8200), ICMPv6's echo (RFC 4443), neighbour discovery (RFC 4861) and SLAAC (RFC 4862). The interface takes a

@@ -1,9 +1,9 @@
 package session_manager
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import programs from "../../protocols/programs"
 import powerbox from "../../protocols/powerbox"
 import config from "../../protocols/config"

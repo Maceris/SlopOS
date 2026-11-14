@@ -1,6 +1,6 @@
 package aml_test
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /*
  * A small AML assembler for the tests: each function writes one encoding, so a test writes its table as the ASL it

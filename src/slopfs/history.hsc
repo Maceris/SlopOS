@@ -1,7 +1,7 @@
 package slopfs
 
-import runtime from "base"
-import maps from "std"
+import runtime from "base:runtime"
+import maps from "std:maps"
 
 /*
  * What a volume server needs beyond the volume itself (decisions/0089): the history change cursors read, objects kept

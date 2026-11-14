@@ -4,7 +4,7 @@
  */
 package test_shell_results
 
-import os from "std"
+import os from "std:os"
 
 /** What it gives back when it's fine: what it was given. */
 Summary :: struct {

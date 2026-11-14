@@ -21,13 +21,13 @@
  */
 package image_builder
 
-import runtime from "base"
-import io from "std"
-import os from "std"
-import random from "std"
-import crypto from "std"
-import strings from "std"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import io from "std:io"
+import os from "std:os"
+import random from "std:random"
+import crypto from "std:crypto"
+import strings from "std:strings"
+import text_buffer from "std:text_buffer"
 import fat from "../../fat"
 import gpt from "../../gpt"
 import slopfs from "../../slopfs"

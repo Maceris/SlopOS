@@ -7,10 +7,10 @@
  */
 package service_kit
 
-import compiler from "base"
-import runtime from "base"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 import system_records from "../../system_records"
 
 /**

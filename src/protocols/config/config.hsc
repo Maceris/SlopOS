@@ -1,10 +1,10 @@
 package config
 
-import compiler from "base"
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 
 /*
  * The config store's protocol (roadmap 9c2, decisions/0107, 0109, design/software.md §4). A connection reaches one

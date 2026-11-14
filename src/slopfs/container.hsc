@@ -1,8 +1,8 @@
 package slopfs
 
-import runtime from "base"
-import crypto from "std"
-import maps from "std"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import maps from "std:maps"
 
 /*
  * A container (design/storage.md §3): its space, its three trees, the volumes open on it, and the transaction they're

@@ -15,11 +15,11 @@
  */
 package account_records
 
-import compiler from "base"
-import runtime from "base"
-import crypto from "std"
-import random from "std"
-import unicode from "std"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import random from "std:random"
+import unicode from "std:unicode"
 
 /** The fewest characters a password may have, counted as code points, not bytes (NIST SP 800-63B). */
 MIN_PASSWORD_CHARACTERS : usize : 8

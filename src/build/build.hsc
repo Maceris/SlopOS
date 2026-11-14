@@ -28,11 +28,11 @@
  */
 package build
 
-import compiler from "base"
-import runtime from "base"
-import os from "std"
-import schema from "std"
-import text_buffer from "std"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import os from "std:os"
+import schema from "std:schema"
+import text_buffer from "std:text_buffer"
 import bundle from "../bundle"
 import checks from "../checks"
 

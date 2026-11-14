@@ -8,19 +8,19 @@
  */
 package test_replay
 
-import intrinsics from "base"
-import runtime from "base"
-import concurrency from "std"
-import os from "std"
-import terminal from "std"
-import text_buffer from "std"
-import slop_os from "std/os"
-import terminal as protocol from "std/os/slop_os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
+import os from "std:os"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import slop_os from "std:os/slop_os"
+import terminal as protocol from "std:os/slop_os/terminal"
 #if TARGET_ARCH == .x86_64 {
-    import x86_64 from "base/intrinsics"
+    import x86_64 from "base:intrinsics/x86_64"
 }
 #else_if TARGET_ARCH == .arm64 {
-    import aarch64 from "base/intrinsics"
+    import aarch64 from "base:intrinsics/aarch64"
 }
 
 /** How many threads mix into the total. */

@@ -1,9 +1,9 @@
 package net_stack
 
 #if base.OS == .SlopOS {
-    import slop_os from "std/os"
+    import slop_os from "std:os/slop_os"
 }
-import crypto from "std"
+import crypto from "std:crypto"
 
 /*
  * TCP (RFC 9293), with window scaling and timestamps (RFC 7323), selective acknowledgements (RFC 2018) and loss

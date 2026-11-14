@@ -1,8 +1,8 @@
 package supervisor
 
-import os from "std"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 import log_line from "../../log_line"
 
 /*

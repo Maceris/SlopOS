@@ -17,10 +17,10 @@
  */
 package container_service
 
-import runtime from "base"
-import random from "std"
-import os from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import random from "std:random"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import slopfs from "../../slopfs"
 import log_line from "../../log_line"
 import block from "../../protocols/block"

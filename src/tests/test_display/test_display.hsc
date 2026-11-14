@@ -15,10 +15,10 @@
  */
 package test_display
 
-import runtime from "base"
-import canvas from "std"
-import os from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import canvas from "std:canvas"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
 import input from "../../protocols/input"

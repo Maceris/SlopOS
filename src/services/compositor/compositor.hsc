@@ -17,12 +17,12 @@
  */
 package compositor
 
-import runtime from "base"
-import canvas from "std"
-import fonts from "std"
-import os from "std"
-import slop_os from "std/os"
-import terminal from "std/os/slop_os"
+import runtime from "base:runtime"
+import canvas from "std:canvas"
+import fonts from "std:fonts"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import terminal from "std:os/slop_os/terminal"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
 import seat from "../../protocols/seat"

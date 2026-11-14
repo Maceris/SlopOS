@@ -1,9 +1,9 @@
 package shell_language
 
-import runtime from "base"
-import text_buffer from "std"
-import unicode from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import text_buffer from "std:text_buffer"
+import unicode from "std:unicode"
+import slop_os from "std:os/slop_os"
 
 /*
  * The shell's values (design/shell.md §2): typed, never re-parsed as text. Sizes are bytes and durations nanoseconds;

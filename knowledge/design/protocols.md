@@ -82,7 +82,7 @@ by a house rule:
 package block
 
 // Protocol and Lending live next to the ABI package (see Open Questions)
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 
 PROTOCOL :: slop_os.Protocol.{
     name = "block",

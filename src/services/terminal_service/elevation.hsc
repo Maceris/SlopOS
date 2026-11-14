@@ -8,15 +8,15 @@
  */
 package terminal_service
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import text_buffer from "std"
-import terminal from "std/os/slop_os"
-import time from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
+import terminal from "std:os/slop_os/terminal"
+import time from "std:time"
 import accounts from "../../protocols/accounts"
 import prompt from "../../protocols/prompt"
-import power_protocol from "../../protocols/power"
+import power as power_protocol from "../../protocols/power"
 import trace from "../../protocols/trace"
 import events from "../../protocols/events"
 import screen from "../../screen"

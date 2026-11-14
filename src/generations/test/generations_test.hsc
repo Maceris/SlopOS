@@ -4,7 +4,7 @@
  */
 package generations_test
 
-import testing from "std"
+import testing from "std:testing"
 import bundle from "../../bundle"
 import generations from ".."
 

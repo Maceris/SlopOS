@@ -5,8 +5,8 @@
  */
 package uefi_hello
 
-import runtime from "base"
-import uefi from "std/os"
+import runtime from "base:runtime"
+import uefi from "std:os/uefi"
 
 /**
  * Add up 1000 numbers from the boot services' pool, log the sum, and turn the machine off.

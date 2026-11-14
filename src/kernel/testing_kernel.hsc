@@ -1,7 +1,7 @@
 package kernel
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 
 /*
  * How the kernel runs its own tests (decisions/0175): each command-line flag that asks for one, like test_heap, runs

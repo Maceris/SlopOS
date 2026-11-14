@@ -1,8 +1,8 @@
 package arch_aarch64
 
-import runtime from "base"
-import aarch64 from "base/intrinsics"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import aarch64 from "base:intrinsics/aarch64"
+import slop_os from "std:os/slop_os"
 import arch_interface from "../../arch_interface"
 
 /*

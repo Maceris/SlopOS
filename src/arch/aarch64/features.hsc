@@ -1,7 +1,7 @@
 package arch_aarch64
 
-import aarch64 from "base/intrinsics"
-import slop_os from "std/os"
+import aarch64 from "base:intrinsics/aarch64"
+import slop_os from "std:os/slop_os"
 
 /** Which of the ID registers a feature is reported in. */
 IdRegister :: enum {

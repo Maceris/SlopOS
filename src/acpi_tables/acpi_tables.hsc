@@ -7,7 +7,7 @@
 //SPEC: ACPI 6.5, §5.2.9 (FADT), §5.2.3.2 (Generic Address Structure), §4.8.1 (PM1 and GPE blocks)
 package acpi_tables
 
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 
 /** What the FADT says of the fixed hardware; a port of 0 is a block that isn't there. */
 Fadt :: struct {

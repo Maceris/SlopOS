@@ -6,12 +6,12 @@
  */
 package terminal_service
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import text_buffer from "std"
-import terminal from "std/os/slop_os"
-import dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
+import terminal from "std:os/slop_os/terminal"
+import dir from "std:os/slop_os/dir"
 import screen from "../../screen"
 
 /** The USB HID usage of the G key, which opens the grants view from the secure attention key's screen. */

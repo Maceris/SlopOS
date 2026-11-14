@@ -1,8 +1,8 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import text_buffer from "std:text_buffer"
 
 /*
  * Evaluating the shell language: each statement's tree to a value, or an error that stops what follows

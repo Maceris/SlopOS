@@ -6,9 +6,9 @@
  */
 package virtio_rng
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import service_kit from "../../libraries/service_kit"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"

@@ -8,13 +8,13 @@
  */
 package test_affinity
 
-import compiler from "base"
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import testing from "std"
-import slop_os from "std/os"
-import process_manager from "std/os/slop_os"
+import compiler from "base:compiler"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import testing from "std:testing"
+import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 

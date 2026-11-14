@@ -1,8 +1,8 @@
 package arch_aarch64
 
-import aarch64 from "base/intrinsics"
+import aarch64 from "base:intrinsics/aarch64"
 import arch_interface from "../../arch_interface"
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 
 /*
  * User-mode registers (arch_interface, User State): a thread's RegisterFrame, as the entry function saves it

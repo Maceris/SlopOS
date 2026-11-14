@@ -1,10 +1,10 @@
 package arch_aarch64
 
-import intrinsics from "base"
-import runtime from "base"
-import aarch64 from "base/intrinsics"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import aarch64 from "base:intrinsics/aarch64"
 import arch_interface from "../../arch_interface"
-import concurrency from "std"
+import concurrency from "std:concurrency"
 
 /*
  * Message-signaled interrupts through the GICv3's ITS (arch_interface, MSIs; decisions/0073). A device writes its

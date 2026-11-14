@@ -1,7 +1,7 @@
 package kernel
 
-import intrinsics from "base"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import slop_os from "std:os/slop_os"
 
 /**
  * Take the kernel's coverage counters into the caller's buffer, and zero them (decisions/0186, He): only in a kernel

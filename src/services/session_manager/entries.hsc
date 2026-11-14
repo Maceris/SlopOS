@@ -1,9 +1,9 @@
 package session_manager
 
-import runtime from "base"
-import os from "std"
-import schema from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import os from "std:os"
+import schema from "std:schema"
+import slop_os from "std:os/slop_os"
 import config from "../../protocols/config"
 import bundle from "../../bundle"
 import system_records from "../../system_records"

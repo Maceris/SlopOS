@@ -7,10 +7,10 @@
  */
 package ssh_service
 
-import compiler from "base"
-import os from "std"
-import ssh from "std"
-import slop_os from "std/os"
+import compiler from "base:compiler"
+import os from "std:os"
+import ssh from "std:ssh"
+import slop_os from "std:os/slop_os"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"

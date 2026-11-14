@@ -7,10 +7,10 @@
  */
 package x86_64_test
 
-import intrinsics from "base"
-import runtime from "base"
-import testing from "std"
-import arch from ".."
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import testing from "std:testing"
+import arch_x86_64 as arch from ".."
 import arch_interface from "../../../arch_interface"
 
 /** The pretend physical address of the buffer's first frame, 1 MiB. */

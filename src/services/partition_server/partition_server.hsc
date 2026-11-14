@@ -17,9 +17,9 @@
  */
 package partition_server
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import gpt from "../../gpt"
 import log_line from "../../log_line"
 import block from "../../protocols/block"

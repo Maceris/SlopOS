@@ -5,9 +5,9 @@
  */
 package aml_test
 
-import runtime from "base"
-import testing from "std"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
 import aml from ".."
 
 // ---- The host

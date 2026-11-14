@@ -7,9 +7,9 @@
  */
 package edu_dma
 
-import runtime from "base"
-import intrinsics from "base"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import intrinsics from "base:intrinsics"
+import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"
 

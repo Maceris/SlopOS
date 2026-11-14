@@ -1,7 +1,7 @@
 package aml
 
-import runtime from "base"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import text_buffer from "std:text_buffer"
 
 /*
  * The namespace: a tree of nodes, each named by a segment of four characters, the first in a u32's low byte as AML

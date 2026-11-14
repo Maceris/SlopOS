@@ -3,9 +3,9 @@
  */
 package copy
 
-import os from "std"
-import strings from "std"
-import dir from "std/os/slop_os"
+import os from "std:os"
+import strings from "std:strings"
+import dir from "std:os/slop_os/dir"
 import file_tools from "../../file_tools"
 
 /** An error naming the parameter it came from. */

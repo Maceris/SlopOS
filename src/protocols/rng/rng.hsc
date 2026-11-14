@@ -1,7 +1,7 @@
 package rng
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The device class of hardware random number generators (decisions/0074), which the entropy service reseeds from: a

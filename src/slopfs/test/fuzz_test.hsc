@@ -1,9 +1,9 @@
 package slopfs_test
 
-import runtime from "base"
-import crypto from "std"
-import os from "std"
-import testing from "std"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import os from "std:os"
+import testing from "std:testing"
 import slopfs from ".."
 
 /*

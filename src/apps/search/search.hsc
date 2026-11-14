@@ -4,14 +4,14 @@
  */
 package search
 
-import runtime from "base"
-import os from "std"
-import regex from "std"
-import strings from "std"
-import unicode from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import stream from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import regex from "std:regex"
+import strings from "std:strings"
+import unicode from "std:unicode"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import stream from "std:os/slop_os/stream"
 import file_tools from "../../file_tools"
 
 /** The most bytes of a file that are searched: 4 MiB. What's past them isn't. */

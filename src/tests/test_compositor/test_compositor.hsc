@@ -13,9 +13,9 @@
  */
 package test_compositor
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import connector from "../../protocols/connector"
 import surface from "../../protocols/surface"
 import service_kit from "../../libraries/service_kit"

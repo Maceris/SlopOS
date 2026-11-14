@@ -6,9 +6,9 @@
  * carries a fiber pool of two fibers, for a breakpoint set before the thread was, and the fibers listed (12f).
  */
 package test_debug
-import fiber from "std"
-import intrinsics from "base"
-import runtime from "base"
+import fiber from "std:fiber"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 
 /** A struct the debugger shows with its members. */
 Point :: struct {

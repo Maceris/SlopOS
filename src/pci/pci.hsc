@@ -18,8 +18,8 @@
  */
 package pci
 
-import intrinsics from "base"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import slop_os from "std:os/slop_os"
 import devicetree from "../devicetree"
 
 /** The most windows a Host keeps: 4; more are dropped. */

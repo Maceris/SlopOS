@@ -8,8 +8,8 @@
  */
 package net_stack_test
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 import net_stack from ".."
 
 /** How many frames can be on the link at once; past them, the newest are lost. */

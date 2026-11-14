@@ -7,17 +7,17 @@
  */
 package kernel_entry
 
-import intrinsics from "base"
-import runtime from "base"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import arch_interface from "../../arch_interface"
-import text_buffer from "std"
+import text_buffer from "std:text_buffer"
 import kernel from ".."
 
 #if TARGET_ARCH == .x86_64 {
-    import arch from "../../arch/x86_64"
+    import arch_x86_64 as arch from "../../arch/x86_64"
 }
 #else_if TARGET_ARCH == .arm64 {
-    import arch from "../../arch/aarch64"
+    import arch_aarch64 as arch from "../../arch/aarch64"
 }
 
 /** What an interrupt interrupted: the kernel itself never is, as it runs with interrupts disabled. */

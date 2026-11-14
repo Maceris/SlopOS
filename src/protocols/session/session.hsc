@@ -1,9 +1,9 @@
 package session
 
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import terminal from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import terminal from "std:os/slop_os/terminal"
 import prompt from "../prompt"
 import pipe from "../pipe"
 

@@ -1,6 +1,6 @@
 package shell_language
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /*
  * The built-in stages' work that evaluates nothing: sorting and grouping a pipeline's items by a field.

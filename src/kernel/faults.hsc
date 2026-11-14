@@ -1,6 +1,6 @@
 package kernel
 
-import intrinsics from "base"
+import intrinsics from "base:intrinsics"
 import robustness from "../robustness"
 
 /**

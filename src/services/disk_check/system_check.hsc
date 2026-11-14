@@ -1,14 +1,14 @@
 package disk_check
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import testing from "std"
-import dir from "std/os/slop_os"
-import file from "std/os/slop_os"
-import files from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
-import read_only_file from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import testing from "std:testing"
+import dir from "std:os/slop_os/dir"
+import file from "std:os/slop_os/file"
+import files from "std:os/slop_os/files"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import read_only_file from "std:os/slop_os/read_only_file"
 import test_kit from "../../test_kit"
 
 /*

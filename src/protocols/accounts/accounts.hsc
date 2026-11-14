@@ -1,9 +1,9 @@
 package accounts
 
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import grant from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import grant from "std:os/slop_os/grant"
 
 /*
  * The account service's protocol (decisions/0141, roadmap 10b): accounts made, their home volumes opened with their

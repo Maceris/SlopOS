@@ -4,9 +4,9 @@
  */
 package handle_entries_test
 
-import runtime from "base"
-import concurrency from "std"
-import testing from "std"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
+import testing from "std:testing"
 import handle_entries from ".."
 
 /** The first handle the entry holds, at generation 0. */

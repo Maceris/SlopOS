@@ -8,10 +8,10 @@
  */
 package substitution
 
-import runtime from "base"
-import schema from "std"
-import strings from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import schema from "std:schema"
+import strings from "std:strings"
+import slop_os from "std:os/slop_os"
 import bundle from "../bundle"
 import library_interface from "../library_interface"
 

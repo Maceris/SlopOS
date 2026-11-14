@@ -1,7 +1,7 @@
 package input
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The device class of keyboards, mice and tablets (decisions/0077): events in SlopOS's own terms, a key by its USB HID

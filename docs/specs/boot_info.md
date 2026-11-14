@@ -40,7 +40,7 @@ All of these are in the `boot_info` package, which L0 and L2 both import.
 ```
 package boot_info
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 PhysicalAddress :: distinct alias u64
 VirtualAddress :: distinct alias u64

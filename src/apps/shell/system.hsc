@@ -1,10 +1,10 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import programs from "../../protocols/programs"
 import powerbox from "../../protocols/powerbox"
 import trace from "../../protocols/trace"

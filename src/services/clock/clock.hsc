@@ -24,13 +24,13 @@
 //SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
 package clock
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import time from "std"
-import slop_os from "std/os"
-import text_buffer from "std"
-import dir from "std/os/slop_os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import time from "std:time"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
+import dir from "std:os/slop_os/dir"
 import service_kit from "../../libraries/service_kit"
 import clock_setting from "../../protocols/clock_setting"
 

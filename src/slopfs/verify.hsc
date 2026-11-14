@@ -1,7 +1,7 @@
 package slopfs
 
-import runtime from "base"
-import maps from "std"
+import runtime from "base:runtime"
+import maps from "std:maps"
 
 /*
  * A container checked whole, as fsck checks a filesystem: every node of every tree read and checked, every extent a

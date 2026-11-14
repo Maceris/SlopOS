@@ -8,10 +8,10 @@
 //SPEC: Intel 6300ESB I/O Controller Hub datasheet, §15 (the watchdog timer); Linux's i6300esb.c
 package i6300esb
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
 import service_kit from "../../libraries/service_kit"
 import watchdog from "../../protocols/watchdog"

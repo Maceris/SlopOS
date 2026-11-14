@@ -1,17 +1,17 @@
 package kernel
 
-import intrinsics from "base"
+import intrinsics from "base:intrinsics"
 import arch_interface from "../arch_interface"
-import concurrency from "std"
+import concurrency from "std:concurrency"
 import frames from "frames"
-import testing from "std"
-import text_buffer from "std"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
 
 #if TARGET_ARCH == .x86_64 {
-    import arch from "../arch/x86_64"
+    import arch_x86_64 as arch from "../arch/x86_64"
 }
 #else_if TARGET_ARCH == .arm64 {
-    import arch from "../arch/aarch64"
+    import arch_aarch64 as arch from "../arch/aarch64"
 }
 
 /*

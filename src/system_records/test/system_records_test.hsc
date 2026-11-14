@@ -5,8 +5,8 @@
  */
 package system_records_test
 
-import runtime from "base"
-import testing from "std"
+import runtime from "base:runtime"
+import testing from "std:testing"
 import system_records from ".."
 
 /** The tag of the protocol the test's server serves and its client takes a channel to; any value but 0 would do. */

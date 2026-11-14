@@ -7,10 +7,10 @@
  */
 package virtio_input
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"
 import input from "../../protocols/input"

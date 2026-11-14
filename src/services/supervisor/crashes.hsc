@@ -1,7 +1,7 @@
 package supervisor
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import log_line from "../../log_line"
 import crash_reports from "../../crash_reports"
 

@@ -11,7 +11,7 @@
  */
 package shootdowns
 
-import intrinsics from "base"
+import intrinsics from "base:intrinsics"
 
 /** One shootdown at a time, and how many CPUs haven't flushed its batch. */
 Handshake :: struct {

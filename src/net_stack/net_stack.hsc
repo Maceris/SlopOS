@@ -24,8 +24,8 @@
  */
 package net_stack
 
-import compiler from "base"
-import crypto from "std"
+import compiler from "base:compiler"
+import crypto from "std:crypto"
 
 // ---- Sizes
 

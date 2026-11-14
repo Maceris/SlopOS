@@ -1,6 +1,6 @@
 package slopfs
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /*
  * Snapshots and clones (roadmap 8e, design/storage.md §3), as ZFS has them, by birth times and dead lists. A snapshot

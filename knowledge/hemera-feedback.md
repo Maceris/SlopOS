@@ -198,6 +198,13 @@ by hand on the heap, its events as a plain struct. A build once stopped in the c
 Then for 12h (2026-11-09, `0185`): base's `CarrierBlock.thread_page`, `Fiber.cpu_budget`, `runtime.note_running_fiber`
 and `runtime.bind_cpu_budget`, no-ops but on SlopOS, where they write the per-thread page; std's fiber scheduler calls
 the first around each turn. `HemeraTest` embeds base as `hemera` does, so both are rebuilt after a base change.
+Imports changed (2026-11-14, decided with the owner, Hemera's `docs/packages.md`): a built-in location is a prefix
+with a colon and the package's whole folder, `import uefi from "std:os/uefi"`, and a location without one is always
+relative. The name after `import` must be the package's own, from its package statement (E4043), so a different name
+is an alias. Every import in `src` was rewritten by script, 1,588 lines in 370 files; 133 took an alias, mostly
+`import arch_x86_64 as arch`, `import shell_language as language` and the protocols' `import powerbox as
+powerbox_protocol`. The house rules' `is_std` (`src/checks`) tells std's imports by a `std:` location or none. The
+specs and the protocols design note use the new form; decisions and `compiler-plan.md` keep the old, as written.
 
 ## 4. Features That Look Like a Strong Fit
 

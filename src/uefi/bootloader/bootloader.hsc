@@ -9,19 +9,19 @@
  */
 package bootloader
 
-import runtime from "base"
-import intrinsics from "base"
-import uefi from "std/os"
+import runtime from "base:runtime"
+import intrinsics from "base:intrinsics"
+import uefi from "std:os/uefi"
 import bundle from "../../bundle"
 import generations from "../../generations"
 import boot_info from "../../boot_info"
 import boot_protocol from "../../boot_protocol"
 
 #if TARGET_ARCH == .x86_64 {
-    import x86_64 from "base/intrinsics"
+    import x86_64 from "base:intrinsics/x86_64"
 }
 #else {
-    import aarch64 from "base/intrinsics"
+    import aarch64 from "base:intrinsics/aarch64"
 }
 
 /** The key that boots the recovery generation, held or pressed as the machine starts; its capital does too. */

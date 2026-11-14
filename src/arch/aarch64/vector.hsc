@@ -1,7 +1,7 @@
 package arch_aarch64
 
-import intrinsics from "base"
-import aarch64 from "base/intrinsics"
+import intrinsics from "base:intrinsics"
+import aarch64 from "base:intrinsics/aarch64"
 import arch_interface from "../../arch_interface"
 
 /*

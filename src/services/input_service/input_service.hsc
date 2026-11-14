@@ -15,11 +15,11 @@
  */
 package input_service
 
-import runtime from "base"
-import os from "std"
-import random from "std"
-import slop_os from "std/os"
-import terminal from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import random from "std:random"
+import slop_os from "std:os/slop_os"
+import terminal from "std:os/slop_os/terminal"
 import connector from "../../protocols/connector"
 import input from "../../protocols/input"
 import seat from "../../protocols/seat"

@@ -8,15 +8,15 @@
  */
 package connect
 
-import runtime from "base"
-import net from "std"
-import os from "std"
-import text_buffer from "std"
-import slop_os from "std/os"
-import net_address from "std/os/slop_os"
-import network from "std/os/slop_os"
-import stream from "std/os/slop_os"
-import powerbox_protocol from "../../protocols/powerbox"
+import runtime from "base:runtime"
+import net from "std:net"
+import os from "std:os"
+import text_buffer from "std:text_buffer"
+import slop_os from "std:os/slop_os"
+import net_address from "std:os/slop_os/net_address"
+import network from "std:os/slop_os/network"
+import stream from "std:os/slop_os/stream"
+import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** The most bytes of what comes back that are shown: 4 KiB. */
 MAX_SHOWN :: 4096

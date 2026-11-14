@@ -1,6 +1,6 @@
 package symbols
 
-import text_buffer from "std"
+import text_buffer from "std:text_buffer"
 
 /*
  * DWARF 4, as Hemera's debug files have it (decisions/0185, 12e; Hemera's docs/compilation.md, Debug Info): read for

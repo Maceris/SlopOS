@@ -8,7 +8,7 @@
  */
 package safe_text
 
-import unicode from "std"
+import unicode from "std:unicode"
 
 /** The most bytes one cluster may have: longer ones (a base and dozens of marks) show as U+FFFD. */
 MAX_CLUSTER_BYTES :: 32

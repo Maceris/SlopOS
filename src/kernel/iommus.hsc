@@ -1,11 +1,11 @@
 package kernel
 
-import intrinsics from "base"
-import runtime from "base"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import iommu_interface from "../iommu_interface"
 import boot_info from "../boot_info"
-import concurrency from "std"
-import slop_os from "std/os"
+import concurrency from "std:concurrency"
+import slop_os from "std:os/slop_os"
 
 // Each architecture's IOMMU package, by one name
 #if TARGET_ARCH == .x86_64 {

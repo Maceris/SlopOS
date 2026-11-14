@@ -5,12 +5,12 @@
  */
 package elf_loader_test
 
-import compiler from "base"
-import runtime from "base"
-import os from "std"
-import strings from "std"
-import testing from "std"
-import text_buffer from "std"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import os from "std:os"
+import strings from "std:strings"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
 import elf_loader from ".."
 import hosted_faults from "../../robustness/hosted"
 

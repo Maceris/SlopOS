@@ -1,7 +1,7 @@
 package net
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The device class of network interfaces (decisions/0188, 13a): Ethernet frames between a NIC's driver and its client,

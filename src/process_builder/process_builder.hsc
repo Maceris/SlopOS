@@ -19,8 +19,8 @@
  */
 package process_builder
 
-import runtime from "base"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
 import elf_loader from "../elf_loader"
 import random_stream from "../random_stream"
 

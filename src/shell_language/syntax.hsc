@@ -1,7 +1,7 @@
 package shell_language
 
-import runtime from "base"
-import strings from "std"
+import runtime from "base:runtime"
+import strings from "std:strings"
 
 /*
  * The shell language's syntax (design/shell.md §2, decisions/0162, 0169), parsed straight from a line to a tree:

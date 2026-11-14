@@ -22,13 +22,13 @@
  */
 package test_kit
 
-import intrinsics from "base"
-import runtime from "base"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 #if TARGET_ARCH == .arm64 {
-    import aarch64 from "base/intrinsics"
+    import aarch64 from "base:intrinsics/aarch64"
 }
-import slop_os from "std/os"
-import testing from "std"
+import slop_os from "std:os/slop_os"
+import testing from "std:testing"
 import log_line from "../log_line"
 
 /** The size of a test thread's stack, in bytes, as start_thread maps it: 64 KiB. */

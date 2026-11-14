@@ -8,10 +8,10 @@
  */
 package arch_interface
 
-import runtime from "base"
+import runtime from "base:runtime"
 import boot_info from "../boot_info"
 // The system ABI's types, like CpuFeatures (0019)
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 
 /** A physical address, as BootInfo gives them. */
 PhysicalAddress :: boot_info.PhysicalAddress

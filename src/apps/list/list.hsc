@@ -3,12 +3,12 @@
  */
 package list
 
-import memory from "std"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import files from "std/os/slop_os"
-import stream from "std/os/slop_os"
+import memory from "std:memory"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import files from "std:os/slop_os/files"
+import stream from "std:os/slop_os/stream"
 import file_tools from "../../file_tools"
 
 /** What an entry is. */

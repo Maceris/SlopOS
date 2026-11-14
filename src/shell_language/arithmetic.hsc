@@ -1,7 +1,7 @@
 package shell_language
 
-import runtime from "base"
-import strings from "std"
+import runtime from "base:runtime"
+import strings from "std:strings"
 
 /*
  * Arithmetic that says when it overflows, where Hemera's wraps. //STD(missing): checked arithmetic, like LLVM's

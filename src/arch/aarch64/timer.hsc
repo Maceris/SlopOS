@@ -1,6 +1,6 @@
 package arch_aarch64
 
-import aarch64 from "base/intrinsics"
+import aarch64 from "base:intrinsics/aarch64"
 
 /*
  * The generic timer (docs/specs/arch_interface.md, Timer): the virtual counter, and the virtual timer's

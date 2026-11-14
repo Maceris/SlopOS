@@ -11,7 +11,7 @@
  */
 package handle_entries
 
-import intrinsics from "base"
+import intrinsics from "base:intrinsics"
 
 // An entry's tag: its rights in the low 32 bits, then its kind, and these, then its generation in the top 16.
 /** The tag's bit for an entry that holds a handle. */

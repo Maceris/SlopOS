@@ -6,10 +6,10 @@
  */
 package test_profile
 
-import fiber from "std"
-import intrinsics from "base"
-import runtime from "base"
-import slop_os from "std/os"
+import fiber from "std:fiber"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
 
 /** How long spin_here spins. */
 Spin :: struct {

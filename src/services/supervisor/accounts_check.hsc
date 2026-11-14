@@ -1,11 +1,11 @@
 package supervisor
 
-import compiler from "base"
-import runtime from "base"
-import os from "std"
-import testing from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import os from "std:os"
+import testing from "std:testing"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import test_kit from "../../test_kit"

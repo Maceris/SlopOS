@@ -6,8 +6,8 @@
  */
 package log_line
 
-import slop_os from "std/os"
-import text_buffer from "std"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 
 /**
  * Write a formatted line in the kernel's log.

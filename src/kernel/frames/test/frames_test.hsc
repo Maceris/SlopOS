@@ -8,8 +8,8 @@
  */
 package frames_test
 
-import compiler from "base"
-import testing from "std"
+import compiler from "base:compiler"
+import testing from "std:testing"
 import frames from ".."
 import boot_info from "../../../boot_info"
 import hosted_faults from "../../../robustness/hosted"

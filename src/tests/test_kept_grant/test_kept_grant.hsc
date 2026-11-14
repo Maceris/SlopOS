@@ -4,12 +4,12 @@
  */
 package test_kept_grant
 
-import os from "std"
-import strings from "std"
-import terminal from "std"
-import slop_os from "std/os"
-import terminal as protocol from "std/os/slop_os"
-import powerbox_protocol from "../../protocols/powerbox"
+import os from "std:os"
+import strings from "std:strings"
+import terminal from "std:terminal"
+import slop_os from "std:os/slop_os"
+import terminal as protocol from "std:os/slop_os/terminal"
+import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** The key the file's kept under. */
 KEY :: "kept"

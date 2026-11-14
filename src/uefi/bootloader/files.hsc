@@ -1,7 +1,7 @@
 package bootloader
 
-import runtime from "base"
-import uefi from "std/os"
+import runtime from "base:runtime"
+import uefi from "std:os/uefi"
 
 /*
  * The ESP, through the firmware's file system protocol on the device the bootloader was loaded from: whole files read

@@ -1,8 +1,8 @@
 package slopfs
 
-import runtime from "base"
-import crypto from "std"
-import maps from "std"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import maps from "std:maps"
 
 /*
  * Copy-on-write B+trees of 16 KiB nodes (Rodeh, "B-trees, Shadowing, and Clones", TOS 2008): a node changed in a

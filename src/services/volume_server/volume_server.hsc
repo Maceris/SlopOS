@@ -28,22 +28,22 @@
  */
 package volume_server
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import file from "std/os/slop_os"
-import file_set from "std/os/slop_os"
-import files from "std/os/slop_os"
-import grant from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
-import read_only_file from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import file from "std:os/slop_os/file"
+import file_set from "std:os/slop_os/file_set"
+import files from "std:os/slop_os/files"
+import grant from "std:os/slop_os/grant"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import read_only_file from "std:os/slop_os/read_only_file"
 import slopfs from "../../slopfs"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import container from "../../protocols/container"
 import links from "../../protocols/links"
-import volume_protocol from "../../protocols/volume"
+import volume as volume_protocol from "../../protocols/volume"
 
 /** The most connections at once, of every kind; one past them is closed at once, and an open answered NoSpace. */
 MAX_CONNECTIONS :: 64

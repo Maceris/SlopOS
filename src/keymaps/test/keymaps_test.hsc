@@ -5,7 +5,7 @@
  */
 package keymaps_test
 
-import testing from "std"
+import testing from "std:testing"
 import keymaps from ".."
 
 the_us_layout_types_letters_and_digits #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {

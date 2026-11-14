@@ -1,9 +1,9 @@
 package arch_x86_64
 
-import x86_64 from "base/intrinsics"
-import runtime from "base"
+import x86_64 from "base:intrinsics/x86_64"
+import runtime from "base:runtime"
 import arch_interface from "../../arch_interface"
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 
 /*
  * User-mode registers (arch_interface, User State): a thread's RegisterFrame, as entries save it and

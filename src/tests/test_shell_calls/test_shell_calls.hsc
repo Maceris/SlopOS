@@ -8,17 +8,17 @@
  */
 package test_shell_calls
 
-import intrinsics from "base"
-import os from "std"
-import strings from "std"
-import terminal from "std"
-import text_buffer from "std"
-import time from "std"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
-import dir from "std/os/slop_os"
-import stream from "std/os/slop_os"
-import terminal as protocol from "std/os/slop_os"
+import intrinsics from "base:intrinsics"
+import os from "std:os"
+import strings from "std:strings"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import time from "std:time"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
+import dir from "std:os/slop_os/dir"
+import stream from "std:os/slop_os/stream"
+import terminal as protocol from "std:os/slop_os/terminal"
 
 /** A choice the shell passes by name. */
 Speed :: enum {

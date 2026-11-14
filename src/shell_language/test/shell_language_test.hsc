@@ -5,13 +5,13 @@
  */
 package shell_language_test
 
-import runtime from "base"
-import memory from "std"
-import schema from "std"
-import time from "std"
-import testing from "std"
-import text_buffer from "std"
-import language from ".."
+import runtime from "base:runtime"
+import memory from "std:memory"
+import schema from "std:schema"
+import time from "std:time"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
+import shell_language as language from ".."
 
 /**
  * Find a parsed line's first statement.

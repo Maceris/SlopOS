@@ -1,7 +1,7 @@
 package arch_x86_64
 
-import x86_64 from "base/intrinsics"
-import slop_os from "std/os"
+import x86_64 from "base:intrinsics/x86_64"
+import slop_os from "std:os/slop_os"
 
 /** One of the four registers CPUID reports in. */
 CpuidRegister :: enum {

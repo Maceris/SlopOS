@@ -1,7 +1,7 @@
 package seat
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The input service's protocol (decisions/0136, 0138): the seat's keyboards as the trusted path sees them, for the

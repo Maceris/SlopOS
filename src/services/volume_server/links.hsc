@@ -1,17 +1,17 @@
 package volume_server
 
-import os from "std"
-import random from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import file from "std/os/slop_os"
-import files from "std/os/slop_os"
-import grant from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
-import read_only_file from "std/os/slop_os"
+import os from "std:os"
+import random from "std:random"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import file from "std:os/slop_os/file"
+import files from "std:os/slop_os/files"
+import grant from "std:os/slop_os/grant"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import read_only_file from "std:os/slop_os/read_only_file"
 import slopfs from "../../slopfs"
 import links from "../../protocols/links"
-import volume_protocol from "../../protocols/volume"
+import volume as volume_protocol from "../../protocols/volume"
 
 /*
  * Stored links (roadmap 8f, design/security.md §8, slopfs/links.hsc), from both ends.

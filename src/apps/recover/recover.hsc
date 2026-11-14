@@ -5,12 +5,12 @@
  */
 package recover
 
-import runtime from "base"
-import memory from "std"
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import stream from "std/os/slop_os"
+import runtime from "base:runtime"
+import memory from "std:memory"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import stream from "std:os/slop_os/stream"
 import file_tools from "../../file_tools"
 
 /** The most snapshots looked in, newest first: each is served to be read, which takes a while. */

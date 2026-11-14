@@ -1,7 +1,7 @@
 package iommu_vtd
 
-import intrinsics from "base"
-import x86_64 from "base/intrinsics"
+import intrinsics from "base:intrinsics"
+import x86_64 from "base:intrinsics/x86_64"
 import iommu_interface from "../../iommu_interface"
 
 /*

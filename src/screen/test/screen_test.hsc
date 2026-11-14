@@ -6,8 +6,8 @@
  */
 package screen_test
 
-import testing from "std"
-import terminal from "std/os/slop_os"
+import testing from "std:testing"
+import terminal from "std:os/slop_os/terminal"
 import screen from ".."
 
 /**

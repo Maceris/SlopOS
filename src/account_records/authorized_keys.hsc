@@ -6,7 +6,7 @@
  */
 package account_records
 
-import ssh from "std"
+import ssh from "std:ssh"
 
 /** The most keys an account has. */
 MAX_KEYS :: 16

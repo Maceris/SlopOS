@@ -7,8 +7,8 @@
  */
 package slab_test
 
-import compiler from "base"
-import testing from "std"
+import compiler from "base:compiler"
+import testing from "std:testing"
 import slab from ".."
 import frames from "../../frames"
 import boot_info from "../../../boot_info"

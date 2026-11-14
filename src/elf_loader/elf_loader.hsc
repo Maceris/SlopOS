@@ -15,8 +15,8 @@
  */
 package elf_loader
 
-import intrinsics from "base"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import slop_os from "std:os/slop_os"
 
 /** The page size segments are laid out in and protected by, in bytes: 4 KiB, on both architectures. */
 PAGE_SIZE : u64 : 4096

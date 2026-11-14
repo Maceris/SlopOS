@@ -1,8 +1,8 @@
 package platform
 
-import runtime from "base"
-import slop_os from "std/os"
-import protocol from "../../protocols/platform"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
+import platform as protocol from "../../protocols/platform"
 import pci from "../../pci"
 import log_line from "../../log_line"
 

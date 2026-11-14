@@ -8,8 +8,8 @@
  */
 package screen
 
-import terminal from "std/os/slop_os"
-import unicode from "std"
+import terminal from "std:os/slop_os/terminal"
+import unicode from "std:unicode"
 
 /** The columns of the screen, the status line's included. */
 COLUMNS :: 80

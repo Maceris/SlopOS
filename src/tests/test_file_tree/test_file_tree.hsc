@@ -4,11 +4,11 @@
  */
 package test_file_tree
 
-import runtime from "base"
-import os from "std"
-import schema from "std"
-import strings from "std"
-import dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import schema from "std:schema"
+import strings from "std:strings"
+import dir from "std:os/slop_os/dir"
 
 /** A script it makes: its name and its text. */
 Script :: struct {

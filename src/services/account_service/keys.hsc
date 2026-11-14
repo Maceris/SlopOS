@@ -5,12 +5,12 @@
  */
 package account_service
 
-import runtime from "base"
-import os from "std"
+import runtime from "base:runtime"
+import os from "std:os"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
-import compiler from "base"
-import crypto from "std"
+import compiler from "base:compiler"
+import crypto from "std:crypto"
 import log_line from "../../log_line"
 
 /** What an account's keys' file name ends with, its account's name before it. */

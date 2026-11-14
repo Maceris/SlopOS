@@ -13,10 +13,10 @@
  */
 package symbols
 
-import runtime from "base"
-import os from "std"
-import text_buffer from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import os from "std:os"
+import text_buffer from "std:text_buffer"
+import slop_os from "std:os/slop_os"
 
 /** The most offsets named at once; more are left out. */
 MAX_OFFSETS :: 64

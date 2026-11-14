@@ -1,13 +1,13 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import schema from "std"
-import terminal from "std"
-import text_buffer from "std"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import schema from "std:schema"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 import crash_reports from "../../crash_reports"
 
 /*

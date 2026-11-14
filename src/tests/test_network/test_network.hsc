@@ -27,16 +27,16 @@
  */
 package test_network
 
-import runtime from "base"
-import net from "std"
-import os from "std"
-import text_buffer from "std"
-import slop_os from "std/os"
-import net_address from "std/os/slop_os"
-import network from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
-import tls from "std"
-import ntp from "std"
+import runtime from "base:runtime"
+import net from "std:net"
+import os from "std:os"
+import text_buffer from "std:text_buffer"
+import slop_os from "std:os/slop_os"
+import net_address from "std:os/slop_os/net_address"
+import network from "std:os/slop_os/network"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import tls from "std:tls"
+import ntp from "std:ntp"
 import connector from "../../protocols/connector"
 import service_kit from "../../libraries/service_kit"
 

@@ -1,7 +1,7 @@
 package display
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The device class of displays (decisions/0192, 15b; design/display.md §2): a screen of one mode, its scanout buffers

@@ -1,8 +1,8 @@
 package arch_x86_64
 
-import runtime from "base"
-import x86_64 from "base/intrinsics"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import x86_64 from "base:intrinsics/x86_64"
+import slop_os from "std:os/slop_os"
 import arch_interface from "../../arch_interface"
 
 /*

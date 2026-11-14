@@ -1,12 +1,12 @@
 package powerbox
 
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import file from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
-import read_only_file from "std/os/slop_os"
-import network from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import file from "std:os/slop_os/file"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import read_only_file from "std:os/slop_os/read_only_file"
+import network from "std:os/slop_os/network"
 import trace from "../trace"
 import events from "../events"
 

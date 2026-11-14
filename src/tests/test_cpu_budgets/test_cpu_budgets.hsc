@@ -12,11 +12,11 @@
  */
 package test_cpu_budgets
 
-import compiler from "base"
-import os from "std"
-import testing from "std"
-import slop_os from "std/os"
-import process_manager from "std/os/slop_os"
+import compiler from "base:compiler"
+import os from "std:os"
+import testing from "std:testing"
+import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */

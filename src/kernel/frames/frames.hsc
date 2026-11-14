@@ -24,9 +24,9 @@
  */
 package frames
 
-import intrinsics from "base"
-import runtime from "base"
-import concurrency from "std"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import boot_info from "../../boot_info"
 import robustness from "../../robustness"
 

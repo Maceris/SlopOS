@@ -5,7 +5,7 @@
  */
 package psf2
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 //SPEC: PSF1 and PSF2 font formats, as documented with the Linux kbd package (psffontformat)
 

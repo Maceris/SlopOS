@@ -8,13 +8,13 @@
  */
 package test_streams
 
-import compiler from "base"
-import os from "std"
-import testing from "std"
-import slop_os from "std/os"
-import process_manager from "std/os/slop_os"
-import stream from "std/os/slop_os"
-import memory from "std"
+import compiler from "base:compiler"
+import os from "std:os"
+import testing from "std:testing"
+import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
+import stream from "std:os/slop_os/stream"
+import memory from "std:memory"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */

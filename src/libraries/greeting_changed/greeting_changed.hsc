@@ -4,7 +4,7 @@
  */
 package greeting_changed
 
-import runtime from "base"
+import runtime from "base:runtime"
 
 /**
  * Add two integers, of other types than greeting's add takes, so the export's type isn't greeting's.

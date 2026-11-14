@@ -6,9 +6,9 @@
  */
 package vt_test
 
-import testing from "std"
-import text_buffer from "std"
-import terminal from "std/os/slop_os"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
+import terminal from "std:os/slop_os/terminal"
 import vt from ".."
 
 /** A string's bytes with ` as ESC and ^X as Ctrl-X. */

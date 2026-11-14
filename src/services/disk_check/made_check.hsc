@@ -1,8 +1,8 @@
 package disk_check
 
-import os from "std"
-import slop_os from "std/os"
-import testing from "std"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import testing from "std:testing"
 import storage from "../../protocols/storage"
 import slopfs from "../../slopfs"
 import test_kit from "../../test_kit"

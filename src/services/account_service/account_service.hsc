@@ -25,14 +25,14 @@
  */
 package account_service
 
-import compiler from "base"
-import runtime from "base"
-import crypto from "std"
-import os from "std"
-import strings from "std"
-import time from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import os from "std:os"
+import strings from "std:strings"
+import time from "std:time"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import log_line from "../../log_line"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"

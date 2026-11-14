@@ -1,7 +1,7 @@
 package shell_language
 
-import runtime from "base"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import text_buffer from "std:text_buffer"
 
 /** The shell's names and their values: a function's call has its own, in the scope it was called from. */
 Scope :: struct {

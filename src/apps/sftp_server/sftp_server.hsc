@@ -5,10 +5,10 @@
  */
 package sftp_server
 
-import os from "std"
-import ssh from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import os from "std:os"
+import ssh from "std:ssh"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import pipe from "../../protocols/pipe"
 import sftp from "../../sftp"
 

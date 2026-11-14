@@ -1,10 +1,10 @@
 package test_perf
 
-import intrinsics from "base"
-import math from "std"
-import slop_os from "std/os"
-import fast from "std/math"
-import testing from "std"
+import intrinsics from "base:intrinsics"
+import math from "std:math"
+import slop_os from "std:os/slop_os"
+import fast from "std:math/fast"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /*

@@ -1,7 +1,7 @@
 package serial
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The device class of byte streams (decisions/0075): a serial line, or a console that's one, like virtio-console. A

@@ -11,9 +11,9 @@
  */
 package hosted_faults
 
-import runtime from "base"
-import memory from "std"
-import os from "std"
+import runtime from "base:runtime"
+import memory from "std:memory"
+import os from "std:os"
 import robustness from "../../robustness"
 
 /** What SLOPOS_FAIL asks for; all zero when it's unset or not understood. */

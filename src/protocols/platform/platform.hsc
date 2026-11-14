@@ -1,7 +1,7 @@
 package platform
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The platform service's protocol (decisions/0074, 0077, 0093): the devices it found, each claimed once, by the

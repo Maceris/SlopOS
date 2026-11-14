@@ -12,11 +12,11 @@
  */
 package config_service
 
-import runtime from "base"
-import os from "std"
-import time from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import time from "std:time"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import service_kit from "../../libraries/service_kit"
 import config from "../../protocols/config"
 

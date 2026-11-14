@@ -1,7 +1,7 @@
 package trace
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * Tracing the whole system (decisions/0185, 12g): the supervisor, which holds the kernel's trace right, serves it, on a

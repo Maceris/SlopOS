@@ -1,9 +1,9 @@
 package kernel
 
-import intrinsics from "base"
-import runtime from "base"
-import concurrency from "std"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
+import slop_os from "std:os/slop_os"
 import boot_info from "../boot_info"
 import frames from "frames"
 import handle_entries from "handle_entries"

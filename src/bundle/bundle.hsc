@@ -10,9 +10,9 @@
  */
 package bundle
 
-import runtime from "base"
-import crypto from "std"
-import schema from "std"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import schema from "std:schema"
 
 /** An object's name in the bundle store: the BLAKE3-256 hash of its bytes. */
 Hash :: struct {

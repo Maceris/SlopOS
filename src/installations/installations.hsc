@@ -6,7 +6,7 @@
  */
 package installations
 
-import slop_os from "std/os"
+import slop_os from "std:os/slop_os"
 
 /**
  * An installation's data directory, as its entry takes it: one end, speaking dir (Hemera's base: an AppData is a

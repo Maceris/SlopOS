@@ -13,19 +13,19 @@
  */
 package ssh_app
 
-import runtime from "base"
-import crypto from "std"
-import net from "std"
-import os from "std"
-import ssh from "std"
-import strings from "std"
-import terminal from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import net_address from "std/os/slop_os"
-import network from "std/os/slop_os"
-import terminal as protocol from "std/os/slop_os"
-import powerbox_protocol from "../../protocols/powerbox"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import net from "std:net"
+import os from "std:os"
+import ssh from "std:ssh"
+import strings from "std:strings"
+import terminal from "std:terminal"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import net_address from "std:os/slop_os/net_address"
+import network from "std:os/slop_os/network"
+import terminal as protocol from "std:os/slop_os/terminal"
+import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** An error naming the parameter it came from. */
 Problem :: struct {

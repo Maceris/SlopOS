@@ -1,7 +1,7 @@
 package kernel
 
-import intrinsics from "base"
-import testing from "std"
+import intrinsics from "base:intrinsics"
+import testing from "std:testing"
 
 /*
  * test_tickless (decisions/0128): with nothing to run, every CPU but the boot CPU idles without ticking. From the

@@ -1,10 +1,10 @@
 package kernel
 
 #if TARGET_ARCH == .x86_64 {
-    import arch from "../arch/x86_64"
+    import arch_x86_64 as arch from "../arch/x86_64"
 }
 #else_if TARGET_ARCH == .arm64 {
-    import arch from "../arch/aarch64"
+    import arch_aarch64 as arch from "../arch/aarch64"
 }
 
 /*

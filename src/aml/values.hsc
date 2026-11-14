@@ -1,7 +1,7 @@
 package aml
 
-import runtime from "base"
-import memory from "std"
+import runtime from "base:runtime"
+import memory from "std:memory"
 
 /*
  * AML's values. A string's, a buffer's and a package's contents are on one of two allocators: the evaluation's arena,

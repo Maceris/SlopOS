@@ -7,9 +7,9 @@
  */
 package glyph_screen
 
-import slop_os from "std/os"
-import terminal from "std/os/slop_os"
-import unicode from "std"
+import slop_os from "std:os/slop_os"
+import terminal from "std:os/slop_os/terminal"
+import unicode from "std:unicode"
 import psf2 from "../psf2"
 import screen from "../screen"
 

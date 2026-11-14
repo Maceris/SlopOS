@@ -1,10 +1,10 @@
 package network_service
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import net_address from "std/os/slop_os"
-import network from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import net_address from "std:os/slop_os/net_address"
+import network from "std:os/slop_os/network"
 import net_stack from "../../net_stack"
 import service_kit from "../../libraries/service_kit"
 

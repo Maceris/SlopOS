@@ -7,8 +7,8 @@
  */
 package vt
 
-import text_buffer from "std"
-import terminal from "std/os/slop_os"
+import text_buffer from "std:text_buffer"
+import terminal from "std:os/slop_os/terminal"
 
 /** ESC, which starts every escape sequence. */
 ESCAPE : u8 : 0x1b

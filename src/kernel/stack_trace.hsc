@@ -1,6 +1,6 @@
 package kernel
 
-import intrinsics from "base"
+import intrinsics from "base:intrinsics"
 
 /**
  * A return address read from a frame, without the authentication code AArch64's pointer authentication signed it with

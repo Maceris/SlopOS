@@ -1,10 +1,10 @@
 package clock_setting
 
-import os from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import network from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import network from "std:os/slop_os/network"
+import read_only_dir from "std:os/slop_os/read_only_dir"
 
 /*
  * The clock service's protocol for setting the time (roadmap 9a, decisions/0093): it sets the real-time clock, and the

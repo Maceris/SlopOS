@@ -5,8 +5,8 @@
  */
 package safe_text_test
 
-import testing from "std"
-import unicode from "std"
+import testing from "std:testing"
+import unicode from "std:unicode"
 import safe_text from ".."
 
 /**

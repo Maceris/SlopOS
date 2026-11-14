@@ -15,18 +15,18 @@
  */
 package echo
 
-import runtime from "base"
-import os from "std"
-import text_buffer from "std"
-import unicode from "std"
-import locale from "std"
-import time from "std"
-import terminal from "std"
-import slop_os from "std/os"
-import terminal as protocol from "std/os/slop_os"
-import dir from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
-import powerbox_protocol from "../../protocols/powerbox"
+import runtime from "base:runtime"
+import os from "std:os"
+import text_buffer from "std:text_buffer"
+import unicode from "std:unicode"
+import locale from "std:locale"
+import time from "std:time"
+import terminal from "std:terminal"
+import slop_os from "std:os/slop_os"
+import terminal as protocol from "std:os/slop_os/terminal"
+import dir from "std:os/slop_os/dir"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** The most bytes of a line that fit in echo's answer to it; what's past them is cut. */
 LINE_BYTES :: 256

@@ -16,7 +16,7 @@
  */
 package virtio
 
-import intrinsics from "base"
+import intrinsics from "base:intrinsics"
 import pci from "../pci"
 
 // ---- The vendor capability, and the configuration structures it points at (virtio 1.2 §4.1.4)

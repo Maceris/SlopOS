@@ -15,10 +15,10 @@
  */
 package platform
 
-import intrinsics from "base"
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import log_line from "../../log_line"
 import pci from "../../pci"
 import platform as protocol from "../../protocols/platform"

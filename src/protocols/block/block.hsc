@@ -1,7 +1,7 @@
 package block
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * The device class of disks (decisions/0076), which M8's storage stack is built on. A disk is BLOCK_BYTES blocks,

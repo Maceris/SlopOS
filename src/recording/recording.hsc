@@ -21,11 +21,11 @@
  */
 package recording
 
-import compiler from "base"
-import runtime from "base"
-import os from "std"
-import text_buffer from "std"
-import slop_os from "std/os"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import os from "std:os"
+import text_buffer from "std:text_buffer"
+import slop_os from "std:os/slop_os"
 
 /** The most threads a recording follows; a program that starts more ends the recording. */
 MAX_THREADS :: 32

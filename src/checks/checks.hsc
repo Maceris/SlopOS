@@ -8,10 +8,10 @@
  */
 package checks
 
-import compiler from "base"
-import runtime from "base"
-import os from "std"
-import reflection from "std"
+import compiler from "base:compiler"
+import runtime from "base:runtime"
+import os from "std:os"
+import reflection from "std:reflection"
 
 /**
  * Check a target's program against every house rule, the check the build registers with compiler.add_check.
@@ -140,10 +140,11 @@ tier_name :: fn(tier: int) -> string {
 }
 
 /**
- * Tell whether a package is std's: it's in a std folder, or something in the program imports it from "std".
+ * Tell whether a package is std's: it's in a std folder, or something in the program imports it from std, with a
+ * location starting "std:" or with none.
  *
  * @param program The program as the compiler describes it once checked; only read, its packages' import edges looked
- *     through for one from "std".
+ *     through for one from std.
  * @param path The package's path, as PackageInfo.path or an import edge has it; one with a std folder in it, "/std/" or
  *     "\std\", is std's whatever imports it.
  * @return True if it's std's.
@@ -156,7 +157,7 @@ is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
     }
     for &package in program.packages {
         for &edge in package.imports {
-            if edge.path == path && (edge.from == "std" || starts_with(edge.from, "std/")) {
+            if edge.path == path && (edge.from == "" || starts_with(edge.from, "std:")) {
                 return true
             }
         }

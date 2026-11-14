@@ -1,14 +1,14 @@
 package clock
 
-import runtime from "base"
-import net from "std"
-import ntp from "std"
-import os from "std"
-import text_buffer from "std"
-import tls from "std"
-import slop_os from "std/os"
-import network from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import net from "std:net"
+import ntp from "std:ntp"
+import os from "std:os"
+import text_buffer from "std:text_buffer"
+import tls from "std:tls"
+import slop_os from "std:os/slop_os"
+import network from "std:os/slop_os/network"
+import read_only_dir from "std:os/slop_os/read_only_dir"
 import service_kit from "../../libraries/service_kit"
 import clock_setting from "../../protocols/clock_setting"
 

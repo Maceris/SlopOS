@@ -5,15 +5,15 @@
  */
 package file_tools
 
-import runtime from "base"
-import memory from "std"
-import os from "std"
-import strings from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import files from "std/os/slop_os"
-import lifecycle from "std/os/slop_os"
-import read_only_dir from "std/os/slop_os"
+import runtime from "base:runtime"
+import memory from "std:memory"
+import os from "std:os"
+import strings from "std:strings"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import files from "std:os/slop_os/files"
+import lifecycle from "std:os/slop_os/lifecycle"
+import read_only_dir from "std:os/slop_os/read_only_dir"
 
 /** How many bytes are read and written at a time when a file's copied: 64 KiB, a File's buffer. */
 COPY_BYTES :: 64 * 1024

@@ -1,10 +1,10 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import slop_os from "std/os"
-import lifecycle from "std/os/slop_os"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 
 /*
  * The profiler (decisions/0183, 12d): profile name arguments runs a program as a call would, its intercept sampling

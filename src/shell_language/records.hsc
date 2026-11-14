@@ -1,9 +1,9 @@
 package shell_language
 
-import runtime from "base"
-import schema from "std"
-import strings from "std"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import schema from "std:schema"
+import strings from "std:strings"
+import text_buffer from "std:text_buffer"
 
 /*
  * Values written as a program's entry and a pipeline's records are laid out (std/schema's write_value), and read back:

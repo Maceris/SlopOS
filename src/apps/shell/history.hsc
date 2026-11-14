@@ -1,8 +1,8 @@
 package shell
 
-import runtime from "base"
-import os from "std"
-import terminal from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import terminal from "std:terminal"
 
 /*
  * History (design/shell.md §6): the lines entered, kept in the shell's data directory, the user's own, so Up finds

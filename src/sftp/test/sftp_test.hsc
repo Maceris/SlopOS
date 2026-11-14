@@ -4,10 +4,10 @@
  */
 package sftp_test
 
-import runtime from "base"
-import os from "std"
-import ssh from "std"
-import testing from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import ssh from "std:ssh"
+import testing from "std:testing"
 import sftp from ".."
 
 /** A path normalized, as text; "!" if it's refused. */

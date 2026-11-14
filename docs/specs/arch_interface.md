@@ -67,7 +67,7 @@ These rules are what keep the interface small.
 ```
 package arch_interface
 
-import runtime from "base"
+import runtime from "base:runtime"
 import boot_info from "../boot_info"
 // The system ABI's types, like CpuFeatures (0019). Not yet specified.
 import abi from "../abi"

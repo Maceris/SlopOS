@@ -1,11 +1,11 @@
 package disk_check
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import testing from "std"
-import time from "std"
-import time_zones from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import testing from "std:testing"
+import time from "std:time"
+import time_zones from "std:time_zones"
 import test_kit from "../../test_kit"
 
 /*

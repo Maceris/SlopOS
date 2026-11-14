@@ -1,16 +1,16 @@
 package shell
 
-import runtime from "base"
-import language from "../../shell_language"
-import os from "std"
-import schema from "std"
-import slop_os from "std/os"
-import process_manager from "std/os/slop_os"
-import network from "std/os/slop_os"
-import lifecycle from "std/os/slop_os"
-import dir from "std/os/slop_os"
-import files from "std/os/slop_os"
-import terminal as protocol from "std/os/slop_os"
+import runtime from "base:runtime"
+import shell_language as language from "../../shell_language"
+import os from "std:os"
+import schema from "std:schema"
+import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
+import network from "std:os/slop_os/network"
+import lifecycle from "std:os/slop_os/lifecycle"
+import dir from "std:os/slop_os/dir"
+import files from "std:os/slop_os/files"
+import terminal as protocol from "std:os/slop_os/terminal"
 import programs from "../../protocols/programs"
 
 /*

@@ -8,10 +8,10 @@
  */
 package process_manager
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import process_manager as protocol from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import process_manager as protocol from "std:os/slop_os/process_manager"
 import log_line from "../../log_line"
 import process_builder from "../../process_builder"
 import entropy from "../../protocols/entropy"

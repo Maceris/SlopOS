@@ -25,8 +25,8 @@
  */
 package slab
 
-import runtime from "base"
-import concurrency from "std"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import boot_info from "../../boot_info"
 import frames from "../frames"
 import robustness from "../../robustness"

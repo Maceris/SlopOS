@@ -12,9 +12,9 @@
  */
 package virtio_net
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"
 import net from "../../protocols/net"

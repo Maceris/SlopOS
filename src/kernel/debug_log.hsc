@@ -1,8 +1,8 @@
 package kernel
 
-import runtime from "base"
-import slop_os from "std/os"
-import text_buffer from "std"
+import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 
 /*
  * Debug logs (decisions/0058, 0060): lines a program writes in the kernel's log, for reporting before

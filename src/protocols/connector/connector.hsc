@@ -1,7 +1,7 @@
 package connector
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * A connector (decisions/0017, 0077): what a client holds in place of a connection to a service that may be restarted.

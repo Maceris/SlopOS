@@ -22,10 +22,10 @@
  */
 package generation_builder
 
-import runtime from "base"
-import os from "std"
-import time from "std"
-import strings from "std"
+import runtime from "base:runtime"
+import os from "std:os"
+import time from "std:time"
+import strings from "std:strings"
 import bundle from "../../bundle"
 import generations from "../../generations"
 

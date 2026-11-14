@@ -1,7 +1,7 @@
 package watchdog
 
-import os from "std"
-import slop_os from "std/os"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
 
 /*
  * A hardware watchdog (decisions/0182, P5, design/lessons.md §6.2): its driver's one client, the supervisor, arms it

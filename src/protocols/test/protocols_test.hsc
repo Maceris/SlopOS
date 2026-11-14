@@ -9,14 +9,14 @@
  */
 package protocols_test
 
-import runtime from "base"
-import os from "std"
-import slop_os from "std/os"
-import testing from "std"
-import network from "std/os/slop_os"
-import tcp_stream from "std/os/slop_os"
-import tcp_listener from "std/os/slop_os"
-import datagrams from "std/os/slop_os"
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import testing from "std:testing"
+import network from "std:os/slop_os/network"
+import tcp_stream from "std:os/slop_os/tcp_stream"
+import tcp_listener from "std:os/slop_os/tcp_listener"
+import datagrams from "std:os/slop_os/datagrams"
 import accounts from "../accounts"
 import block from "../block"
 import bundle_store from "../bundle_store"

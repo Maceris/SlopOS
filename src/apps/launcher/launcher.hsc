@@ -6,14 +6,14 @@
  */
 package launcher
 
-import runtime from "base"
-import crypto from "std"
-import os from "std"
-import schema from "std"
-import ui from "std"
-import slop_os from "std/os"
-import dir from "std/os/slop_os"
-import process_manager from "std/os/slop_os"
+import runtime from "base:runtime"
+import crypto from "std:crypto"
+import os from "std:os"
+import schema from "std:schema"
+import ui from "std:ui"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import process_manager from "std:os/slop_os/process_manager"
 import gui_kit from "../../gui_kit"
 import gui_programs from "../../gui_programs"
 import programs from "../../protocols/programs"

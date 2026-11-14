@@ -8,12 +8,12 @@
  */
 package gui_kit
 
-import runtime from "base"
-import canvas from "std"
-import os from "std"
-import ui from "std"
-import slop_os from "std/os"
-import terminal from "std/os/slop_os"
+import runtime from "base:runtime"
+import canvas from "std:canvas"
+import os from "std:os"
+import ui from "std:ui"
+import slop_os from "std:os/slop_os"
+import terminal from "std:os/slop_os/terminal"
 import connector from "../protocols/connector"
 import surface from "../protocols/surface"
 

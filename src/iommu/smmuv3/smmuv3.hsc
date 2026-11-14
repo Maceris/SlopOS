@@ -1,8 +1,8 @@
 package iommu_smmuv3
 
-import intrinsics from "base"
-import runtime from "base"
-import aarch64 from "base/intrinsics"
+import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
+import aarch64 from "base:intrinsics/aarch64"
 import iommu_interface from "../../iommu_interface"
 
 /*

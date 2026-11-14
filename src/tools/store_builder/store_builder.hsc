@@ -13,8 +13,8 @@
  */
 package store_builder
 
-import runtime from "base"
-import os from "std"
+import runtime from "base:runtime"
+import os from "std:os"
 import bundle from "../../bundle"
 
 /**
