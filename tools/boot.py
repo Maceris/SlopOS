@@ -931,6 +931,114 @@ class PowerButton(Keyboard):
             pass
 
 
+class DisplayTest(Keyboard):
+    """
+    A virtio GPU and a virtio tablet for test_display (decisions/0192, 15b), driven through QEMU's machine protocol: once
+    test_display has shown its cursor, the tablet moves to the screen's middle and clicks; once it says where it clicked,
+    the GPU's screen is taken and checked for the scene it draws (scene_drawn), and the power button pressed, which ends
+    the run. problem is None once the scene was there, or what's wrong.
+    """
+
+    SHOWED_CURSOR = "[user] test_display: showed the cursor"
+    CLICKED = "[user] test_display: clicked at "
+    # The tablet's middle: QEMU's absolute axes run from 0 to 0x7fff
+    MIDDLE = 0x4000
+
+    def __init__(self, serial: Path, screenshot: Path):
+        super().__init__()
+        self.serial = serial
+        self.screenshot = screenshot
+        self.problem: str | None = "the display's screen wasn't taken"
+        self.thread = threading.Thread(target=self.drive, daemon=True)
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-device", "virtio-gpu-pci,disable-legacy=on,iommu_platform=on,id=gpu",
+                "-device", "virtio-tablet-pci,disable-legacy=on,iommu_platform=on,id=tablet",
+                "-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+
+    def wait_for(self, start: str, deadline: float) -> bool:
+        while time.monotonic() < deadline:
+            written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+            if any(line.startswith(start) for line in written):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def ask(self, name: str, arguments: dict) -> dict:
+        """A command's reply, its return or its error."""
+        message = {"execute": name, "arguments": arguments}
+        self.connection.sendall(json.dumps(message).encode() + b"\n")
+        while True:
+            while b"\n" not in self.replies:
+                data = self.connection.recv(4096)
+                if not data:
+                    raise OSError("QMP closed")
+                self.replies += data
+            line, _, self.replies = self.replies.partition(b"\n")
+            reply = json.loads(line)
+            if "return" in reply or "error" in reply:
+                return reply
+
+    def drive(self) -> None:
+        try:
+            if not self.wait_for(self.SHOWED_CURSOR, time.monotonic() + 600):
+                self.problem = "test_display never showed its cursor"
+                return
+            if not self.connect():
+                self.problem = "the machine protocol couldn't be reached"
+                return
+            time.sleep(0.5)
+            self.command("input-send-event", {"events": [
+                {"type": "abs", "data": {"axis": "x", "value": self.MIDDLE}},
+                {"type": "abs", "data": {"axis": "y", "value": self.MIDDLE}}]})
+            time.sleep(0.3)
+            for down in (True, False):
+                self.command("input-send-event", {"events": [
+                    {"type": "btn", "data": {"down": down, "button": "left"}}]})
+                time.sleep(0.1)
+            if not self.wait_for(self.CLICKED, time.monotonic() + 30):
+                self.problem = "test_display never said where it clicked"
+                return
+            time.sleep(0.5)
+            reply = self.ask("screendump", {"filename": str(self.screenshot), "device": "gpu"})
+            if "error" in reply:
+                self.problem = f"the screen couldn't be taken: {reply['error'].get('desc')}"
+                return
+            self.problem = scene_drawn(self.screenshot)
+            # Done: the power button ends the run, which test_settle bounds otherwise
+            self.command("system_powerdown")
+        except OSError as error:
+            self.problem = f"the machine protocol failed: {error}"
+
+
+def scene_drawn(screenshot: Path) -> str | None:
+    """
+    Whether a screenshot (QEMU's screendump, a PPM) shows test_display's scene: dark blue, a white square from (100, 100)
+    200 pixels a side, an orange disc in its middle, and the green mark of a click in the screen's middle. None if it
+    does, or what's wrong.
+    """
+    data = screenshot.read_bytes()
+    if os.environ.get("SLOPOS_SCREENSHOT"):
+        Path(os.environ["SLOPOS_SCREENSHOT"]).write_bytes(data)
+    parts = data.split(b"\n", 3)
+    if len(parts) < 4 or parts[0] != b"P6":
+        return "the screenshot isn't a PPM"
+    width, height = (int(value) for value in parts[1].split())
+    pixels = parts[3]
+
+    def colour(x: int, y: int) -> tuple[int, int, int]:
+        at = (y * width + x) * 3
+        return pixels[at], pixels[at + 1], pixels[at + 2]
+
+    wanted = [("the background", 20, height - 20, (26, 51, 115)), ("the white square", 110, 110, (255, 255, 255)),
+              ("the orange disc", 200, 200, (255, 128, 0)), ("the click's mark", width // 2, height // 2, (0, 255, 0))]
+    for what, x, y, expected in wanted:
+        found = colour(x, y)
+        if any(abs(a - b) > 8 for a, b in zip(found, expected)):
+            return f"{what} at ({x}, {y}) is {found}, not {expected}"
+    return None
+
+
 class ConsoleLink:
     """
     A virtio console whose other end is a TCP socket QEMU serves on the loopback (a file can't be typed into on
@@ -1550,6 +1658,10 @@ def main() -> int:
                         help="a virtio NIC on QEMU's user-mode network, and echo peers on this machine for test_network: "
                         "{tcp_echo} and {udp_echo} in the command line are their ports, and port 7 on the machine is "
                         "connected to and checked once it listens (decisions/0188)")
+    parser.add_argument("--display", action="store_true",
+                        help="a virtio GPU and a virtio tablet for test_display: once it shows its cursor, the tablet clicks in the "
+                        "screen's middle, and once it says where, the screen is taken and checked for its scene, with --expect "
+                        "(decisions/0192, 15b)")
     parser.add_argument("--power-button-after",
                         help="press the machine's power button, through QEMU's machine protocol, once the serial output has "
                         "this line (decisions/0182)")
@@ -1699,6 +1811,11 @@ def main() -> int:
             keyboard = Keyboard()
             extra += keyboard.qemu_arguments()
         screenshot = folder / "screen.ppm"
+        display_test = None
+        if arguments.display:
+            display_test = DisplayTest(serial, folder / "display.ppm")
+            extra += display_test.qemu_arguments()
+            display_test.thread.start()
         if arguments.screen_after and aarch64:
             # virt has no display of its own; AAVMF gives a framebuffer on QEMU's ramfb
             extra += ["-device", "ramfb"]
@@ -1796,6 +1913,9 @@ def main() -> int:
         if peers is not None and peers.problem is not None:
             print(f"boot.py: the network peers: {peers.problem}", file=sys.stderr)
             missing_shown.append(peers.problem)
+        if display_test is not None and display_test.problem is not None:
+            print(f"boot.py: the display: {display_test.problem}", file=sys.stderr)
+            missing_shown.append(display_test.problem)
         for expected in unwritten:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
         for text in leaked:

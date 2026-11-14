@@ -108,10 +108,14 @@ SupervisorGrants :: struct {
     virtio_rng_module : slop_os.Memory?,
     /** The virtio network driver's module. */
     virtio_net_module : slop_os.Memory?,
+    /** The virtio GPU driver's module. */
+    virtio_gpu_module : slop_os.Memory?,
     /** The network service's module. */
     network_module : slop_os.Memory?,
     /** test_network's client's module. */
     test_network_module : slop_os.Memory?,
+    /** test_display's client's module. */
+    test_display_module : slop_os.Memory?,
     /** The edu DMA test device's driver's module. */
     edu_dma_module : slop_os.Memory?,
     /** The storage manager's module. */
@@ -508,8 +512,10 @@ main :: fn(platform: slop_os.Platform, debug_log: slop_os.DebugLog, command_line
         virtio_input_module = module_copy(root, "virtio_input", program_rights),
         virtio_rng_module = module_copy(root, "virtio_rng", program_rights),
         virtio_net_module = module_copy(root, "virtio_net", program_rights),
+        virtio_gpu_module = module_copy(root, "virtio_gpu", program_rights),
         network_module = module_copy(root, "network", program_rights),
         test_network_module = module_copy(root, "test_network", program_rights),
+        test_display_module = module_copy(root, "test_display", program_rights),
         edu_dma_module = module_copy(root, "edu_dma", program_rights),
         storage_manager_module = module_copy(root, "storage_manager", program_rights),
         partition_server_module = module_copy(root, "partition_server", program_rights),

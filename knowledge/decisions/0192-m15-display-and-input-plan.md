@@ -131,3 +131,39 @@ and atlas are the owner's own.
   font, a changed font, and any path, curve, stroke, dash and transform drawn (huge and NaN coordinates included);
   fuzz targets `font_bytes`, `font_changed` and `canvas_paths` in `tools/fuzz.py`. The fuzzed path test found strokes
   with dashes along huge paths making pieces without end; they're capped.
+
+## As Built: 15b
+- **The `display` protocol** (`src/protocols/display`): one client, the compositor, of a screen of one mode.
+  - `Describe` gives its size, stride, format (XRGB8888), how many scanout buffers, its cursor plane's size and its
+    refresh rate where known.
+  - `GetBuffer` gives a read-write window onto a scanout buffer (DMA memory the device reads) or the cursor's
+    (64 by 64, ARGB8888 not premultiplied).
+  - `Present` shows a buffer with what in it changed since that buffer was last presented, buffer age as other systems
+    have it. It's answered once shown, which frees the buffer shown before.
+  - `SetCursor` and `MoveCursor` aren't answered, so moving the pointer never waits.
+- **`virtio_gpu`** drives a virtio GPU in 2D mode.
+  - It shows the first scanout at the size the device prefers (QEMU's 1280 by 800), up to 1920 by 1200.
+  - Each of two buffers is a device resource backed by the driver's DMA memory: a present copies the damage
+    (`TRANSFER_TO_HOST_2D`), switches the scanout if it's another buffer, and flushes.
+  - The cursor is a resource of its own, moved through the cursor queue with 16 commands in flight; a move with none
+    free waits for one, so the last position always lands.
+  - Control commands go one at a time, each waited for, up to a second.
+- **Input**: the `input` protocol's `Describe` gives a device's absolute axes' ranges, which `virtio_input` reads from
+  the device's configuration (`VIRTIO_INPUT_CFG_ABS_INFO`), so a tablet's positions can be scaled to the screen.
+- **`test_display`**, started with `test_display` on the command line, is given connectors to the display and the
+  input devices.
+  - It draws a scene with `std/canvas` into the buffer that isn't shown and presents it.
+  - It shows an arrow on the cursor plane and moves it with the tablet.
+  - It draws a click's mark into the other buffer.
+- Where the plan differed:
+  - **The firmware framebuffer as a `display`** moved to 15c. It's the terminal service's console until the
+    compositor takes the screen over, which is 15c's hand-over.
+  - **The pointer through the input service** moved to 15c too, with the seat's hand-over. Until then a client
+    reads the input devices itself, as `test_display` does.
+  - On x86-64 OVMF's GOP can be the virtio GPU itself, which the terminal service then draws its console on until
+    `virtio_gpu` takes the device. That conflict is also 15c's.
+- **Tests:**
+  - A boot test on both architectures (`--display`): QEMU's tablet clicks the screen's middle through the machine
+    protocol, and the GPU's screen is taken (`screendump`) and checked for the scene's colours and the click's mark.
+    Then the power button ends the run.
+  - The `display` protocol's validators are among those fuzzed.

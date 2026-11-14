@@ -153,6 +153,7 @@ of its own with a memory budget split off its starter's, which owns it:
 | `virtio_console` | the supervisor, through the manager, for each modern virtio console | its device's bundle, `clients: Listener[Serial]` | Its device's first port as the `serial` protocol |
 | `virtio_blk` | the supervisor, through the manager, for each modern virtio block device | its device's bundle, `clients: Listener[Block]` | The disk as the `block` protocol (below) |
 | `virtio_input` | the supervisor, through the manager, for each modern virtio input device | its device's bundle, `clients: Listener[Input]` | Its keyboard, mouse or tablet as the `input` protocol (below) |
+| `virtio_gpu` | the supervisor, through the manager, for each modern virtio GPU | its device's bundle, `clients: Listener[Display]` | Its first scanout as the `display` protocol (below), in 2D mode |
 | `edu_dma` | the supervisor, through the manager, for each QEMU edu device | its device's bundle | A driver that isn't trusted with DMA: writes outside its domain, for the test that it's stopped (`0084`) |
 | `storage_manager` | the supervisor, through the manager, once the drivers have started, if there's a disk | `log`, `manager: Channel[Connector]`, `partition_server_module`, `fat_server_module`, `container_service_module`, `volume_server_module`, `disk0` to `disk3: Channel[Connector]?`, `clients: Listener[Storage]` | Starts a partition server for each disk, and serves every disk's partitions, block connections narrowed to one, a FAT partition's files, and a SlopOS container's system volume, as the `storage` protocol (`0086`, `0087`, `0089`) |
 | `partition_server` | the storage manager, through the manager, for each disk | `log`, `disk: Channel[Block]`, `clients: Listener[Partitions]` | Reads its disk's GPT, and serves its partitions and block connections narrowed to one as the `partitions` protocol, holding nothing but its disk (`0086`) |
@@ -325,8 +326,19 @@ console. The supervisor claims it each time it starts the terminal service.
 **Input devices** (`src/protocols/input`, `0077`): events in SlopOS's own terms, each a kind (`Key`, `Motion`,
 `Position`, `Button`, `Wheel`), whether it's pressed, a code and x and y: a key by its USB HID usage (page 7), a button
 from 0 for the left, a pointer's motion or position, how far a wheel turned. `Read` with the most to take, held until
-there's at least one, is answered with `Events`; every client sees every event from when it connected. `virtio_input`
-turns its device's evdev events into these: keys 0 to 127 by a table, buttons, relative and absolute axes, the wheel.
+there's at least one, is answered with `Events`; every client sees every event from when it connected. `Describe` is
+answered with the ranges of its absolute axes, where a `Position` lies. `virtio_input` turns its device's evdev events
+into these: keys 0 to 127 by a table, buttons, relative and absolute axes, the wheel; and reads its axes' ranges from
+the device's configuration.
+
+**Displays** (`src/protocols/display`, `0192`): one client, the compositor, draws a screen of one mode. `Describe` gives
+its width, height, stride, format (XRGB8888), how many scanout buffers it has, its cursor plane's size (0 for none)
+and its refresh rate where it's known. `GetBuffer` gives a read-write window onto a scanout buffer, DMA memory the
+device reads, or the cursor's. `Present` shows a buffer with what in it changed since it was last presented, answered
+with `Presented` once it's shown, which frees the buffer shown before it. `SetCursor` takes the cursor's image from its
+buffer, with its hot spot, and `MoveCursor` moves it, neither answered. `virtio_gpu` shows its device's first scanout
+at the size the device prefers, up to 1920 by 1200, with two buffers and a 64-pixel cursor on the device's cursor
+queue.
 
 **Disks** (`src/protocols/block`, `0076`): a disk is 512-byte blocks. Each connection has a buffer, DMA memory the
 driver makes at its first `GetBuffer` and gives a read-write window onto, 64 KiB for `virtio_blk`, which the device

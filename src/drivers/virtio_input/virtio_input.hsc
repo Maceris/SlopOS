@@ -52,6 +52,17 @@ REL_WHEEL : u16 : 8
 ABS_X : u16 : 0
 /** evdev's absolute axis code down. */
 ABS_Y : u16 : 1
+/** The device configuration's select register, which says what its union holds (virtio 1.2 §5.8.4). */
+CONFIG_SELECT : u64 : 0
+/** The device configuration's subselect register: for VIRTIO_INPUT_CFG_ABS_INFO, which axis. */
+CONFIG_SUBSELECT : u64 : 1
+/** The device configuration's size register: how many bytes of the union are valid, 0 for nothing there. */
+CONFIG_SIZE : u64 : 2
+/** Where the device configuration's union starts: for an axis, its virtio_input_absinfo, min then max. */
+CONFIG_UNION : u64 : 8
+/** The select value for an absolute axis's range, VIRTIO_INPUT_CFG_ABS_INFO. */
+CFG_ABS_INFO : u8 : 0x12
+
 /** evdev's code of the first mouse button, the left, which is button 0 here. */
 BTN_LEFT : u16 : 0x110
 /** evdev's code of the last mouse button taken as a button, button 7 here. */
@@ -115,6 +126,8 @@ Driver :: struct {
     x : i32,
     /** A tablet's position down so far, which each ABS_Y changes. */
     y : i32,
+    /** Its absolute axes' ranges, read from its configuration as it starts; all 0 for a device without them. */
+    axes : input.Axes,
 }
 
 /**
@@ -173,6 +186,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     driver.queue = virtio.setup_queue(&driver.transport, EVENT_QUEUE, pages, device_address,virtio.QUEUE_PAGE, 0) or_return 8
     driver.buffers = pages + PAGE
     driver.buffers_device = device_address + PAGE
+    driver.axes = axes_of(&driver.transport)
     virtio.ready(&driver.transport)
     pci.write_u16(config_at, pci.COMMAND, pci.read_u16(config_at, pci.COMMAND) | pci.COMMAND_BUS_MASTER)
     for buffer in 0..<EVENT_BUFFERS {
@@ -246,6 +260,12 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
                     driver.held[index] = if most == 0 { cast[u32](1) } else { most }
                 }
             }
+            case Describe => {
+                out := os.Outgoing.{}
+                response :: os.begin[input.Response](&out)
+                response^ = .Described(driver.axes)
+                _ = input.send_response(end, driver.port, &out)
+            }
             case Connect(connection) => {
                 // A new client sees what arrives from now on
                 match service_kit.add_client_index(&driver.clients, driver.port, connection.end) {
@@ -262,6 +282,40 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
             }
         }
     }
+}
+
+/**
+ * Read a device's absolute axes' ranges from its configuration, ABS_X's and ABS_Y's.
+ *
+ * @param transport The device's registers.
+ * @return Each axis's minimum and maximum; 0 and 0 for an axis the device doesn't have, or a device without a
+ *     configuration. A maximum below its minimum is taken as the minimum.
+ */
+axes_of :: fn(transport: ptr[virtio.Transport]) -> input.Axes {
+    axes := input.Axes.{}
+    device :: transport.device
+    if device == 0 {
+        return axes
+    }
+    for axis in cast[u8](0)..<2 {
+        virtio.write_u8(device, CONFIG_SELECT, CFG_ABS_INFO)
+        virtio.write_u8(device, CONFIG_SUBSELECT, axis)
+        if virtio.read_u8(device, CONFIG_SIZE) < 8 {
+            continue
+        }
+        low :: bit_cast[i32](virtio.read_u32(device, CONFIG_UNION))
+        high_read :: bit_cast[i32](virtio.read_u32(device, CONFIG_UNION + 4))
+        high :: if high_read < low { low } else { high_read }
+        if axis == 0 {
+            axes.x_min = low
+            axes.x_max = high
+        }
+        else {
+            axes.y_min = low
+            axes.y_max = high
+        }
+    }
+    return axes
 }
 
 /**

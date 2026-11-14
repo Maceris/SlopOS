@@ -224,7 +224,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 88 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 90 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -277,6 +277,17 @@ TESTS = [
         "--expect-line=[user] test_network: missing.slopos.test: NoSuchName",
         "--expect-line=[user] test_network: listening on 7",
         "--expect-line=[user] test_network: echoed 40000 bytes back to 10.0.2.2",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The display (decisions/0192, 15b): virtio-gpu in 2D mode at the size QEMU prefers, a frame drawn with std/canvas into
+    # the buffer not shown and presented, an arrow on the device's cursor plane moved by a virtio tablet, and a click
+    # marked in the other buffer; the screen taken and checked for each (--display)
+    ("draws on a virtio GPU and moves its cursor with a tablet", 7, [WITH_PROGRAMS, "--display", "--timeout=240",
+        "--command-line=test_exit test_services test_settle=120 test_display",
+        "--expect-line=[user] virtio_gpu: serving 1280 by 800",
+        "--expect-line=[user] test_display: the display is 1280 by 800",
+        "--expect-line=[user] test_display: presented a frame",
+        "--expect-line=[user] test_display: showed the cursor",
+        "--expect-line=[user] test_display: clicked at 640, 400",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
     ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",

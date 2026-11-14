@@ -43,6 +43,7 @@ import hello from "../apps/hello"
 import edu_dma from "../drivers/edu_dma"
 import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
+import virtio_gpu from "../drivers/virtio_gpu"
 import virtio_input from "../drivers/virtio_input"
 import virtio_net from "../drivers/virtio_net"
 import virtio_rng from "../drivers/virtio_rng"
@@ -55,6 +56,7 @@ import session from "../protocols/session"
 import power from "../protocols/power"
 import powerbox from "../protocols/powerbox"
 import test_channels from "../tests/test_channels"
+import test_display from "../tests/test_display"
 import test_network from "../tests/test_network"
 import ssh_service from "../services/ssh_service"
 import test_control from "../tests/test_control"
@@ -275,6 +277,9 @@ SERVICES :: Service.[
     // The network stack (decisions/0188), over the first NIC; started only when there's one
     Service.{name = "network", module = "network_service.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
         entry = type_of(network_service.main)},
+    // The display's test client (decisions/0192, 15b), started only with test_display on the kernel's command line
+    Service.{name = "test_display", module = "test_display.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,
+        entry = type_of(test_display.main), not_restarted = true},
     // The network's test client (decisions/0188, 13c), started only with test_network on the kernel's command line;
     // room for TLS's state, some 300 KiB a connection, and trust anchors (13f)
     Service.{name = "test_network", module = "test_network.elf", starter = .Supervisor, by_manager = true, budget = 8 * MIB,
@@ -335,6 +340,10 @@ SERVICES :: Service.[
     // A modern virtio input device (virtio's device ID 18), a keyboard, mouse or tablet
     Service.{name = "virtio_input", module = "virtio_input.elf", starter = .Supervisor, by_manager = true, budget = 2 * MIB,
         entry = type_of(virtio_input.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1052,
+        class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
+    // A modern virtio GPU (virtio's device ID 16) in 2D mode; its two scanout buffers, up to 1920 by 1200, in its budget
+    Service.{name = "virtio_gpu", module = "virtio_gpu.elf", starter = .Supervisor, by_manager = true, budget = 24 * MIB,
+        entry = type_of(virtio_gpu.main), devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1050,
         class = platform_protocol.ANY_CLASS}, trusted_with_dma = true, cpu = INTERACTIVE_CPU},
     // A modern virtio network device (virtio's device ID 1); its queues, headers and the frames' buffer in its budget
     Service.{name = "virtio_net", module = "virtio_net.elf", starter = .Supervisor, by_manager = true, budget = 4 * MIB,

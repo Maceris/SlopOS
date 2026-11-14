@@ -109,6 +109,23 @@ Request :: union {
      * already has as many clients as it takes. Sent on the listener, and answered with nothing.
      */
     Connect(os.Channel[Input]),
+    /** Ask what the device is: its absolute axes' ranges. Answered with Described. */
+    Describe,
+}
+
+/**
+ * What an input device is: the range of each of its absolute axes, where a Position's x and y lie, both 0 to 0 for a
+ * device without them, like a keyboard or a mouse.
+ */
+Axes :: struct {
+    /** The smallest x a Position has. */
+    x_min : i32,
+    /** The largest x a Position has, x_min or more. */
+    x_max : i32,
+    /** The smallest y a Position has. */
+    y_min : i32,
+    /** The largest y a Position has, y_min or more. */
+    y_max : i32,
 }
 
 /** What an input device's driver answers. */
@@ -120,18 +137,21 @@ Response :: union {
     Events(slop_os.Relative[Event]),
     /** The answer to a request the driver doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
+    /** Describe's answer: the device's axes. */
+    Described(Axes),
 }
 
 /**
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Read, which again would take other events; true for Connect.
+ * @return False for Read, which again would take other events; true for Connect and Describe.
  */
 is_idempotent :: fn(request: ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
         case Connect(_) => true
+        case Describe => true
     }
 }
 

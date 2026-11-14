@@ -66,6 +66,7 @@ import read_only_file from "std/os/slop_os"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
+import display from "../../protocols/display"
 import entropy from "../../protocols/entropy"
 import input from "../../protocols/input"
 import net from "../../protocols/net"
@@ -100,6 +101,7 @@ import account_service from "../account_service"
 import accounts from "../../protocols/accounts"
 import input_service from "../input_service"
 import network_service from "../network_service"
+import test_display from "../../tests/test_display"
 import test_network from "../../tests/test_network"
 import ssh_service from "../ssh_service"
 import seat from "../../protocols/seat"
@@ -111,6 +113,7 @@ import storage_manager from "../storage_manager"
 import edu_dma from "../../drivers/edu_dma"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
+import virtio_gpu from "../../drivers/virtio_gpu"
 import virtio_input from "../../drivers/virtio_input"
 import virtio_net from "../../drivers/virtio_net"
 import virtio_rng from "../../drivers/virtio_rng"
@@ -226,6 +229,8 @@ Speaks :: enum {
     Block,
     /** An input device's driver: the input protocol. */
     Input,
+    /** A display's driver: the display protocol. */
+    Display,
     /** A NIC's driver: the net protocol. */
     Net,
     /** The network service: the network protocol. */
@@ -368,6 +373,22 @@ NetworkGrants :: struct {
     command_line : slop_os.Memory?,
     /** The listener programs' connections arrive on; the supervisor keeps its other end, and dials it for connectors. */
     clients : os.Listener[network.Network],
+}
+
+/** What the display's test client is given (test_display.main); its handles move to it at its launch. */
+TestDisplayGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the first display's driver. */
+    display_connector : os.Channel[connector.Connector]?,
+    /** A connector to the first input device's driver, as the input service is given. */
+    input0 : os.Channel[connector.Connector]?,
+    /** A connector to the second input device's driver. */
+    input1 : os.Channel[connector.Connector]?,
+    /** A connector to the third input device's driver. */
+    input2 : os.Channel[connector.Connector]?,
+    /** A connector to the fourth input device's driver. */
+    input3 : os.Channel[connector.Connector]?,
 }
 
 /** What test_network's client is given (test_network.main); its handles move to it at its launch. */
@@ -647,10 +668,14 @@ Modules :: struct {
     virtio_rng : slop_os.Memory?,
     /** The virtio network driver's module. */
     virtio_net : slop_os.Memory?,
+    /** The virtio GPU driver's module. */
+    virtio_gpu : slop_os.Memory?,
     /** The network service's module. */
     network : slop_os.Memory?,
     /** test_network's client's module. */
     test_network : slop_os.Memory?,
+    /** test_display's client's module. */
+    test_display : slop_os.Memory?,
     /** The edu DMA test device's driver's module. */
     edu_dma : slop_os.Memory?,
     /** The storage manager's module. */
@@ -937,6 +962,8 @@ Supervisor :: struct {
     first_keyboard : usize,
     /** The first NIC's driver, by index in started; NOWHERE without one. */
     first_nic : usize,
+    /** The first display's driver, by index in started; NOWHERE without one. */
+    first_display : usize,
     /** The terminal service, by index in started; NOWHERE until it's started. */
     terminal : usize,
     /** The input service, by index in started; NOWHERE until it's started. */
@@ -1107,8 +1134,10 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param virtio_input_module The virtio input driver's program.
  * @param virtio_rng_module The virtio entropy driver's program.
  * @param virtio_net_module The virtio network driver's program.
+ * @param virtio_gpu_module The virtio GPU driver's program.
  * @param network_module The network service's program.
  * @param test_network_module test_network's client's program.
+ * @param test_display_module test_display's client's program.
  * @param edu_dma_module The edu DMA test device's driver's program.
  * @param storage_manager_module The storage manager's program; without it, or any of the four server modules below,
  *     there's no storage manager, and so no system volume.
@@ -1137,8 +1166,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     hello_module: slop_os.Memory?, platform_service: os.Channel[connector.Connector]?, entropy_service: os.Channel[connector.Connector]?,
     terminal_module: slop_os.Memory?, echo_module: slop_os.Memory?, sessions_module: slop_os.Memory?, input_module: slop_os.Memory?, disk_check_module: slop_os.Memory?, virtio_blk_module: slop_os.Memory?,
     virtio_console_module: slop_os.Memory?, virtio_input_module: slop_os.Memory?, virtio_rng_module: slop_os.Memory?,
-    virtio_net_module: slop_os.Memory?, network_module: slop_os.Memory?, test_network_module: slop_os.Memory?,
-    edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
+    virtio_net_module: slop_os.Memory?, virtio_gpu_module: slop_os.Memory?, network_module: slop_os.Memory?,
+    test_network_module: slop_os.Memory?, test_display_module: slop_os.Memory?, edu_dma_module: slop_os.Memory?, storage_manager_module: slop_os.Memory?, partition_server_module: slop_os.Memory?,
     fat_server_module: slop_os.Memory?, container_service_module: slop_os.Memory?, volume_server_module: slop_os.Memory?,
     command_line: slop_os.Memory?, scheduler: os.Channel[connector.Connector]?, clock_module: slop_os.Memory?,
     events_module: slop_os.Memory?, bundle_store_module: slop_os.Memory?, config_module: slop_os.Memory?, system: slop_os.Memory,
@@ -1159,11 +1188,12 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     boot_records^ = records^
     supervisor := Supervisor.{block = startup, records = records, boot_records = boot_records, overrides_end = NONE, substitutions_end = NONE, manager_connector = manager.end, root = root.end, platform_end = NONE,
         platform_connector = NONE, scheduler_connector = NONE, entropy_connector = NONE,
-        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, first_nic = NOWHERE, terminal = NOWHERE, input = NOWHERE, network = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
+        first_serial = NOWHERE, first_disk = NOWHERE, first_keyboard = NOWHERE, first_nic = NOWHERE, first_display = NOWHERE, terminal = NOWHERE, input = NOWHERE, network = NOWHERE, accounts = NOWHERE, sessions = NOWHERE, config_users = NONE, system = NONE, scheduler_end = NONE, clock_page = cast[slop_os.Memory](slop_os.NO_HANDLE), clock_setting = NONE,
         events_end = NONE, store_end = NONE, config_end = NONE, installations_end = NONE, update_end = NONE, relaunching = NOWHERE, storage_slot = NOWHERE, launched_ring = cast[slop_os.Memory](slop_os.NO_HANDLE), launched_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
         launched_lifecycle = NONE, last_panic = last_panic, trace_end = NONE}
     supervisor.modules = Modules.{events = events_module, bundle_store = bundle_store_module, config = config_module, update = update_module, clock = clock_module, acpi = acpi_module, power_button = power_button_module, hello = hello_module, terminal = terminal_module, echo = echo_module, sessions = sessions_module, input = input_module, disk_check = disk_check_module, virtio_blk = virtio_blk_module,
-        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, virtio_net = virtio_net_module, network = network_module, test_network = test_network_module, edu_dma = edu_dma_module,
+        virtio_console = virtio_console_module, virtio_input = virtio_input_module, virtio_rng = virtio_rng_module, virtio_net = virtio_net_module, virtio_gpu = virtio_gpu_module, network = network_module, test_network = test_network_module,
+        test_display = test_display_module, edu_dma = edu_dma_module,
         storage_manager = storage_manager_module, partition_server = partition_server_module, fat_server = fat_server_module,
         container_service = container_service_module, volume_server = volume_server_module}
     supervisor.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -1209,6 +1239,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     no_disk_check := false
     // The network's test client (decisions/0188, 13c)
     test_network_client := false
+    // The display's test client (decisions/0192, 15b)
+    test_display_client := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -1216,6 +1248,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
             text :: service_kit.text_of(startup, memory) or_else ""
             test_restart = service_kit.has_word(text, "test_restart")
             test_network_client = service_kit.has_word(text, "test_network")
+            test_display_client = service_kit.has_word(text, "test_display")
             test_dma_fault = service_kit.has_word(text, "test_dma_fault")
             test_clock = service_kit.has_word(text, "test_clock")
             test_events = service_kit.has_word(text, "test_events")
@@ -1299,6 +1332,9 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], roo
     else {
         if test_network_client {
             start_test_network(&supervisor)
+        }
+        if test_display_client {
+            start_test_display(&supervisor)
         }
         start_ssh(&supervisor)
         start_hello(&supervisor, NOWHERE)
@@ -2396,6 +2432,13 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
         listener = pair.b
         launched = launch_serving[input.Input](supervisor, service, device, pair.a, virtio_input.main)
     }
+    else if service.name == "virtio_gpu" {
+        name = "virtio_gpu"
+        speaks = .Display
+        pair :: listener_for[display.Display](supervisor, &device) or_return void
+        listener = pair.b
+        launched = launch_serving[display.Display](supervisor, service, device, pair.a, virtio_gpu.main)
+    }
     else if service.name == "virtio_net" {
         name = "virtio_net"
         speaks = .Net
@@ -2472,6 +2515,9 @@ start_driver :: fn(supervisor: ptr[mut Supervisor], index: usize, device: platfo
     }
     if speaks == .Net && supervisor.first_nic == NOWHERE {
         supervisor.first_nic = slot
+    }
+    if speaks == .Display && supervisor.first_display == NOWHERE {
+        supervisor.first_display = slot
     }
 }
 
@@ -4292,7 +4338,8 @@ module_of :: fn(supervisor: ptr[mut Supervisor], name: string) -> slop_os.Memory
     none :: cast[slop_os.Memory](slop_os.NO_HANDLE)
     found := if name == "virtio_rng" { modules.virtio_rng } else if name == "virtio_console" { modules.virtio_console }
         else if name == "virtio_net" { modules.virtio_net } else if name == "network" { modules.network }
-        else if name == "test_network" { modules.test_network }
+        else if name == "test_network" { modules.test_network } else if name == "test_display" { modules.test_display }
+        else if name == "virtio_gpu" { modules.virtio_gpu }
         else if name == "virtio_blk" { modules.virtio_blk } else if name == "virtio_input" { modules.virtio_input }
         else if name == "edu_dma" { modules.edu_dma } else if name == "storage_manager" { modules.storage_manager }
         else if name == "terminal" { modules.terminal } else if name == "echo" { modules.echo } else if name == "input" { modules.input }
@@ -4707,6 +4754,35 @@ start_network :: fn(supervisor: ptr[mut Supervisor], again: usize) {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         }
+    }
+}
+
+/**
+ * Start the display's test client (decisions/0192, 15b), with connectors to the first display's driver and the first
+ * four input devices'; only with test_display on the command line, and a display.
+ *
+ * @param supervisor The supervisor.
+ */
+start_test_display :: fn(supervisor: ptr[mut Supervisor]) {
+    if supervisor.first_display == NOWHERE {
+        log_line.write(supervisor.log, "supervisor: test_display: there's no display")
+        return void
+    }
+    service :: service_named(supervisor, "test_display") or_return void
+    inputs : MaybeConnector[4]
+    found : usize = 0
+    for entry, i in supervisor.started {
+        if i < supervisor.started_count && entry.speaks == .Input && found < inputs.count {
+            inputs[found] = connector_to(supervisor, i)
+            found += 1
+        }
+    }
+    grants :: TestDisplayGrants.{log = duplicate_log(supervisor), display_connector = connector_to(supervisor, supervisor.first_display),
+        input0 = inputs[0], input1 = inputs[1], input2 = inputs[2], input3 = inputs[3]}
+    match os.launch(supervisor.manager, supervisor.manager_port, service.name, module_of(supervisor, "test_display"), service.budget,
+        test_display.main, grants, options_for(supervisor, service.name)) {
+        case Ok(launched) => _ = place(supervisor, "test_display", kept(supervisor, launched), NOWHERE)
+        case Error(error) => failed(supervisor, service.name, error)
     }
 }
 
@@ -5480,6 +5556,7 @@ dial :: fn(supervisor: ptr[mut Supervisor], target: usize) -> slop_os.Channel? {
         case .Serial => (serial.connect(entry.listener, port, budget) or_return null).end
         case .Block => (block.connect(entry.listener, port, budget) or_return null).end
         case .Input => (input.connect(entry.listener, port, budget) or_return null).end
+        case .Display => (display.connect(entry.listener, port, budget) or_return null).end
         case .Net => (net.connect(entry.listener, port, budget) or_return null).end
         case .Network => (network.connect(entry.listener, port, budget) or_return null).end
         case .Terminal => (terminal.connect(entry.listener, port, budget) or_return null).end
