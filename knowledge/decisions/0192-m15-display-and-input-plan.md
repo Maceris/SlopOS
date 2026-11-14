@@ -250,3 +250,14 @@ and atlas are the owner's own.
   also the fuzz target `ui_input`.
 - Where the plan differed: frames are checked by measured layout and painted pixels rather than reference images, as
   15a did. A multi-line text field is left for 15e's programs, which have none yet.
+
+## Settled during M15 (2026-11-13)
+Chosen with the project's owner after 15d:
+- **GUI login makes sessions.** The GUI's login, in the trusted layer (15f's), comes before the programs (15e's): a
+  login there makes a session, as the console's does, whose programs are given a connection to the compositor. The
+  terminal emulator is one of them: it serves the terminal protocol to a shell it starts in its session.
+- **The launcher lists the installed bundles' programs** by their manifests, as the shell finds them, and starts them
+  in its session through the session's programs connection.
+- **The console yields the firmware framebuffer while the seat's lent.** On a machine with one framebuffer the
+  terminal service gives it to a framebuffer display driver for the compositor while the seat's lent, and takes it
+  back, redrawing, on the secure attention key.
