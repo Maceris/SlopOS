@@ -102,7 +102,13 @@ and atlas are the owner's own.
 - **15f, the trusted layer**: login, the lock screen and the powerbox's chooser and prompts drawn by the trusted
   services above every client; the secure attention key bringing it forward; the GUI's capabilities through the
   powerbox. Boot tests: a client can't draw over the band or the layer; a prompt answered there.
-- **15g, a security review and the full suites**, with the input-to-photon latency test (`display.md` *Also
+- **15g, catching up, finishing, and making it fast** (added 2026-11-14, with the project's owner):
+  - Catch up with the compiler's changes made meanwhile for its LSP and formatter.
+  - Fix the failing boot tests: the GUI login's first, and any the compiler's changes broke.
+  - Finish 15e's and 15f's open items (below, *As Built so far*).
+  - Profile the boot tests and M15's code (the compositor, the canvas, std/ui, the GPU driver) and optimize what the
+    profiles show.
+- **15h, a security review and the full suites**, with the input-to-photon latency test (`display.md` *Also
   proposed*).
 
 ## As Built: 15a
@@ -304,4 +310,5 @@ of `boot_tests.py` until it passes).
   it. Next step: instrument the compositor's serve and deliver for the trusted client.
 
 **Still to build:** the typed-data viewer; forms from manifests; the powerbox's prompts in the trusted layer; the console
-yielding the firmware framebuffer while the seat's lent; and 15g's review and full suites.
+yielding the firmware framebuffer while the seat's lent (all 15g's, with the GUI login test); and 15h's review and
+full suites.
