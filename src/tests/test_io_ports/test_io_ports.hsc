@@ -12,9 +12,9 @@ package test_io_ports
 
 import compiler from "base:compiler"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -39,32 +39,64 @@ Given :: struct {
  * @param t The test's state.
  * @return Ok once it's run; Error if main wasn't given the platform capability, or the budget couldn't be made.
  */
-port_ranges_reach_only_their_ports #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+port_ranges_reach_only_their_ports #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    hardware :: testing.require_some(t, given.platform, "the root task grants the platform capability, which makes port ranges")?
+    hardware :: testing.require_some(
+        t,
+        given.platform,
+        "the root task grants the platform capability, which makes port ranges"
+    )?
     memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the ranges")?
     #if TARGET_ARCH == .x86_64 {
-        rtc :: testing.require_ok(t, slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2), "the platform capability makes a range of the RTC's two ports")?
+        rtc :: testing.require_ok(
+            t,
+            slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2),
+            "the platform capability makes a range of the RTC's two ports"
+        )?
         // Register A, its divider in bits 4 to 6
         selected :: slop_os.io_port_write(rtc, 0, 1, RTC_STATUS_A)
         testing.expect_ok(t, selected, "the range's first port, the RTC's index register, can be written")
         status :: slop_os.io_port_read(rtc, 1, 1)
         testing.expect_ok(t, status, "the range's second port, the RTC's data register, can be read")
-        testing.expect_eq(t, (status or_else 0) & 0x70, 0x20, "register A's divider is 010, running the RTC's 32.768 kHz clock, so the read reached the RTC")
+        testing.expect_eq(
+            t,
+            (status or_else 0) & 0x70,
+            0x20,
+            "register A's divider is 010, running the RTC's 32.768 kHz clock, so the read reached the RTC"
+        )
         past :: slop_os.io_port_read(rtc, 2, 1)
         testing.expect_error(t, past, slop_os.DeviceError.InvalidArgument, "a port past the range's end is outside it")
         odd_width :: slop_os.io_port_read(rtc, 0, 3)
-        testing.expect_error(t, odd_width, slop_os.DeviceError.InvalidArgument, "a port is read 1, 2 or 4 bytes wide, never 3")
+        testing.expect_error(
+            t,
+            odd_width,
+            slop_os.DeviceError.InvalidArgument,
+            "a port is read 1, 2 or 4 bytes wide, never 3"
+        )
         past_last :: slop_os.io_ports_create(hardware, memory, 0xffff, 2)
-        testing.expect_error(t, past_last, slop_os.DeviceError.InvalidArgument, "a range can't run past the last port, 0xffff")
+        testing.expect_error(
+            t,
+            past_last,
+            slop_os.DeviceError.InvalidArgument,
+            "a range can't run past the last port, 0xffff"
+        )
         _ = slop_os.handle_close(cast[slop_os.Handle](rtc))
     }
     #else {
         refused :: slop_os.io_ports_create(hardware, memory, RTC_PORTS, 2)
-        testing.expect_error(t, refused, slop_os.DeviceError.InvalidArgument, "AArch64 has no I/O ports, so every range is refused")
+        testing.expect_error(
+            t,
+            refused,
+            slop_os.DeviceError.InvalidArgument,
+            "AArch64 has no I/O ports, so every range is refused"
+        )
     }
-    testing.expect(t, test_kit.wait_for_budget(memory, 0, 1_000_000_000), "the budget is back to nothing once the ranges are closed")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(memory, 0, 1_000_000_000),
+        "the budget is back to nothing once the ranges are closed"
+    )
     return .Ok
 }
 
@@ -81,8 +113,16 @@ port_ranges_reach_only_their_ports #test :: fn(t: ptr[mut testing.T]) -> testing
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log, platform = platform}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

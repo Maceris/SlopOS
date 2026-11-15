@@ -12,10 +12,11 @@ import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
 import os from "std:os"
-import terminal from "std:terminal"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
 import terminal as protocol from "std:os/slop_os/terminal"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+
 #if TARGET_ARCH == .x86_64 {
     import x86_64 from "base:intrinsics/x86_64"
 }
@@ -47,7 +48,7 @@ Shared :: struct {
  * @return 0 once it's written; 2 if a thread couldn't be started, 3 if the terminal couldn't be opened, 4 if the end
  *     couldn't be passed.
  */
-main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, channel: u64?) -> int {
+main :: fn(session_terminal : os.Channel[protocol.Terminal]?, count : u64, channel : u64?) -> int {
     shared :: runtime.new(Shared)
     shared.count = if count == 0 { 1 } else { count }
     shared.total = 1
@@ -145,4 +146,3 @@ pass_an_end :: fn() -> u64? {
     _ = slop_os.handle_close(cast[slop_os.Handle](end))
     return cast[u64](handles[0])
 }
-

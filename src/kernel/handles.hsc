@@ -5,9 +5,9 @@ import runtime from "base:runtime"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
 import boot_info from "../boot_info"
+import robustness from "../robustness"
 import frames from "frames"
 import handle_entries from "handle_entries"
-import robustness from "../robustness"
 
 /*
  * Handle tables (roadmap M5, decisions/0008, 0010): one per process. A handle is an entry's index in
@@ -39,7 +39,6 @@ MAX_HANDLES :: ENTRIES_PER_PAGE * TABLE_PAGES
     /** A fresh entry's generation: 0. */
     HANDLE_GENERATION_START : u64 : 0
 }
-
 
 /** A process's handle table: entries in pages of ENTRIES_PER_PAGE, found through a directory frame. */
 HandleTable :: struct {
@@ -95,8 +94,15 @@ Resolved :: struct {
  * @error BudgetExceeded The table's process's budget can't pay for a page.
  * @error InvalidHandle A free entry's page is missing, which the table's own bookkeeping never allows.
  */
-install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64, generation: u32, kind: slop_os.ObjectKind,
-    rights: slop_os.Rights, owning: bool) -> Result[slop_os.Handle, slop_os.HandleError] {
+install :: fn(
+    kernel : ptr[mut Kernel],
+    table : ptr[mut HandleTable],
+    object : u64,
+    generation : u32,
+    kind : slop_os.ObjectKind,
+    rights : slop_os.Rights,
+    owning : bool
+) -> Result[slop_os.Handle, slop_os.HandleError] {
     lock_at(&table.lock, .HandleTable)
     defer unlock_at(&table.lock, .HandleTable)
     if table.closed {
@@ -116,12 +122,23 @@ install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64,
         if cast[usize](index) >= MAX_HANDLES {
             return .Error(.TableFull)
         }
-        entry = make_entry(kernel, table, index) or_return .Error(if table.short_of_budget { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
+        entry = make_entry(kernel, table, index)
+            or_return .Error(
+                if table.short_of_budget { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory }
+            )
         handle_entries.start(entry, HANDLE_GENERATION_START)
         table.next_unused = index + 1
     }
-    entry_generation :: handle_entries.fill(entry, handle_entries.Held.{object = object, generation = generation,
-        kind = cast[u8](kind), rights = cast[u32](rights), owning = owning})
+    entry_generation :: handle_entries.fill(
+        entry,
+        handle_entries.Held.{
+            object = object,
+            generation = generation,
+            kind = cast[u8](kind),
+            rights = cast[u32](rights),
+            owning = owning,
+        }
+    )
     table.count += 1
     return .Ok(cast[slop_os.Handle](cast[u32](index) | cast[u32](entry_generation << 16)))
 }
@@ -139,7 +156,7 @@ install :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], object: u64,
  *     generation has changed since, as it was closed.
  * @error ObjectGone Its object was destroyed, or is being destroyed.
  */
-lookup :: fn(table: ptr[HandleTable], handle: slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
+lookup :: fn(table : ptr[HandleTable], handle : slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
     index :: cast[u32](handle) & 0xffff
     wanted :: cast[u64](cast[u32](handle) >> 16)
     if index == 0 {
@@ -159,9 +176,14 @@ lookup :: fn(table: ptr[HandleTable], handle: slop_os.Handle) -> Result[Resolved
  * @param held What the entry holds.
  * @return The same, with its kind and rights as the kernel's types.
  */
-resolved_of :: fn(held: handle_entries.Held) -> Resolved {
-    return Resolved.{object = held.object, generation = held.generation, kind = cast[slop_os.ObjectKind](held.kind),
-        rights = cast[slop_os.Rights](held.rights), owning = held.owning}
+resolved_of :: fn(held : handle_entries.Held) -> Resolved {
+    return Resolved.{
+        object = held.object,
+        generation = held.generation,
+        kind = cast[slop_os.ObjectKind](held.kind),
+        rights = cast[slop_os.Rights](held.rights),
+        owning = held.owning,
+    }
 }
 
 /**
@@ -176,7 +198,7 @@ resolved_of :: fn(held: handle_entries.Held) -> Resolved {
  *     isn't checked.
  * @error InvalidHandle It isn't one of the table's: index 0, a page not there, a free entry, or one already closed.
  */
-remove :: fn(table: ptr[mut HandleTable], handle: slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
+remove :: fn(table : ptr[mut HandleTable], handle : slop_os.Handle) -> Result[Resolved, slop_os.HandleError] {
     index :: cast[u32](handle) & 0xffff
     wanted :: cast[u64](cast[u32](handle) >> 16)
     lock_at(&table.lock, .HandleTable)
@@ -204,7 +226,7 @@ remove :: fn(table: ptr[mut HandleTable], handle: slop_os.Handle) -> Result[Reso
  * @return The entry, in its page in the direct map, good until the table is freed; null if the directory or the
  *     entry's page isn't there yet. The entry may be free.
  */
-entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut handle_entries.HandleEntry]? {
+entry_at :: fn(table : ptr[HandleTable], index : u32) -> ptr[mut handle_entries.HandleEntry]? {
     directory :: intrinsics.atomic_load_u64_acquire(&table.directory)
     page_index :: cast[usize](index) / ENTRIES_PER_PAGE % TABLE_PAGES
     if directory == 0 {
@@ -214,7 +236,8 @@ entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut handle_entries.Ha
     if page == 0 {
         return null
     }
-    return cast[ptr[mut handle_entries.HandleEntry]](page + cast[u64](cast[usize](index) % ENTRIES_PER_PAGE) * cast[u64](size_of(handle_entries.HandleEntry)))
+    return cast[ptr[mut handle_entries.HandleEntry]](page
+        + cast[u64](cast[usize](index) % ENTRIES_PER_PAGE) * cast[u64](size_of(handle_entries.HandleEntry)))
 }
 
 /**
@@ -230,7 +253,11 @@ entry_at :: fn(table: ptr[HandleTable], index: u32) -> ptr[mut handle_entries.Ha
  * @param index The entry's index, next_unused, below MAX_HANDLES.
  * @return The entry, zeroed if its page is new; null if there's no memory, or the budget is short.
  */
-make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u32) -> ptr[mut handle_entries.HandleEntry]? {
+make_entry :: fn(
+    kernel : ptr[mut Kernel],
+    table : ptr[mut HandleTable],
+    index : u32
+) -> ptr[mut handle_entries.HandleEntry]? {
     table.short_of_budget = false
     if table.directory == 0 {
         directory :: charged_frame(kernel, table) or_return null
@@ -253,7 +280,7 @@ make_entry :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable], index: u3
  * @return The frame's address in the direct map; null if fault injection failed this pass, the budget can't pay, or
  *     there's no frame, when the charge is given back.
  */
-charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64? {
+charged_frame :: fn(kernel : ptr[mut Kernel], table : ptr[mut HandleTable]) -> u64? {
     if fails(.Handles) {
         return null
     }
@@ -275,7 +302,7 @@ charged_frame :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) -> u64
  * @return The frame's address in the direct map, the caller's to give back with give_frame_at; null if there are no
  *     frames.
  */
-zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
+zeroed_frame :: fn(kernel : ptr[mut Kernel]) -> u64? {
     frame :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames) or_return null
     address :: frames.virtual_of(&kernel.frames, frame)
     intrinsics.mem_zero(cast[mut rawptr](address), cast[usize](frames.FRAME_SIZE))
@@ -289,7 +316,7 @@ zeroed_frame :: fn(kernel: ptr[mut Kernel]) -> u64? {
  *
  * @param table The table, whose process is being destroyed.
  */
-close_table :: fn(table: ptr[mut HandleTable]) {
+close_table :: fn(table : ptr[mut HandleTable]) {
     lock_at(&table.lock, .HandleTable)
     table.closed = true
     unlock_at(&table.lock, .HandleTable)
@@ -303,7 +330,7 @@ close_table :: fn(table: ptr[mut HandleTable]) {
  * @param kernel The kernel, whose frames they go back to through this CPU's frame cache.
  * @param table The table, closed, whose directory is 0 afterwards; one that never had a handle has nothing to free.
  */
-free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
+free_table :: fn(kernel : ptr[mut Kernel], table : ptr[mut HandleTable]) {
     if table.directory == 0 {
         return void
     }
@@ -325,7 +352,7 @@ free_table :: fn(kernel: ptr[mut Kernel], table: ptr[mut HandleTable]) {
  * @param kernel The kernel, which raises SIGNAL_UNHELD for memory no one holds now.
  * @param page A page of the table's entries, by its address in the direct map; free entries are passed by.
  */
-let_go_of_page :: fn(kernel: ptr[mut Kernel], page: u64) {
+let_go_of_page :: fn(kernel : ptr[mut Kernel], page : u64) {
     for i in cast[u64](0)..<(frames.FRAME_SIZE / cast[u64](size_of(handle_entries.HandleEntry))) {
         entry :: cast[ptr[handle_entries.HandleEntry]](page + i * cast[u64](size_of(handle_entries.HandleEntry)))
         held :: handle_entries.peek(entry) or_continue
@@ -341,6 +368,10 @@ let_go_of_page :: fn(kernel: ptr[mut Kernel], page: u64) {
  * @param kernel The kernel, for frames.
  * @param address The frame's address in the direct map: one frames.take_frame gave, which the caller no longer uses.
  */
-give_frame_at :: fn(kernel: ptr[mut Kernel], address: u64) {
-    frames.give_frame(&per_cpu().frame_cache, &kernel.frames, cast[boot_info.PhysicalAddress](address - kernel.frames.direct_map_offset))
+give_frame_at :: fn(kernel : ptr[mut Kernel], address : u64) {
+    frames.give_frame(
+        &per_cpu().frame_cache,
+        &kernel.frames,
+        cast[boot_info.PhysicalAddress](address - kernel.frames.direct_map_offset)
+    )
 }

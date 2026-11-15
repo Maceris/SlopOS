@@ -10,7 +10,6 @@
  */
 package devicetree
 
-
 /** The header's magic, its first big-endian word (Devicetree Specification §5.2). */
 FDT_MAGIC : u32 : 0xd00dfeed
 /** FDT_BEGIN_NODE: a node starts, followed by its NUL-terminated name, padded to 4 bytes (§5.4.1). */
@@ -76,7 +75,7 @@ Property :: struct {
  * @return The tree, or null when address is 0, the magic is wrong, the version is below 17 (which has the blocks'
  *     sizes), or the structure block runs past the blob's end.
  */
-open :: fn(address: u64) -> Tree? {
+open :: fn(address : u64) -> Tree? {
     if address == 0 || big_endian_u32(address) != FDT_MAGIC {
         return null
     }
@@ -103,7 +102,7 @@ open :: fn(address: u64) -> Tree? {
  * @return The node, or null if none lists it, every one that does has status "disabled", or the tree is malformed
  *     or nests deeper than MAX_DEPTH before one is found.
  */
-find_compatible :: fn(tree: ptr[Tree], compatible: string) -> Node? {
+find_compatible :: fn(tree : ptr[Tree], compatible : string) -> Node? {
     return find_node(tree, compatible, 0)
 }
 
@@ -117,7 +116,7 @@ find_compatible :: fn(tree: ptr[Tree], compatible: string) -> Node? {
  * @param compatible The compatible string to look for, matched whole; not "".
  * @return The node, or null if none lists it or the tree is malformed before one is found.
  */
-find_compatible_even_disabled :: fn(tree: ptr[Tree], compatible: string) -> Node? {
+find_compatible_even_disabled :: fn(tree : ptr[Tree], compatible : string) -> Node? {
     return find_node(tree, compatible, 0, true)
 }
 
@@ -129,7 +128,7 @@ find_compatible_even_disabled :: fn(tree: ptr[Tree], compatible: string) -> Node
  * @param phandle The phandle; 0 is never a node's.
  * @return The node, or null when phandle is 0, no node has it, or the node with it is disabled.
  */
-find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
+find_phandle :: fn(tree : ptr[Tree], phandle : u32) -> Node? {
     return if phandle == 0 { null } else { find_node(tree, "", phandle) }
 }
 
@@ -148,8 +147,14 @@ find_phandle :: fn(tree: ptr[Tree], phandle: u32) -> Node? {
  * @return The first matching node, or null if none matches, or the walk meets a malformed token, the structure
  *     block's end, or nesting deeper than MAX_DEPTH first.
  */
-find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled: bool = false, cell_name: string = "",
-    cell_value: u32 = 0) -> Node? {
+find_node :: fn(
+    tree : ptr[Tree],
+    compatible : string,
+    phandle : u32,
+    even_disabled : bool = false,
+    cell_name : string = "",
+    cell_value : u32 = 0
+) -> Node? {
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
     size_cells : u32[MAX_DEPTH]
@@ -242,7 +247,7 @@ find_node :: fn(tree: ptr[Tree], compatible: string, phandle: u32, even_disabled
  * @return How many identifiers were written, at most ids.count; the walk stops early, keeping those found, at a
  *     malformed token, the structure block's end, or nesting deeper than MAX_DEPTH.
  */
-cpus :: fn(tree: ptr[Tree], ids: mut u64[]) -> usize {
+cpus :: fn(tree : ptr[Tree], ids : mut u64[]) -> usize {
     address_cells : u32[MAX_DEPTH]
     depth : usize = 0
     offset := cast[u64](0)
@@ -319,7 +324,7 @@ cpus :: fn(tree: ptr[Tree], ids: mut u64[]) -> usize {
  * @param name The property's name, like "reg" or "interrupts".
  * @return The property's value, a view into the blob, or null if the node hasn't it.
  */
-property :: fn(tree: ptr[Tree], node: ptr[Node], name: string) -> Property? {
+property :: fn(tree : ptr[Tree], node : ptr[Node], name : string) -> Property? {
     offset := node.offset
     offset = align4(offset + name_length(tree, offset) + 1)
     loop {
@@ -353,14 +358,17 @@ property :: fn(tree: ptr[Tree], node: ptr[Node], name: string) -> Property? {
  * @return The pair, or null if the node has no reg, it hasn't that many pairs, or a pair's cells are 0 or an address
  *     or size takes more than 2 cells (more than 64 bits).
  */
-reg :: fn(tree: ptr[Tree], node: ptr[Node], index: u64) -> Region? {
+reg :: fn(tree : ptr[Tree], node : ptr[Node], index : u64) -> Region? {
     value :: property(tree, node, "reg") or_return null
     cells :: cast[u64](node.address_cells + node.size_cells)
     if cells == 0 || (index + 1) * cells * 4 > value.size || node.address_cells > 2 || node.size_cells > 2 {
         return null
     }
     start :: value.address + index * cells * 4
-    return Region.{address = read_cells(start, node.address_cells), size = read_cells(start + cast[u64](node.address_cells) * 4, node.size_cells)}
+    return Region.{
+        address = read_cells(start, node.address_cells),
+        size = read_cells(start + cast[u64](node.address_cells) * 4, node.size_cells),
+    }
 }
 
 /**
@@ -370,7 +378,7 @@ reg :: fn(tree: ptr[Tree], node: ptr[Node], index: u64) -> Region? {
  * @param index Which cell, from 0.
  * @return The cell, converted from big-endian, or null if the value is too short to have it.
  */
-cell :: fn(value: Property, index: u64) -> u32? {
+cell :: fn(value : Property, index : u64) -> u32? {
     if (index + 1) * 4 > value.size {
         return null
     }
@@ -384,7 +392,7 @@ cell :: fn(value: Property, index: u64) -> u32? {
  * @param count How many cells, 0 to 2; more keep only the last two's 64 bits.
  * @return The number, 0 for no cells.
  */
-read_cells :: fn(address: u64, count: u32) -> u64 {
+read_cells :: fn(address : u64, count : u32) -> u64 {
     result := cast[u64](0)
     for i in 0..<count {
         result = (result << 32) | cast[u64](big_endian_u32(address + cast[u64](i) * 4))
@@ -399,7 +407,7 @@ read_cells :: fn(address: u64, count: u32) -> u64 {
  * @param text The string, matched whole; a string in the list without its NUL isn't matched.
  * @return Whether one of the list's strings is exactly text.
  */
-lists :: fn(value: Property, text: string) -> bool {
+lists :: fn(value : Property, text : string) -> bool {
     start := cast[u64](0)
     for i in 0..<value.size {
         if byte_at(value.address + i) == 0 {
@@ -419,7 +427,7 @@ lists :: fn(value: Property, text: string) -> bool {
  * @param text The string; each character is compared as one byte.
  * @return Whether the bytes equal text's.
  */
-matches :: fn(address: u64, text: string) -> bool {
+matches :: fn(address : u64, text : string) -> bool {
     for character, i in text {
         if byte_at(address + cast[u64](i)) != cast[u8](character) {
             return false
@@ -437,7 +445,7 @@ matches :: fn(address: u64, text: string) -> bool {
  * @return The NUL-terminated string there, a view into the blob, cut short at the block's end; "" when offset is
  *     outside the block.
  */
-string_at :: fn(tree: ptr[Tree], offset: u64) -> string {
+string_at :: fn(tree : ptr[Tree], offset : u64) -> string {
     if offset >= tree.strings_size {
         return ""
     }
@@ -458,7 +466,7 @@ string_at :: fn(tree: ptr[Tree], offset: u64) -> string {
  * @param offset The name's byte offset in the structure block.
  * @return The name's length in bytes, without its NUL, cut short at the block's end.
  */
-name_length :: fn(tree: ptr[Tree], offset: u64) -> u64 {
+name_length :: fn(tree : ptr[Tree], offset : u64) -> u64 {
     length := cast[u64](0)
     loop {
         if offset + length >= tree.structure_size || byte_at(tree.structure + offset + length) == 0 {
@@ -474,7 +482,7 @@ name_length :: fn(tree: ptr[Tree], offset: u64) -> u64 {
  * @param offset The offset in bytes.
  * @return The smallest multiple of 4 at least offset.
  */
-align4 :: fn(offset: u64) -> u64 {
+align4 :: fn(offset : u64) -> u64 {
     return (offset + 3) & ~cast[u64](3)
 }
 
@@ -484,7 +492,7 @@ align4 :: fn(offset: u64) -> u64 {
  * @param address The byte's virtual address, which has to be mapped.
  * @return The byte's value, read with a plain load; any of 0 to 255.
  */
-byte_at :: fn(address: u64) -> u8 {
+byte_at :: fn(address : u64) -> u8 {
     return cast[ptr[u8]](address)^
 }
 
@@ -494,7 +502,9 @@ byte_at :: fn(address: u64) -> u8 {
  * @param address The word's virtual address, which has to be mapped for 4 bytes.
  * @return The word's value: its first byte the most significant, any of 0 to 0xffffffff.
  */
-big_endian_u32 :: fn(address: u64) -> u32 {
-    return cast[u32](byte_at(address)) << 24 | cast[u32](byte_at(address + 1)) << 16 | cast[u32](byte_at(address + 2)) << 8
+big_endian_u32 :: fn(address : u64) -> u32 {
+    return cast[u32](byte_at(address)) << 24
+        | cast[u32](byte_at(address + 1)) << 16
+        | cast[u32](byte_at(address + 2)) << 8
         | cast[u32](byte_at(address + 3))
 }

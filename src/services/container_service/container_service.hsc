@@ -18,13 +18,13 @@
 package container_service
 
 import runtime from "base:runtime"
-import random from "std:random"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import slopfs from "../../slopfs"
+import random from "std:random"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import container from "../../protocols/container"
+import slopfs from "../../slopfs"
 
 /** The most connections at once: listeners, volumes' and block connections; one past them is closed at once. */
 MAX_CONNECTIONS :: 32
@@ -134,7 +134,11 @@ Server :: struct {
  *     itself, 3 if it didn't give its buffer, 5 if there's no container on it, 6
  *     if the container's owners couldn't be read, and 7 if clients couldn't be added. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[container.Container]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    partition : os.Channel[block.Block],
+    clients : os.Listener[container.Container]
+) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
@@ -156,12 +160,22 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
     server.buffer_bytes = info.buffer_bytes
     server.sector_count = info.block_count
-    device :: slopfs.Device.{context = cast[rawptr](server), block_count = info.block_count / SECTORS_PER_BLOCK, read = read_blocks,
-        write = write_blocks, flush = flush}
+    device :: slopfs.Device.{
+        context = cast[rawptr](server),
+        block_count = info.block_count / SECTORS_PER_BLOCK,
+        read = read_blocks,
+        write = write_blocks,
+        flush = flush,
+    }
     match slopfs.mount(device) {
         case Ok(mounted) => server.container = mounted
         case Error(error) => {
-            log_line.write(server.log, "container_service: no container on a partition of % blocks: %", info.block_count, error)
+            log_line.write(
+                server.log,
+                "container_service: no container on a partition of % blocks: %",
+                info.block_count,
+                error
+            )
             return 5
         }
     }
@@ -169,8 +183,13 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
         log_line.write(server.log, "container_service: the container's owners can't be read")
         return 6
     }
-    log_line.write(server.log, "container_service: serving a container of % blocks, % of them free, at transaction %",
-        device.block_count, slopfs.free_blocks(server.container), slopfs.durable_transaction(server.container))
+    log_line.write(
+        server.log,
+        "container_service: serving a container of % blocks, % of them free, at transaction %",
+        device.block_count,
+        slopfs.free_blocks(server.container),
+        slopfs.durable_transaction(server.container)
+    )
     if add(server, .Unbound, clients.end, NONE, 0) is_none {
         return 7
     }
@@ -205,7 +224,7 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> block.Response {
+call :: fn(end : slop_os.Channel, port : slop_os.Port, request : block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
     made^ = request
@@ -228,7 +247,7 @@ call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> 
  * @param response A block request's answer, as call gives it; only read.
  * @return Whether it's Finished with Done.
  */
-done :: fn(response: block.Response) -> bool {
+done :: fn(response : block.Response) -> bool {
     return match response {
         case Finished(completion) => completion.status == .Done
         case _ => false
@@ -245,7 +264,7 @@ done :: fn(response: block.Response) -> bool {
  * @param into Where they go, at least count blocks long.
  * @return Whether they were read whole.
  */
-read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+read_blocks :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     return move(server, first * SECTORS_PER_BLOCK, count * SECTORS_PER_BLOCK, into, false)
 }
@@ -260,9 +279,15 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
  * @param from What's written, at least count blocks long.
  * @return Whether every write finished.
  */
-write_blocks :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
+write_blocks :: fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
-    return move(server, first * SECTORS_PER_BLOCK, count * SECTORS_PER_BLOCK, view_of(cast[ptr[mut u8]](from.data), from.count), true)
+    return move(
+        server,
+        first * SECTORS_PER_BLOCK,
+        count * SECTORS_PER_BLOCK,
+        view_of(cast[ptr[mut u8]](from.data), from.count),
+        true
+    )
 }
 
 /**
@@ -271,7 +296,7 @@ write_blocks :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool 
  * @param context The Server main gave the Device, cast back; a Flush is sent on its disk and waited for.
  * @return Whether the flush finished, everything written before it durable.
  */
-flush :: fn(context: rawptr) -> bool {
+flush :: fn(context : rawptr) -> bool {
     server :: cast[ptr[mut Server]](context)
     return done(call(server.disk, server.disk_port, .Flush(1)))
 }
@@ -289,7 +314,7 @@ flush :: fn(context: rawptr) -> bool {
  * @return Whether all of them moved; false if bytes is too short, the buffer holds no sector, a transfer failed, or
  *     the buffer couldn't be copied, its driver gone; what was moved before it moved.
  */
-move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], writing: bool) -> bool {
+move :: fn(server : ptr[mut Server], first : u64, count : u64, bytes : mut u8[], writing : bool) -> bool {
     per :: server.buffer_bytes / block.BLOCK_BYTES
     if per == 0 || count * block.BLOCK_BYTES > cast[u64](bytes.count) {
         return false
@@ -309,7 +334,13 @@ move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], wri
             return false
         }
         transfer :: block.Transfer.{tag = 1, first = first + moved, count = cast[u32](now), offset = 0}
-        if !done(call(server.disk, server.disk_port, if writing { block.Request.Write(transfer) } else { block.Request.Read(transfer) })) {
+        if !done(
+            call(
+                server.disk,
+                server.disk_port,
+                if writing { block.Request.Write(transfer) } else { block.Request.Read(transfer) }
+            )
+        ) {
             return false
         }
         if !writing && (slop_os.memory_read(server.window, 0, bytes[start..<end]) is_error) {
@@ -330,18 +361,31 @@ move :: fn(server: ptr[mut Server], first: u64, count: u64, bytes: mut u8[], wri
  * @param server The server, its container mounted and owned empty.
  * @return Whether they were all loaded; false if a tree couldn't be read or there wasn't the memory.
  */
-load_owned :: fn(server: ptr[mut Server]) -> bool {
+load_owned :: fn(server : ptr[mut Server]) -> bool {
     value := slopfs.OwnerValue.{}
     at := slopfs.Key.{}
     loop {
         found := slopfs.Found.{}
-        match slopfs.tree_next(&server.container.nodes, &server.container.owners, at,
-            view_of(cast[ptr[mut u8]](&value), size_of(slopfs.OwnerValue))) {
+        match slopfs.tree_next(
+            &server.container.nodes,
+            &server.container.owners,
+            at,
+            view_of(cast[ptr[mut u8]](&value), size_of(slopfs.OwnerValue))
+        ) {
             case Ok(next) => found = next or_break
             case Error(error) => return false
         }
-        if cast[u64](value.volume) != 0 && runtime.array_try_add(&server.owned, Owned.{start = found.key.object, blocks = cast[u64](value.blocks),
-            owner = cast[u64](value.volume), birth = cast[u64](value.birth)}) != null {
+        if cast[u64](value.volume) != 0
+            && runtime.array_try_add(
+                &server.owned,
+                Owned.{
+                    start = found.key.object,
+                    blocks = cast[u64](value.blocks),
+                    owner = cast[u64](value.volume),
+                    birth = cast[u64](value.birth),
+                }
+            )
+                != null {
             return false
         }
         at = slopfs.key_after(found.key) or_break
@@ -380,7 +424,7 @@ load_owned :: fn(server: ptr[mut Server]) -> bool {
  * @param start A 4 KiB block in the container, compared with each extent's start.
  * @return The index of the first extent whose start isn't below start; owned's count if there's none.
  */
-owned_index :: fn(server: ptr[Server], start: u64) -> usize {
+owned_index :: fn(server : ptr[Server], start : u64) -> usize {
     low : usize = 0
     high := server.owned.count
     loop {
@@ -409,7 +453,7 @@ owned_index :: fn(server: ptr[Server], start: u64) -> usize {
  * @param fresh Whether it was allocated since the volume's last commit.
  * @return Whether it could be kept: false, and nothing changed, without the memory (decisions/0104).
  */
-own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u64, fresh: bool) -> bool {
+own :: fn(server : ptr[mut Server], start : u64, blocks : u64, owner : u64, birth : u64, fresh : bool) -> bool {
     index :: owned_index(server, start)
     if runtime.array_try_add(&server.owned, Owned.{}) != null {
         return false
@@ -439,7 +483,7 @@ own :: fn(server: ptr[mut Server], start: u64, blocks: u64, owner: u64, birth: u
  * @param count How many 4 KiB blocks, from first.
  * @return A copy of the one extent that holds all of them; null if none does, as for blocks across two extents.
  */
-holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
+holding :: fn(server : ptr[Server], first : u64, count : u64) -> Owned? {
     index :: owned_index(server, first + 1)
     if index == 0 || index - 1 >= server.owned.count {
         return null
@@ -461,7 +505,7 @@ holding :: fn(server: ptr[Server], first: u64, count: u64) -> Owned? {
  * @param count How many 4 KiB blocks, from first.
  * @return Whether one extent of owner's holds them all, and it isn't dead.
  */
-owns :: fn(server: ptr[Server], owner: u64, first: u64, count: u64) -> bool {
+owns :: fn(server : ptr[Server], owner : u64, first : u64, count : u64) -> bool {
     extent :: holding(server, first, count) or_return false
     return extent.owner == owner && !extent.dead
 }
@@ -476,13 +520,15 @@ owns :: fn(server: ptr[Server], owner: u64, first: u64, count: u64) -> bool {
  * @return Whether they're its volume's own live extents, or for a snapshot's, what the volume had by the snapshot's
  *     transaction, dead or not; or, for a clone, its origins', up to what their snapshots hold.
  */
-may_read :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, count: u64) -> bool {
+may_read :: fn(server : ptr[Server], connection : ptr[Connection], first : u64, count : u64) -> bool {
     extent :: holding(server, first, count) or_return false
     if extent.owner == connection.volume {
         return if connection.snapshot == 0 { !extent.dead } else { extent.birth <= connection.snapshot }
     }
     for i in 0..<connection.lineage.count {
-        if i < slopfs.MAX_LINEAGE && extent.owner == connection.lineage.owners[i] && extent.birth <= connection.lineage.up_to[i] {
+        if i < slopfs.MAX_LINEAGE
+            && extent.owner == connection.lineage.owners[i]
+            && extent.birth <= connection.lineage.up_to[i] {
             return true
         }
     }
@@ -499,7 +545,7 @@ may_read :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, cou
  * @param count How many blocks, all in one extent.
  * @return Whether one fresh, live extent of its volume's holds them all.
  */
-may_write :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, count: u64) -> bool {
+may_write :: fn(server : ptr[Server], connection : ptr[Connection], first : u64, count : u64) -> bool {
     extent :: holding(server, first, count) or_return false
     return connection.snapshot == 0 && extent.owner == connection.volume && extent.fresh && !extent.dead
 }
@@ -510,7 +556,7 @@ may_write :: fn(server: ptr[Server], connection: ptr[Connection], first: u64, co
  * @param server The container service's state; every extent of volume's in its owned list is no longer fresh.
  * @param volume The volume's ID, which has just committed.
  */
-settle_fresh :: fn(server: ptr[mut Server], volume: u64) {
+settle_fresh :: fn(server : ptr[mut Server], volume : u64) {
     for &extent in server.owned {
         if extent.owner == volume {
             extent.fresh = false
@@ -525,7 +571,7 @@ settle_fresh :: fn(server: ptr[mut Server], volume: u64) {
  * @param start The extent's first block; an extent not in the owned list is ignored.
  * @param dead Whether it's dead.
  */
-mark_dead :: fn(server: ptr[mut Server], start: u64, dead: bool) {
+mark_dead :: fn(server : ptr[mut Server], start : u64, dead : bool) {
     index :: owned_index(server, start)
     if index < server.owned.count && server.owned[index].start == start {
         server.owned[index].dead = dead
@@ -538,7 +584,7 @@ mark_dead :: fn(server: ptr[mut Server], start: u64, dead: bool) {
  * @param server The container service's state, whose owned list loses the extent.
  * @param start The extent's first block; an extent not in the owned list is ignored.
  */
-forget :: fn(server: ptr[mut Server], start: u64) {
+forget :: fn(server : ptr[mut Server], start : u64) {
     index :: owned_index(server, start)
     if index < server.owned.count && server.owned[index].start == start {
         runtime.array_remove(&server.owned, index)
@@ -554,7 +600,7 @@ forget :: fn(server: ptr[mut Server], start: u64) {
  * @param blocks Its length in blocks, which must be the extent's whole length.
  * @return Whether it was owner's, exactly that extent, and was taken off; false, and nothing changed, otherwise.
  */
-disown :: fn(server: ptr[mut Server], owner: u64, start: u64, blocks: u64) -> bool {
+disown :: fn(server : ptr[mut Server], owner : u64, start : u64, blocks : u64) -> bool {
     index :: owned_index(server, start)
     if index >= server.owned.count {
         return false
@@ -581,7 +627,13 @@ disown :: fn(server: ptr[mut Server], owner: u64, start: u64, blocks: u64) -> bo
  * @param volume The volume's ID, or 0 for an unbound connection.
  * @return Its slot; null if there are MAX_CONNECTIONS already, or binding failed.
  */
-add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, driver: slop_os.Channel, volume: u64) -> usize? {
+add :: fn(
+    server : ptr[mut Server],
+    kind : Kind,
+    end : slop_os.Channel,
+    driver : slop_os.Channel,
+    volume : u64
+) -> usize? {
     slot := server.count
     for connection, i in server.connections {
         if i < server.count && connection.kind == .Free {
@@ -604,7 +656,13 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, driver: slo
         }
     }
     if cast[slop_os.Handle](driver) != slop_os.NO_HANDLE
-        && (slop_os.port_bind(server.port, cast[slop_os.Handle](driver), signals, DRIVER_KEY + cast[u64](slot), .Persistent) is_error) {
+        && (slop_os.port_bind(
+            server.port,
+            cast[slop_os.Handle](driver),
+            signals,
+            DRIVER_KEY + cast[u64](slot),
+            .Persistent
+        ) is_error) {
         // Its driver unwatched, its replies would never be read
         _ = slop_os.port_unbind(server.port, cast[u64](slot))
         _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -626,7 +684,7 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, driver: slo
  *     slot left Free for add to reuse; count isn't lowered.
  * @param index The connection's slot; one past them is ignored.
  */
-drop :: fn(server: ptr[mut Server], index: usize) {
+drop :: fn(server : ptr[mut Server], index : usize) {
     if index >= server.connections.count {
         return void
     }
@@ -648,7 +706,7 @@ drop :: fn(server: ptr[mut Server], index: usize) {
  * @param index The connection's slot; a free one, or one past them, is left alone.
  * @param into Where each message is read into, reused.
  */
-serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -676,7 +734,7 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
  * @param index The connection's slot among server's connections; one past them is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_container :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -717,11 +775,27 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
                 name :: os.items(into, at)
                 response^ = open_volume(server, name)
             }
-            case TakeSnapshot(named) => response^ = take_snapshot(server, os.items(into, named.volume), os.items(into, named.snapshot), named.now)
-            case DeleteSnapshot(named) => response^ = delete_snapshot(server, os.items(into, named.volume), os.items(into, named.snapshot))
+            case TakeSnapshot(
+                named
+            ) => response^ = take_snapshot(
+                server,
+                os.items(into, named.volume),
+                os.items(into, named.snapshot),
+                named.now
+            )
+            case DeleteSnapshot(
+                named
+            ) => response^ = delete_snapshot(server, os.items(into, named.volume), os.items(into, named.snapshot))
             case SnapshotAt(at) => response^ = snapshot_at(server, os.items(into, at.volume), at.index, &out)
-            case Clone(cloning) => response^ = clone(server, os.items(into, cloning.volume), os.items(into, cloning.snapshot),
-                os.items(into, cloning.name), cloning.now)
+            case Clone(
+                cloning
+            ) => response^ = clone(
+                server,
+                os.items(into, cloning.volume),
+                os.items(into, cloning.snapshot),
+                os.items(into, cloning.name),
+                cloning.now
+            )
             case SetQuota(quota) => {
                 match volume_named(server, os.items(into, quota.volume)) {
                     case Some(id) => {
@@ -739,28 +813,58 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
                     case None => response^ = .NoVolume
                 }
             }
-            case CreateVolume(creation) => response^ = create_volume(server, os.items(into, creation.name), creation.cipher, creation.now)
+            case CreateVolume(
+                creation
+            ) => response^ = create_volume(server, os.items(into, creation.name), creation.cipher, creation.now)
             case Connect(other) => {
                 _ = add(server, .Unbound, other.end, NONE, 0)
                 continue
             }
             // A volume's own snapshots (decisions/0179), from its live connection only
             case TakeOwnSnapshot(own) => {
-                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
-                    container.Response.NotYours } else { snapshot_taken(server, volume, os.items(into, own.snapshot), own.now) }
+                response^ = if connection.kind != .Volume {
+                    container.Response.NotAVolume
+                }
+                else if connection.snapshot != 0 {
+                    container.Response.NotYours
+                }
+                else {
+                    snapshot_taken(server, volume, os.items(into, own.snapshot), own.now)
+                }
             }
             case OwnSnapshotAt(index) => {
-                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
-                    container.Response.NotYours } else { snapshot_found(server, volume, index, &out) }
+                response^ = if connection.kind != .Volume {
+                    container.Response.NotAVolume
+                }
+                else if connection.snapshot != 0 {
+                    container.Response.NotYours
+                }
+                else {
+                    snapshot_found(server, volume, index, &out)
+                }
             }
             case OpenOwnSnapshot(named) => {
-                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
-                    container.Response.NotYours } else { volume_opened(server, volume, os.items(into, named), true) }
+                response^ = if connection.kind != .Volume {
+                    container.Response.NotAVolume
+                }
+                else if connection.snapshot != 0 {
+                    container.Response.NotYours
+                }
+                else {
+                    volume_opened(server, volume, os.items(into, named), true)
+                }
             }
             // A new volume key (decisions/0181's F5), from its live connection only
             case Rekey(rekeying) => {
-                response^ = if connection.kind != .Volume { container.Response.NotAVolume } else if connection.snapshot != 0 {
-                    container.Response.NotYours } else { rekeyed(server, volume, rekeying, os.items(into, rekeying.generations)) }
+                response^ = if connection.kind != .Volume {
+                    container.Response.NotAVolume
+                }
+                else if connection.snapshot != 0 {
+                    container.Response.NotYours
+                }
+                else {
+                    rekeyed(server, volume, rekeying, os.items(into, rekeying.generations))
+                }
             }
             case _ => {
                 if connection.kind != .Volume {
@@ -781,7 +885,7 @@ serve_container :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.In
  * @param name The name, as OpenVolume's request gives it; only read.
  * @return The index of the first '@'; name's count if there's none.
  */
-at_of :: fn(name: u8[]) -> usize {
+at_of :: fn(name : u8[]) -> usize {
     for byte, i in name {
         if byte == cast[u8]('@') {
             return i
@@ -798,7 +902,7 @@ at_of :: fn(name: u8[]) -> usize {
  * @return True for OpenVolume, TakeSnapshot, DeleteSnapshot, SnapshotAt, Clone, SetQuota, Usage, CreateVolume and
  *     Connect; false for a volume's own requests.
  */
-is_listeners :: fn(request: container.Request) -> bool {
+is_listeners :: fn(request : container.Request) -> bool {
     return match request {
         case OpenVolume(_) => true
         case TakeSnapshot(_) => true
@@ -820,7 +924,7 @@ is_listeners :: fn(request: container.Request) -> bool {
  * @param name The volume's name, as a request gave it; only read.
  * @return Its ID; null if there's no such volume, or the container couldn't be read.
  */
-volume_named :: fn(server: ptr[mut Server], name: u8[]) -> u64? {
+volume_named :: fn(server : ptr[mut Server], name : u8[]) -> u64? {
     match slopfs.find_volume_named(server.container, name) {
         case Ok(found) => return found
         case Error(error) => return null
@@ -838,7 +942,7 @@ volume_named :: fn(server: ptr[mut Server], name: u8[]) -> u64? {
  *     for no such snapshot, NoSpace if a channel or a slot couldn't be had, or Failed if the container couldn't be
  *     read.
  */
-open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
+open_volume :: fn(server : ptr[mut Server], name : u8[]) -> container.Response {
     split :: at_of(name)
     if split > name.count {
         return .NoVolume
@@ -864,7 +968,7 @@ open_volume :: fn(server: ptr[mut Server], name: u8[]) -> container.Response {
  *     for no such snapshot, NoSpace if a channel or a slot couldn't be had, or Failed if the container couldn't be
  *     read.
  */
-volume_opened :: fn(server: ptr[mut Server], id: u64, name: u8[], of_snapshot: bool) -> container.Response {
+volume_opened :: fn(server : ptr[mut Server], id : u64, name : u8[], of_snapshot : bool) -> container.Response {
     record := slopfs.volume_record(server.container, id) or_return .NoVolume
     lineage :: slopfs.lineage_of(server.container, &record) or_return .Failed
     snapshot : u64 = 0
@@ -897,7 +1001,7 @@ volume_opened :: fn(server: ptr[mut Server], id: u64, name: u8[], of_snapshot: b
  * @return Done once it's durable; NoVolume, AlreadyExists for a name taken, or Failed if it couldn't be taken or
  *     committed.
  */
-take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64) -> container.Response {
+take_snapshot :: fn(server : ptr[mut Server], volume : u8[], name : u8[], now : u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     return snapshot_taken(server, id, name, now)
 }
@@ -912,7 +1016,7 @@ take_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[], now: u64)
  * @param now When it's taken, as the taker says.
  * @return Done once it's durable; AlreadyExists for a name taken, or Failed if it couldn't be taken or committed.
  */
-snapshot_taken :: fn(server: ptr[mut Server], id: u64, name: u8[], now: u64) -> container.Response {
+snapshot_taken :: fn(server : ptr[mut Server], id : u64, name : u8[], now : u64) -> container.Response {
     match slopfs.take_snapshot(server.container, id, name, now) {
         case Ok(number) => {}
         case Error(error) => return if error == .AlreadyExists { .AlreadyExists } else { .Failed }
@@ -932,7 +1036,7 @@ snapshot_taken :: fn(server: ptr[mut Server], id: u64, name: u8[], now: u64) -> 
  * @return Done once it's durable; NoVolume, NoSnapshot, InUse for a snapshot a clone keeps, or Failed if it couldn't
  *     be deleted or committed.
  */
-delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> container.Response {
+delete_snapshot :: fn(server : ptr[mut Server], volume : u8[], name : u8[]) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     freed : slopfs.Extent[..]
     defer runtime.array_free(&freed)
@@ -948,7 +1052,9 @@ delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> cont
     // The last snapshot from before a new volume key was sealed in may have been all that kept the old generations
     match slopfs.drop_old_generations(server.container, id) {
         case Ok(dropped) => match dropped {
-            case Some(floor) => log_line.write(server.log, "container_service: volume %'s key generations before % deleted", id, floor)
+            case Some(
+                floor
+            ) => log_line.write(server.log, "container_service: volume %'s key generations before % deleted", id, floor)
             case None => {}
         }
         case Error(error) => {}
@@ -966,7 +1072,12 @@ delete_snapshot :: fn(server: ptr[mut Server], volume: u8[], name: u8[]) -> cont
  * @return Snapshot with its name, transaction and when it was taken; NoMore past the last, NoVolume, or Failed if
  *     they couldn't be read.
  */
-snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mut os.Outgoing]) -> container.Response {
+snapshot_at :: fn(
+    server : ptr[mut Server],
+    volume : u8[],
+    index : u64,
+    out : ptr[mut os.Outgoing]
+) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     return snapshot_found(server, id, index, out)
 }
@@ -982,7 +1093,12 @@ snapshot_at :: fn(server: ptr[mut Server], volume: u8[], index: u64, out: ptr[mu
  * @return Snapshot with its name, transaction and when it was taken; NoMore past the last, or Failed if they couldn't
  *     be read.
  */
-snapshot_found :: fn(server: ptr[mut Server], id: u64, index: u64, out: ptr[mut os.Outgoing]) -> container.Response {
+snapshot_found :: fn(
+    server : ptr[mut Server],
+    id : u64,
+    index : u64,
+    out : ptr[mut os.Outgoing]
+) -> container.Response {
     snapshots : slopfs.NumberedSnapshot[..]
     defer runtime.array_free(&snapshots)
     if slopfs.snapshot_records(server.container, id, &snapshots) is_error {
@@ -992,8 +1108,13 @@ snapshot_found :: fn(server: ptr[mut Server], id: u64, index: u64, out: ptr[mut 
         return .NoMore
     }
     found := snapshots[cast[usize](index)].record
-    return .Snapshot(container.SnapshotInfo.{name = os.append(out, slopfs.name_of_snapshot(&found)), transaction = cast[u64](found.transaction),
-        created = cast[u64](found.created)})
+    return .Snapshot(
+        container.SnapshotInfo.{
+            name = os.append(out, slopfs.name_of_snapshot(&found)),
+            transaction = cast[u64](found.transaction),
+            created = cast[u64](found.created),
+        }
+    )
 }
 
 /**
@@ -1006,12 +1127,15 @@ snapshot_found :: fn(server: ptr[mut Server], id: u64, index: u64, out: ptr[mut 
  * @param now When it's made, as the asker says.
  * @return Done once it's durable; NoVolume, NoSnapshot, AlreadyExists for a name taken, or Failed.
  */
-clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], now: u64) -> container.Response {
+clone :: fn(server : ptr[mut Server], volume : u8[], snapshot : u8[], name : u8[], now : u64) -> container.Response {
     id :: volume_named(server, volume) or_return .NoVolume
     match slopfs.clone_snapshot(server.container, id, snapshot, name, now) {
         case Ok(made) => {}
         case Error(error) => {
-            return if error == .AlreadyExists { .AlreadyExists } else if error == .NotFound { .NoSnapshot } else { .Failed }
+            return if error == .AlreadyExists {
+                .AlreadyExists
+            }
+            else if error == .NotFound { .NoSnapshot } else { .Failed }
         }
     }
     return commit_own(server)
@@ -1028,8 +1152,10 @@ clone :: fn(server: ptr[mut Server], volume: u8[], snapshot: u8[], name: u8[], n
  * @param now When it's made, as the asker says.
  * @return Created with its ID once it's durable; AlreadyExists for a name taken, or Failed.
  */
-create_volume :: fn(server: ptr[mut Server], name: u8[], cipher: u8, now: u64) -> container.Response {
-    if cipher != cast[u8](slopfs.Cipher.None) && cipher != cast[u8](slopfs.Cipher.ChaCha20Poly1305) && cipher != cast[u8](slopfs.Cipher.Aes256Gcm) {
+create_volume :: fn(server : ptr[mut Server], name : u8[], cipher : u8, now : u64) -> container.Response {
+    if cipher != cast[u8](slopfs.Cipher.None)
+        && cipher != cast[u8](slopfs.Cipher.ChaCha20Poly1305)
+        && cipher != cast[u8](slopfs.Cipher.Aes256Gcm) {
         return .Failed
     }
     hash_key : u8[32]
@@ -1056,7 +1182,7 @@ create_volume :: fn(server: ptr[mut Server], name: u8[], cipher: u8, now: u64) -
  *     or failed.
  * @return Done once they're durable; Failed, logged, if the commit failed.
  */
-commit_own :: fn(server: ptr[mut Server]) -> container.Response {
+commit_own :: fn(server : ptr[mut Server]) -> container.Response {
     match slopfs.commit_own(server.container) {
         case Ok => return .Done
         case Error(error) => {
@@ -1077,12 +1203,22 @@ commit_own :: fn(server: ptr[mut Server]) -> container.Response {
  * @return Done; NotYours for a clone, or generations or a number that don't match the volume's records; Failed if
  *     they couldn't be kept.
  */
-rekeyed :: fn(server: ptr[mut Server], volume: u64, rekeying: container.Rekeying, generations: slopfs.NumberedGeneration[]) -> container.Response {
+rekeyed :: fn(
+    server : ptr[mut Server],
+    volume : u64,
+    rekeying : container.Rekeying,
+    generations : slopfs.NumberedGeneration[]
+) -> container.Response {
     wrap := rekeying.wrap
     added := rekeying.added
     match slopfs.replace_keys(server.container, volume, &wrap, generations, rekeying.number, &added) {
         case Ok => {
-            log_line.write(server.log, "container_service: volume % given a new volume key, its floor generation %", volume, rekeying.number)
+            log_line.write(
+                server.log,
+                "container_service: volume % given a new volume key, its floor generation %",
+                volume,
+                rekeying.number
+            )
             return .Done
         }
         case Error(error) => {
@@ -1110,7 +1246,7 @@ rekeyed :: fn(server: ptr[mut Server], volume: u64, rekeying: container.Rekeying
  *     NoMore past a volume's wraps or generations, Failed for what the container couldn't do, and the request's own
  *     answer otherwise.
  */
-for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Request) -> container.Response {
+for_volume :: fn(server : ptr[mut Server], index : usize, request : container.Request) -> container.Response {
     if index >= server.connections.count {
         return .NotAVolume
     }
@@ -1143,18 +1279,33 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
                     }
                 }
             }
-            return .Described(container.Described.{id = volume, record = record, transaction = server.container.nodes.transaction,
-                container = server.container.id, lineage = connection.lineage, read_only = connection.snapshot != 0})
+            return .Described(
+                container.Described.{
+                    id = volume,
+                    record = record,
+                    transaction = server.container.nodes.transaction,
+                    container = server.container.id,
+                    lineage = connection.lineage,
+                    read_only = connection.snapshot != 0,
+                }
+            )
         }
         case Allocate(allocation) => {
             blocks :: allocation.blocks
             if blocks == 0 || blocks > MAX_ALLOCATE {
                 return .NoSpace
             }
-            start :: slopfs.space_allocate(cast[rawptr](&server.container.space), blocks, volume, allocation.data) or_return .NoSpace
+            start :: slopfs.space_allocate(cast[rawptr](&server.container.space), blocks, volume, allocation.data)
+                or_return .NoSpace
             // Kept as the volume's, or not allocated at all
             if !own(server, start, blocks, volume, server.container.space.transaction, true) {
-                slopfs.space_release(cast[rawptr](&server.container.space), start, blocks, volume, server.container.space.transaction)
+                slopfs.space_release(
+                    cast[rawptr](&server.container.space),
+                    start,
+                    blocks,
+                    volume,
+                    server.container.space.transaction
+                )
                 return .NoSpace
             }
             return .Allocated(start)
@@ -1166,7 +1317,10 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
                 return .Done
             }
             extent :: holding(server, released.first, released.blocks) or_return .NotYours
-            if extent.owner != volume || extent.dead || extent.start != released.first || extent.blocks != released.blocks {
+            if extent.owner != volume
+                || extent.dead
+                || extent.start != released.first
+                || extent.blocks != released.blocks {
                 return .NotYours
             }
             // One a snapshot holds stays the volume's, on its dead list, for the snapshot to read
@@ -1176,7 +1330,13 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
             else {
                 _ = disown(server, volume, released.first, released.blocks)
             }
-            slopfs.space_release(cast[rawptr](&server.container.space), released.first, released.blocks, volume, released.birth)
+            slopfs.space_release(
+                cast[rawptr](&server.container.space),
+                released.first,
+                released.blocks,
+                volume,
+                released.birth
+            )
             return .Done
         }
         case OpenBlocks => return open_blocks(server, index)
@@ -1184,7 +1344,8 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
             undone : slopfs.Change[..]
             defer runtime.array_free(&undone)
             // Room to own again every extent it gave back, before anything's undone
-            if runtime.array_try_reserve(&server.owned, server.owned.count + server.container.space.changes.count) != null
+            if runtime.array_try_reserve(&server.owned, server.owned.count + server.container.space.changes.count)
+                != null
                 || !slopfs.abandon_volume(server.container, volume, &undone) {
                 return .Failed
             }
@@ -1248,7 +1409,12 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
             match slopfs.drop_old_generations(server.container, volume) {
                 case Ok(dropped) => {
                     floor :: dropped or_return .NoMore
-                    log_line.write(server.log, "container_service: volume %'s key generations before % deleted", volume, floor)
+                    log_line.write(
+                        server.log,
+                        "container_service: volume %'s key generations before % deleted",
+                        volume,
+                        floor
+                    )
                     return .Dropped(floor)
                 }
                 case Error(error) => return .Failed
@@ -1271,7 +1437,13 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
             match slopfs.add_generation(server.container, volume, added.number, &record) {
                 case Ok => return .Done
                 case Error(error) => {
-                    log_line.write(server.log, "container_service: volume %'s generation % refused: %", volume, added.number, error)
+                    log_line.write(
+                        server.log,
+                        "container_service: volume %'s generation % refused: %",
+                        volume,
+                        added.number,
+                        error
+                    )
                     return if error == .NotFound { .NotYours } else { .Failed }
                 }
             }
@@ -1315,7 +1487,7 @@ for_volume :: fn(server: ptr[mut Server], index: usize, request: container.Reque
  * @return Blocks with the connection's other end, which the caller owns; NotAVolume for a slot past them, or NoSpace
  *     if the driver, a channel or a slot couldn't be had.
  */
-open_blocks :: fn(server: ptr[mut Server], index: usize) -> container.Response {
+open_blocks :: fn(server : ptr[mut Server], index : usize) -> container.Response {
     if index >= server.connections.count {
         return .NotAVolume
     }
@@ -1362,7 +1534,7 @@ open_blocks :: fn(server: ptr[mut Server], index: usize) -> container.Response {
  *     alone.
  * @param into Where each request is read into, reused.
  */
-serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_blocks :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1387,13 +1559,21 @@ serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
         match request {
             case Read(transfer) => {
                 if !in_volume(server, &connection, transfer, false) {
-                    answer(connection.end, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange}))
+                    answer(
+                        connection.end,
+                        server.port,
+                        .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange})
+                    )
                     continue
                 }
             }
             case Write(transfer) => {
                 if !in_volume(server, &connection, transfer, true) {
-                    answer(connection.end, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange}))
+                    answer(
+                        connection.end,
+                        server.port,
+                        .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange})
+                    )
                     continue
                 }
             }
@@ -1425,13 +1605,20 @@ serve_blocks :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
  * @param writing Whether it writes.
  * @return Whether it may.
  */
-in_volume :: fn(server: ptr[Server], connection: ptr[Connection], transfer: block.Transfer, writing: bool) -> bool {
-    if transfer.first % SECTORS_PER_BLOCK != 0 || cast[u64](transfer.count) % SECTORS_PER_BLOCK != 0 || transfer.count == 0 {
+in_volume :: fn(server : ptr[Server], connection : ptr[Connection], transfer : block.Transfer, writing : bool) -> bool {
+    if transfer.first % SECTORS_PER_BLOCK != 0
+        || cast[u64](transfer.count) % SECTORS_PER_BLOCK != 0
+        || transfer.count == 0 {
         return false
     }
     first :: transfer.first / SECTORS_PER_BLOCK
     count :: cast[u64](transfer.count) / SECTORS_PER_BLOCK
-    return if writing { may_write(server, connection, first, count) } else { may_read(server, connection, first, count) }
+    return if writing {
+        may_write(server, connection, first, count)
+    }
+    else {
+        may_read(server, connection, first, count)
+    }
 }
 
 /**
@@ -1442,7 +1629,7 @@ in_volume :: fn(server: ptr[Server], connection: ptr[Connection], transfer: bloc
  * @param index The block connection's slot; it's dropped if its driver's connection fails.
  * @param into Where each answer is read into, reused.
  */
-pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+pass_back :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1470,7 +1657,7 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
  * @param port The server's port, waited on while the ring is full.
  * @param response The answer, copied whole into the message; a failure to send it is ignored.
  */
-answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response) {
+answer :: fn(end : slop_os.Channel, port : slop_os.Port, response : block.Response) {
     out := os.Outgoing.{}
     made :: os.begin[block.Response](&out)
     made^ = response

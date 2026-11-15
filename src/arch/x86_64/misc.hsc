@@ -4,8 +4,10 @@ import x86_64 from "base:intrinsics/x86_64"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 
-// The early console: the first 16550 UART, at COM1's I/O ports
-//SPEC: TI PC16550D datasheet (registers, line control, line status); COM1 at I/O port 0x3f8
+/*
+ * The early console: the first 16550 UART, at COM1's I/O ports
+ * SPEC: TI PC16550D datasheet (registers, line control, line status); COM1 at I/O port 0x3f8
+ */
 /** The first I/O port of COM1, the early console's UART; its registers are at offsets from it. */
 COM1 : u16 : 0x3f8
 /** The UART's data register offset: a write sends a byte (with DLAB clear). */
@@ -48,7 +50,7 @@ RESET_CONTROL_PORT : u16 : 0xcf9
  * The test device: QEMU's PIT, ISA IRQ 0, which QEMU's MADT routes to line 2 of its I/O APIC, at the
  * address the MP specification gives the first I/O APIC.
  */
-//SPEC: Intel MultiProcessor Specification 1.4, §3.6.1 (the default I/O APIC address); Intel 8254 datasheet
+// SPEC: Intel MultiProcessor Specification 1.4, §3.6.1 (the default I/O APIC address); Intel 8254 datasheet
 /** The physical address of the test device's I/O APIC's registers, the first I/O APIC's default. */
 TEST_IO_APIC : u64 : 0xfec00000
 /** The I/O APIC line QEMU's PIT is wired to. */
@@ -71,7 +73,7 @@ PIT_TEST_DIVISOR : u16 : 1193
  * @param direct_map_offset Where the bootloader's direct map is, not needed for I/O ports.
  * @param firmware The firmware's tables, not needed: COM1 is assumed at its usual ports.
  */
-early_console_init :: fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) {
+early_console_init :: fn(direct_map_offset : u64, firmware : ptr[boot_info.FirmwareTables]) {
     x86_64.out_u8(COM1 + UART_INTERRUPT_ENABLE, 0)
     x86_64.out_u8(COM1 + UART_LINE_CONTROL, LINE_CONTROL_DLAB)
     x86_64.out_u8(COM1 + UART_DIVISOR_LOW, cast[u8](BAUD_DIVISOR & 0xff))
@@ -89,7 +91,7 @@ early_console_init :: fn(direct_map_offset: u64, firmware: ptr[boot_info.Firmwar
  *
  * @param text The text, sent byte by byte, UTF-8 as it is.
  */
-early_console_write :: fn(text: string) {
+early_console_write :: fn(text : string) {
     for character in text {
         // A terminal needs a carriage return before each line feed
         if character == '\n' {
@@ -104,7 +106,7 @@ early_console_write :: fn(text: string) {
  *
  * @param byte The byte, sent as it is.
  */
-write_byte :: fn(byte: u8) {
+write_byte :: fn(byte : u8) {
     loop {
         x86_64.pause()
     }
@@ -120,7 +122,7 @@ write_byte :: fn(byte: u8) {
  *
  * @param code The value written to the device.
  */
-test_exit :: fn(code: u32) {
+test_exit :: fn(code : u32) {
     x86_64.out_u32(DEBUG_EXIT_PORT, code)
 }
 
@@ -131,7 +133,7 @@ test_exit :: fn(code: u32) {
  * @param direct_map_offset Where the bootloader's direct map is, not needed.
  * @return 1, the reset control register, the only method on x86-64, which needs nothing from the firmware.
  */
-reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 {
+reset_method :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> u8 {
     return 1
 }
 
@@ -142,7 +144,7 @@ reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u
  *
  * @param method What reset_method chose, not used: there's only the one method.
  */
-reset :: fn(method: u8) {
+reset :: fn(method : u8) {
     x86_64.out_u8(RESET_CONTROL_PORT, 0x02)
     x86_64.out_u8(RESET_CONTROL_PORT, 0x06)
 }
@@ -154,7 +156,7 @@ reset :: fn(method: u8) {
  * @return False: x86-64 turns off through ACPI's PM1 control registers, which only the firmware's tables and AML
  *     name, so the kernel is told them (power_set_off) and writes them itself.
  */
-can_power_off :: fn(method: u8) -> bool {
+can_power_off :: fn(method : u8) -> bool {
     return false
 }
 
@@ -163,7 +165,7 @@ can_power_off :: fn(method: u8) -> bool {
  *
  * @param method What reset_method chose, not used.
  */
-power_off :: fn(method: u8) {}
+power_off :: fn(method : u8) {}
 
 /**
  * Describe the emulator's test device, QEMU's PIT on line 2 of its first I/O APIC, for test_ioapic.
@@ -188,7 +190,7 @@ test_device :: fn() -> arch_interface.TestDevice {
  *
  * @param on True to start them, false to stop them.
  */
-test_device_interrupts :: fn(on: bool) {
+test_device_interrupts :: fn(on : bool) {
     divisor :: if on { PIT_TEST_DIVISOR } else { cast[u16](0) }
     x86_64.out_u8(PIT_COMMAND, if on { PIT_CHANNEL_0_RATE } else { PIT_CHANNEL_0_ONCE })
     x86_64.out_u8(PIT_CHANNEL_0, cast[u8](divisor & 0xff))
@@ -270,7 +272,7 @@ has_io_ports :: fn() -> bool {
  * @param width How many bytes to read: 1, 2 or 4.
  * @return The value, zero-extended, or null for any other width, when nothing was read.
  */
-port_read :: fn(port: u16, width: u32) -> u32? {
+port_read :: fn(port : u16, width : u32) -> u32? {
     if width == 1 {
         return cast[u32](x86_64.in_u8(port))
     }
@@ -291,7 +293,7 @@ port_read :: fn(port: u16, width: u32) -> u32? {
  * @param value The value, of which the low width bytes are written.
  * @return True if it was written; false for any other width, when nothing was.
  */
-port_write :: fn(port: u16, width: u32, value: u32) -> bool {
+port_write :: fn(port : u16, width : u32, value : u32) -> bool {
     if width == 1 {
         x86_64.out_u8(port, cast[u8](value & 0xff))
         return true

@@ -24,8 +24,8 @@ package generation_builder
 
 import runtime from "base:runtime"
 import os from "std:os"
-import time from "std:time"
 import strings from "std:strings"
+import time from "std:time"
 import bundle from "../../bundle"
 import generations from "../../generations"
 
@@ -63,7 +63,9 @@ main :: fn() -> int {
         base += 1
     }
     if arguments.count < base + 6 {
-        runtime.log_error("usage: generation_builder [--recovery] [--development] <esp folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
+        runtime.log_error(
+            "usage: generation_builder [--recovery] [--development] <esp folder> <store folder> <number> <yes|no> <command line> <kernel> <file>..."
+        )
         return 1
     }
     esp :: argument(arguments, base)
@@ -101,8 +103,12 @@ main :: fn() -> int {
         }
         made.files[at].hash = hash
         made.file_count += 1
-        // A typed library is in the store too, where a substitution names it by its hash, pinned so it's kept (decisions/0122)
-        if strings.ends_with(argument(arguments, i), ".library") && !pin_library(argument(arguments, base + 1), argument(arguments, i)) {
+        /*
+         * A typed library is in the store too, where a substitution names it by its hash, pinned so it's kept
+         * (decisions/0122)
+         */
+        if strings.ends_with(argument(arguments, i), ".library")
+            && !pin_library(argument(arguments, base + 1), argument(arguments, i)) {
             runtime.log_error("generation_builder: can't put % in the store", argument(arguments, i))
             return 4
         }
@@ -117,16 +123,22 @@ main :: fn() -> int {
     record_storage : u8[128]
     path_storage : u8[1024]
     record :: generations.bytes_of(&made)
-    if os.write_entire_file(joined(esp, "/", generations.record_path(made.number, &record_storage), &path_storage),
-        bit_cast[string](record)) != null {
+    if os.write_entire_file(
+        joined(esp, "/", generations.record_path(made.number, &record_storage), &path_storage),
+        bit_cast[string](record)
+    )
+        != null {
         return 7
     }
     if recovery {
         rescue := made
         rescue.state = generations.STATE_RECOVERY
         rescue.number = generations.RECOVERY_NUMBER
-        if os.write_entire_file(joined(esp, "/", generations.record_path(rescue.number, &record_storage), &path_storage),
-            bit_cast[string](generations.bytes_of(&rescue))) != null {
+        if os.write_entire_file(
+            joined(esp, "/", generations.record_path(rescue.number, &record_storage), &path_storage),
+            bit_cast[string](generations.bytes_of(&rescue))
+        )
+            != null {
             return 7
         }
     }
@@ -143,22 +155,29 @@ main :: fn() -> int {
  *     a file couldn't be read or put, 5 for too many boot-set files or too long a name, 6 if the generation doesn't
  *     check, 7 if its record couldn't be written.
  */
-stage :: fn(arguments: string[]) -> int {
+stage :: fn(arguments : string[]) -> int {
     if arguments.count < 9 {
-        runtime.log_error("usage: generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>...")
+        runtime.log_error(
+            "usage: generation_builder --stage <system volume folder> <store folder> <number> <yes|no> <command line> <kernel> <file>..."
+        )
         return 1
     }
     system :: argument(arguments, 2)
     store :: argument(arguments, 3)
-    made := generations.Generation.{magic = generations.MAGIC, state = generations.STATE_TENTATIVE, tries_left = generations.TRIES,
-        built = built_now()}
+    made := generations.Generation.{
+        magic = generations.MAGIC,
+        state = generations.STATE_TENTATIVE,
+        tries_left = generations.TRIES,
+        built = built_now(),
+    }
     made.number = number_of(argument(arguments, 4)) or_return 3
     made.kaslr = if argument(arguments, 5) == "yes" { 1 } else { 0 }
     if !generations.set_line(&made.command_line, argument(arguments, 6)) {
         return 3
     }
     root_storage : u8[1024]
-    made.store_root = bundle.from_hex(os.read_entire_file(joined(store, "/root", "", &root_storage)) or_else "") or_else bundle.Hash.{}
+    made.store_root = bundle.from_hex(os.read_entire_file(joined(store, "/root", "", &root_storage)) or_else "")
+        or_else bundle.Hash.{}
     // The store keeps objects as objects/<hex>, as the ESP does under boot/
     made.kernel = put_in(store, "/objects/", argument(arguments, 7)) or_return 4
     for i in cast[usize](8)..<arguments.count {
@@ -180,7 +199,11 @@ stage :: fn(arguments: string[]) -> int {
         case None => {}
     }
     path_storage : u8[1024]
-    if os.write_entire_file(joined(system, "/updates/pending", "", &path_storage), bit_cast[string](generations.bytes_of(&made))) != null {
+    if os.write_entire_file(
+        joined(system, "/updates/pending", "", &path_storage),
+        bit_cast[string](generations.bytes_of(&made))
+    )
+        != null {
         return 7
     }
     runtime.log_info("generation_builder: generation % staged", made.number)
@@ -195,13 +218,17 @@ stage :: fn(arguments: string[]) -> int {
  * @param path The host path of the file, read whole; its bytes are hashed and written unchanged as the object.
  * @return Its hash; null if it couldn't be read or written, which isn't logged.
  */
-put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
+put_in :: fn(folder : string, objects : string, path : string) -> bundle.Hash? {
     contents :: os.read_entire_file(path) or_return null
     hash :: bundle.hash_of(bit_cast[u8[]](contents))
     hex_storage : u8[64]
     folder_storage : u8[1024]
     path_storage : u8[1024]
-    if os.write_entire_file(joined(joined(folder, objects, "", &folder_storage), bundle.hex(hash, &hex_storage), "", &path_storage), contents) != null {
+    if os.write_entire_file(
+        joined(joined(folder, objects, "", &folder_storage), bundle.hex(hash, &hex_storage), "", &path_storage),
+        contents
+    )
+        != null {
         return null
     }
     return hash
@@ -215,7 +242,7 @@ put_in :: fn(folder: string, objects: string, path: string) -> bundle.Hash? {
  * @param path The library's path, its name ending in .library.
  * @return True once it's put and pinned; false if it couldn't be read or written, or pins/ couldn't be made.
  */
-pin_library :: fn(store: string, path: string) -> bool {
+pin_library :: fn(store : string, path : string) -> bool {
     hash :: put_in(store, "/objects/", path) or_return false
     folder_storage : u8[1024]
     pins :: joined(store, "/pins", "", &folder_storage)
@@ -237,7 +264,7 @@ pin_library :: fn(store: string, path: string) -> bool {
  * @param path The host path of the file, read whole; its bytes are hashed and written unchanged as the object.
  * @return Its hash; null, logged, if it couldn't be read or written.
  */
-put :: fn(esp: string, path: string) -> bundle.Hash? {
+put :: fn(esp : string, path : string) -> bundle.Hash? {
     contents :: match os.read_entire_file(path) {
         case Ok(read) => read
         case Error(error) => {
@@ -248,7 +275,8 @@ put :: fn(esp: string, path: string) -> bundle.Hash? {
     hash :: bundle.hash_of(bit_cast[u8[]](contents))
     object_storage : u8[128]
     path_storage : u8[1024]
-    if os.write_entire_file(joined(esp, "/", generations.object_path(hash, &object_storage), &path_storage), contents) != null {
+    if os.write_entire_file(joined(esp, "/", generations.object_path(hash, &object_storage), &path_storage), contents)
+        != null {
         runtime.log_error("generation_builder: can't write %'s object", path)
         return null
     }
@@ -262,7 +290,7 @@ put :: fn(esp: string, path: string) -> bundle.Hash? {
  * @param index Which, from 0.
  * @return The argument; "" past the last.
  */
-argument :: fn(arguments: string[], index: usize) -> string {
+argument :: fn(arguments : string[], index : usize) -> string {
     return if index < arguments.count { arguments[index] } else { "" }
 }
 
@@ -272,7 +300,7 @@ argument :: fn(arguments: string[], index: usize) -> string {
  * @param text The digits, nothing else.
  * @return Its value, wrapping past a u64's largest, as it isn't checked; null if text is empty or isn't all digits.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     if text.count == 0 {
         return null
     }
@@ -292,7 +320,7 @@ number_of :: fn(text: string) -> u64? {
  * @param path The path, with / or \ separators.
  * @return What's after its last separator, a view into path; all of it without one.
  */
-file_name :: fn(path: string) -> string {
+file_name :: fn(path : string) -> string {
     start := cast[usize](0)
     for character, i in path {
         if character == '/' || character == '\\' {
@@ -311,7 +339,7 @@ file_name :: fn(path: string) -> string {
  * @param storage Where they're written; what's past its 1024 bytes is dropped.
  * @return The joined text, a view into storage, good while it is; empty if all are.
  */
-joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[1024]]) -> string {
+joined :: fn(a : string, b : string, c : string, storage : ptr[mut u8[1024]]) -> string {
     count := cast[usize](0)
     for text in string.[a, b, c] {
         for character in text {

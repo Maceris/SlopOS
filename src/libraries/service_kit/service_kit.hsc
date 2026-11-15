@@ -52,7 +52,7 @@ Clients :: struct {
  * @param end The client's end, which the clients keep when it's added; not closed when it isn't.
  * @return True once it's added; false if there's no room, or it can't be bound.
  */
-add_client #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> bool {
+add_client #export :: fn(clients : ptr[mut Clients], port : slop_os.Port, end : slop_os.Channel) -> bool {
     return add_client_index(clients, port, end) is_some
 }
 
@@ -66,7 +66,7 @@ add_client #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slo
  * @return The client's index, 0 to MAX_CLIENTS - 1, the lowest freed place or the next; null if there's no room, or
  *     it can't be bound.
  */
-add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, end: slop_os.Channel) -> usize? {
+add_client_index #export :: fn(clients : ptr[mut Clients], port : slop_os.Port, end : slop_os.Channel) -> usize? {
     index := clients.count
     for i in cast[usize](0)..<clients.count {
         if i < clients.ends.count && cast[slop_os.Handle](clients.ends[i]) == slop_os.NO_HANDLE {
@@ -99,7 +99,7 @@ add_client_index #export :: fn(clients: ptr[mut Clients], port: slop_os.Port, en
  *     add_client then reuses.
  * @param index The client's index; one past MAX_CLIENTS is nothing.
  */
-drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
+drop_client #export :: fn(clients : ptr[mut Clients], index : usize) {
     if index < clients.ends.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](clients.ends[index]))
         clients.ends[index] = cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -112,7 +112,7 @@ drop_client #export :: fn(clients: ptr[mut Clients], index: usize) {
  * @param label The label, padded with zeros to GRANT_LABEL_SIZE bytes.
  * @return Its bytes up to the first zero, all of them if there's none: a view into label, good while it is.
  */
-text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
+text_of_label #export :: fn(label : ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string {
     count : usize = 0
     for byte in label^ {
         if byte == 0 {
@@ -133,7 +133,7 @@ text_of_label #export :: fn(label: ptr[u8[slop_os.GRANT_LABEL_SIZE]]) -> string 
  * @return Its bytes up to its first zero, all of them if there's none; null if its size couldn't be read, or it
  *     couldn't be mapped.
  */
-text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> string? {
+text_of #export :: fn(block : ptr[slop_os.StartupBlock], memory : slop_os.Memory) -> string? {
     size :: slop_os.memory_size(memory) or_return null
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
     if slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
@@ -161,11 +161,16 @@ text_of #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) 
  *     service is MAX_SERVICES when it can't be read, is too small, or can't be copied without memory, or
  *     system_records.check's when it doesn't check.
  */
-read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Memory) -> Result[ptr[mut system_records.SystemRecords], system_records.Problem] {
+read_records #export :: fn(
+    block : ptr[slop_os.StartupBlock],
+    memory : slop_os.Memory
+) -> Result[ptr[mut system_records.SystemRecords], system_records.Problem] {
     unreadable :: system_records.Problem.{reason = "can't be read", service = system_records.MAX_SERVICES}
     size :: slop_os.memory_size(memory) or_return .Error(unreadable)
     if size < cast[u64](size_of(system_records.SystemRecords)) {
-        return .Error(system_records.Problem.{reason = "is too small to be system records", service = system_records.MAX_SERVICES})
+        return .Error(
+            system_records.Problem.{reason = "is too small to be system records", service = system_records.MAX_SERVICES}
+        )
     }
     address :: runtime.reserve_addresses(cast[usize](size)) or_return .Error(unreadable)
     if slop_os.memory_map(memory, block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
@@ -177,7 +182,9 @@ read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Mem
     }
     _ = slop_os.memory_unmap(block.space, address)
     if error != null {
-        return .Error(system_records.Problem.{reason = "can't be copied without memory", service = system_records.MAX_SERVICES})
+        return .Error(
+            system_records.Problem.{reason = "can't be copied without memory", service = system_records.MAX_SERVICES}
+        )
     }
     match system_records.check(made) {
         case Some(problem) => {
@@ -196,7 +203,7 @@ read_records #export :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Mem
  * @return The rest of the first word that starts with prefix, a view into text, empty if the word is just prefix;
  *     null if no word does.
  */
-word_after #export :: fn(text: string, prefix: string) -> string? {
+word_after #export :: fn(text : string, prefix : string) -> string? {
     start : usize = 0
     for character, i in text {
         if character == ' ' {
@@ -216,7 +223,7 @@ word_after #export :: fn(text: string, prefix: string) -> string? {
  * @param text The number's digits, nothing else: no sign, no spaces.
  * @return Its value; null if text is empty, isn't all digits, or has more than 19 of them, which a u64 may not hold.
  */
-number_of #export :: fn(text: string) -> u64? {
+number_of #export :: fn(text : string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
     }
@@ -240,7 +247,7 @@ number_of #export :: fn(text: string) -> u64? {
  * @return The rest of the word after prefix, a view into text; null if it doesn't start with it, or start and end
  *     aren't a range of text.
  */
-word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> string? {
+word_from :: fn(text : string, start : usize, end : usize, prefix : string) -> string? {
     if end < start || end > text.count {
         return null
     }
@@ -258,7 +265,7 @@ word_from :: fn(text: string, start: usize, end: usize, prefix: string) -> strin
  * @param word The word, compared whole and exactly.
  * @return True if one of text's words is word.
  */
-has_word #export :: fn(text: string, word: string) -> bool {
+has_word #export :: fn(text : string, word : string) -> bool {
     start : usize = 0
     for character, i in text {
         if character == ' ' {
@@ -281,7 +288,7 @@ has_word #export :: fn(text: string, word: string) -> bool {
  * @return True if text's bytes from start to end are word's; false otherwise, or if start and end aren't a range of
  *     text.
  */
-is_word_at :: fn(text: string, start: usize, end: usize, word: string) -> bool {
+is_word_at :: fn(text : string, start : usize, end : usize, word : string) -> bool {
     if end < start || end > text.count {
         return false
     }
@@ -304,7 +311,7 @@ READ_PIECE : u64 : 4096
  * @param into Where the bytes go, all of it filled, from offset on; what was read before a failure stays.
  * @return True once into is filled; false if a read failed: the memory gone, its pager gone, or the range past its end.
  */
-read_pages :: fn(memory: slop_os.Memory, offset: u64, into: mut u8[]) -> bool {
+read_pages :: fn(memory : slop_os.Memory, offset : u64, into : mut u8[]) -> bool {
     done := cast[usize](0)
     loop {
         if done >= into.count {
@@ -339,7 +346,7 @@ STOP_KEY : u64 : 0xffff_ffff_ffff_fff0
  * @return True if a Stop will wake it; false if it can't, as for a program given no lifecycle channel, which then
  *     ends only when it's killed.
  */
-watch_stop :: fn(port: slop_os.Port) -> bool {
+watch_stop :: fn(port : slop_os.Port) -> bool {
     return lifecycle.on_stop(port, STOP_KEY)
 }
 

@@ -11,8 +11,8 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import lifecycle from "std:os/slop_os/lifecycle"
-import config from "../protocols/config"
 import installations from "../installations"
+import config from "../protocols/config"
 
 /** What it's configured with: how much a run counts. */
 CounterSettings :: struct {
@@ -39,7 +39,7 @@ STOP_KEY : u64 : 1
  *     data directory couldn't be opened; 3 if the count couldn't be written; 4 if the port for the stop request
  *     couldn't be made or bound.
  */
-run :: fn(data: installations.AppData, settings: config.Config[CounterSettings]?, version: int) -> int {
+run :: fn(data : installations.AppData, settings : config.Config[CounterSettings]?, version : int) -> int {
     step := cast[u64](1)
     match settings {
         case Some(connection) => {
@@ -88,7 +88,7 @@ run :: fn(data: installations.AppData, settings: config.Config[CounterSettings]?
  * @param text The text, whose leading digits are read up to the first byte that isn't one; a sign or space isn't.
  * @return The number its leading digits make, 0 if it doesn't start with a digit; one too big for a u64 wraps.
  */
-number_of :: fn(text: string) -> u64 {
+number_of :: fn(text : string) -> u64 {
     value := cast[u64](0)
     for character in text {
         if character < '0' || character > '9' {
@@ -106,7 +106,7 @@ number_of :: fn(text: string) -> u64 {
  * @param digits Where the digits go, 20 bytes, enough for any u64; what was there is overwritten.
  * @return The digits, without a sign or leading zeros, as a view into digits, good as long as it is.
  */
-decimal :: fn(value: u64, digits: ptr[mut u8[20]]) -> string {
+decimal :: fn(value : u64, digits : ptr[mut u8[20]]) -> string {
     reversed : u8[20]
     count := cast[usize](0)
     left := value

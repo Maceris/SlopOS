@@ -1,11 +1,11 @@
 package arch_aarch64
 
 import intrinsics from "base:intrinsics"
-import runtime from "base:runtime"
 import aarch64 from "base:intrinsics/aarch64"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import arch_interface from "../../arch_interface"
 import kernel_entry from "../../kernel/entry"
-import concurrency from "std:concurrency"
 
 /*
  * The GICv3 (docs/specs/arch_interface.md, AArch64): the distributor for shared peripheral interrupts (SPIs),
@@ -17,7 +17,10 @@ import concurrency from "std:concurrency"
  * interrupt IDs are translated: routes records which ID each line was routed to on which CPU. So for the LPIs
  * message-signaled interrupts raise (its.hsc).
  */
-//SPEC: Arm GICv3 and GICv4 Architecture Specification (IHI 0069): §12.9 (GICD_*), §12.10/12.11 (GICR_* and the SGI frame), §12.2 (ICC_*_EL1)
+/*
+ * SPEC: Arm GICv3 and GICv4 Architecture Specification (IHI 0069): §12.9 (GICD_*), §12.10/12.11 (GICR_* and the SGI
+ * frame), §12.2 (ICC_*_EL1)
+ */
 
 // Distributor registers
 /** GICD_CTLR's offset in the distributor: the distributor's control register. */
@@ -88,7 +91,10 @@ SRE_ENABLE : u64 : 0x7
 INTERRUPT_PRIORITY : u8 : 0xa0
 /** SGI_NMI's priority, above every other's, so it preempts one being handled too. */
 NMI_PRIORITY : u8 : 0x20
-/** ICC_PMR_EL1's value in user mode and idle: interrupts of a priority below 0xf0, as INTERRUPT_PRIORITY is, are let through. */
+/**
+ * ICC_PMR_EL1's value in user mode and idle: interrupts of a priority below 0xf0, as INTERRUPT_PRIORITY is, are let
+ * through.
+ */
 PRIORITY_MASK : u64 : 0xf0
 /** ICC_PMR_EL1's value in the kernel: only priorities below 0x80, NMI_PRIORITY's, are let through. */
 KERNEL_PRIORITY_MASK : u64 : 0x80
@@ -157,7 +163,7 @@ InterruptController :: struct {
  *
  * @param system The shared state, whose distributor is mapped (non-zero).
  */
-init_distributor :: fn(system: ptr[mut ArchSystem]) {
+init_distributor :: fn(system : ptr[mut ArchSystem]) {
     base :: system.distributor
     write_u32(base, GICD_CTLR, 0)
     wait_for_distributor(base)
@@ -170,7 +176,7 @@ init_distributor :: fn(system: ptr[mut ArchSystem]) {
  *
  * @param base The distributor's registers, a virtual address.
  */
-wait_for_distributor :: fn(base: u64) {
+wait_for_distributor :: fn(base : u64) {
     loop {
         intrinsics.spin_hint()
     }
@@ -187,7 +193,7 @@ wait_for_distributor :: fn(base: u64) {
  * @param system The shared state, with the redistributor region and the timers' interrupt IDs.
  * @param cpu The calling CPU's state, whose mpidr is set; its redistributor is set here, 0 if none was found.
  */
-init_cpu_interface :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
+init_cpu_interface :: fn(system : ptr[ArchSystem], cpu : ptr[mut ArchCpu]) {
     cpu.redistributor = find_redistributor(system, cpu.mpidr)
     base :: cpu.redistributor
     if base != 0 {
@@ -203,7 +209,11 @@ init_cpu_interface :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
             write_u8(sgi, GICR_IPRIORITYR + cast[u64](i), INTERRUPT_PRIORITY)
         }
         write_u8(sgi, GICR_IPRIORITYR + cast[u64](SGI_NMI), NMI_PRIORITY)
-        write_u32(sgi, GICR_ISENABLER0, 0xffff | (cast[u32](1) << system.timer_interrupt) | (cast[u32](1) << system.test_timer_interrupt))
+        write_u32(
+            sgi,
+            GICR_ISENABLER0,
+            0xffff | (cast[u32](1) << system.timer_interrupt) | (cast[u32](1) << system.test_timer_interrupt)
+        )
     }
     aarch64.write_system_register(.ICC_SRE_EL1, SRE_ENABLE)
     aarch64.isb()
@@ -222,7 +232,7 @@ init_cpu_interface :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
  * @return The redistributor's registers, a virtual address through the direct map; 0 without a region, or if no
  *     redistributor in it has that affinity.
  */
-find_redistributor :: fn(system: ptr[ArchSystem], mpidr: u64) -> u64 {
+find_redistributor :: fn(system : ptr[ArchSystem], mpidr : u64) -> u64 {
     if system.redistributors == 0 {
         return 0
     }
@@ -285,7 +295,7 @@ pending_interrupt #no_context :: fn() -> u32 {
  *     send_ipi raises; Spurious for a special ID, an SPI or LPI with no route on this CPU, the test device's
  *     clock, or any other SGI or PPI.
  */
-interrupt_source :: fn(interrupt: u32) -> kernel_entry.InterruptSource {
+interrupt_source :: fn(interrupt : u32) -> kernel_entry.InterruptSource {
     cpu :: current_cpu()
     system :: current_system()
     if interrupt >= FIRST_SPECIAL && interrupt < FIRST_LPI {
@@ -332,7 +342,7 @@ interrupt_source :: fn(interrupt: u32) -> kernel_entry.InterruptSource {
  *
  * @param interrupt The GIC's interrupt ID, as ICC_IAR1_EL1 read it.
  */
-acknowledge :: fn(interrupt: u32) {
+acknowledge :: fn(interrupt : u32) {
     aarch64.write_system_register(.ICC_EOIR1_EL1, cast[u64](interrupt))
     aarch64.isb()
 }
@@ -347,7 +357,7 @@ acknowledge :: fn(interrupt: u32) {
  * @param interrupt The GIC's interrupt ID, an SPI's or an LPI's.
  * @return The kernel's device interrupt ID, or NO_ROUTE if the interrupt isn't routed to that CPU.
  */
-device_id_for :: fn(system: ptr[ArchSystem], cpu: u64, interrupt: u32) -> u32 {
+device_id_for :: fn(system : ptr[ArchSystem], cpu : u64, interrupt : u32) -> u32 {
     for route in system.routes {
         if route.used && route.cpu == cpu && route.interrupt == interrupt {
             return route.id
@@ -364,7 +374,7 @@ device_id_for :: fn(system: ptr[ArchSystem], cpu: u64, interrupt: u32) -> u32 {
  * @return first FIRST_DEVICE_ID, 32.
  * @return count DEVICE_ID_COUNT, 224, so the IDs are 32 to 255.
  */
-device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32) {
+device_interrupt_range :: fn() -> (first : arch_interface.InterruptId, count : u32) {
     return cast[arch_interface.InterruptId](FIRST_DEVICE_ID), DEVICE_ID_COUNT
 }
 
@@ -377,7 +387,7 @@ device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32
  * @param id The kernel's device interrupt ID, as interrupt_source gave it; the interrupt ended is the one that ID was
  *     given for. Nothing is ended if this CPU has no device interrupt active.
  */
-end_of_interrupt :: fn(id: arch_interface.InterruptId) {
+end_of_interrupt :: fn(id : arch_interface.InterruptId) {
     cpu :: current_cpu()
     if cpu.active_interrupt == NO_ACTIVE_INTERRUPT {
         return void
@@ -398,7 +408,7 @@ NO_ACTIVE_INTERRUPT : u32 : 0xffffffff
  * @param cpu_hardware_id The target CPU's MPIDR, its affinity fields, as affinity_of_this_cpu gives them.
  * @param kind Which IPI: SGI_RESCHEDULE, SGI_TLB_FLUSH or SGI_STOP.
  */
-send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
+send_ipi :: fn(cpu_hardware_id : u64, kind : arch_interface.IpiKind) {
     interrupt :: match kind {
         case .Reschedule => SGI_RESCHEDULE
         case .TlbFlush => SGI_TLB_FLUSH
@@ -413,7 +423,7 @@ send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
  * @param cpu_hardware_id The target CPU's MPIDR, its affinity fields, as affinity_of_this_cpu gives them.
  * @param interrupt The SGI, 0 to 15.
  */
-send_sgi :: fn(cpu_hardware_id: u64, interrupt: u32) {
+send_sgi :: fn(cpu_hardware_id : u64, interrupt : u32) {
     affinity_0 :: cpu_hardware_id & 0xff
     value := cast[u64](1) << (affinity_0 % 16)
     value |= ((cpu_hardware_id >> 8) & 0xff) << 16
@@ -450,9 +460,9 @@ interrupt_pending :: fn() -> bool {
  * @error NotFound GICD_TYPER says there are no SPIs; nothing was written.
  */
 init_interrupt_controller :: fn(
-    controller: ptr[mut InterruptController],
-    kind: arch_interface.ControllerKind,
-    registers: arch_interface.VirtualAddress,
+    controller : ptr[mut InterruptController],
+    kind : arch_interface.ControllerKind,
+    registers : arch_interface.VirtualAddress
 ) -> Result[u32, arch_interface.ControllerError] {
     if kind != .GicDistributor {
         return .Error(.UnsupportedKind)
@@ -489,14 +499,13 @@ init_interrupt_controller :: fn(
  * @param polarity Ignored, as route_wired ignores it.
  */
 route_wired_remapped :: fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    message: arch_interface.MsiMessage,
-    id: arch_interface.InterruptId,
-    trigger: arch_interface.Trigger,
-    polarity: arch_interface.Polarity,
-) {
-}
+    controller : ptr[mut InterruptController],
+    line : u32,
+    message : arch_interface.MsiMessage,
+    id : arch_interface.InterruptId,
+    trigger : arch_interface.Trigger,
+    polarity : arch_interface.Polarity
+) {}
 
 /**
  * Deliver a line to a CPU as the kernel's ID there, still masked (arch_interface.route_wired).
@@ -512,12 +521,12 @@ route_wired_remapped :: fn(
  * @param polarity Ignored: the GIC has no polarity of its own, so an active-low line is inverted before it.
  */
 route_wired :: fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    cpu_hardware_id: u64,
-    id: arch_interface.InterruptId,
-    trigger: arch_interface.Trigger,
-    polarity: arch_interface.Polarity,
+    controller : ptr[mut InterruptController],
+    line : u32,
+    cpu_hardware_id : u64,
+    id : arch_interface.InterruptId,
+    trigger : arch_interface.Trigger,
+    polarity : arch_interface.Polarity
 ) {
     interrupt :: FIRST_SPI + line
     base :: controller.registers
@@ -541,7 +550,7 @@ route_wired :: fn(
  * @param id The kernel's device interrupt ID on that CPU.
  * @param interrupt The GIC's interrupt ID, an SPI's or an LPI's.
  */
-record_route :: fn(system: ptr[mut ArchSystem], cpu: u64, id: u32, interrupt: u32) {
+record_route :: fn(system : ptr[mut ArchSystem], cpu : u64, id : u32, interrupt : u32) {
     concurrency.lock(&system.routes_lock)
     defer concurrency.unlock(&system.routes_lock)
     free : usize = MAX_ROUTES
@@ -563,7 +572,7 @@ record_route :: fn(system: ptr[mut ArchSystem], cpu: u64, id: u32, interrupt: u3
  * @param system The shared state, whose routes change.
  * @param interrupt The GIC's interrupt ID; nothing happens if no route has it.
  */
-forget_route :: fn(system: ptr[mut ArchSystem], interrupt: u32) {
+forget_route :: fn(system : ptr[mut ArchSystem], interrupt : u32) {
     concurrency.lock(&system.routes_lock)
     defer concurrency.unlock(&system.routes_lock)
     for &route in system.routes {
@@ -579,7 +588,7 @@ forget_route :: fn(system: ptr[mut ArchSystem], interrupt: u32) {
  * @param controller The distributor, from init_interrupt_controller.
  * @param line The SPI line, below controller's lines.
  */
-mask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
+mask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
     interrupt :: FIRST_SPI + line
     write_u32(controller.registers, GICD_ICENABLER + cast[u64](interrupt / 32) * 4, cast[u32](1) << (interrupt % 32))
 }
@@ -590,7 +599,7 @@ mask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
  * @param controller The distributor, from init_interrupt_controller.
  * @param line The SPI line, below controller's lines, routed already (route_wired).
  */
-unmask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
+unmask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
     interrupt :: FIRST_SPI + line
     write_u32(controller.registers, GICD_ISENABLER + cast[u64](interrupt / 32) * 4, cast[u32](1) << (interrupt % 32))
 }
@@ -621,7 +630,7 @@ test_device :: fn() -> arch_interface.TestDevice {
  * @param on True to start it, arming the calling CPU's physical timer; false to stop it, disarming the timer, so
  *     it should be called on the CPU that started it.
  */
-test_device_interrupts :: fn(on: bool) {
+test_device_interrupts :: fn(on : bool) {
     system :: current_system()
     system.test_interrupts = on
     if on {
@@ -639,7 +648,7 @@ test_device_interrupts :: fn(on: bool) {
  *
  * @param system The shared state, whose distributor is mapped.
  */
-pend_test_line :: fn(system: ptr[ArchSystem]) {
+pend_test_line :: fn(system : ptr[ArchSystem]) {
     interrupt :: FIRST_SPI + TEST_LINE
     write_u32(system.distributor, GICD_ISPENDR + cast[u64](interrupt / 32) * 4, cast[u32](1) << (interrupt % 32))
 }
@@ -652,7 +661,7 @@ pend_test_line :: fn(system: ptr[ArchSystem]) {
  * @return The 32 bits the register reads as now; each call loads afresh, never merged or skipped, so a polling loop
  *     sees changes.
  */
-read_u32 :: fn(base: u64, offset: u64) -> u32 {
+read_u32 :: fn(base : u64, offset : u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset))
 }
 
@@ -663,7 +672,7 @@ read_u32 :: fn(base: u64, offset: u64) -> u32 {
  * @param offset The register's offset in bytes, 8-aligned.
  * @return The 64 bits the register reads as now, in one load; each call loads afresh, never merged or skipped.
  */
-read_u64 :: fn(base: u64, offset: u64) -> u64 {
+read_u64 :: fn(base : u64, offset : u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](base + offset))
 }
 
@@ -674,7 +683,7 @@ read_u64 :: fn(base: u64, offset: u64) -> u64 {
  * @param offset The register's offset in bytes.
  * @param value What to write.
  */
-write_u8 :: fn(base: u64, offset: u64, value: u8) {
+write_u8 :: fn(base : u64, offset : u64, value : u8) {
     intrinsics.volatile_store_u8(cast[ptr[mut u8]](base + offset), value)
 }
 
@@ -685,7 +694,7 @@ write_u8 :: fn(base: u64, offset: u64, value: u8) {
  * @param offset The register's offset in bytes, 4-aligned.
  * @param value What to write.
  */
-write_u32 :: fn(base: u64, offset: u64, value: u32) {
+write_u32 :: fn(base : u64, offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), value)
 }
 
@@ -696,7 +705,7 @@ write_u32 :: fn(base: u64, offset: u64, value: u32) {
  * @param offset The register's offset in bytes, 8-aligned.
  * @param value What to write.
  */
-write_u64 :: fn(base: u64, offset: u64, value: u64) {
+write_u64 :: fn(base : u64, offset : u64, value : u64) {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](base + offset), value)
 }
 
@@ -707,7 +716,7 @@ write_u64 :: fn(base: u64, offset: u64, value: u64) {
  * @param cpu_hardware_id The target CPU's MPIDR, its affinity fields.
  * @return True: it's sent.
  */
-send_nmi :: fn(cpu_hardware_id: u64) -> bool {
+send_nmi :: fn(cpu_hardware_id : u64) -> bool {
     send_sgi(cpu_hardware_id, SGI_NMI)
     return true
 }

@@ -2,9 +2,9 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
-import concurrency from "std:concurrency"
 import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
@@ -81,14 +81,29 @@ Window :: struct {
  * @param direct_end The physical address just past the highest the direct map covers: the window stays clear of the
  *     direct map's offset up to its offset plus that, whatever isn't RAM below it.
  */
-start_window :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo], direct_end: u64) {
+start_window :: fn(kernel : ptr[mut Kernel], info : ptr[boot_info.BootInfo], direct_end : u64) {
     direct_start :: info.direct_map_offset & ~(WINDOW_ALIGNMENT - 1)
     direct_last :: frames.round_up(info.direct_map_offset + direct_end, WINDOW_ALIGNMENT)
-    below :: if direct_start >= KERNEL_HALF_LOW + WINDOW_SIZE { (direct_start - KERNEL_HALF_LOW - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1 } else { cast[u64](0) }
-    above :: if KERNEL_IMAGE_REGION >= direct_last + WINDOW_SIZE { (KERNEL_IMAGE_REGION - direct_last - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1 } else { cast[u64](0) }
+    below :: if direct_start >= KERNEL_HALF_LOW + WINDOW_SIZE {
+        (direct_start - KERNEL_HALF_LOW - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1
+    }
+    else {
+        cast[u64](0)
+    }
+    above :: if KERNEL_IMAGE_REGION >= direct_last + WINDOW_SIZE {
+        (KERNEL_IMAGE_REGION - direct_last - WINDOW_SIZE) / WINDOW_ALIGNMENT + 1
+    }
+    else {
+        cast[u64](0)
+    }
     runtime.assert(below + above > 0, "the kernel half has room for the window beside the direct map")
     choice :: if kernel.options.no_kaslr { cast[u64](0) } else { random_seed(info) % (below + above) }
-    base :: if choice < below { KERNEL_HALF_LOW + choice * WINDOW_ALIGNMENT } else { direct_last + (choice - below) * WINDOW_ALIGNMENT }
+    base :: if choice < below {
+        KERNEL_HALF_LOW + choice * WINDOW_ALIGNMENT
+    }
+    else {
+        direct_last + (choice - below) * WINDOW_ALIGNMENT
+    }
     kernel.window.base = base
     kernel.window.count = 1
     kernel.window.free[0] = Extent.{base, WINDOW_SIZE}
@@ -104,7 +119,7 @@ start_window :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo], direc
  * @param info The boot information, whose bootloader_entropy is used if it's there.
  * @return The bits; 0 when neither source had any, which places the window the same way every boot.
  */
-random_seed :: fn(info: ptr[boot_info.BootInfo]) -> u64 {
+random_seed :: fn(info : ptr[boot_info.BootInfo]) -> u64 {
     seed : u64 = 0
     for i in 0..<10 {
         match arch.hardware_entropy() {
@@ -142,7 +157,11 @@ random_seed :: fn(info: ptr[boot_info.BootInfo]) -> u64 {
  * @return The kernel virtual address physical is mapped at, with the same offset into its page.
  * @error OutOfAddresses No free range of the window is big enough for the pages; nothing is mapped.
  */
-map_device :: fn(kernel: ptr[mut Kernel], physical: boot_info.PhysicalAddress, size: u64) -> Result[u64, WindowError] {
+map_device :: fn(
+    kernel : ptr[mut Kernel],
+    physical : boot_info.PhysicalAddress,
+    size : u64
+) -> Result[u64, WindowError] {
     start :: cast[u64](physical) & ~(frames.FRAME_SIZE - 1)
     end :: frames.round_up(cast[u64](physical) + size, frames.FRAME_SIZE)
     address :: map_in_window(kernel, start, end - start, DEVICE_MAPPING)?
@@ -159,7 +178,7 @@ map_device :: fn(kernel: ptr[mut Kernel], physical: boot_info.PhysicalAddress, s
  * @param address The kernel virtual address map_device returned.
  * @param size The size in bytes map_device was given.
  */
-unmap_device :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
+unmap_device :: fn(kernel : ptr[mut Kernel], address : u64, size : u64) {
     start :: address & ~(frames.FRAME_SIZE - 1)
     unmap_from_window(kernel, start, frames.round_up(address + size, frames.FRAME_SIZE) - start)
 }
@@ -177,13 +196,25 @@ unmap_device :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
  * @return The kernel virtual address the range starts at in the window, page aligned.
  * @error OutOfAddresses No free range of the window is big enough; nothing is mapped.
  */
-map_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: arch_interface.Mapping) -> Result[u64, WindowError] {
+map_in_window :: fn(
+    kernel : ptr[mut Kernel],
+    physical : u64,
+    size : u64,
+    mapping : arch_interface.Mapping
+) -> Result[u64, WindowError] {
     address :: take_addresses(&kernel.window, size) or_return .Error(.OutOfAddresses)
     mapper : Mapper
     mapper.pages_1g = arch.supports_page_size(.Size1G)
     // Page by page: a window's mappings are small, and unmapping takes them page by page too
     for offset in 0..<size / frames.FRAME_SIZE {
-        map_page(kernel, address + offset * frames.FRAME_SIZE, physical + offset * frames.FRAME_SIZE, .Size4K, mapping, &mapper)
+        map_page(
+            kernel,
+            address + offset * frames.FRAME_SIZE,
+            physical + offset * frames.FRAME_SIZE,
+            .Size4K,
+            mapping,
+            &mapper
+        )
     }
     give_back_tables(kernel, &mapper.tables)
     return .Ok(address)
@@ -202,13 +233,25 @@ map_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: 
  * @return The kernel virtual address the range starts at, page aligned, a page above its addresses' start.
  * @error OutOfAddresses No free range of the window is big enough; nothing is mapped.
  */
-map_guarded_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, mapping: arch_interface.Mapping) -> Result[u64, WindowError] {
+map_guarded_in_window :: fn(
+    kernel : ptr[mut Kernel],
+    physical : u64,
+    size : u64,
+    mapping : arch_interface.Mapping
+) -> Result[u64, WindowError] {
     guarded :: take_addresses(&kernel.window, size + 2 * frames.FRAME_SIZE) or_return .Error(.OutOfAddresses)
     address :: guarded + frames.FRAME_SIZE
     mapper : Mapper
     mapper.pages_1g = arch.supports_page_size(.Size1G)
     for offset in 0..<size / frames.FRAME_SIZE {
-        map_page(kernel, address + offset * frames.FRAME_SIZE, physical + offset * frames.FRAME_SIZE, .Size4K, mapping, &mapper)
+        map_page(
+            kernel,
+            address + offset * frames.FRAME_SIZE,
+            physical + offset * frames.FRAME_SIZE,
+            .Size4K,
+            mapping,
+            &mapper
+        )
     }
     give_back_tables(kernel, &mapper.tables)
     return .Ok(address)
@@ -226,7 +269,7 @@ map_guarded_in_window :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, m
  * @param address The range's first kernel virtual address, page aligned, as map_in_window returned it.
  * @param size Its size in bytes, a multiple of a page, as it was mapped.
  */
-unmap_from_window :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
+unmap_from_window :: fn(kernel : ptr[mut Kernel], address : u64, size : u64) {
     flush : arch_interface.TlbBatch
     freed : arch_interface.FreedTables
     pages :: size / frames.FRAME_SIZE
@@ -236,8 +279,13 @@ unmap_from_window :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
     loop {
         lock_at(&kernel.page_table_lock, .PageTable)
         loop {
-            result :: arch.unmap(&kernel.page_table, cast[arch_interface.VirtualAddress](address + page * frames.FRAME_SIZE), .Size4K,
-                &freed, &flush)
+            result :: arch.unmap(
+                &kernel.page_table,
+                cast[arch_interface.VirtualAddress](address + page * frames.FRAME_SIZE),
+                .Size4K,
+                &freed,
+                &flush
+            )
             match result {
                 case Ok(physical) => page += 1
                 case Error(error) => {
@@ -266,7 +314,7 @@ unmap_from_window :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
  * @param kernel The kernel, whose frame allocator they go back to.
  * @param freed The emptied tables' physical frames, which this takes; its count is 0 after.
  */
-free_tables :: fn(kernel: ptr[mut Kernel], freed: ptr[mut arch_interface.FreedTables]) {
+free_tables :: fn(kernel : ptr[mut Kernel], freed : ptr[mut arch_interface.FreedTables]) {
     count :: cast[usize](freed.count)
     runtime.assert(count <= 4, "FreedTables holds 4 frames")
     for i in 0..<count {
@@ -283,7 +331,7 @@ free_tables :: fn(kernel: ptr[mut Kernel], freed: ptr[mut arch_interface.FreedTa
  * @param kernel The kernel, whose frame allocator they go back to.
  * @param tables The unused zeroed frames, which this takes; its count is 0 after.
  */
-give_back_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.TableFrames]) {
+give_back_tables :: fn(kernel : ptr[mut Kernel], tables : ptr[mut arch_interface.TableFrames]) {
     count :: cast[usize](tables.count)
     runtime.assert(count <= 4, "TableFrames holds 4 frames")
     for i in 0..<count {
@@ -302,7 +350,7 @@ give_back_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.T
  * @return The addresses' start, a kernel virtual address that's page aligned when size is; null when no free range is
  *     that big, and nothing is taken.
  */
-take_addresses :: fn(window: ptr[mut Window], size: u64) -> u64? {
+take_addresses :: fn(window : ptr[mut Window], size : u64) -> u64? {
     lock_at(&window.lock, .Window)
     defer unlock_at(&window.lock, .Window)
     count :: window.count
@@ -332,7 +380,7 @@ take_addresses :: fn(window: ptr[mut Window], size: u64) -> u64? {
  * @param start The addresses' start, as take_addresses returned it.
  * @param size Their size in bytes, as take_addresses was given; none of them may be free already.
  */
-give_addresses :: fn(window: ptr[mut Window], start: u64, size: u64) {
+give_addresses :: fn(window : ptr[mut Window], start : u64, size : u64) {
     lock_at(&window.lock, .Window)
     defer unlock_at(&window.lock, .Window)
     count :: window.count
@@ -376,7 +424,7 @@ give_addresses :: fn(window: ptr[mut Window], start: u64, size: u64) {
  * @param index The free range's index, below the window's count; asserts it's below MAX_WINDOW_EXTENTS.
  * @return The kernel virtual address just past the range.
  */
-extent_end :: fn(window: ptr[Window], index: usize) -> u64 {
+extent_end :: fn(window : ptr[Window], index : usize) -> u64 {
     runtime.assert(index < MAX_WINDOW_EXTENTS, "extent_end takes one of the free ranges")
     return window.free[index].start + window.free[index].size
 }
@@ -388,7 +436,7 @@ extent_end :: fn(window: ptr[Window], index: usize) -> u64 {
  * @param index The free range's index, below the window's count; asserts it's below MAX_WINDOW_EXTENTS.
  * @param size How many bytes to add; the addresses after the range have to be free.
  */
-grow_extent :: fn(window: ptr[mut Window], index: usize, size: u64) {
+grow_extent :: fn(window : ptr[mut Window], index : usize, size : u64) {
     runtime.assert(index < MAX_WINDOW_EXTENTS, "grow_extent takes one of the free ranges")
     window.free[index].size += size
 }
@@ -399,9 +447,12 @@ grow_extent :: fn(window: ptr[mut Window], index: usize, size: u64) {
  * @param window The window, its lock held by the caller.
  * @param index The free range's index, below the window's count, which asserts.
  */
-remove_extent :: fn(window: ptr[mut Window], index: usize) {
+remove_extent :: fn(window : ptr[mut Window], index : usize) {
     count :: window.count
-    runtime.assert(count >= 1 && count <= MAX_WINDOW_EXTENTS && index < count, "remove_extent takes one of the free ranges")
+    runtime.assert(
+        count >= 1 && count <= MAX_WINDOW_EXTENTS && index < count,
+        "remove_extent takes one of the free ranges"
+    )
     for i in index + 1..<count {
         window.free[i - 1] = window.free[i]
     }

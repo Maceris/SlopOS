@@ -46,8 +46,9 @@ PowerSettings :: struct {
  * @param kernel The kernel, whose reset_method and power.off are read.
  * @return True if the architecture turns it off by itself (PSCI) or power_set_off has said how.
  */
-can_turn_off :: fn(kernel: ptr[Kernel]) -> bool {
-    return arch.can_power_off(kernel.reset_method) || intrinsics.atomic_load_u64_acquire(&kernel.power.off) & OFF_SET != 0
+can_turn_off :: fn(kernel : ptr[Kernel]) -> bool {
+    return arch.can_power_off(kernel.reset_method)
+        || intrinsics.atomic_load_u64_acquire(&kernel.power.off) & OFF_SET != 0
 }
 
 /**
@@ -60,14 +61,24 @@ can_turn_off :: fn(kernel: ptr[Kernel]) -> bool {
  * @param sleep_b PM1b's sleep type for S5, 0 to 7.
  * @error InvalidArgument A value out of its range, or an architecture without I/O ports or that turns off by itself.
  */
-set_power_off :: fn(kernel: ptr[mut Kernel], control_a: u32, control_b: u32, sleep_a: u32, sleep_b: u32) -> Result[void, slop_os.DeviceError] {
+set_power_off :: fn(
+    kernel : ptr[mut Kernel],
+    control_a : u32,
+    control_b : u32,
+    sleep_a : u32,
+    sleep_b : u32
+) -> Result[void, slop_os.DeviceError] {
     if !arch.has_io_ports() || arch.can_power_off(kernel.reset_method) {
         return .Error(.InvalidArgument)
     }
     if control_a == 0 || control_a > 0xffff || control_b > 0xffff || sleep_a > 7 || sleep_b > 7 {
         return .Error(.InvalidArgument)
     }
-    word :: OFF_SET | cast[u64](control_a) | (cast[u64](control_b) << 16) | (cast[u64](sleep_a) << 32) | (cast[u64](sleep_b) << 35)
+    word :: OFF_SET
+        | cast[u64](control_a)
+        | (cast[u64](control_b) << 16)
+        | (cast[u64](sleep_a) << 32)
+        | (cast[u64](sleep_b) << 35)
     intrinsics.atomic_store_u64_release(&kernel.power.off, word)
     return .Ok
 }
@@ -80,7 +91,7 @@ set_power_off :: fn(kernel: ptr[mut Kernel], control_a: u32, control_b: u32, sle
  * @param value The byte that resets, 0 to 255.
  * @error InvalidArgument A value out of its range, or an architecture without I/O ports.
  */
-set_power_reset :: fn(kernel: ptr[mut Kernel], port: u32, value: u32) -> Result[void, slop_os.DeviceError] {
+set_power_reset :: fn(kernel : ptr[mut Kernel], port : u32, value : u32) -> Result[void, slop_os.DeviceError] {
     if !arch.has_io_ports() || port == 0 || port > 0xffff || value > 0xff {
         return .Error(.InvalidArgument)
     }
@@ -96,7 +107,7 @@ set_power_reset :: fn(kernel: ptr[mut Kernel], port: u32, value: u32) -> Result[
  * @error InvalidArgument A value that isn't one of PowerAction's.
  * @error NoPowerOff Off, when can_turn_off says the kernel can't.
  */
-set_power_end :: fn(kernel: ptr[mut Kernel], action: u32) -> Result[void, slop_os.DeviceError] {
+set_power_end :: fn(kernel : ptr[mut Kernel], action : u32) -> Result[void, slop_os.DeviceError] {
     if action < cast[u32](slop_os.PowerAction.Halt) || action > cast[u32](slop_os.PowerAction.Restart) {
         return .Error(.InvalidArgument)
     }
@@ -114,7 +125,7 @@ set_power_end :: fn(kernel: ptr[mut Kernel], action: u32) -> Result[void, slop_o
  *
  * @param kernel The kernel, whose power.reset and reset_method are read.
  */
-reset_machine :: fn(kernel: ptr[Kernel]) {
+reset_machine :: fn(kernel : ptr[Kernel]) {
     reset :: intrinsics.atomic_load_u64_acquire(&kernel.power.reset)
     if reset & RESET_SET != 0 {
         _ = arch.port_write(cast[u16](reset & 0xffff), 1, cast[u32]((reset >> 16) & 0xff))
@@ -130,7 +141,7 @@ reset_machine :: fn(kernel: ptr[Kernel]) {
  *
  * @param kernel The kernel, whose power.off and reset_method are read.
  */
-turn_off :: fn(kernel: ptr[Kernel]) {
+turn_off :: fn(kernel : ptr[Kernel]) {
     off :: intrinsics.atomic_load_u64_acquire(&kernel.power.off)
     if off & OFF_SET == 0 {
         arch.power_off(kernel.reset_method)
@@ -143,7 +154,11 @@ turn_off :: fn(kernel: ptr[Kernel]) {
     // PM1b first, where there is one, so PM1a's write, which QEMU and most chipsets act on, comes last
     if control_b != 0 {
         value_b :: arch.port_read(control_b, 2) or_else 0
-        _ = arch.port_write(control_b, 2, (value_b & ~(SLEEP_TYPE_MASK | SLEEP_ENABLE)) | (sleep_b << 10) | SLEEP_ENABLE)
+        _ = arch.port_write(
+            control_b,
+            2,
+            (value_b & ~(SLEEP_TYPE_MASK | SLEEP_ENABLE)) | (sleep_b << 10) | SLEEP_ENABLE
+        )
     }
     value_a :: arch.port_read(control_a, 2) or_else 0
     _ = arch.port_write(control_a, 2, (value_a & ~(SLEEP_TYPE_MASK | SLEEP_ENABLE)) | (sleep_a << 10) | SLEEP_ENABLE)
@@ -158,7 +173,7 @@ turn_off :: fn(kernel: ptr[Kernel]) {
  *
  * @param kernel The kernel, whose power settings and options are read.
  */
-end_power :: fn(kernel: ptr[Kernel]) {
+end_power :: fn(kernel : ptr[Kernel]) {
     action :: intrinsics.atomic_load_u32_acquire(&kernel.power.end_with)
     if action == 0 || action == cast[u32](slop_os.PowerAction.Halt) {
         return void

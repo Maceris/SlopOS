@@ -70,7 +70,7 @@ LoadedKernel :: struct {
  * @param size How many bytes it is, 1 to 8.
  * @return The number; 0 if any of it is past the file's end.
  */
-read_at :: fn(file: Pages, offset: u64, size: u64) -> u64 {
+read_at :: fn(file : Pages, offset : u64, size : u64) -> u64 {
     if offset > file.size || size > file.size - offset {
         return 0
     }
@@ -94,9 +94,14 @@ read_at :: fn(file: Pages, offset: u64, size: u64) -> u64 {
  *     more than 1 GiB or none, a segment's bytes are outside the file, pages couldn't be had, or it has a relocation
  *     other than a relative one, or one outside the image.
  */
-load_kernel :: fn(file: Pages, random: ptr[Random]) -> LoadedKernel? {
-    if file.size < ELF_HEADER_SIZE || read_at(file, 0, 4) != 0x464c457f || read_at(file, 4, 1) != 2 || read_at(file, 5, 1) != 1
-        || read_at(file, 16, 2) != 3 || read_at(file, 18, 2) != ELF_MACHINE || read_at(file, 54, 2) != PROGRAM_HEADER_SIZE {
+load_kernel :: fn(file : Pages, random : ptr[Random]) -> LoadedKernel? {
+    if file.size < ELF_HEADER_SIZE
+        || read_at(file, 0, 4) != 0x464c457f
+        || read_at(file, 4, 1) != 2
+        || read_at(file, 5, 1) != 1
+        || read_at(file, 16, 2) != 3
+        || read_at(file, 18, 2) != ELF_MACHINE
+        || read_at(file, 54, 2) != PROGRAM_HEADER_SIZE {
         return null
     }
     headers :: read_at(file, 32, 8)
@@ -144,8 +149,12 @@ load_kernel :: fn(file: Pages, random: ptr[Random]) -> LoadedKernel? {
         }
         copy(physical + (address - lowest), file.address + offset, file_size)
         if loaded.segment_count < loaded.segments.count {
-            loaded.segments[loaded.segment_count] = boot_protocol.Segment.{virtual_base = address + slide, size = memory_size,
-                writable = if flags & PF_WRITE != 0 { 1 } else { 0 }, executable = if flags & PF_EXECUTE != 0 { 1 } else { 0 }}
+            loaded.segments[loaded.segment_count] = boot_protocol.Segment.{
+                virtual_base = address + slide,
+                size = memory_size,
+                writable = if flags & PF_WRITE != 0 { 1 } else { 0 },
+                executable = if flags & PF_EXECUTE != 0 { 1 } else { 0 },
+            }
             loaded.segment_count += 1
         }
     }
@@ -167,7 +176,7 @@ load_kernel :: fn(file: Pages, random: ptr[Random]) -> LoadedKernel? {
  * @return True if every relocation was applied, or there were none; false at the first of another kind than
  *     RELATIVE, or one whose word is outside the image, those before it applied.
  */
-relocate :: fn(loaded: ptr[LoadedKernel], lowest: u64, dynamic: u64, slide: u64) -> bool {
+relocate :: fn(loaded : ptr[LoadedKernel], lowest : u64, dynamic : u64, slide : u64) -> bool {
     image :: Pages.{address = loaded.physical, size = loaded.size}
     table := cast[u64](0)
     bytes := cast[u64](0)
@@ -204,7 +213,7 @@ relocate :: fn(loaded: ptr[LoadedKernel], lowest: u64, dynamic: u64, slide: u64)
  * @param from Where they come from, identity-mapped; the ranges shouldn't overlap.
  * @param count How many bytes.
  */
-copy :: fn(to: u64, from: u64, count: u64) {
+copy :: fn(to : u64, from : u64, count : u64) {
     for i in cast[u64](0)..<count {
         cast[ptr[mut u8]](cast[rawptr](to + i))^ = cast[ptr[u8]](cast[rawptr](from + i))^
     }

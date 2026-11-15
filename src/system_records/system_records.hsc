@@ -244,7 +244,7 @@ Installations :: struct {
  * @param installations The installations, as records or the config store hold them.
  * @return Null if they're well formed; otherwise what's wrong, as a phrase following "the configuration", static text.
  */
-installations_check :: fn(installations: ptr[Installations]) -> string? {
+installations_check :: fn(installations : ptr[Installations]) -> string? {
     if installations.count > MAX_INSTALLATIONS {
         return "has more installations than there's room for"
     }
@@ -293,11 +293,13 @@ Problem :: struct {
  * @param records The records, which aren't changed.
  * @return Null if they check; otherwise the first problem found, with the service it's about.
  */
-check :: fn(records: ptr[SystemRecords]) -> Problem? {
+check :: fn(records : ptr[SystemRecords]) -> Problem? {
     if records.magic != MAGIC {
         return Problem.{reason = "isn't system records", service = MAX_SERVICES}
     }
-    if records.service_count > MAX_SERVICES || records.parameter_count > MAX_PARAMETERS || records.served_count > MAX_SERVED {
+    if records.service_count > MAX_SERVICES
+        || records.parameter_count > MAX_PARAMETERS
+        || records.served_count > MAX_SERVED {
         return Problem.{reason = "has more than there's room for", service = MAX_SERVICES}
     }
     match installations_check(&records.installations) {
@@ -308,7 +310,9 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
         return Problem.{reason = "has no default CPU share within its period", service = MAX_SERVICES}
     }
     for i in cast[usize](0)..<records.served.count {
-        if i < cast[usize](records.served_count) && i < records.served_by.count && records.served_by[i] > SERVED_BY_SESSION_MANAGER {
+        if i < cast[usize](records.served_count)
+            && i < records.served_by.count
+            && records.served_by[i] > SERVED_BY_SESSION_MANAGER {
             return Problem.{reason = "has a protocol served by nothing it knows", service = MAX_SERVICES}
         }
     }
@@ -338,8 +342,12 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
                 return Problem.{reason = "has two services of one name", service = at}
             }
         }
-        if service.starter > STARTER_STORAGE_MANAGER || service.by_manager > 1 || service.trusted_with_dma > 1 || service.boot_set > 1
-            || service.not_restarted > 1 || service.late > 1 {
+        if service.starter > STARTER_STORAGE_MANAGER
+            || service.by_manager > 1
+            || service.trusted_with_dma > 1
+            || service.boot_set > 1
+            || service.not_restarted > 1
+            || service.late > 1 {
             return Problem.{reason = "has a service with a flag that isn't one", service = at}
         }
         if service.budget == 0 || service.budget > MAX_BUDGET {
@@ -351,7 +359,8 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
         if is_driver(service) && service.starter != STARTER_SUPERVISOR {
             return Problem.{reason = "has a driver the supervisor doesn't start", service = at}
         }
-        if cast[u64](service.first_parameter) + cast[u64](service.parameter_count) > cast[u64](records.parameter_count) {
+        if cast[u64](service.first_parameter) + cast[u64](service.parameter_count)
+            > cast[u64](records.parameter_count) {
             return Problem.{reason = "has a service whose parameters aren't there", service = at}
         }
         for parameter in parameters_of(records, service) {
@@ -359,7 +368,10 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
                 return Problem.{reason = "has a channel no service serves", service = at}
             }
             // What the system needs can't require what it doesn't
-            if parameter.kind == KIND_CHANNEL && parameter.optional == 0 && service.late == 0 && served_only_late(records, parameter.tag) {
+            if parameter.kind == KIND_CHANNEL
+                && parameter.optional == 0
+                && service.late == 0
+                && served_only_late(records, parameter.tag) {
                 return Problem.{reason = "requires a channel only a late service serves", service = at}
             }
         }
@@ -373,7 +385,7 @@ check :: fn(records: ptr[SystemRecords]) -> Problem? {
  * @param cpu The share, as a record or an override has it.
  * @return True if has is 0, or has is 1 with a period that isn't 0 and a time from 1 to it.
  */
-cpu_holds :: fn(cpu: CpuRecord) -> bool {
+cpu_holds :: fn(cpu : CpuRecord) -> bool {
     if cpu.has > 1 {
         return false
     }
@@ -387,14 +399,16 @@ cpu_holds :: fn(cpu: CpuRecord) -> bool {
  * @param tag The protocol's channel end tag.
  * @return True if it's served.
  */
-served :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
+served :: fn(records : ptr[SystemRecords], tag : u64) -> bool {
     for i in cast[usize](0)..<records.served.count {
         if i < cast[usize](records.served_count) && records.served[i] == tag {
             return true
         }
     }
     for i in cast[usize](0)..<records.parameters.count {
-        if i < cast[usize](records.parameter_count) && records.parameters[i].kind == KIND_LISTENER && records.parameters[i].tag == tag {
+        if i < cast[usize](records.parameter_count)
+            && records.parameters[i].kind == KIND_LISTENER
+            && records.parameters[i].tag == tag {
             return true
         }
     }
@@ -409,7 +423,7 @@ served :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
  * @param tag The protocol's channel end tag.
  * @return True if some late service serves it and nothing else does; false if something else does, or nothing does.
  */
-served_only_late :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
+served_only_late :: fn(records : ptr[SystemRecords], tag : u64) -> bool {
     for i in cast[usize](0)..<records.served.count {
         if i < cast[usize](records.served_count) && records.served[i] == tag {
             return false
@@ -440,7 +454,7 @@ served_only_late :: fn(records: ptr[SystemRecords], tag: u64) -> bool {
  * @param service The service, one of records'.
  * @return Its deadline in nanoseconds: its own, or the configuration's default when it has none.
  */
-deadline_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) -> u64 {
+deadline_of :: fn(records : ptr[SystemRecords], service : ptr[ServiceRecord]) -> u64 {
     milliseconds :: if service.deadline_ms != 0 { service.deadline_ms } else { records.default_deadline_ms }
     return cast[u64](milliseconds) * 1_000_000
 }
@@ -453,7 +467,7 @@ deadline_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) -> u
  * @return Null once it's taken; otherwise why not: it tunes more than MAX_TUNED, names a service records don't have,
  *     sets something it can't, or leaves them something check refuses.
  */
-apply :: fn(records: ptr[mut SystemRecords], overrides: ptr[SystemOverrides]) -> Problem? {
+apply :: fn(records : ptr[mut SystemRecords], overrides : ptr[SystemOverrides]) -> Problem? {
     if overrides.count > MAX_TUNED {
         return Problem.{reason = "tunes more than MAX_TUNED", service = MAX_SERVICES}
     }
@@ -499,7 +513,7 @@ apply :: fn(records: ptr[mut SystemRecords], overrides: ptr[SystemOverrides]) ->
  * @param name The service's name, compared exactly.
  * @return Its index in services; MAX_SERVICES if there's none of that name.
  */
-index_of :: fn(records: ptr[SystemRecords], name: string) -> usize {
+index_of :: fn(records : ptr[SystemRecords], name : string) -> usize {
     for i in cast[usize](0)..<records.services.count {
         if i < cast[usize](records.service_count) && text_of(&records.services[i].name) == name {
             return i
@@ -515,7 +529,7 @@ index_of :: fn(records: ptr[SystemRecords], name: string) -> usize {
  * @param name The service's name, compared exactly.
  * @return The service's record, in records; null if there's none of that name.
  */
-service_of :: fn(records: ptr[SystemRecords], name: string) -> ptr[ServiceRecord]? {
+service_of :: fn(records : ptr[SystemRecords], name : string) -> ptr[ServiceRecord]? {
     at :: index_of(records, name)
     if at >= records.services.count {
         return null
@@ -530,7 +544,7 @@ service_of :: fn(records: ptr[SystemRecords], name: string) -> ptr[ServiceRecord
  * @param service The service, one of records'.
  * @return Its parameters, a view into records; empty if it has none, or they aren't within the parameters.
  */
-parameters_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) -> ParameterRecord[] {
+parameters_of :: fn(records : ptr[SystemRecords], service : ptr[ServiceRecord]) -> ParameterRecord[] {
     first :: cast[usize](service.first_parameter)
     count :: cast[usize](service.parameter_count)
     if first >= records.parameters.count || count > records.parameters.count - first || count == 0 {
@@ -545,7 +559,7 @@ parameters_of :: fn(records: ptr[SystemRecords], service: ptr[ServiceRecord]) ->
  * @param service A service's record, only read; just its vendor, device and class are looked at.
  * @return True if any of its vendor, device and class isn't 0.
  */
-is_driver :: fn(service: ptr[ServiceRecord]) -> bool {
+is_driver :: fn(service : ptr[ServiceRecord]) -> bool {
     return service.vendor != 0 || service.device != 0 || service.class != 0
 }
 
@@ -555,7 +569,7 @@ is_driver :: fn(service: ptr[ServiceRecord]) -> bool {
  * @param name A name field, as a record holds it; only read, and not checked to be well formed (valid_name does that).
  * @return Its bytes up to the first zero, all of them without one: a view into name, good while it is.
  */
-text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
+text_of :: fn(name : ptr[u8[NAME_BYTES]]) -> string {
     count := cast[usize](0)
     for byte in name^ {
         if byte == 0 {
@@ -573,7 +587,7 @@ text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
  * @param text The name, at most NAME_BYTES - 1 bytes, so a zero ends it.
  * @return True if it fits; false, the place all zeros, if it doesn't.
  */
-set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
+set_name :: fn(name : ptr[mut u8[NAME_BYTES]], text : string) -> bool {
     for i in cast[usize](0)..<name.count {
         name^[i] = 0
     }
@@ -598,7 +612,7 @@ set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
  * @param module Whether it's a module's name, which may have dots.
  * @return True if it's well formed.
  */
-valid_name :: fn(name: ptr[u8[NAME_BYTES]], module: bool) -> bool {
+valid_name :: fn(name : ptr[u8[NAME_BYTES]], module : bool) -> bool {
     ended := false
     count := cast[usize](0)
     for byte in name^ {
@@ -627,7 +641,7 @@ valid_name :: fn(name: ptr[u8[NAME_BYTES]], module: bool) -> bool {
  * @param protocol The name of the protocol's type, P in os.Channel[P], without its package, its bytes hashed.
  * @return The tag, as os.end_tag gives a Channel[P]'s.
  */
-tag_of :: fn(protocol: string) -> u64 {
+tag_of :: fn(protocol : string) -> u64 {
     hash : u64 = 0xcbf29ce484222325
     for character in protocol {
         hash = (hash ~ cast[u64](cast[u8](character))) * 0x100000001b3

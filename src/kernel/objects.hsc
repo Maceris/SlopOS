@@ -5,8 +5,8 @@ import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
-import slab from "slab"
 import robustness from "../robustness"
+import slab from "slab"
 
 /*
  * Kernel objects (roadmap M5, decisions/0008, 0034): every object has exactly one owner, a Process, and
@@ -18,8 +18,10 @@ import robustness from "../robustness"
  * CPU has passed a quiescent point since: returning to user mode, or going idle (scheduler.hsc). Kernel
  * code never keeps a pointer to an object across one.
  */
-//SPEC: McKenney and Slingwine, "Read-Copy Update: Using Execution History to Solve Concurrency Problems"
-//      (PDCS 1998), quiescent-state-based reclamation
+/*
+ * SPEC: McKenney and Slingwine, "Read-Copy Update: Using Execution History to Solve Concurrency Problems"
+ *      (PDCS 1998), quiescent-state-based reclamation
+ */
 
 /** The part at the start of every kernel object, which the kernel's generic object code works on. */
 ObjectHeader :: struct {
@@ -149,7 +151,7 @@ ObjectPools :: struct {
  *
  * @param kernel The kernel, whose pools are set.
  */
-init_pools :: fn(kernel: ptr[mut Kernel]) {
+init_pools :: fn(kernel : ptr[mut Kernel]) {
     #insert object_pools()
     kernel.pools.bindings = object_cache(cast[u64](size_of(Binding)), cast[u64](align_of(Binding)))
     kernel.pools.channel_cores = slab.make_cache(cast[u64](size_of(ChannelCore)), cast[u64](align_of(ChannelCore)))
@@ -168,7 +170,10 @@ object_pools :: fn() -> compiler.Code {
         type :: compiler.type_code(compiler.described_type(field.member_type))
         index :: cast[u64](cast[u8](kind_of(field)))
         array_add(&made, #code {
-            kernel.pools.objects[#insert index] = object_cache(cast[u64](size_of(#insert type)), cast[u64](align_of(#insert type)))
+            kernel.pools.objects[#insert index] = object_cache(
+                cast[u64](size_of(#insert type)),
+                cast[u64](align_of(#insert type))
+            )
         })
     }
     return compiler.list(made)
@@ -182,7 +187,7 @@ object_pools :: fn() -> compiler.Code {
  * @return One statement per kind, which calls its function with kernel and object, cast to that kind's type, when
  *     kind is that kind; written for where kind, kernel and object (an address) are in scope.
  */
-per_kind :: fn(prefix: string) -> compiler.Code {
+per_kind :: fn(prefix : string) -> compiler.Code {
     made : compiler.Code[..]
     for field in object_table().members {
         type :: compiler.type_code(compiler.described_type(field.member_type))
@@ -213,7 +218,7 @@ object_table :: fn() -> ptr[compiler.TypeInfoStruct] {
  * @return The ObjectKind of the same name as the field's type. With none, a compile error is reported, and Process
  *     comes back in its place.
  */
-kind_of :: fn(field: compiler.StructMember) -> slop_os.ObjectKind {
+kind_of :: fn(field : compiler.StructMember) -> slop_os.ObjectKind {
     name :: cast[ptr[compiler.TypeInfoStruct]](field.member_type).name
     kinds :: cast[ptr[compiler.TypeInfoEnum]](type_info_of(slop_os.ObjectKind))
     for member, i in kinds.members {
@@ -245,7 +250,7 @@ kind_of :: fn(field: compiler.StructMember) -> slop_os.ObjectKind {
  * @param alignment The objects' alignment in bytes, a power of two up to a frame.
  * @return The cache, which keeps its empty slabs rather than freeing them, so a slot only ever holds its kind.
  */
-object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
+object_cache :: fn(size : u64, alignment : u64) -> slab.SlabCache {
     cache := slab.make_cache(size, alignment)
     cache.type_stable = true
     cache.fresh_offset = cast[u64](offset_of(ObjectHeader, generation))
@@ -260,7 +265,7 @@ object_cache :: fn(size: u64, alignment: u64) -> slab.SlabCache {
  * @param kind The kind; its value is taken modulo OBJECT_KIND_SLOTS, so any value finds a pool.
  * @return The kind's pool in kernel.pools, good for as long as the kernel runs.
  */
-pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab.SlabCache] {
+pool_of :: fn(kernel : ptr[mut Kernel], kind : slop_os.ObjectKind) -> ptr[mut slab.SlabCache] {
     return &kernel.pools.objects[cast[usize](cast[u8](kind)) % OBJECT_KIND_SLOTS]
 }
 
@@ -272,11 +277,12 @@ pool_of :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind) -> ptr[mut slab
  *
  * @param kernel The kernel, whose pools' counts are read without their locks, so they're a moment's.
  */
-log_objects_left :: fn(kernel: ptr[mut Kernel]) {
+log_objects_left :: fn(kernel : ptr[mut Kernel]) {
     pools :: &kernel.pools
     others : u64 = 0
     for pool, i in pools.objects {
-        if i != cast[usize](cast[u8](slop_os.ObjectKind.MemoryBudget)) && i != cast[usize](cast[u8](slop_os.ObjectKind.Platform))
+        if i != cast[usize](cast[u8](slop_os.ObjectKind.MemoryBudget))
+            && i != cast[usize](cast[u8](slop_os.ObjectKind.Platform))
             && i != cast[usize](cast[u8](slop_os.ObjectKind.CpuBudget)) {
             others += pool.allocated
         }
@@ -284,13 +290,26 @@ log_objects_left :: fn(kernel: ptr[mut Kernel]) {
     budgets :: pool_of(kernel, .MemoryBudget).allocated
     platforms :: pool_of(kernel, .Platform).allocated
     cpu_budgets :: pool_of(kernel, .CpuBudget).allocated
-    if others == 0 && budgets == 1 && platforms <= 1 && cpu_budgets <= 1 && pools.bindings.allocated == 0 && pools.channel_cores.allocated == 0
+    if others == 0
+        && budgets == 1
+        && platforms <= 1
+        && cpu_budgets <= 1
+        && pools.bindings.allocated == 0
+        && pools.channel_cores.allocated == 0
         && pools.mappings.allocated == 0 {
         runtime.log_info("objects left: only the kernel's own")
         return void
     }
-    runtime.log_error("objects left: % budgets, % CPU budgets, % platforms, % other objects, % bindings, % channel cores, % mappings", budgets,
-        cpu_budgets, platforms, others, pools.bindings.allocated, pools.channel_cores.allocated, pools.mappings.allocated)
+    runtime.log_error(
+        "objects left: % budgets, % CPU budgets, % platforms, % other objects, % bindings, % channel cores, % mappings",
+        budgets,
+        cpu_budgets,
+        platforms,
+        others,
+        pools.bindings.allocated,
+        pools.channel_cores.allocated,
+        pools.mappings.allocated
+    )
     for pool, i in pools.objects {
         if pool.allocated != 0 {
             runtime.log_error("objects left: % of kind %", pool.allocated, i)
@@ -314,7 +333,12 @@ log_objects_left :: fn(kernel: ptr[mut Kernel]) {
  * @error BudgetExceeded The budget is closed, can't take its slot and extra bytes, or fault injection failed it; the
  *     slot went back to its pool.
  */
-new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind, budget: u64, extra: u64) -> Result[u64, ObjectError] {
+new_object :: fn(
+    kernel : ptr[mut Kernel],
+    kind : slop_os.ObjectKind,
+    budget : u64,
+    extra : u64
+) -> Result[u64, ObjectError] {
     pool :: pool_of(kernel, kind)
     address :: slab.allocate(pool, &kernel.frames) or_return .Error(.OutOfMemory)
     header :: cast[ptr[mut ObjectHeader]](address)
@@ -338,7 +362,7 @@ new_object :: fn(kernel: ptr[mut Kernel], kind: slop_os.ObjectKind, budget: u64,
  * @param size The slot's bytes, all of which but the generation's are zeroed.
  * @param generation_at The generation's offset in the slot, in bytes: a u32 that ends within size.
  */
-zero_but_generation :: fn(address: u64, size: u64, generation_at: u64) {
+zero_but_generation :: fn(address : u64, size : u64, generation_at : u64) {
     after :: generation_at + cast[u64](size_of(u32))
     runtime.assert(after <= size, "a slot's generation is within it")
     intrinsics.mem_zero(cast[mut rawptr](address), cast[usize](generation_at))
@@ -361,7 +385,7 @@ zero_but_generation :: fn(address: u64, size: u64, generation_at: u64) {
  * @error OwnerGone The owner is being destroyed; the object isn't on its list.
  * @error ObjectGone The object is being destroyed; it isn't on the owner's list.
  */
-adopt :: fn(owner: u64, object: u64) -> Result[void, ObjectError] {
+adopt :: fn(owner : u64, object : u64) -> Result[void, ObjectError] {
     header :: cast[ptr[mut ObjectHeader]](object)
     if owner == 0 {
         intrinsics.atomic_store_u64_release(&header.owner, 0)
@@ -401,7 +425,7 @@ adopt :: fn(owner: u64, object: u64) -> Result[void, ObjectError] {
  *
  * @param object The object, as an address; one on no list, as one owned by the kernel (owner 0) is, is left alone.
  */
-disown :: fn(object: u64) {
+disown :: fn(object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     loop {
         owned_by :: intrinsics.atomic_load_u64_acquire(&header.owned_by)
@@ -425,7 +449,7 @@ disown :: fn(object: u64) {
  * @param list The list, its lock held, which the object is on (its owned_by is the list's process).
  * @param object The object, as an address.
  */
-unlink_owned :: fn(list: ptr[mut OwnedList], object: u64) {
+unlink_owned :: fn(list : ptr[mut OwnedList], object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     if header.owned_previous != 0 {
         cast[ptr[mut ObjectHeader]](header.owned_previous).owned_next = header.owned_next
@@ -450,7 +474,7 @@ unlink_owned :: fn(list: ptr[mut OwnedList], object: u64) {
  *     rest left.
  * @return The object, as an address, no longer on the list but still naming its owner; 0 if the list was empty.
  */
-take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {
+take_owned :: fn(list : ptr[mut OwnedList]) -> u64 {
     lock_at(&list.lock, .ObjectList)
     defer unlock_at(&list.lock, .ObjectList)
     first :: list.first
@@ -471,9 +495,10 @@ take_owned :: fn(list: ptr[mut OwnedList]) -> u64 {
  * @param generation The generation the handle carries.
  * @return True if its generation is still that one and its destruction hasn't started.
  */
-is_live :: fn(object: u64, generation: u32) -> bool {
+is_live :: fn(object : u64, generation : u32) -> bool {
     header :: cast[ptr[ObjectHeader]](object)
-    return intrinsics.atomic_load_u32_acquire(&header.generation) == generation && intrinsics.atomic_load_u32_acquire(&header.dying) == 0
+    return intrinsics.atomic_load_u32_acquire(&header.generation) == generation
+        && intrinsics.atomic_load_u32_acquire(&header.dying) == 0
 }
 
 /**
@@ -489,7 +514,7 @@ is_live :: fn(object: u64, generation: u32) -> bool {
  * @param object The object, as an address: a live one, or one already dying.
  * @return True if this call destroyed it; false if it was already being destroyed, when nothing was done.
  */
-destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
+destroy_object :: fn(kernel : ptr[mut Kernel], object : u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     _, first :: intrinsics.interlocked_compare_exchange_u32(&header.dying, 1, 0)
     if !first {
@@ -531,7 +556,7 @@ destroy_object :: fn(kernel: ptr[mut Kernel], object: u64) -> bool {
  * @param object The object, as an address.
  * @param generation The generation it had when the caller found it; if it's changed, or it's dying, nothing is done.
  */
-destroy_later :: fn(kernel: ptr[mut Kernel], object: u64, generation: u32) {
+destroy_later :: fn(kernel : ptr[mut Kernel], object : u64, generation : u32) {
     if !is_live(object, generation) {
         return void
     }
@@ -552,7 +577,7 @@ destroy_later :: fn(kernel: ptr[mut Kernel], object: u64, generation: u32) {
  * @param kernel The kernel, whose epoch is incremented atomically.
  * @param object The object, as an address, destroyed and not yet on any limbo list.
  */
-retire :: fn(kernel: ptr[mut Kernel], object: u64) {
+retire :: fn(kernel : ptr[mut Kernel], object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     header.limbo_epoch = intrinsics.interlocked_increment_u64(&kernel.epoch)
     cpu :: per_cpu()
@@ -572,7 +597,7 @@ retire :: fn(kernel: ptr[mut Kernel], object: u64) {
  * @param cpu The calling CPU's PerCpu, whose quiescent_epoch is set and whose limbo list is walked.
  * @param epoch The kernel's epoch, read before the caller's last check of what it resumes (that it isn't dying).
  */
-pass_quiescent :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], epoch: u64) {
+pass_quiescent :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], epoch : u64) {
     intrinsics.atomic_store_u64(&cpu.quiescent_epoch, epoch)
     if cpu.limbo == 0 {
         return void
@@ -611,7 +636,7 @@ IDLE_EPOCH : u64 : 0xffffffffffffffff
  * @return That epoch: an object destroyed in an epoch below it can be freed. At most one past the kernel's epoch,
  *     which it is when every online CPU is idle without ticking (IDLE_EPOCH) or has no PerCpu yet.
  */
-oldest_quiescent :: fn(kernel: ptr[Kernel]) -> u64 {
+oldest_quiescent :: fn(kernel : ptr[Kernel]) -> u64 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
     oldest := intrinsics.atomic_load_u64(&kernel.epoch) + 1
@@ -635,7 +660,7 @@ oldest_quiescent :: fn(kernel: ptr[Kernel]) -> u64 {
  *     gives back what it held to.
  * @param object The object, as an address; it's no longer the caller's to touch.
  */
-release_object :: fn(kernel: ptr[mut Kernel], object: u64) {
+release_object :: fn(kernel : ptr[mut Kernel], object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     kind :: header.kind
     #insert per_kind("release_")

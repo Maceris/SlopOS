@@ -1,10 +1,10 @@
 package kernel
 
 import intrinsics from "base:intrinsics"
-import arch_interface from "../arch_interface"
-import boot_info from "../boot_info"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
+import boot_info from "../boot_info"
 import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
@@ -69,8 +69,14 @@ FaultOutcome :: enum {
  * @error OutOfMemory No slot or frames for it.
  * @error ObjectGone The owner is being destroyed.
  */
-create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port: ptr[mut Port], key: u64, size: u64)
-    -> Result[ptr[mut Memory], slop_os.MemoryError] {
+create_paged_memory :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    port : ptr[mut Port],
+    key : u64,
+    size : u64
+) -> Result[ptr[mut Memory], slop_os.MemoryError] {
     lock_at(&port.lock, .Port)
     binding_address := cast[u64](0)
     generation : u32 = 0
@@ -102,7 +108,7 @@ create_paged_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, port
  * @return The memory at the root of memory's windows, which isn't a window.
  * @return The page's index in that root.
  */
-paged_root :: fn(memory: ptr[Memory], page: u64) -> (ptr[mut Memory], u64) {
+paged_root :: fn(memory : ptr[Memory], page : u64) -> (ptr[mut Memory], u64) {
     root := cast[ptr[mut Memory]](memory)
     at := page
     loop {
@@ -133,8 +139,15 @@ paged_root :: fn(memory: ptr[Memory], page: u64) -> (ptr[mut Memory], u64) {
  * @return Mapped if the page was there and is mapped now (or another CPU mapped it); Blocked if the thread now waits
  *     for the pager; Failed if mapping it failed or the pager's binding is gone.
  */
-resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], address: u64,
-    memory: ptr[mut Memory], page: u64, mapping: arch_interface.Mapping) -> FaultOutcome {
+resolve_paged_fault :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    memory : ptr[mut Memory],
+    page : u64,
+    mapping : arch_interface.Mapping
+) -> FaultOutcome {
     lock_at(&memory.page_lock, .MemoryPages)
     slot :: page_slot(memory, page)
     held :: intrinsics.atomic_load_u64_acquire(slot)
@@ -142,7 +155,12 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
         unlock_at(&memory.page_lock, .MemoryPages)
         mapped, error :: map_pages_locked(kernel, space, address, held, frames.FRAME_SIZE, mapping)
         return match error {
-            case Some(failure) => if failure == .AlreadyMapped { FaultOutcome.Mapped } else { FaultOutcome.Failed }
+            case Some(failure) => if failure == .AlreadyMapped {
+                FaultOutcome.Mapped
+            }
+            else {
+                FaultOutcome.Failed
+            }
             case None => FaultOutcome.Mapped
         }
     }
@@ -166,8 +184,14 @@ resolve_paged_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], spac
  *     memory_read is; moved back before it's on the waiters, where a supply could wake it on another CPU.
  * @return Blocked if the thread now waits for the pager; Failed, with nothing changed, if the pager's binding is gone.
  */
-want_page_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], memory: ptr[mut Memory], slot: ptr[mut u64], held: u64,
-    restart: bool) -> FaultOutcome {
+want_page_locked :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    memory : ptr[mut Memory],
+    slot : ptr[mut u64],
+    held : u64,
+    restart : bool
+) -> FaultOutcome {
     port :: match lock_bound_port(cast[ptr[Binding]](memory.pager_binding), memory.pager_generation) {
         case Some(locked) => locked
         case None => {
@@ -209,7 +233,7 @@ want_page_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], memory:
  * @param kernel The kernel, whose scheduler each thread is made ready on, asking for the CPU its cpu field names.
  * @param memory The paged memory, whose page lock the caller holds; it has no waiters after.
  */
-wake_fault_waiters :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+wake_fault_waiters :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory]) {
     loop {
         first :: memory.fault_waiters
         if first == 0 {
@@ -234,7 +258,7 @@ wake_fault_waiters :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
  *
  * @param thread The thread, no longer running; its fault_memory is 0 after.
  */
-cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
+cancel_fault_wait :: fn(thread : ptr[mut Thread]) {
     address :: thread.fault_memory
     if address == 0 {
         return void
@@ -266,7 +290,7 @@ cancel_fault_wait :: fn(thread: ptr[mut Thread]) {
  * @error NotPaged The memory isn't paged memory, or is a window.
  * @error NothingWanted No page is wanted that hasn't been reported.
  */
-page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
+page_wanted :: fn(memory : ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
     if memory.pager_binding == 0 {
         return .Error(.NotPaged)
     }
@@ -299,12 +323,19 @@ page_wanted :: fn(memory: ptr[mut Memory]) -> Result[u64, slop_os.MemoryError] {
  *     aligned or is past either's end, or a source that's device memory or a framebuffer (which can't be copied from), OutOfMemory if source's page has no frame (as an unsupplied page of paged memory
  *     hasn't) or no frame is free for the copy, BudgetExceeded if the budget can't pay for the page.
  */
-supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64, source: ptr[Memory], source_offset: u64)
-    -> slop_os.MemoryError? {
+supply_page :: fn(
+    kernel : ptr[mut Kernel],
+    memory : ptr[mut Memory],
+    offset : u64,
+    source : ptr[Memory],
+    source_offset : u64
+) -> slop_os.MemoryError? {
     if memory.pager_binding == 0 {
         return .NotPaged
     }
-    if offset & (frames.FRAME_SIZE - 1) != 0 || offset >= memory.size || source_offset & (frames.FRAME_SIZE - 1) != 0
+    if offset & (frames.FRAME_SIZE - 1) != 0
+        || offset >= memory.size
+        || source_offset & (frames.FRAME_SIZE - 1) != 0
         || source_offset >= source.size {
         return .InvalidSize
     }
@@ -328,8 +359,11 @@ supply_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64,
             return .OutOfMemory
         }
     }
-    intrinsics.mem_copy_non_overlapping(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)),
-        cast[rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](from))), cast[usize](frames.FRAME_SIZE))
+    intrinsics.mem_copy_non_overlapping(
+        cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)),
+        cast[rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](from))),
+        cast[usize](frames.FRAME_SIZE)
+    )
     lock_at(&memory.page_lock, .MemoryPages)
     slot :: page_slot(memory, offset / frames.FRAME_SIZE)
     supplied_already :: intrinsics.atomic_load_u64_acquire(slot) >= frames.FRAME_SIZE
@@ -376,7 +410,7 @@ Unmapped :: struct {
  *     offset, MappedWidely, leaving the page, if more mappings cover it than MAX_EVICT_SPACES, NotSupplied if it isn't
  *     there.
  */
-evict_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) -> slop_os.MemoryError? {
+evict_page :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory], offset : u64) -> slop_os.MemoryError? {
     if memory.pager_binding == 0 || memory.parent != 0 {
         return .NotPaged
     }
@@ -451,8 +485,13 @@ evict_page :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) 
  * @param count How many of unmapped's entries are used already.
  * @return How many of unmapped's entries are used after.
  */
-unmap_page_in :: fn(memory: ptr[mut Memory], page: u64, frame: u64, unmapped: ptr[mut Unmapped[slop_os.MAX_EVICT_SPACES]], count: usize)
-    -> usize {
+unmap_page_in :: fn(
+    memory : ptr[mut Memory],
+    page : u64,
+    frame : u64,
+    unmapped : ptr[mut Unmapped[slop_os.MAX_EVICT_SPACES]],
+    count : usize
+) -> usize {
     made := count
     with {
         address := memory.first_mapping
@@ -476,8 +515,12 @@ unmap_page_in :: fn(memory: ptr[mut Memory], page: u64, frame: u64, unmapped: pt
         }
         if mapped {
             entry :: &unmapped^[made]
-            entry^ = Unmapped.{space = cast[u64](space), generation = intrinsics.atomic_load_u32_acquire(&space.header.generation),
-                tag = space.table.tag, address = at}
+            entry^ = Unmapped.{
+                space = cast[u64](space),
+                generation = intrinsics.atomic_load_u32_acquire(&space.header.generation),
+                tag = space.table.tag,
+                address = at,
+            }
             flush := arch_interface.TlbBatch.{}
             match arch.unmap(&space.table, cast[arch_interface.VirtualAddress](at), .Size4K, &entry.freed, &flush) {
                 case Ok(physical) => made += 1
@@ -500,7 +543,7 @@ unmap_page_in :: fn(memory: ptr[mut Memory], page: u64, frame: u64, unmapped: pt
  * @param page The page's index in memory.
  * @return The number of mappings, which may change once the locks are let go.
  */
-mappings_of_page :: fn(memory: ptr[mut Memory], page: u64) -> u64 {
+mappings_of_page :: fn(memory : ptr[mut Memory], page : u64) -> u64 {
     count := cast[u64](0)
     lock_at(&memory.lock, .MemoryParent)
     count += covering(memory, page)
@@ -530,7 +573,7 @@ mappings_of_page :: fn(memory: ptr[mut Memory], page: u64) -> u64 {
  * @param page The page's index in memory.
  * @return The number of its mappings whose range includes the page.
  */
-covering :: fn(memory: ptr[Memory], page: u64) -> u64 {
+covering :: fn(memory : ptr[Memory], page : u64) -> u64 {
     count := cast[u64](0)
     with {
         address := memory.first_mapping
@@ -564,7 +607,11 @@ covering :: fn(memory: ptr[Memory], page: u64) -> u64 {
  * @error NotPaged The memory isn't paged memory, or is a window.
  * @error InvalidSize The offset isn't page aligned, or is past the memory's end.
  */
-page_accessed :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u64) -> Result[u64, slop_os.MemoryError] {
+page_accessed :: fn(
+    kernel : ptr[mut Kernel],
+    memory : ptr[mut Memory],
+    offset : u64
+) -> Result[u64, slop_os.MemoryError] {
     if memory.pager_binding == 0 || memory.parent != 0 {
         return .Error(.NotPaged)
     }
@@ -603,7 +650,7 @@ page_accessed :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], offset: u6
  * @param page The page's index in memory.
  * @return True if the hardware marked the page accessed in any of the mappings.
  */
-take_accessed_in :: fn(memory: ptr[Memory], page: u64) -> bool {
+take_accessed_in :: fn(memory : ptr[Memory], page : u64) -> bool {
     touched := false
     with {
         address := memory.first_mapping
@@ -620,7 +667,11 @@ take_accessed_in :: fn(memory: ptr[Memory], page: u64) -> bool {
         }
         space :: cast[ptr[mut AddressSpace]](mapping.space)
         lock_at(&space.lock, .Space)
-        touched = arch.take_accessed(&space.table, cast[arch_interface.VirtualAddress](mapping.address + (page - first) * frames.FRAME_SIZE)) || touched
+        touched = arch.take_accessed(
+            &space.table,
+            cast[arch_interface.VirtualAddress](mapping.address + (page - first) * frames.FRAME_SIZE)
+        )
+            || touched
         unlock_at(&space.lock, .Space)
     }
     return touched

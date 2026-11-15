@@ -1,6 +1,7 @@
 /**
  * What the file tools share (decisions/0179): list, copy, move, remove and recover, programs each, which take the
- * shell's directory as here. Snapshots asked for on a dir connection, and a tree copied, from a directory or from one as
+ * shell's directory as here. Snapshots asked for on a dir connection, and a tree copied, from a directory or from one
+ * as
  * a snapshot has it, into a directory, its files' bytes read and written through std/os's files.
  */
 package file_tools
@@ -8,12 +9,12 @@ package file_tools
 import runtime from "base:runtime"
 import memory from "std:memory"
 import os from "std:os"
-import strings from "std:strings"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
 import lifecycle from "std:os/slop_os/lifecycle"
 import read_only_dir from "std:os/slop_os/read_only_dir"
+import strings from "std:strings"
 
 /** How many bytes are read and written at a time when a file's copied: 64 KiB, a File's buffer. */
 COPY_BYTES :: 64 * 1024
@@ -78,7 +79,12 @@ Stopped :: struct {
  * @param into Where the answer goes, for os.message_of[dir.Response].
  * @return Whether the answer came; false if it couldn't be sent or the connection's gone.
  */
-ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
+ask_dir :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> bool {
     if dir.send_request(end, port, out) is_some {
         return false
     }
@@ -96,7 +102,7 @@ ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing
  * @return The snapshot's name, on the heap, the caller's; why not, as the server said: Unsupported, as from a file
  *     system without snapshots, is Unavailable.
  */
-take_snapshot :: fn(end: slop_os.Channel) -> Result[string, files.FileError] {
+take_snapshot :: fn(end : slop_os.Channel) -> Result[string, files.FileError] {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return .Error(.NoMemory)
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     out := os.Outgoing.{}
@@ -119,7 +125,7 @@ take_snapshot :: fn(end: slop_os.Channel) -> Result[string, files.FileError] {
  * @param into Where they're added, newest first; each name on the heap, freed with free_seen.
  * @return Null once they're all listed; why not, as the server said.
  */
-snapshots_of :: fn(end: slop_os.Channel, into: ptr[mut Seen[..]]) -> files.FileError? {
+snapshots_of :: fn(end : slop_os.Channel, into : ptr[mut Seen[..]]) -> files.FileError? {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return files.FileError.NoMemory
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     oldest_first : Seen[..]
@@ -161,7 +167,7 @@ snapshots_of :: fn(end: slop_os.Channel, into: ptr[mut Seen[..]]) -> files.FileE
  *
  * @param seen The list, from snapshots_of; left empty.
  */
-free_seen :: fn(seen: ptr[mut Seen[..]]) {
+free_seen :: fn(seen : ptr[mut Seen[..]]) {
     for each in seen^ {
         strings.free_string(each.name)
     }
@@ -176,7 +182,7 @@ free_seen :: fn(seen: ptr[mut Seen[..]]) {
  * @return The directory in the snapshot, as a Source the caller closes with close_source; NotFound if the snapshot, or
  *     the directory in it, isn't there; why not otherwise, as the server said.
  */
-open_snapshot :: fn(end: slop_os.Channel, name: string) -> Result[Source, files.FileError] {
+open_snapshot :: fn(end : slop_os.Channel, name : string) -> Result[Source, files.FileError] {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return .Error(.NoMemory)
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     out := os.Outgoing.{}
@@ -189,7 +195,8 @@ open_snapshot :: fn(end: slop_os.Channel, name: string) -> Result[Source, files.
     }
     match os.message_of[dir.Response](&into)^ {
         case Narrowed(made) => {
-            past_port :: os.port_for(slop_os.startup_block().budget, made.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+            past_port :: os.port_for(slop_os.startup_block().budget, made.end)
+                or_else cast[slop_os.Port](slop_os.NO_HANDLE)
             if cast[slop_os.Handle](past_port) == slop_os.NO_HANDLE {
                 _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
                 return .Error(.NoMemory)
@@ -207,8 +214,12 @@ open_snapshot :: fn(end: slop_os.Channel, name: string) -> Result[Source, files.
  * @param directory The directory, kept by the caller; close_source doesn't close it.
  * @return The Source.
  */
-live_source :: fn(directory: os.Directory) -> Source {
-    return Source.{live = directory, past = cast[slop_os.Channel](slop_os.NO_HANDLE), port = cast[slop_os.Port](slop_os.NO_HANDLE)}
+live_source :: fn(directory : os.Directory) -> Source {
+    return Source.{
+        live = directory,
+        past = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        port = cast[slop_os.Port](slop_os.NO_HANDLE),
+    }
 }
 
 /**
@@ -216,7 +227,7 @@ live_source :: fn(directory: os.Directory) -> Source {
  *
  * @param source The Source; a snapshot's connection and port are closed.
  */
-close_source :: fn(source: Source) {
+close_source :: fn(source : Source) {
     if cast[slop_os.Handle](source.past) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](source.port))
         _ = slop_os.handle_close(cast[slop_os.Handle](source.past))
@@ -233,7 +244,7 @@ close_source :: fn(source: Source) {
  * @param into Where the answer goes, for os.message_of[read_only_dir.Response].
  * @return Whether the answer came.
  */
-ask_past :: fn(source: Source, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
+ask_past :: fn(source : Source, out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> bool {
     if read_only_dir.send_request(source.past, source.port, out) is_some {
         return false
     }
@@ -250,7 +261,7 @@ ask_past :: fn(source: Source, out: ptr[mut os.Outgoing], into: ptr[mut os.Incom
  * @param path The path, relative, its parts separated by /.
  * @return File, Directory, or Missing for nothing there or what can't be told.
  */
-kind_at :: fn(source: Source, path: string) -> Kind {
+kind_at :: fn(source : Source, path : string) -> Kind {
     if cast[slop_os.Handle](source.past) == slop_os.NO_HANDLE {
         return match os.path_kind_in(source.live, path) {
             case .FILE => Kind.File
@@ -278,7 +289,7 @@ kind_at :: fn(source: Source, path: string) -> Kind {
  * @param path Its path.
  * @return Its connection, speaking read_only_dir, the caller's; null if it isn't a directory there.
  */
-past_directory :: fn(source: Source, path: string) -> slop_os.Channel? {
+past_directory :: fn(source : Source, path : string) -> slop_os.Channel? {
     out := os.Outgoing.{}
     request :: os.begin[read_only_dir.Request](&out)
     request^ = .OpenDirectory(os.append(&out, string_bytes(path)))
@@ -299,7 +310,7 @@ past_directory :: fn(source: Source, path: string) -> slop_os.Channel? {
  * @param path Its path.
  * @return Its connection, speaking read_only_file, the caller's; null if it isn't a file there.
  */
-past_file :: fn(source: Source, path: string) -> slop_os.Channel? {
+past_file :: fn(source : Source, path : string) -> slop_os.Channel? {
     out := os.Outgoing.{}
     request :: os.begin[read_only_dir.Request](&out)
     request^ = .OpenReadOnlyFile(os.append(&out, string_bytes(path)))
@@ -321,12 +332,18 @@ past_file :: fn(source: Source, path: string) -> slop_os.Channel? {
  * @param names Where its entries' names go, each on the heap, freed with free_names, and whether each is a directory.
  * @return Null once they're listed; why not otherwise.
  */
-names_at :: fn(source: Source, path: string, names: ptr[mut os.DirectoryEntry[..]]) -> os.OsError? {
+names_at :: fn(source : Source, path : string, names : ptr[mut os.DirectoryEntry[..]]) -> os.OsError? {
     if cast[slop_os.Handle](source.past) == slop_os.NO_HANDLE {
         match os.list_directory_in(source.live, path) {
             case Ok(listed) => {
                 for each in listed {
-                    runtime.array_add(names, os.DirectoryEntry.{name = strings.clone(each.name) or_continue, is_directory = each.is_directory})
+                    runtime.array_add(
+                        names,
+                        os.DirectoryEntry.{
+                            name = strings.clone(each.name) or_continue,
+                            is_directory = each.is_directory,
+                        }
+                    )
                 }
                 os.free_directory_listing(listed)
                 return null
@@ -369,7 +386,7 @@ names_at :: fn(source: Source, path: string, names: ptr[mut os.DirectoryEntry[..
  *
  * @param names The list, from names_at; left empty.
  */
-free_names :: fn(names: ptr[mut os.DirectoryEntry[..]]) {
+free_names :: fn(names : ptr[mut os.DirectoryEntry[..]]) {
     for each in names^ {
         strings.free_string(each.name)
     }
@@ -383,7 +400,7 @@ free_names :: fn(names: ptr[mut os.DirectoryEntry[..]]) {
  * @param path The file's path.
  * @return The File, which the caller closes with os.close; why not otherwise.
  */
-open_to_read :: fn(source: Source, path: string) -> Result[os.File, os.OsError] {
+open_to_read :: fn(source : Source, path : string) -> Result[os.File, os.OsError] {
     if cast[slop_os.Handle](source.past) == slop_os.NO_HANDLE {
         return os.open_in(source.live, path, .READ)
     }
@@ -404,7 +421,7 @@ open_to_read :: fn(source: Source, path: string) -> Result[os.File, os.OsError] 
  * @param path The path.
  * @return How many files; 0 for nothing there, and what can't be listed counts as nothing.
  */
-count_files :: fn(source: Source, path: string) -> u64 {
+count_files :: fn(source : Source, path : string) -> u64 {
     match kind_at(source, path) {
         case .File => return 1
         case .Missing => return 0
@@ -437,7 +454,14 @@ count_files :: fn(source: Source, path: string) -> u64 {
  * @param copied What's been copied, which this adds to.
  * @return Null once it's copied; where it stopped, and why, otherwise, with what was copied before it left.
  */
-copy_tree :: fn(source: Source, from: string, into: os.Directory, to: string, total: u64, copied: ptr[mut Copied]) -> Stopped? {
+copy_tree :: fn(
+    source : Source,
+    from : string,
+    into : os.Directory,
+    to : string,
+    total : u64,
+    copied : ptr[mut Copied]
+) -> Stopped? {
     match kind_at(source, from) {
         case .Missing => return stopped(to, .NotFound)
         case .File => return copy_file(source, from, into, to, total, copied)
@@ -481,7 +505,14 @@ copy_tree :: fn(source: Source, from: string, into: os.Directory, to: string, to
  * @param copied What's been copied, to which its bytes and the file are added once it's written.
  * @return Null once it's written; where it stopped, and why, otherwise.
  */
-copy_file :: fn(source: Source, from: string, into: os.Directory, to: string, total: u64, copied: ptr[mut Copied]) -> Stopped? {
+copy_file :: fn(
+    source : Source,
+    from : string,
+    into : os.Directory,
+    to : string,
+    total : u64,
+    copied : ptr[mut Copied]
+) -> Stopped? {
     reading :: match open_to_read(source, from) {
         case Ok(file) => file
         case Error(error) => return stopped(to, error)
@@ -521,7 +552,7 @@ copy_file :: fn(source: Source, from: string, into: os.Directory, to: string, to
  * @param why Why.
  * @return The Stopped.
  */
-stopped :: fn(path: string, why: os.OsError) -> Stopped {
+stopped :: fn(path : string, why : os.OsError) -> Stopped {
     return Stopped.{path = strings.clone(path) or_else "", why = why}
 }
 
@@ -534,7 +565,7 @@ stopped :: fn(path: string, why: os.OsError) -> Stopped {
  * @param name The name.
  * @return path/name, or name alone for "" or ".", on the heap, the caller's; null without the memory.
  */
-joined :: fn(path: string, name: string) -> string? {
+joined :: fn(path : string, name : string) -> string? {
     if path.count == 0 || path == "." {
         return strings.clone(name) or_return null
     }
@@ -547,7 +578,7 @@ joined :: fn(path: string, name: string) -> string? {
  * @param path The path, its parts separated by /; one ending in / has it dropped first.
  * @return A view of its last part.
  */
-last_name :: fn(path: string) -> string {
+last_name :: fn(path : string) -> string {
     // Where the last part starts and ends: after the last / that isn't the path's last byte
     start : usize = 0
     end : usize = 0
@@ -572,7 +603,7 @@ last_name :: fn(path: string) -> string {
  * @param end Where it ends, at most text's count.
  * @return The view; empty if start or end is out of order or past text.
  */
-string_of_view :: fn(text: string, start: usize, end: usize) -> string {
+string_of_view :: fn(text : string, start : usize, end : usize) -> string {
     bytes :: string_bytes(text)
     if start >= end || end > bytes.count || start >= bytes.count {
         return ""
@@ -586,7 +617,7 @@ string_of_view :: fn(text: string, start: usize, end: usize) -> string {
  * @param bytes UTF-8, as a message holds a name.
  * @return The copy, the caller's, freed with strings.free_string; "" for none; null without the memory.
  */
-copy_of :: fn(bytes: u8[]) -> string? {
+copy_of :: fn(bytes : u8[]) -> string? {
     if bytes.count == 0 {
         return ""
     }

@@ -16,7 +16,7 @@ TYPE_NAMES :: string.["int", "size", "duration", "bool", "string", "path", "list
  * @return The value; null if the word isn't one of the type, like a bool other than true or false. For int, size and
  *     duration, any number literal is given, of whatever kind it is, for the caller to check.
  */
-word_as :: fn(type: string, word: string) -> Value? {
+word_as :: fn(type : string, word : string) -> Value? {
     if type == "" || type == "string" || type == "list" || type == "record" {
         return .Text(word)
     }
@@ -47,7 +47,7 @@ word_as :: fn(type: string, word: string) -> Value? {
  * @param value The value checked; only its kind is looked at, so any Int is an int and any list a list.
  * @return True if the parameter takes it; Null is taken only by "", any type.
  */
-of_type :: fn(type: string, value: Value) -> bool {
+of_type :: fn(type : string, value : Value) -> bool {
     return match value {
         case Null => type == ""
         case Bool(_) => type == "" || type == "bool"
@@ -69,7 +69,7 @@ of_type :: fn(type: string, value: Value) -> bool {
  * @param kind The kind.
  * @return "Dir", "File" or "ReadOnlyFile".
  */
-handle_type :: fn(kind: HandleKind) -> string {
+handle_type :: fn(kind : HandleKind) -> string {
     return match kind {
         case .Dir => "Dir"
         case .File => "File"
@@ -83,7 +83,7 @@ handle_type :: fn(kind: HandleKind) -> string {
  * @param value Any value; a Text's string is shared by the Path made, not copied.
  * @return A Path of the same text for Text; any other value as it is.
  */
-as_path :: fn(value: Value) -> Value {
+as_path :: fn(value : Value) -> Value {
     return match value {
         case Text(text) => Value.Path(text)
         case _ => value
@@ -97,9 +97,30 @@ as_path :: fn(value: Value) -> Value {
  *     other name is said as "text".
  * @return Its name with an article, like "an integer"; "text" for string, any or an unknown name.
  */
-type_article :: fn(type: string) -> string {
-    return if type == "int" { "an integer" } else if type == "size" { "a size" } else if type == "duration" { "a duration" }
-        else if type == "bool" { "true or false" } else if type == "path" { "a path" } else if type == "list" { "a list" }
-        else if type == "record" { "a record" } else if type == "Dir" { "a directory" } else if type == "File" { "a file" }
-        else if type == "ReadOnlyFile" { "a file to read" } else { "text" }
+type_article :: fn(type : string) -> string {
+    return if type == "int" {
+        "an integer"
+    }
+    else if type == "size" {
+        "a size"
+    }
+    else if type == "duration" {
+        "a duration"
+    }
+    else if type == "bool" {
+        "true or false"
+    }
+    else if type == "path" {
+        "a path"
+    }
+    else if type == "list" {
+        "a list"
+    }
+    else if type == "record" {
+        "a record"
+    }
+    else if type == "Dir" {
+        "a directory"
+    }
+    else if type == "File" { "a file" } else if type == "ReadOnlyFile" { "a file to read" } else { "text" }
 }

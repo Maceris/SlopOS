@@ -9,6 +9,7 @@
  * before it writes them: a read that sees a field the fill wrote then sees the tag that emptied the entry before it, or
  * a later one, so never takes one entry's object with another's tag.
  */
+
 package handle_entries
 
 import intrinsics from "base:intrinsics"
@@ -60,7 +61,7 @@ Held :: struct {
  * @param entry The entry, filled or not.
  * @return Its generation, 0 to 0xffff: what a handle to it has in its high 16 bits.
  */
-generation_of :: fn(entry: ptr[HandleEntry]) -> u64 {
+generation_of :: fn(entry : ptr[HandleEntry]) -> u64 {
     return intrinsics.atomic_load_u64_no_fence(&entry.tag) >> TAG_GENERATION_SHIFT
 }
 
@@ -70,7 +71,7 @@ generation_of :: fn(entry: ptr[HandleEntry]) -> u64 {
  * @param entry The entry, never filled, and not yet reachable by reads: its page was just made.
  * @param generation Its first generation, 0 to 0xffff.
  */
-start :: fn(entry: ptr[mut HandleEntry], generation: u64) {
+start :: fn(entry : ptr[mut HandleEntry], generation : u64) {
     intrinsics.atomic_store_u64_no_fence(&entry.tag, (generation & 0xffff) << TAG_GENERATION_SHIFT)
 }
 
@@ -81,7 +82,7 @@ start :: fn(entry: ptr[mut HandleEntry], generation: u64) {
  * @param held What it holds from now on.
  * @return Its generation, which a handle to it has in its high 16 bits.
  */
-fill :: fn(entry: ptr[mut HandleEntry], held: Held) -> u64 {
+fill :: fn(entry : ptr[mut HandleEntry], held : Held) -> u64 {
     generation :: generation_of(entry)
     // What emptied it, before the fields: a read seeing a field written here sees that too
     intrinsics.fence_release()
@@ -105,14 +106,17 @@ fill :: fn(entry: ptr[mut HandleEntry], held: Held) -> u64 {
  * @param wanted The generation of the handle being looked up, 0 to 0xffff.
  * @return What it holds; null if it's empty, or its generation isn't wanted, as the handle was closed.
  */
-read :: fn(entry: ptr[HandleEntry], wanted: u64) -> Held? {
+read :: fn(entry : ptr[HandleEntry], wanted : u64) -> Held? {
     loop {
         tag :: intrinsics.atomic_load_u64_acquire(&entry.tag)
         if tag & TAG_VALID == 0 || tag >> TAG_GENERATION_SHIFT != wanted {
             return null
         }
-        held :: held_of(tag, intrinsics.atomic_load_u64_no_fence(&entry.object),
-            intrinsics.atomic_load_u32_no_fence(&entry.generation))
+        held :: held_of(
+            tag,
+            intrinsics.atomic_load_u64_no_fence(&entry.object),
+            intrinsics.atomic_load_u32_no_fence(&entry.generation)
+        )
         intrinsics.fence_acquire()
         // Unchanged while it was read, so what was read belongs together
         if intrinsics.atomic_load_u64_no_fence(&entry.tag) == tag {
@@ -130,13 +134,16 @@ read :: fn(entry: ptr[HandleEntry], wanted: u64) -> Held? {
  *     again. Untouched when the entry isn't emptied.
  * @return What it held; null if it was empty already, or its generation isn't wanted, as the handle was closed.
  */
-empty :: fn(entry: ptr[mut HandleEntry], wanted: u64, next: ptr[mut u64]) -> Held? {
+empty :: fn(entry : ptr[mut HandleEntry], wanted : u64, next : ptr[mut u64]) -> Held? {
     tag :: intrinsics.atomic_load_u64_no_fence(&entry.tag)
     if tag & TAG_VALID == 0 || tag >> TAG_GENERATION_SHIFT != wanted {
         return null
     }
-    held :: held_of(tag, intrinsics.atomic_load_u64_no_fence(&entry.object),
-        intrinsics.atomic_load_u32_no_fence(&entry.generation))
+    held :: held_of(
+        tag,
+        intrinsics.atomic_load_u64_no_fence(&entry.object),
+        intrinsics.atomic_load_u32_no_fence(&entry.generation)
+    )
     next_generation :: (wanted + 1) & 0xffff
     intrinsics.atomic_store_u64_release(&entry.tag, next_generation << TAG_GENERATION_SHIFT)
     next^ = next_generation
@@ -149,12 +156,16 @@ empty :: fn(entry: ptr[mut HandleEntry], wanted: u64, next: ptr[mut u64]) -> Hel
  * @param entry The entry.
  * @return What it holds; null if it's empty.
  */
-peek :: fn(entry: ptr[HandleEntry]) -> Held? {
+peek :: fn(entry : ptr[HandleEntry]) -> Held? {
     tag :: intrinsics.atomic_load_u64_no_fence(&entry.tag)
     if tag & TAG_VALID == 0 {
         return null
     }
-    return held_of(tag, intrinsics.atomic_load_u64_no_fence(&entry.object), intrinsics.atomic_load_u32_no_fence(&entry.generation))
+    return held_of(
+        tag,
+        intrinsics.atomic_load_u64_no_fence(&entry.object),
+        intrinsics.atomic_load_u32_no_fence(&entry.generation)
+    )
 }
 
 /**
@@ -165,7 +176,12 @@ peek :: fn(entry: ptr[HandleEntry]) -> Held? {
  * @param generation The generation field.
  * @return What they say the entry holds.
  */
-held_of :: fn(tag: u64, object: u64, generation: u32) -> Held {
-    return Held.{object = object, generation = generation, kind = cast[u8](tag >> 32), rights = cast[u32](tag),
-        owning = tag & TAG_OWNING != 0}
+held_of :: fn(tag : u64, object : u64, generation : u32) -> Held {
+    return Held.{
+        object = object,
+        generation = generation,
+        kind = cast[u8](tag >> 32),
+        rights = cast[u32](tag),
+        owning = tag & TAG_OWNING != 0,
+    }
 }

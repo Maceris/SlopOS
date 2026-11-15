@@ -86,7 +86,7 @@ Value :: union {
  * @param value The integer.
  * @return It, cut to 32 bits unless integers are 64.
  */
-masked :: fn(interpreter: ptr[Interpreter], value: u64) -> u64 {
+masked :: fn(interpreter : ptr[Interpreter], value : u64) -> u64 {
     return if interpreter.wide { value } else { value & 0xffffffff }
 }
 
@@ -96,7 +96,7 @@ masked :: fn(interpreter: ptr[Interpreter], value: u64) -> u64 {
  * @param interpreter The interpreter.
  * @return All ones, 64 or 32 bits of them.
  */
-ones :: fn(interpreter: ptr[Interpreter]) -> u64 {
+ones :: fn(interpreter : ptr[Interpreter]) -> u64 {
     return masked(interpreter, 0xffffffffffffffff)
 }
 
@@ -106,7 +106,7 @@ ones :: fn(interpreter: ptr[Interpreter]) -> u64 {
  * @param interpreter The interpreter.
  * @return 8 or 4.
  */
-integer_bytes :: fn(interpreter: ptr[Interpreter]) -> usize {
+integer_bytes :: fn(interpreter : ptr[Interpreter]) -> usize {
     return if interpreter.wide { 8 } else { 4 }
 }
 
@@ -119,8 +119,9 @@ integer_bytes :: fn(interpreter: ptr[Interpreter]) -> usize {
  * @param size The bytes about to be taken.
  * @return Null if they fit; Memory if they'd pass limits.evaluation_bytes.
  */
-spend :: fn(interpreter: ptr[mut Interpreter], size: usize) -> Error? {
-    if size > interpreter.limits.evaluation_bytes || interpreter.evaluation_bytes > interpreter.limits.evaluation_bytes - size {
+spend :: fn(interpreter : ptr[mut Interpreter], size : usize) -> Error? {
+    if size > interpreter.limits.evaluation_bytes
+        || interpreter.evaluation_bytes > interpreter.limits.evaluation_bytes - size {
         return .Memory
     }
     interpreter.evaluation_bytes += size
@@ -135,7 +136,7 @@ spend :: fn(interpreter: ptr[mut Interpreter], size: usize) -> Error? {
  * @return The bytes, good until the evaluation ends.
  * @error Memory The evaluation's budget, or the heap, can't hold them.
  */
-temporary_bytes :: fn(interpreter: ptr[mut Interpreter], count: u64) -> Result[ptr[mut Bytes], Error] #unrestricted {
+temporary_bytes :: fn(interpreter : ptr[mut Interpreter], count : u64) -> Result[ptr[mut Bytes], Error] #unrestricted {
     if count > cast[u64](interpreter.limits.evaluation_bytes) {
         return .Error(.Memory)
     }
@@ -164,7 +165,10 @@ temporary_bytes :: fn(interpreter: ptr[mut Interpreter], count: u64) -> Result[p
  * @return The package, good until the evaluation ends.
  * @error Memory The evaluation's budget, or the heap, can't hold it.
  */
-temporary_package :: fn(interpreter: ptr[mut Interpreter], count: u64) -> Result[ptr[mut Package], Error] #unrestricted {
+temporary_package :: fn(
+    interpreter : ptr[mut Interpreter],
+    count : u64
+) -> Result[ptr[mut Package], Error] #unrestricted {
     if count > cast[u64](interpreter.limits.evaluation_bytes / size_of(Value)) {
         return .Error(.Memory)
     }
@@ -196,7 +200,7 @@ temporary_package :: fn(interpreter: ptr[mut Interpreter], count: u64) -> Result
  * @return The string.
  * @error Memory The evaluation's budget, or the heap, can't hold it.
  */
-temporary_string :: fn(interpreter: ptr[mut Interpreter], text: u8[]) -> Result[Value, Error] #unrestricted {
+temporary_string :: fn(interpreter : ptr[mut Interpreter], text : u8[]) -> Result[Value, Error] #unrestricted {
     made :: temporary_bytes(interpreter, cast[u64](text.count))?
     data :: made.data
     for byte, i in text {
@@ -214,8 +218,9 @@ temporary_string :: fn(interpreter: ptr[mut Interpreter], text: u8[]) -> Result[
  * @param size The bytes about to be taken.
  * @return Null if they fit; Memory if they'd pass limits.namespace_bytes.
  */
-keep :: fn(interpreter: ptr[mut Interpreter], size: usize) -> Error? {
-    if size > interpreter.limits.namespace_bytes || interpreter.namespace_bytes > interpreter.limits.namespace_bytes - size {
+keep :: fn(interpreter : ptr[mut Interpreter], size : usize) -> Error? {
+    if size > interpreter.limits.namespace_bytes
+        || interpreter.namespace_bytes > interpreter.limits.namespace_bytes - size {
         return .Memory
     }
     interpreter.namespace_bytes += size
@@ -231,7 +236,10 @@ keep :: fn(interpreter: ptr[mut Interpreter], size: usize) -> Error? {
  *     error.
  * @return failed Null, or Memory if the budget or the heap can't hold them.
  */
-persistent_bytes :: fn(interpreter: ptr[mut Interpreter], count: usize) -> (data #unrestricted : mut u8[], failed : Error?) {
+persistent_bytes :: fn(
+    interpreter : ptr[mut Interpreter],
+    count : usize
+) -> (data #unrestricted : mut u8[], failed : Error?) {
     empty : mut u8[]
     if keep(interpreter, count) is_some {
         return empty, .Memory
@@ -251,7 +259,7 @@ persistent_bytes :: fn(interpreter: ptr[mut Interpreter], count: usize) -> (data
  * @param count How many bytes.
  * @return The Bytes, persistent, its bytes zero; null if the budget or the heap can't hold it.
  */
-persistent_block :: fn(interpreter: ptr[mut Interpreter], count: usize) -> ptr[mut Bytes]? #unrestricted {
+persistent_block :: fn(interpreter : ptr[mut Interpreter], count : usize) -> ptr[mut Bytes]? #unrestricted {
     if keep(interpreter, size_of(Bytes)) is_some {
         return null
     }
@@ -277,7 +285,7 @@ persistent_block :: fn(interpreter: ptr[mut Interpreter], count: usize) -> ptr[m
  * @param text The text, copied.
  * @return The string, persistent; null if the budget or the heap can't hold it.
  */
-persistent_string :: fn(interpreter: ptr[mut Interpreter], text: string) -> Value? #unrestricted {
+persistent_string :: fn(interpreter : ptr[mut Interpreter], text : string) -> Value? #unrestricted {
     bytes :: string_bytes(text)
     made :: persistent_block(interpreter, bytes.count) or_return null
     data :: made.data
@@ -300,7 +308,11 @@ persistent_string :: fn(interpreter: ptr[mut Interpreter], text: string) -> Valu
  * @error Memory The namespace's budget, or the heap, can't hold it.
  * @error Depth Packages nested more than 32 deep.
  */
-persist :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value, depth: u32 = 0) -> Result[Value, Error] #unrestricted {
+persist :: fn(
+    interpreter : ptr[mut Interpreter],
+    value #escaping : Value,
+    depth : u32 = 0
+) -> Result[Value, Error] #unrestricted {
     if depth > 32 {
         return .Error(.Depth)
     }
@@ -361,7 +373,10 @@ persist :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value, depth:
  * @return The copy, persistent.
  * @error Memory The namespace's budget, or the heap, can't hold it.
  */
-persistent_copy :: fn(interpreter: ptr[mut Interpreter], bytes: ptr[Bytes]) -> Result[ptr[mut Bytes], Error] #unrestricted {
+persistent_copy :: fn(
+    interpreter : ptr[mut Interpreter],
+    bytes : ptr[Bytes]
+) -> Result[ptr[mut Bytes], Error] #unrestricted {
     made :: persistent_block(interpreter, bytes.data.count) or_return .Error(.Memory)
     data :: made.data
     for byte, i in bytes.data {
@@ -378,7 +393,7 @@ persistent_copy :: fn(interpreter: ptr[mut Interpreter], bytes: ptr[Bytes]) -> R
  * @param interpreter The interpreter, whose namespace_bytes are lessened.
  * @param value The value, which mustn't be used after.
  */
-release_persistent :: fn(interpreter: ptr[mut Interpreter], value: Value) {
+release_persistent :: fn(interpreter : ptr[mut Interpreter], value : Value) {
     match value {
         case String(bytes) => release_bytes(interpreter, bytes)
         case Buffer(bytes) => release_bytes(interpreter, bytes)
@@ -409,7 +424,7 @@ release_persistent :: fn(interpreter: ptr[mut Interpreter], value: Value) {
  * @param interpreter The interpreter, whose namespace_bytes are lessened.
  * @param bytes The bytes; a temporary one is left.
  */
-release_bytes :: fn(interpreter: ptr[mut Interpreter], bytes: ptr[mut Bytes]) {
+release_bytes :: fn(interpreter : ptr[mut Interpreter], bytes : ptr[mut Bytes]) {
     if !bytes.persistent {
         return void
     }
@@ -428,7 +443,11 @@ release_bytes :: fn(interpreter: ptr[mut Interpreter], bytes: ptr[mut Bytes]) {
  * @error Memory The evaluation's budget can't hold it.
  * @error Depth Packages nested more than 32 deep.
  */
-temporary_copy :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value, depth: u32 = 0) -> Result[Value, Error] #unrestricted {
+temporary_copy :: fn(
+    interpreter : ptr[mut Interpreter],
+    value #escaping : Value,
+    depth : u32 = 0
+) -> Result[Value, Error] #unrestricted {
     if depth > 32 {
         return .Error(.Depth)
     }
@@ -464,7 +483,7 @@ temporary_copy :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value,
  * @param bytes The bytes.
  * @return A string viewing them; empty for none.
  */
-text_of :: fn(bytes: u8[]) -> string {
+text_of :: fn(bytes : u8[]) -> string {
     if bytes.count == 0 {
         return ""
     }
@@ -477,7 +496,7 @@ text_of :: fn(bytes: u8[]) -> string {
  * @param into Where they're copied to.
  * @param from Where they're copied from.
  */
-copy_into :: fn(into: mut u8[], from: u8[]) {
+copy_into :: fn(into : mut u8[], from : u8[]) {
     for byte, i in from {
         if i < into.count {
             into[i] = byte
@@ -498,7 +517,7 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
  * @return The integer, masked.
  * @error WrongType A package, an object, a reference, or Uninitialized.
  */
-integer_of :: fn(interpreter: ptr[Interpreter], value: Value) -> Result[u64, Error] {
+integer_of :: fn(interpreter : ptr[Interpreter], value : Value) -> Result[u64, Error] {
     match value {
         case Integer(number) => return .Ok(masked(interpreter, number))
         case String(text) => return .Ok(masked(interpreter, hexadecimal(text.data)))
@@ -521,7 +540,7 @@ integer_of :: fn(interpreter: ptr[Interpreter], value: Value) -> Result[u64, Err
  * @param text The text: an optional "0x" or "0X", then hex digits; it stops at the first that isn't one.
  * @return The number, its digits past 16 shifted out.
  */
-hexadecimal :: fn(text: u8[]) -> u64 {
+hexadecimal :: fn(text : u8[]) -> u64 {
     number : u64 = 0
     start : usize = 0
     if text.count >= 2 && text[0] == cast[u8]('0') && (text[1] == cast[u8]('x') || text[1] == cast[u8]('X')) {
@@ -543,7 +562,7 @@ hexadecimal :: fn(text: u8[]) -> u64 {
  * @param text The text, leading spaces skipped; it stops at the first character that isn't a digit of its base.
  * @return The number, wrapping past 64 bits.
  */
-explicit_integer :: fn(text: u8[]) -> u64 {
+explicit_integer :: fn(text : u8[]) -> u64 {
     start : usize = 0
     loop {
         if start >= text.count || text[start] != cast[u8](' ') {
@@ -551,7 +570,9 @@ explicit_integer :: fn(text: u8[]) -> u64 {
         }
         start += 1
     }
-    if start + 1 < text.count && text[start] == cast[u8]('0') && (text[start + 1] == cast[u8]('x') || text[start + 1] == cast[u8]('X')) {
+    if start + 1 < text.count
+        && text[start] == cast[u8]('0')
+        && (text[start + 1] == cast[u8]('x') || text[start + 1] == cast[u8]('X')) {
         return hexadecimal(text[start..<text.count])
     }
     number : u64 = 0
@@ -571,7 +592,7 @@ explicit_integer :: fn(text: u8[]) -> u64 {
  * @param character An ASCII character.
  * @return 0 to 15 for 0-9, a-f and A-F; 16 for anything else.
  */
-digit_value :: fn(character: u8) -> u64 {
+digit_value :: fn(character : u8) -> u64 {
     if character >= cast[u8]('0') && character <= cast[u8]('9') {
         return cast[u64](character - cast[u8]('0'))
     }
@@ -594,7 +615,10 @@ digit_value :: fn(character: u8) -> u64 {
  * @error WrongType A package, an object, a reference, or Uninitialized.
  * @error Memory The evaluation's budget can't hold it.
  */
-buffer_of :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value) -> Result[ptr[mut Bytes], Error] #unrestricted {
+buffer_of :: fn(
+    interpreter : ptr[mut Interpreter],
+    value #escaping : Value
+) -> Result[ptr[mut Bytes], Error] #unrestricted {
     match value {
         case Buffer(bytes) => return .Ok(bytes)
         case Integer(number) => {
@@ -625,7 +649,10 @@ buffer_of :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value) -> R
  * @error WrongType A package, an object, a reference, or Uninitialized.
  * @error Memory The evaluation's budget can't hold it.
  */
-string_of_value :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value) -> Result[ptr[mut Bytes], Error] #unrestricted {
+string_of_value :: fn(
+    interpreter : ptr[mut Interpreter],
+    value #escaping : Value
+) -> Result[ptr[mut Bytes], Error] #unrestricted {
     match value {
         case String(text) => return .Ok(text)
         case Integer(number) => {
@@ -659,7 +686,9 @@ string_of_value :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value
 }
 
 /** The hex digits, upper case, as AML's conversions write them. */
-HEX_DIGITS : u8[16] : u8.[0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46]
+HEX_DIGITS : u8[16] : u8.[
+    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46
+]
 
 /**
  * ACPI's object type number for ObjectType (ACPI 6.5 §19.6.97).
@@ -669,7 +698,7 @@ HEX_DIGITS : u8[16] : u8.[0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 
  *     8 method, 9 mutex, 10 region, 11 power resource, 12 processor, 13 thermal zone, 14 buffer field, 16 debug; a
  *     reference's, its target's.
  */
-type_number :: fn(value: Value) -> u64 {
+type_number :: fn(value : Value) -> u64 {
     match value {
         case Uninitialized => return 0
         case Integer(_) => return 1
@@ -691,7 +720,7 @@ type_number :: fn(value: Value) -> u64 {
  * @param node The node.
  * @return As type_number's: a Name's, its value's.
  */
-node_type_number :: fn(node: ptr[Node]) -> u64 {
+node_type_number :: fn(node : ptr[Node]) -> u64 {
     match node.kind {
         case .Scope => return 0
         case .Name => return type_number(node.value)

@@ -2,10 +2,10 @@ package session_manager
 
 import runtime from "base:runtime"
 import os from "std:os"
-import schema from "std:schema"
 import slop_os from "std:os/slop_os"
-import config from "../../protocols/config"
+import schema from "std:schema"
 import bundle from "../../bundle"
+import config from "../../protocols/config"
 import system_records from "../../system_records"
 
 /*
@@ -47,7 +47,7 @@ EntryProblem :: union {
  * @param bundle_hash The bundle's hash.
  * @return The plan, its program the caller's; Unreadable, or Needs with the first parameter that can't be given.
  */
-entry_plan :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> Result[EntryPlan, EntryProblem] {
+entry_plan :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash) -> Result[EntryPlan, EntryProblem] {
     record :: stored_object(sessions, bundle_hash) or_return .Error(.Unreadable)
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
@@ -100,7 +100,13 @@ entry_plan :: fn(sessions: ptr[mut Manager], bundle_hash: bundle.Hash) -> Result
  * @return Whether it started; not without a data directory it asks for, or room for another program, or if the launch
  *     failed. Each is logged.
  */
-launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string, plan #escaping : EntryPlan, program: string) -> bool {
+launch_installation :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    name : string,
+    plan #escaping : EntryPlan,
+    program : string
+) -> bool {
     grants : os.NamedGrant[..]
     defer runtime.array_free(&grants)
     if plan.data.count > 0 {
@@ -120,7 +126,9 @@ launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string,
             break
         }
         match settings_value(sessions, number, name, label) {
-            case Some(end) => runtime.array_add(&grants, os.NamedGrant.{label = label, handle = cast[slop_os.Handle](end)})
+            case Some(
+                end
+            ) => runtime.array_add(&grants, os.NamedGrant.{label = label, handle = cast[slop_os.Handle](end)})
             case None => {}
         }
     }
@@ -135,8 +143,24 @@ launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string,
         }
     }
     no_values : os.NamedValue[1]
-    return placed(sessions, number, name, prepared, os.launch_named(sessions.manager, sessions.manager_port, name, plan.program,
-        INSTALLATION_BUDGET, grants[0..<grants.count], no_values[0..<0], prepared.options), true, program)
+    return placed(
+        sessions,
+        number,
+        name,
+        prepared,
+        os.launch_named(
+            sessions.manager,
+            sessions.manager_port,
+            name,
+            plan.program,
+            INSTALLATION_BUDGET,
+            grants[0..<grants.count],
+            no_values[0..<0],
+            prepared.options
+        ),
+        true,
+        program
+    )
 }
 
 /**
@@ -149,7 +173,7 @@ launch_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string,
  * @return The connection's end, the caller's to give; null without the store, for a number past MAX_SESSIONS, or if
  *     the store didn't open it.
  */
-settings_value :: fn(sessions: ptr[mut Manager], number: u32, name: string, value: string) -> slop_os.Channel? {
+settings_value :: fn(sessions : ptr[mut Manager], number : u32, name : string, value : string) -> slop_os.Channel? {
     if sessions.settings_end == NONE || cast[usize](number) >= sessions.sessions.count {
         return null
     }
@@ -158,7 +182,9 @@ settings_value :: fn(sessions: ptr[mut Manager], number: u32, name: string, valu
     count :: owner_of(user_of(made), name, &owner)
     out := os.Outgoing.{}
     request :: os.begin[config.Request](&out)
-    request^ = .ValueFor(config.ValueFor.{owner = os.append(&out, owner[0..<count]), name = os.append(&out, string_bytes(value))})
+    request^ = .ValueFor(
+        config.ValueFor.{owner = os.append(&out, owner[0..<count]), name = os.append(&out, string_bytes(value))}
+    )
     into := os.Incoming.{}
     return match config.ask(sessions.settings_end, sessions.settings_port, &out, &into) {
         case Opened(opened) => opened.end
@@ -174,7 +200,7 @@ settings_value :: fn(sessions: ptr[mut Manager], number: u32, name: string, valu
  * @return held The place of the type it holds.
  * @return optional Whether it's an optional, which can go without.
  */
-held_of :: fn(manifest: ptr[schema.Schema], place: usize) -> (held: usize, optional: bool) {
+held_of :: fn(manifest : ptr[schema.Schema], place : usize) -> (held : usize, optional : bool) {
     type :: match schema.type_in(manifest, place) {
         case Some(found) => found
         case None => return place, false
@@ -198,7 +224,7 @@ held_of :: fn(manifest: ptr[schema.Schema], place: usize) -> (held: usize, optio
  * @param name The name, a view of the manifest.
  * @return A copy, on the heap, never freed.
  */
-copied_name :: fn(name: string) -> string {
+copied_name :: fn(name : string) -> string {
     kept : u8[..]
     for byte in string_bytes(name) {
         runtime.array_add(&kept, byte)
@@ -216,7 +242,7 @@ copied_name :: fn(name: string) -> string {
  * @param prefix The prefix.
  * @return True if text's first bytes are prefix's.
  */
-starts_with_bytes :: fn(text: string, prefix: string) -> bool {
+starts_with_bytes :: fn(text : string, prefix : string) -> bool {
     bytes :: string_bytes(text)
     if bytes.count < prefix.count || prefix.count == 0 {
         return prefix.count == 0

@@ -59,8 +59,13 @@ KeysError :: union {
  *     fingerprint.
  * @error NoPowerbox There's no powerbox to ask.
  */
-main :: fn(here: os.Channel[dir.Dir], add: string?, remove: string?, powerbox: os.Channel[powerbox_protocol.Powerbox]?,
-    output: os.Sink[Key]?) -> Result[u64, KeysError] {
+main :: fn(
+    here : os.Channel[dir.Dir],
+    add : string?,
+    remove : string?,
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?,
+    output : os.Sink[Key]?
+) -> Result[u64, KeysError] {
     asked :: if add is_some { "add" } else if remove is_some { "remove" } else { "powerbox" }
     problem :: Problem.{parameter = os.ParameterName.{name = asked}}
     box :: powerbox or_return .Error(.NoPowerbox(problem))
@@ -104,8 +109,11 @@ main :: fn(here: os.Channel[dir.Dir], add: string?, remove: string?, powerbox: o
         printed :: account_records.key_fingerprint(line) or_continue
         comment : u8[account_records.COMMENT_BYTES]
         comment_count :: account_records.comment_of(line, comment[0..<comment.count])
-        key :: Key.{kind = file_tools.copy_of(first_word(line)) or_else "", fingerprint = file_tools.copy_of(printed[0..<50]) or_else "",
-            comment = file_tools.copy_of(account_records.part(comment[0..<comment.count], comment_count)) or_else ""}
+        key :: Key.{
+            kind = file_tools.copy_of(first_word(line)) or_else "",
+            fingerprint = file_tools.copy_of(printed[0..<50]) or_else "",
+            comment = file_tools.copy_of(account_records.part(comment[0..<comment.count], comment_count)) or_else "",
+        }
         count += 1
         if writing && (stream.write(&writer, key) is_some) {
             return .Error(.NoPowerbox(problem))
@@ -126,14 +134,26 @@ main :: fn(here: os.Channel[dir.Dir], add: string?, remove: string?, powerbox: o
  * @param key The key's line to add, or its fingerprint to remove; empty to list.
  * @return The keys' text for a list, "" once one's added or removed; null if it was refused or couldn't be asked.
  */
-ask :: fn(box: os.Channel[powerbox_protocol.Powerbox], change: powerbox_protocol.KeysChange, key: u8[]) -> string? {
+ask :: fn(box : os.Channel[powerbox_protocol.Powerbox], change : powerbox_protocol.KeysChange, key : u8[]) -> string? {
     port :: os.port_for(slop_os.startup_block().budget, box.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestKeys(powerbox_protocol.KeysRequest.{purpose = os.append(&out, string_bytes(
-        if change == .Add { "to log in as you over SSH" } else if change == .Remove { "so it no longer logs in" } else { "to list them" })),
-        change = change, key = os.append(&out, key)})
+    request^ = .RequestKeys(
+        powerbox_protocol.KeysRequest.{
+            purpose = os.append(
+                &out,
+                string_bytes(
+                    if change == .Add {
+                        "to log in as you over SSH"
+                    }
+                    else if change == .Remove { "so it no longer logs in" } else { "to list them" }
+                )
+            ),
+            change = change,
+            key = os.append(&out, key),
+        }
+    )
     if powerbox_protocol.send_request(box.end, port, &out) is_some {
         return null
     }
@@ -150,7 +170,7 @@ ask :: fn(box: os.Channel[powerbox_protocol.Powerbox], change: powerbox_protocol
 }
 
 /** A text's first line, without its line break. */
-first_line :: fn(text: u8[]) -> u8[] {
+first_line :: fn(text : u8[]) -> u8[] {
     for byte, i in text {
         if byte == 0x0a {
             return text[0..<i]
@@ -160,7 +180,7 @@ first_line :: fn(text: u8[]) -> u8[] {
 }
 
 /** A line's first word: up to its first space. */
-first_word :: fn(line: u8[]) -> u8[] {
+first_word :: fn(line : u8[]) -> u8[] {
     for byte, i in line {
         if byte == 0x20 {
             return line[0..<i]

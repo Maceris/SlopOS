@@ -49,7 +49,10 @@ TimerEntry :: struct {
     cpu : u32,
     /** What it's for, which says what owner is. */
     kind : TimerKind,
-    /** What it's for, as an address: a Binding for PortTimer, a Thread for WaitTimeout and FaultStop. Set by whoever arms it. */
+    /**
+     * What it's for, as an address: a Binding for PortTimer, a Thread for WaitTimeout and FaultStop. Set by whoever
+     * arms it.
+     */
     owner : u64,
     /**
      * What owner was when it was armed, so firing can tell it changed since: a binding's generation, or a thread's
@@ -97,7 +100,7 @@ make_timer :: fn() -> TimerEntry {
  * @return True if it's armed; false, with it not armed, if the heap had no room and couldn't grow: no memory, or fault
  *     injection failed it.
  */
-arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
+arm_timer :: fn(entry : ptr[mut TimerEntry], deadline : u64) -> bool {
     cpu :: per_cpu()
     heap :: &cpu.timers
     lock_at(&heap.lock, .Timers)
@@ -132,7 +135,7 @@ arm_timer :: fn(entry: ptr[mut TimerEntry], deadline: u64) -> bool {
  * @param entry The entry: armed, never armed, or already fired or cancelled.
  * @return True if it was armed and is now off its heap; false if it wasn't armed.
  */
-cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
+cancel_timer :: fn(kernel : ptr[Kernel], entry : ptr[mut TimerEntry]) -> bool {
     per_cpus :: kernel.per_cpus
     loop {
         cpu_index :: cast[usize](entry.cpu)
@@ -147,7 +150,9 @@ cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
             return false
         }
         // Armed again on another CPU's heap since cpu was read: follow it there
-        if cast[usize](entry.cpu) != cpu_index || index >= heap.count || index >= heap.entries.count
+        if cast[usize](entry.cpu) != cpu_index
+            || index >= heap.count
+            || index >= heap.entries.count
             || heap.entries[index] != cast[u64](cast[uintptr](entry)) {
             unlock_at(&heap.lock, .Timers)
             continue
@@ -169,7 +174,7 @@ cancel_timer :: fn(kernel: ptr[Kernel], entry: ptr[mut TimerEntry]) -> bool {
  *     port's lock. Runs in this CPU's timer interrupt, with interrupts off and no lock held.
  * @param now The counter's value now, in ticks: entries whose deadline is at most this fire.
  */
-fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
+fire_timers :: fn(kernel : ptr[mut Kernel], now : u64) {
     cpu :: per_cpu()
     heap :: &cpu.timers
     loop {
@@ -203,7 +208,7 @@ fire_timers :: fn(kernel: ptr[mut Kernel], now: u64) {
  *
  * @param cpu The calling CPU's PerCpu: the timer programmed is the one of the CPU this runs on.
  */
-program_deadline :: fn(cpu: ptr[mut PerCpu]) {
+program_deadline :: fn(cpu : ptr[mut PerCpu]) {
     deadline := if intrinsics.atomic_load_u32_acquire(&cpu.tickless) == 1 { ~cast[u64](0) } else { cpu.next_tick }
     heap :: &cpu.timers
     lock_at(&heap.lock, .Timers)
@@ -223,7 +228,7 @@ program_deadline :: fn(cpu: ptr[mut PerCpu]) {
  * @return True if there's room; false if it was full and couldn't grow (no memory, or fault injection failed it),
  *     when it's unchanged.
  */
-grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
+grow_heap :: fn(heap : ptr[mut TimerHeap]) -> bool {
     if heap.count < heap.entries.count {
         return true
     }
@@ -253,7 +258,7 @@ grow_heap :: fn(heap: ptr[mut TimerHeap]) -> bool {
  * @param heap The heap, whose lock the caller holds.
  * @param index The entry's index, below the heap's count; asserted.
  */
-remove_at :: fn(heap: ptr[mut TimerHeap], index: usize) {
+remove_at :: fn(heap : ptr[mut TimerHeap], index : usize) {
     entries :: heap.entries
     count :: heap.count
     runtime.assert(index < count && count <= entries.count, "remove_at takes an entry in the heap")
@@ -276,12 +281,14 @@ remove_at :: fn(heap: ptr[mut TimerHeap], index: usize) {
  * @param heap The heap, whose lock the caller holds.
  * @param start The entry's index; 0 does nothing.
  */
-sift_up :: fn(heap: ptr[mut TimerHeap], start: usize) {
+sift_up :: fn(heap : ptr[mut TimerHeap], start : usize) {
     entries :: heap.entries
     index := start
     loop {
         parent :: (index - 1) / 2
-        if index >= entries.count || parent >= entries.count || deadline_at(entries, parent) <= deadline_at(entries, index) {
+        if index >= entries.count
+            || parent >= entries.count
+            || deadline_at(entries, parent) <= deadline_at(entries, index) {
             break
         }
         swap(entries, index, parent)
@@ -297,7 +304,7 @@ sift_up :: fn(heap: ptr[mut TimerHeap], start: usize) {
  * @param heap The heap, whose lock the caller holds.
  * @param start The entry's index, below the heap's count.
  */
-sift_down :: fn(heap: ptr[mut TimerHeap], start: usize) {
+sift_down :: fn(heap : ptr[mut TimerHeap], start : usize) {
     entries :: heap.entries
     count :: heap.count
     index := start
@@ -305,10 +312,16 @@ sift_down :: fn(heap: ptr[mut TimerHeap], start: usize) {
         left :: index * 2 + 1
         right :: left + 1
         smallest := index
-        if left < count && left < entries.count && smallest < entries.count && deadline_at(entries, left) < deadline_at(entries, smallest) {
+        if left < count
+            && left < entries.count
+            && smallest < entries.count
+            && deadline_at(entries, left) < deadline_at(entries, smallest) {
             smallest = left
         }
-        if right < count && right < entries.count && smallest < entries.count && deadline_at(entries, right) < deadline_at(entries, smallest) {
+        if right < count
+            && right < entries.count
+            && smallest < entries.count
+            && deadline_at(entries, right) < deadline_at(entries, smallest) {
             smallest = right
         }
         if smallest == index {
@@ -327,7 +340,7 @@ sift_down :: fn(heap: ptr[mut TimerHeap], start: usize) {
  * @param index The entry's index, below entries' count; asserted.
  * @return Its deadline, in counter ticks.
  */
-deadline_at :: fn(entries: u64[], index: usize) -> u64 {
+deadline_at :: fn(entries : u64[], index : usize) -> u64 {
     runtime.assert(index < entries.count, "deadline_at takes an entry")
     return cast[ptr[TimerEntry]](entries[index]).deadline
 }
@@ -339,7 +352,7 @@ deadline_at :: fn(entries: u64[], index: usize) -> u64 {
  * @param a One entry's index, below entries' count; asserted.
  * @param b The other's, below entries' count; asserted.
  */
-swap :: fn(entries: mut u64[], a: usize, b: usize) {
+swap :: fn(entries : mut u64[], a : usize, b : usize) {
     runtime.assert(a < entries.count && b < entries.count, "swap takes two entries")
     held :: entries[a]
     entries[a] = entries[b]

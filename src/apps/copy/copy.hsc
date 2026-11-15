@@ -4,8 +4,8 @@
 package copy
 
 import os from "std:os"
-import strings from "std:strings"
 import dir from "std:os/slop_os/dir"
+import strings from "std:strings"
 import file_tools from "../../file_tools"
 
 /** An error naming the parameter it came from. */
@@ -40,7 +40,7 @@ CopyError :: union {
  * @error IntoItself The copy would be inside what it copies; copy it somewhere else.
  * @error Failed Something couldn't be read or written; what was copied before it stays.
  */
-main :: fn(here: os.Channel[dir.Dir], from: string, to: string) -> Result[file_tools.Copied, CopyError] {
+main :: fn(here : os.Channel[dir.Dir], from : string, to : string) -> Result[file_tools.Copied, CopyError] {
     from_problem :: Problem.{parameter = os.ParameterName.{name = "from"}}
     to_problem :: Problem.{parameter = os.ParameterName.{name = "to"}}
     directory, opened :: os.directory_on(here.end)
@@ -65,7 +65,11 @@ main :: fn(here: os.Channel[dir.Dir], from: string, to: string) -> Result[file_t
     }
     copied := file_tools.Copied.{}
     match file_tools.copy_tree(source, from, directory, target, file_tools.count_files(source, from), &copied) {
-        case Some(stop) => return .Error(.Failed(if stop.why == .NotFound && stop.path == target { from_problem } else { to_problem }))
+        case Some(
+            stop
+        ) => return .Error(
+            .Failed(if stop.why == .NotFound && stop.path == target { from_problem } else { to_problem })
+        )
         case None => return .Ok(copied)
     }
 }
@@ -77,7 +81,7 @@ main :: fn(here: os.Channel[dir.Dir], from: string, to: string) -> Result[file_t
  * @param directory The directory's path.
  * @return Whether path is directory, or starts with it and a /.
  */
-is_inside :: fn(path: string, directory: string) -> bool {
+is_inside :: fn(path : string, directory : string) -> bool {
     if path == directory {
         return true
     }

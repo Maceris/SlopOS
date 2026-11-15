@@ -20,7 +20,7 @@ import text_buffer from "std:text_buffer"
  *     append_format formats it.
  * @param values The values for format's placeholders, in order.
  */
-write :: fn(log: slop_os.DebugLog, format: string, values: any...) {
+write :: fn(log : slop_os.DebugLog, format : string, values : any...) {
     storage : u8[200]
     line := text_buffer.make(storage)
     text_buffer.append_format(&line, format, values)

@@ -2,8 +2,8 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import frames from "frames"
 import testing from "std:testing"
+import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -53,10 +53,17 @@ EXPECTED_MARKS :: "ababAB"
  *
  * @param kernel Not used: the tests find the kernel through per_cpu.
  */
-test_fibers :: fn(kernel: ptr[mut Kernel]) {
-    _ = run_tests("test_fibers", testing.Test.[
-        .{name = "two_fibers_take_turns", run = two_fibers_take_turns},
-        .{name = "stack_traces_follow_suspended_and_resumed_fibers", run = stack_traces_follow_suspended_and_resumed_fibers}])
+test_fibers :: fn(kernel : ptr[mut Kernel]) {
+    _ = run_tests(
+        "test_fibers",
+        testing.Test.[
+            .{name = "two_fibers_take_turns", run = two_fibers_take_turns},
+            .{
+                name = "stack_traces_follow_suspended_and_resumed_fibers",
+                run = stack_traces_follow_suspended_and_resumed_fibers,
+            }
+        ]
+    )
 }
 
 /**
@@ -66,10 +73,14 @@ test_fibers :: fn(kernel: ptr[mut Kernel]) {
  * @param t The test's state.
  * @return Ok once it's run; Error if there was no memory for the fibers.
  */
-two_fibers_take_turns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+two_fibers_take_turns #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     test :: run_fibers(t)?
-    testing.expect_eq(t, string_of(&test.marks[0], test.count), EXPECTED_MARKS,
-        "each fiber marks at each suspension and, its calls' sums right, once it ends, the two taking turns")
+    testing.expect_eq(
+        t,
+        string_of(&test.marks[0], test.count),
+        EXPECTED_MARKS,
+        "each fiber marks at each suspension and, its calls' sums right, once it ends, the two taking turns"
+    )
     return .Ok
 }
 
@@ -80,7 +91,7 @@ two_fibers_take_turns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
  * @param t The test's state.
  * @return Ok once it's run; Error if there was no memory for the fibers.
  */
-stack_traces_follow_suspended_and_resumed_fibers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+stack_traces_follow_suspended_and_resumed_fibers #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     test :: run_fibers(t)?
     // descend(1) to (3), fiber_a, fiber_run and fiber_entry, which ends the chain
     expect_traces_agree(t, test, 6)
@@ -97,7 +108,7 @@ stack_traces_follow_suspended_and_resumed_fibers #test :: fn(t: ptr[mut testing.
  * @return The fibers' state, what they marked and traced, from the frame allocator; Error if there was no memory for
  *     it or a fiber, or the fibers didn't both finish within eight turns each.
  */
-run_fibers :: fn(t: ptr[mut testing.T]) -> Result[ptr[mut FiberTest], testing.Stopped] {
+run_fibers :: fn(t : ptr[mut testing.T]) -> Result[ptr[mut FiberTest], testing.Stopped] {
     kernel :: per_cpu().kernel
     made :: allocate_object[FiberTest](&kernel.frames)
     test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
@@ -138,7 +149,12 @@ run_fibers :: fn(t: ptr[mut testing.T]) -> Result[ptr[mut FiberTest], testing.St
             }
         }
     }
-    testing.require_eq(t, finished, bool.[true, true], "each fiber suspends three times at most, so both finish within eight turns")?
+    testing.require_eq(
+        t,
+        finished,
+        bool.[true, true],
+        "each fiber suspends three times at most, so both finish within eight turns"
+    )?
     return .Ok(test)
 }
 
@@ -152,8 +168,12 @@ run_fibers :: fn(t: ptr[mut testing.T]) -> Result[ptr[mut FiberTest], testing.St
  * @param function What the fiber runs, with an empty any as its data.
  * @return The fiber, in the direct map, its frame never freed; Error, recorded, if there was no frame.
  */
-make_fiber :: fn(t: ptr[mut testing.T], kernel: ptr[mut Kernel], test #escaping : ptr[mut FiberTest], function: runtime.ThreadFunction)
-    -> Result[ptr[mut runtime.Fiber], testing.Stopped] {
+make_fiber :: fn(
+    t : ptr[mut testing.T],
+    kernel : ptr[mut Kernel],
+    test #escaping : ptr[mut FiberTest],
+    function : runtime.ThreadFunction
+) -> Result[ptr[mut runtime.Fiber], testing.Stopped] {
     runtime.assert(cast[u64](runtime.FIBER_BLOCK_SIZE) <= frames.FRAME_SIZE, "a fiber's block fits in a frame")
     allocated :: frames.allocate_zeroed(&kernel.frames, 0)
     address :: testing.require_ok(t, allocated, "a boot's free frames hold a fiber's block")?
@@ -203,7 +223,7 @@ fiber_b : runtime.ThreadFunction : fn(data #escaping : any) {
  * @param depth How many more calls to go down; 0 is the bottom.
  * @return The sum over the frames of depth * 10 + 1, and 1 for the bottom: 64 from depth 3, 33 from depth 2.
  */
-descend :: fn(test: ptr[mut FiberTest], letter: char, depth: u64) -> u64 {
+descend :: fn(test : ptr[mut FiberTest], letter : char, depth : u64) -> u64 {
     here :: depth * 10 + 1
     if depth == 0 {
         mark(test, letter)
@@ -243,7 +263,7 @@ pause :: fn() {
  *     dropped.
  * @param letter The letter, ASCII.
  */
-mark :: fn(test: ptr[mut FiberTest], letter: char) {
+mark :: fn(test : ptr[mut FiberTest], letter : char) {
     if test.count < test.marks.count {
         test.marks[test.count] = cast[u8](letter)
         test.count += 1
@@ -261,8 +281,11 @@ DEEP_SUM : u64 : 2080
  *
  * @param kernel Not used: the test finds the kernel through per_cpu.
  */
-test_segments :: fn(kernel: ptr[mut Kernel]) {
-    _ = run_tests("test_segments", testing.Test.[.{name = "a_fiber_grows_onto_segments_and_back", run = a_fiber_grows_onto_segments_and_back}])
+test_segments :: fn(kernel : ptr[mut Kernel]) {
+    _ = run_tests(
+        "test_segments",
+        testing.Test.[.{name = "a_fiber_grows_onto_segments_and_back", run = a_fiber_grows_onto_segments_and_back}]
+    )
 }
 
 /**
@@ -276,7 +299,7 @@ test_segments :: fn(kernel: ptr[mut Kernel]) {
  * @param t The test's state.
  * @return Ok once it's run; Error if there was no memory for the test's state, a segment or the fiber.
  */
-a_fiber_grows_onto_segments_and_back #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_fiber_grows_onto_segments_and_back #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
     made :: allocate_object[FiberTest](&kernel.frames)
     test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
@@ -292,7 +315,10 @@ a_fiber_grows_onto_segments_and_back #test :: fn(t: ptr[mut testing.T]) -> testi
         carrier.segment_cache_count += 1
     }
     fiber :: make_fiber(t, kernel, test, fiber_deep)?
-    // Masked as they were found after (boot runs with them masked; unmasking them left it running unmasked, decisions/0106)
+    /*
+     * Masked as they were found after (boot runs with them masked; unmasking them left it running unmasked,
+     * decisions/0106)
+     */
     unmasked :: arch.interrupts_enabled()
     arch.mask_interrupts()
     defer if unmasked {
@@ -303,14 +329,33 @@ a_fiber_grows_onto_segments_and_back #test :: fn(t: ptr[mut testing.T]) -> testi
         test.outside_count = intrinsics.capture_fiber_stack_trace(fiber, test.outside)
         exit = intrinsics.fiber_resume(fiber)
     }
-    testing.expect_eq(t, exit, runtime.FiberExit.Finished, "the fiber suspends once, at the bottom, so it finishes once resumed")
-    testing.expect_eq(t, string_of(&test.marks[0], test.count), "dD",
-        "the fiber marks at the bottom, and again once its 64 calls' sum comes back right through the segments")
+    testing.expect_eq(
+        t,
+        exit,
+        runtime.FiberExit.Finished,
+        "the fiber suspends once, at the bottom, so it finishes once resumed"
+    )
+    testing.expect_eq(
+        t,
+        string_of(&test.marks[0], test.count),
+        "dD",
+        "the fiber marks at the bottom, and again once its 64 calls' sum comes back right through the segments"
+    )
     // All of them back: in the cache, or kept as the spare
     returned :: carrier.segment_cache_count + (if carrier.spare_segment is_some { cast[u32](1) } else { cast[u32](0) })
-    testing.expect_eq(t, returned, cast[u32](SEGMENT_COUNT), "every segment the fiber grew onto goes back to the carrier as it returns")
+    testing.expect_eq(
+        t,
+        returned,
+        cast[u32](SEGMENT_COUNT),
+        "every segment the fiber grew onto goes back to the carrier as it returns"
+    )
     // climb(1) to (64), fiber_deep, fiber_run and fiber_entry: none of morestack's frames, nor .grow's
-    testing.expect_eq(t, test.before_count, 67, "the trace from the bottom has climb's 64 frames and the fiber's 3, leaving out morestack's")
+    testing.expect_eq(
+        t,
+        test.before_count,
+        67,
+        "the trace from the bottom has climb's 64 frames and the fiber's 3, leaving out morestack's"
+    )
     expect_traces_agree(t, test, 67)
     return .Ok
 }
@@ -334,7 +379,7 @@ fiber_deep : runtime.ThreadFunction : fn(data #escaping : any) {
  * @param depth How many more calls to go down; 0 is the bottom.
  * @return The sum of the depths from depth down to 1: DEEP_SUM from 64.
  */
-climb :: fn(test: ptr[mut FiberTest], depth: u64) -> u64 {
+climb :: fn(test : ptr[mut FiberTest], depth : u64) -> u64 {
     padding : u64[16]
     padding[depth % 16] = depth
     if depth == 0 {
@@ -353,7 +398,7 @@ climb :: fn(test: ptr[mut FiberTest], depth: u64) -> u64 {
  * @param values The 16 words of padding of a climb frame, of which the one at its depth mod 16 is set to its depth.
  * @return The first that isn't zero, or 0 if they all are.
  */
-first_nonzero :: fn(values: u64[]) -> u64 {
+first_nonzero :: fn(values : u64[]) -> u64 {
     for value in values {
         if value != 0 {
             return value
@@ -371,16 +416,34 @@ first_nonzero :: fn(values: u64[]) -> u64 {
  * @param least The fewest frames the trace before suspending may have.
  * @param location Where the test asked, which a failure is recorded at: the caller's own.
  */
-expect_traces_agree :: fn(t: ptr[mut testing.T], test: ptr[FiberTest], least: usize, location := #caller_location) {
+expect_traces_agree :: fn(t : ptr[mut testing.T], test : ptr[FiberTest], least : usize, location := #caller_location) {
     before :: test.before
     after :: test.after
     outside :: test.outside
     count :: test.before_count
-    testing.expect_within(t, cast[i64](count), cast[i64](least), cast[i64](before.count),
-        "the trace before suspending has every frame of the fiber's calls, and they fit in it", location)
-    testing.expect_eq(t, test.after_count, count, "the trace once resumed has as many frames as before, the resume loop having re-entered them", location)
-    testing.expect_within(t, cast[i64](test.outside_count), cast[i64](count), cast[i64](outside.count),
-        "the trace from outside has the suspended fiber's frames, and those of what suspended it", location)
+    testing.expect_within(
+        t,
+        cast[i64](count),
+        cast[i64](least),
+        cast[i64](before.count),
+        "the trace before suspending has every frame of the fiber's calls, and they fit in it",
+        location
+    )
+    testing.expect_eq(
+        t,
+        test.after_count,
+        count,
+        "the trace once resumed has as many frames as before, the resume loop having re-entered them",
+        location
+    )
+    testing.expect_within(
+        t,
+        cast[i64](test.outside_count),
+        cast[i64](count),
+        cast[i64](outside.count),
+        "the trace from outside has the suspended fiber's frames, and those of what suspended it",
+        location
+    )
     if count > before.count || test.outside_count < count || test.outside_count > outside.count {
         return void
     }
@@ -393,5 +456,10 @@ expect_traces_agree :: fn(t: ptr[mut testing.T], test: ptr[FiberTest], least: us
             break
         }
     }
-    testing.expect_none(t, differs, "the three traces have the same return addresses, frame for frame, from the bottom", location)
+    testing.expect_none(
+        t,
+        differs,
+        "the three traces have the same return addresses, frame for frame, from the bottom",
+        location
+    )
 }

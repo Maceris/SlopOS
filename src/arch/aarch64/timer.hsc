@@ -7,7 +7,7 @@ import aarch64 from "base:intrinsics/aarch64"
  * one-shot deadline against it, raising its PPI. The frequency is the counter's own (CNTFRQ_EL0), which the
  * firmware sets; a hint isn't needed.
  */
-//SPEC: Arm ARM (DDI 0487) D12 (the generic timer): CNTFRQ_EL0, CNTVCT_EL0, CNTV_CVAL_EL0, CNTV_CTL_EL0
+// SPEC: Arm ARM (DDI 0487) D12 (the generic timer): CNTFRQ_EL0, CNTVCT_EL0, CNTV_CVAL_EL0, CNTV_CTL_EL0
 
 /** CNTV_CTL_EL0 with ENABLE (bit 0) set and IMASK (bit 1) clear: the timer on, its interrupt not masked. */
 TIMER_ENABLE : u64 : 1
@@ -19,7 +19,7 @@ TIMER_ENABLE : u64 : 1
  * @param hint Ignored: CNTFRQ_EL0, which the firmware sets, is the frequency.
  * @return The counter's frequency in Hz, from CNTFRQ_EL0.
  */
-init_timer :: fn(hint: u64?) -> u64 {
+init_timer :: fn(hint : u64?) -> u64 {
     aarch64.write_system_register(.CNTV_CTL_EL0, 0)
     return aarch64.read_system_register(.CNTFRQ_EL0)
 }
@@ -42,7 +42,7 @@ counter :: fn() -> u64 {
  *
  * @param value The deadline, in counter() ticks; one that has passed already raises the interrupt at once.
  */
-set_deadline :: fn(value: u64) {
+set_deadline :: fn(value : u64) {
     aarch64.write_system_register(.CNTV_CVAL_EL0, value)
     aarch64.write_system_register(.CNTV_CTL_EL0, TIMER_ENABLE)
     aarch64.isb()

@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../arch_interface"
-import boot_info from "../boot_info"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
+import boot_info from "../boot_info"
 import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
@@ -137,9 +137,18 @@ DmaDomain :: struct #align(16) {
  * @error DeviceExists Another device has the address, or, where the controller uses sources, the source.
  * @error ObjectGone owner is being destroyed; the device is destroyed again.
  */
-create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u32, msi_source: u32, config: u64)
-    -> Result[ptr[mut Device], slop_os.DeviceError] {
-    if config == 0 || config & (frames.FRAME_SIZE - 1) != 0 || config > ~CONFIG_BYTES || overlaps_kernel_ram(kernel, config, CONFIG_BYTES) {
+create_device :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    address : u32,
+    msi_source : u32,
+    config : u64
+) -> Result[ptr[mut Device], slop_os.DeviceError] {
+    if config == 0
+        || config & (frames.FRAME_SIZE - 1) != 0
+        || config > ~CONFIG_BYTES
+        || overlaps_kernel_ram(kernel, config, CONFIG_BYTES) {
         return .Error(.BadAddress)
     }
     table_size :: arch.msi_device_memory() or_else 0
@@ -148,7 +157,11 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
     object := cast[u64](0)
     match new_object(kernel, .Device, budget, extra) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory }
+        )
     }
     device :: cast[ptr[mut Device]](object)
     device.address = address
@@ -177,8 +190,8 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
     with {
         other := kernel.first_device
     }
-    // Each device listed, none for the first one made
-    loop {
+    loop // Each device listed, none for the first one made
+    {
         if other == 0 {
             break
         }
@@ -203,7 +216,11 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
         return .Error(.DeviceExists)
     }
     if device.msi_memory != 0 {
-        arch.add_msi_device(msi_source, cast[arch_interface.PhysicalAddress](device.msi_memory), slop_os.MAX_DEVICE_MSIS)
+        arch.add_msi_device(
+            msi_source,
+            cast[arch_interface.PhysicalAddress](device.msi_memory),
+            slop_os.MAX_DEVICE_MSIS
+        )
     }
     match adopt(owner, object) {
         case Ok => {}
@@ -215,8 +232,10 @@ create_device :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, address: u
     return .Ok(device)
 }
 
-// A PCIe function's configuration space, and its command register's Bus Master Enable, which lets it start DMA.
-//SPEC: PCI Express Base Specification 5.0, §7.5.1.1.3 (Command Register)
+/*
+ * A PCIe function's configuration space, and its command register's Bus Master Enable, which lets it start DMA.
+ * SPEC: PCI Express Base Specification 5.0, §7.5.1.1.3 (Command Register)
+ */
 /** The bytes of a PCIe function's configuration space the kernel maps: its first page. */
 CONFIG_BYTES : u64 : 4096
 /** The command register's offset in configuration space, in bytes; it's 16 bits. */
@@ -243,7 +262,11 @@ PCI_COMMAND_BUS_MASTER : u16 : 1 << 2
  *     domain and attached to none.
  * @error BudgetExceeded The domain's budget couldn't pay for its root table; the device is attached to none.
  */
-attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: ptr[mut DmaDomain]) -> Result[void, slop_os.DeviceError] {
+attach_device :: fn(
+    kernel : ptr[mut Kernel],
+    device : ptr[mut Device],
+    domain : ptr[mut DmaDomain]
+) -> Result[void, slop_os.DeviceError] {
     path :: iommu_path(kernel, device.address)
     lock_at(&device.lock, .Device)
     lock_at(&kernel.iommus_lock, .Iommus)
@@ -286,9 +309,10 @@ attach_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device], domain: pt
  *     to detach it; called from destroy_object, on any CPU, with interrupts off.
  * @param device The device being destroyed, already dying.
  */
-destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
+destroy_device :: fn(kernel : ptr[mut Kernel], device : ptr[mut Device]) {
     /*
-     * Its DMA off first, Bus Master Enable cleared: what its driver gave it to read and write, like its queues, goes with
+     * Its DMA off first, Bus Master Enable cleared: what its driver gave it to read and write, like its queues, goes
+     * with
      * the driver, and no grace period ends while this destroy runs, so before any of that memory is used again
      */
     if device.config != 0 {
@@ -339,7 +363,7 @@ destroy_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
  *     called from release_object once every CPU has passed a quiescent point since the destroy.
  * @param device The destroyed device, or one create_device gave up on, with what it got so far.
  */
-release_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
+release_device :: fn(kernel : ptr[mut Kernel], device : ptr[mut Device]) {
     if device.config != 0 {
         unmap_device(kernel, device.config, CONFIG_BYTES)
         device.config = 0
@@ -357,7 +381,7 @@ release_device :: fn(kernel: ptr[mut Kernel], device: ptr[mut Device]) {
  * @param device The IRQ's device, whose lock the caller holds.
  * @param irq The IRQ; one not on the list is left alone.
  */
-unlink_irq :: fn(device: ptr[mut Device], irq: ptr[mut Irq]) {
+unlink_irq :: fn(device : ptr[mut Device], irq : ptr[mut Irq]) {
     if !irq.in_device {
         return void
     }
@@ -395,12 +419,21 @@ unlink_irq :: fn(device: ptr[mut Device], irq: ptr[mut Irq]) {
  * @error NoFreeInterrupt The CPU picked has no device interrupt ID free, or its IOMMU no remapped interrupt; the
  *     event is free again.
  */
-create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: ptr[mut Device]) -> Result[ptr[mut Irq], slop_os.DeviceError] {
+create_msi_irq :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    device : ptr[mut Device]
+) -> Result[ptr[mut Irq], slop_os.DeviceError] {
     _ = arch.msi_device_memory() or_return .Error(.NoMsi)
     object := cast[u64](0)
     match new_object(kernel, .Irq, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory }
+        )
     }
     irq :: cast[ptr[mut Irq]](object)
     irq.msi = true
@@ -492,7 +525,7 @@ create_msi_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, device: p
  * @error ObjectGone The IRQ is off its device's list, as its device is being destroyed, or isn't routed.
  * @error NoFreeInterrupt That CPU has no device interrupt ID free, or hasn't started; the IRQ stays where it was.
  */
-move_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], cpu_index: u32) -> Result[void, slop_os.DeviceError] {
+move_msi_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq], cpu_index : u32) -> Result[void, slop_os.DeviceError] {
     cpus :: kernel.cpus
     if cast[usize](cpu_index) >= cpus.count {
         return .Error(.InvalidArgument)
@@ -535,7 +568,7 @@ move_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], cpu_index: u32) -
  *     to free the remapping entry; called from destroy_irq, with interrupts off.
  * @param irq The message-signaled IRQ being destroyed.
  */
-destroy_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
+destroy_msi_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq]) {
     device :: cast[ptr[mut Device]](irq.device)
     lock_at(&device.lock, .Device)
     if irq.in_device {
@@ -562,11 +595,20 @@ destroy_msi_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
  * @error BudgetExceeded budget hadn't room for the object, or is closed.
  * @error ObjectGone owner is being destroyed; the domain is destroyed again.
  */
-create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, trusted: bool) -> Result[ptr[mut DmaDomain], slop_os.DeviceError] {
+create_dma_domain :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    trusted : bool
+) -> Result[ptr[mut DmaDomain], slop_os.DeviceError] {
     object := cast[u64](0)
     match new_object(kernel, .DmaDomain, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory }
+        )
     }
     cast[ptr[mut DmaDomain]](object).trusted = trusted
     match adopt(owner, object) {
@@ -587,7 +629,7 @@ create_dma_domain :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, truste
  *     destroy_object, on any CPU, with interrupts off.
  * @param domain The domain being destroyed, already dying.
  */
-destroy_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
+destroy_dma_domain :: fn(kernel : ptr[mut Kernel], domain : ptr[mut DmaDomain]) {
     stop_domain(kernel, domain)
 }
 
@@ -599,7 +641,7 @@ destroy_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
  *     ID back; called from release_object once no CPU can still be using them.
  * @param domain The destroyed domain, stopped by destroy_dma_domain; its memory is freed by release_object after.
  */
-release_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
+release_dma_domain :: fn(kernel : ptr[mut Kernel], domain : ptr[mut DmaDomain]) {
     release_domain_tables(kernel, domain)
 }
 
@@ -627,8 +669,14 @@ release_dma_domain :: fn(kernel: ptr[mut Kernel], domain: ptr[mut DmaDomain]) {
  * @error BudgetExceeded budget hadn't room for the block, or is closed, or the domain's budget for its tables.
  * @error ObjectGone owner is being destroyed; the memory is destroyed again.
  */
-create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain: ptr[mut DmaDomain], size: u64, limit: u64)
-    -> Result[ptr[mut Memory], slop_os.DeviceError] {
+create_dma_memory :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    domain : ptr[mut DmaDomain],
+    size : u64,
+    limit : u64
+) -> Result[ptr[mut Memory], slop_os.DeviceError] {
     lock_at(&kernel.iommus_lock, .Iommus)
     if !domain.bound {
         domain.bound = true
@@ -662,7 +710,7 @@ create_dma_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, domain
  * @return The I/O virtual address its domain mapped it at, or without a translating IOMMU, its physical address.
  * @error NotDmaMemory It isn't DMA memory, or its domain was destroyed.
  */
-device_address_of :: fn(memory: ptr[Memory]) -> Result[u64, slop_os.DeviceError] {
+device_address_of :: fn(memory : ptr[Memory]) -> Result[u64, slop_os.DeviceError] {
     if memory.domain == 0 || !is_live(memory.domain, memory.domain_generation) {
         return .Error(.NotDmaMemory)
     }
@@ -675,7 +723,7 @@ device_address_of :: fn(memory: ptr[Memory]) -> Result[u64, slop_os.DeviceError]
  *
  * @param kernel The kernel, whose frames the memory comes from.
  */
-start_msis :: fn(kernel: ptr[mut Kernel]) {
+start_msis :: fn(kernel : ptr[mut Kernel]) {
     size :: arch.msi_controller_memory()
     if size == 0 {
         return void

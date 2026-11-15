@@ -66,7 +66,8 @@ Frame :: struct {
     /** Received: CHECKSUM_VALID, or 0. Sent: 0. */
     flags : u32,
     /**
-     * Sent, with OFFLOAD_SEND_CHECKSUM: where the checksummed part starts, in bytes from the frame's start; 0 for no checksum
+     * Sent, with OFFLOAD_SEND_CHECKSUM: where the checksummed part starts, in bytes from the frame's start; 0 for no
+     * checksum
      * to complete, as for a frame without TCP or UDP. Received: 0.
      */
     checksum_start : u16,
@@ -129,7 +130,9 @@ Request :: union {
      * device has taken it, or with Refused.
      */
     Send(Frame),
-    /** Wait for the link to be other than the given state: up for true. Answered with Link once it is, maybe at once. */
+    /**
+     * Wait for the link to be other than the given state: up for true. Answered with Link once it is, maybe at once.
+     */
     WatchLink(bool),
     /**
      * Have the driver serve another client, on the end given, which moves to the driver; the client before, if any,
@@ -164,7 +167,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return False for Send, whose frame would go twice; true for the rest.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Describe => true
         case GetBuffer => true
@@ -189,7 +192,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Net]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Net]? {
     pair :: os.channel_for[Net](budget, RING_BYTES) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
@@ -212,7 +215,7 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
  * @return What the interface is; null if the request couldn't be sent, the connection failed, or the answer was
  *     something else.
  */
-describe :: fn(end: slop_os.Channel, port: slop_os.Port) -> Info? {
+describe :: fn(end : slop_os.Channel, port : slop_os.Port) -> Info? {
     into := os.Incoming.{}
     if !call(end, port, Request.Describe, &into) {
         return null
@@ -231,7 +234,7 @@ describe :: fn(end: slop_os.Channel, port: slop_os.Port) -> Info? {
  * @return The window, BUFFER_BYTES, the caller's to map and close; null if the request couldn't be sent, the
  *     connection failed, or the driver couldn't make it.
  */
-get_buffer :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Memory? {
+get_buffer :: fn(end : slop_os.Channel, port : slop_os.Port) -> slop_os.Memory? {
     into := os.Incoming.{}
     if !call(end, port, Request.GetBuffer, &into) {
         return null
@@ -251,7 +254,7 @@ get_buffer :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Memory? {
  * @param into Where the answer's received, for message_of.
  * @return True once an answer is in into; false if the request couldn't be sent, or receiving failed.
  */
-call :: fn(end: slop_os.Channel, port: slop_os.Port, request: Request, into: ptr[mut os.Incoming]) -> bool {
+call :: fn(end : slop_os.Channel, port : slop_os.Port, request : Request, into : ptr[mut os.Incoming]) -> bool {
     out := os.Outgoing.{}
     made :: os.begin[Request](&out)
     made^ = request

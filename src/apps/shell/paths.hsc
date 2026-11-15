@@ -1,12 +1,12 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import strings from "std:strings"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import strings from "std:strings"
+import unicode from "std:unicode"
+import shell_language as language from "../../shell_language"
 
 /*
  * "Did you mean" (decisions/0179, 0181's F2, design/lessons.md §4): a path that isn't there, whose last name matches
@@ -24,7 +24,7 @@ import dir from "std:os/slop_os/dir"
  * @return The path meant, the directory part as given and the entry's name as stored, on the heap, never freed; null if
  *     no entry matches, more than one does, or the directory couldn't be opened or listed.
  */
-meant_path :: fn(shell: ptr[mut Shell], given: string) -> string? {
+meant_path :: fn(shell : ptr[mut Shell], given : string) -> string? {
     split := given.count
     loop {
         if split == 0 || slice_of(given, split - 1, split) == "/" {
@@ -88,7 +88,7 @@ meant_path :: fn(shell: ptr[mut Shell], given: string) -> string? {
  * @return Whether their keys (caseless_key) have the same bytes; false if either is only spaces, or too long to fold
  *     (past MAX_FOLDED bytes).
  */
-folded_same :: fn(a: string, b: string) -> bool {
+folded_same :: fn(a : string, b : string) -> bool {
     left :: trimmed(a)
     right :: trimmed(b)
     if left.count == 0 || right.count == 0 {
@@ -108,7 +108,7 @@ MAX_FOLDED :: 128
  * @param name The name, UTF-8, at most MAX_FOLDED bytes.
  * @return The key, on the heap, never freed; null for a longer name.
  */
-caseless_key :: fn(name: string) -> string? {
+caseless_key :: fn(name : string) -> string? {
     bytes :: string_bytes(name)
     if bytes.count > MAX_FOLDED {
         return null
@@ -139,7 +139,7 @@ caseless_key :: fn(name: string) -> string? {
  * @param name The name.
  * @return A view of it without spaces at its start or end; empty for one that's only spaces.
  */
-trimmed :: fn(name: string) -> string {
+trimmed :: fn(name : string) -> string {
     start : usize = 0
     end := name.count
     loop {

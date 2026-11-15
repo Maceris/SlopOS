@@ -80,7 +80,7 @@ Response :: union {
  * @return True for every request: describing again changes nothing, and opening again gives another connection,
  *     which is as good.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Describe(_) => true
         case Open(_) => true
@@ -97,6 +97,9 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return Its name's first name_length bytes, at most NAME_BYTES, as UTF-8 though not checked to be: a view into
  *     info's name, good while info is.
  */
-name_of :: fn(info: ptr[PartitionInfo]) -> string {
-    return string_of(&info.name[0], cast[usize](if info.name_length > NAME_BYTES { cast[u32](NAME_BYTES) } else { info.name_length }))
+name_of :: fn(info : ptr[PartitionInfo]) -> string {
+    return string_of(
+        &info.name[0],
+        cast[usize](if info.name_length > NAME_BYTES { cast[u32](NAME_BYTES) } else { info.name_length })
+    )
 }

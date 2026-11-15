@@ -49,7 +49,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for Read: reading again reads other bytes, which are as good.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => true
     }

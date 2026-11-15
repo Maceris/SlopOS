@@ -39,7 +39,7 @@ PanicRecord :: struct {
  * @param record The record, through the direct map; its length and text change.
  * @param text The text to append.
  */
-panic_record_add :: fn(record: ptr[mut PanicRecord], text: string) {
+panic_record_add :: fn(record : ptr[mut PanicRecord], text : string) {
     if record.length > cast[u64](PANIC_TEXT_BYTES) {
         record.length = 0
     }
@@ -61,7 +61,7 @@ panic_record_add :: fn(record: ptr[mut PanicRecord], text: string) {
  * @param record The record, whose reason, check and magic are written (and its length reset to 0 if out of range).
  * @param reason Why the kernel stopped, its StopReason.
  */
-panic_record_seal :: fn(record: ptr[mut PanicRecord], reason: u64) {
+panic_record_seal :: fn(record : ptr[mut PanicRecord], reason : u64) {
     record.reason = reason
     if record.length > cast[u64](PANIC_TEXT_BYTES) {
         record.length = 0
@@ -78,7 +78,9 @@ panic_record_seal :: fn(record: ptr[mut PanicRecord], reason: u64) {
  *     isn't sealed, its length is out of range, or its check doesn't match.
  */
 panic_record_text :: fn(record #escaping : ptr[PanicRecord]) -> string? {
-    if record.magic != PANIC_RECORD_MAGIC || record.length > cast[u64](PANIC_TEXT_BYTES) || record.check != check_of(record) {
+    if record.magic != PANIC_RECORD_MAGIC
+        || record.length > cast[u64](PANIC_TEXT_BYTES)
+        || record.check != check_of(record) {
         return null
     }
     count :: cast[usize](record.length)
@@ -95,7 +97,7 @@ panic_record_text :: fn(record #escaping : ptr[PanicRecord]) -> string? {
  * @return The 64-bit FNV-1a hash of reason's and length's bytes, interleaved low byte first, then of the first length
  *     bytes of text (all of it, when length is larger).
  */
-check_of :: fn(record: ptr[PanicRecord]) -> u64 {
+check_of :: fn(record : ptr[PanicRecord]) -> u64 {
     hash := cast[u64](0xcbf29ce484222325)
     for i in cast[u64](0)..<8 {
         hash = (hash ~ ((record.reason >> (i * 8)) & 0xff)) * 0x100000001b3

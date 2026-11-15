@@ -15,9 +15,9 @@ package test_protocols
 import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -75,7 +75,7 @@ Response :: union {
  * @param request The request, as received or about to be sent; only its variant is read.
  * @return True for a Ping, answered the same again; false for a Carry, which moves handles, which only happens once.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Ping(_) => true
         case Carry(_) => false
@@ -126,7 +126,7 @@ Arrived :: enum {
  * @param t The test's state, which a failure is recorded in.
  * @return The channel's ends and their ports, which the test closes; Error(Failed), recorded, if any couldn't be made.
  */
-probes :: fn(t: ptr[mut testing.T]) -> Result[Probes, testing.Stopped] {
+probes :: fn(t : ptr[mut testing.T]) -> Result[Probes, testing.Stopped] {
     block :: slop_os.startup_block()
     pair :: testing.require_ok(t, os.channel_for[Probe](block.budget, 8192), "a Probe channel is made")?
     port :: testing.require_some(t, os.port_for(block.budget, pair.b), "a port for the receiving end")?
@@ -139,7 +139,7 @@ probes :: fn(t: ptr[mut testing.T]) -> Result[Probes, testing.Stopped] {
  *
  * @param probes What probes made, each handle closed.
  */
-close_probes :: fn(probes: Probes) {
+close_probes :: fn(probes : Probes) {
     _ = slop_os.handle_close(cast[slop_os.Handle](probes.a))
     _ = slop_os.handle_close(cast[slop_os.Handle](probes.b))
     _ = slop_os.handle_close(cast[slop_os.Handle](probes.port))
@@ -153,7 +153,7 @@ close_probes :: fn(probes: Probes) {
  * @param t The test's state.
  * @return Ok once it's run; Error if the channel, the memory or the other channel couldn't be made.
  */
-a_whole_message_arrives_with_its_handles_and_data #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_whole_message_arrives_with_its_handles_and_data #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     probe :: probes(t)?
     into := os.Incoming.{}
@@ -162,10 +162,23 @@ a_whole_message_arrives_with_its_handles_and_data #test :: fn(t: ptr[mut testing
     numbers :: u64.[3, 1, 4, 1, 5]
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
-    request^ = .Carry(Everything.{flag = true, shade = .Dark, count = 9, memory = memory, data = os.append(&out, numbers[0..<5]),
-        peer = os.Channel[Probe].{end = other.a}})
+    request^ = .Carry(
+        Everything.{
+            flag = true,
+            shade = .Dark,
+            count = 9,
+            memory = memory,
+            data = os.append(&out, numbers[0..<5]),
+            peer = os.Channel[Probe].{end = other.a},
+        }
+    )
     testing.expect(t, send_request(probe.a, probe.sender_port, &out) == null, "a whole message is sent")
-    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.Received, "a whole message is received")
+    testing.expect_eq(
+        t,
+        arrival_code(receive_request(probe.b, probe.port, &into, true)),
+        Arrived.Received,
+        "a whole message is received"
+    )
     match os.message_of[Request](&into)^ {
         case Carry(carried) => {
             got :: os.items(&into, carried.data)
@@ -174,11 +187,19 @@ a_whole_message_arrives_with_its_handles_and_data #test :: fn(t: ptr[mut testing
                 sum += value
             }
             testing.expect_eq(t, sum, 14, "a Relative's u64s read back as they were sent: 3, 1, 4, 1 and 5")
-            testing.expect(t, carried.flag && carried.shade == .Dark && carried.count == 9, "a message's plain fields arrive as they were sent")
+            testing.expect(
+                t,
+                carried.flag && carried.shade == .Dark && carried.count == 9,
+                "a message's plain fields arrive as they were sent"
+            )
             // The memory and the channel are handles of this process's again, and the channel speaks Probe
             size :: slop_os.memory_size(carried.memory)
             testing.expect_ok(t, size, "a handle sent arrives in place, as a handle of the receiver's")
-            testing.expect(t, os.speaks[Probe](carried.peer.end), "a typed channel sent arrives in place, speaking its protocol")
+            testing.expect(
+                t,
+                os.speaks[Probe](carried.peer.end),
+                "a typed channel sent arrives in place, speaking its protocol"
+            )
         }
         case _ => testing.fail(t, "a Carry sent arrives as a Carry")
     }
@@ -194,19 +215,54 @@ a_whole_message_arrives_with_its_handles_and_data #test :: fn(t: ptr[mut testing
  * @param t The test's state.
  * @return Ok once it's run; Error if the channel couldn't be made.
  */
-broken_messages_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+broken_messages_are_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     probe :: probes(t)?
     into := os.Incoming.{}
     a :: probe.a
     b :: probe.b
-    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, 0, 0, 0), Arrived.Invalid, "a message too short for its tag is refused")
-    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Shade), 7, 1), Arrived.Invalid, "an enum that's no member is refused")
-    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Flag), 2, 1), Arrived.Invalid, "a bool that's neither 0 nor 1 is refused")
-    testing.expect_eq(t, refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Memory), 5, 4), Arrived.Invalid, "a handle index past the message's batch is refused")
+    testing.expect_eq(
+        t,
+        refused(a, probe.sender_port, b, probe.port, &into, 0, 0, 0),
+        Arrived.Invalid,
+        "a message too short for its tag is refused"
+    )
+    testing.expect_eq(
+        t,
+        refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Shade), 7, 1),
+        Arrived.Invalid,
+        "an enum that's no member is refused"
+    )
+    testing.expect_eq(
+        t,
+        refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Flag), 2, 1),
+        Arrived.Invalid,
+        "a bool that's neither 0 nor 1 is refused"
+    )
+    testing.expect_eq(
+        t,
+        refused(a, probe.sender_port, b, probe.port, &into, offset_of_field(.Memory), 5, 4),
+        Arrived.Invalid,
+        "a handle index past the message's batch is refused"
+    )
     // A Relative past the end, over the fixed part, and misaligned
-    testing.expect_eq(t, refused_relative(a, probe.sender_port, b, probe.port, &into, 4096, 1), Arrived.Invalid, "a Relative past the message's end is refused")
-    testing.expect_eq(t, refused_relative(a, probe.sender_port, b, probe.port, &into, 8, 1), Arrived.Invalid, "a Relative over the message's fixed part is refused")
-    testing.expect_eq(t, refused_relative(a, probe.sender_port, b, probe.port, &into, cast[u32](size_of(Request)) + 3, 1), Arrived.Invalid, "a Relative misaligned for its items is refused")
+    testing.expect_eq(
+        t,
+        refused_relative(a, probe.sender_port, b, probe.port, &into, 4096, 1),
+        Arrived.Invalid,
+        "a Relative past the message's end is refused"
+    )
+    testing.expect_eq(
+        t,
+        refused_relative(a, probe.sender_port, b, probe.port, &into, 8, 1),
+        Arrived.Invalid,
+        "a Relative over the message's fixed part is refused"
+    )
+    testing.expect_eq(
+        t,
+        refused_relative(a, probe.sender_port, b, probe.port, &into, cast[u32](size_of(Request)) + 3, 1),
+        Arrived.Invalid,
+        "a Relative misaligned for its items is refused"
+    )
     close_probes(probe)
     return .Ok
 }
@@ -217,14 +273,19 @@ broken_messages_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
  * @param t The test's state.
  * @return Ok once it's run; Error if the channel couldn't be made.
  */
-an_unknown_variant_is_unsupported #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_unknown_variant_is_unsupported #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     probe :: probes(t)?
     into := os.Incoming.{}
     unknown : u64[4]
     unknown[0] = 7
     none : slop_os.Handle[1]
     _ = os.send(probe.a, probe.sender_port, view_of(cast[ptr[u8]](&unknown[0]), 32), view_of(&none[0], 0))
-    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.Unsupported, "a variant tag this side doesn't know is Unsupported")
+    testing.expect_eq(
+        t,
+        arrival_code(receive_request(probe.b, probe.port, &into, true)),
+        Arrived.Unsupported,
+        "a variant tag this side doesn't know is Unsupported"
+    )
     close_probes(probe)
     return .Ok
 }
@@ -235,7 +296,7 @@ an_unknown_variant_is_unsupported #test :: fn(t: ptr[mut testing.T]) -> testing.
  * @param t The test's state.
  * @return Ok once it's run; Error if the channel or the stranger channel couldn't be made.
  */
-a_channel_of_another_protocol_is_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_channel_of_another_protocol_is_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     probe :: probes(t)?
     into := os.Incoming.{}
@@ -244,7 +305,12 @@ a_channel_of_another_protocol_is_refused #test :: fn(t: ptr[mut testing.T]) -> t
     carried :: os.begin[Request](&wrong)
     carried^ = .Carry(Everything.{flag = false, shade = .Light, peer = os.Channel[Probe].{end = stranger.a}})
     _ = send_request(probe.a, probe.sender_port, &wrong)
-    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.WrongProtocol, "a channel whose tag isn't Probe's can't arrive as a Channel[Probe]")
+    testing.expect_eq(
+        t,
+        arrival_code(receive_request(probe.b, probe.port, &into, true)),
+        Arrived.WrongProtocol,
+        "a channel whose tag isn't Probe's can't arrive as a Channel[Probe]"
+    )
     close_probes(probe)
     return .Ok
 }
@@ -256,14 +322,19 @@ a_channel_of_another_protocol_is_refused #test :: fn(t: ptr[mut testing.T]) -> t
  * @param t The test's state.
  * @return Ok once it's run; Error if the channel couldn't be made.
  */
-a_short_message_reads_its_missing_fields_as_zeros #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_short_message_reads_its_missing_fields_as_zeros #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     probe :: probes(t)?
     into := os.Incoming.{}
     short : u8[1]
     short[0] = 0
     none : slop_os.Handle[1]
     _ = os.send(probe.a, probe.sender_port, short, view_of(&none[0], 0))
-    testing.expect_eq(t, arrival_code(receive_request(probe.b, probe.port, &into, true)), Arrived.Received, "a message shorter than its type is received")
+    testing.expect_eq(
+        t,
+        arrival_code(receive_request(probe.b, probe.port, &into, true)),
+        Arrived.Received,
+        "a message shorter than its type is received"
+    )
     match os.message_of[Request](&into)^ {
         case Ping(value) => testing.expect_eq(t, value, 0, "a field past a short message's end reads as zero")
         case _ => testing.fail(t, "a message of only Ping's tag arrives as a Ping")
@@ -285,24 +356,41 @@ a_short_message_reads_its_missing_fields_as_zeros #test :: fn(t: ptr[mut testing
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log, manager = manager}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
 
 /**
- * A request that isn't the protocol ends its connection (decisions/0177): the process manager, given a message too short
+ * A request that isn't the protocol ends its connection (decisions/0177): the process manager, given a message too
+ * short
  * to have a tag on a connection of its own, closes it, so the client's wait for an answer ends with the peer closed
  * rather than going on for good; and it serves its other clients still.
  */
-a_broken_request_ends_its_connection #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_broken_request_ends_its_connection #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     manager :: testing.require_some(t, given.manager, "the test is given the process manager")?
     budget :: slop_os.startup_block().budget
-    manager_port :: testing.require_some(t, os.port_for(budget, manager.end), "a port for the manager's connection is made")?
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(budget, manager.end),
+        "a port for the manager's connection is made"
+    )?
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
-    connection :: testing.require_some(t, process_manager.connect(manager.end, manager_port, budget), "another connection is made")?
+    connection :: testing.require_some(
+        t,
+        process_manager.connect(manager.end, manager_port, budget),
+        "another connection is made"
+    )?
     defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
     port :: testing.require_some(t, os.port_for(budget, connection.end), "a port for it is made")?
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -310,8 +398,12 @@ a_broken_request_ends_its_connection #test :: fn(t: ptr[mut testing.T]) -> testi
     none : slop_os.Handle[1]
     _ = os.send(connection.end, port, view_of(&empty[0], 0), view_of(&none[0], 0))
     into := os.Incoming.{}
-    testing.expect_eq(t, arrival_code(process_manager.receive_response(connection.end, port, &into, true)), Arrived.Failed,
-        "the wait for an answer ends, the connection closed")
+    testing.expect_eq(
+        t,
+        arrival_code(process_manager.receive_response(connection.end, port, &into, true)),
+        Arrived.Failed,
+        "the wait for an answer ends, the connection closed"
+    )
     // The first connection's still served: another can be made through it
     again :: process_manager.connect(manager.end, manager_port, budget)
     testing.expect(t, again is_some, "the manager still serves its other clients")
@@ -328,7 +420,7 @@ a_broken_request_ends_its_connection #test :: fn(t: ptr[mut testing.T]) -> testi
  * @param arrival What the receive gave; a Failed's error is dropped.
  * @return Its variant, as an Arrived.
  */
-arrival_code :: fn(arrival: os.Arrival) -> Arrived {
+arrival_code :: fn(arrival : os.Arrival) -> Arrived {
     return match arrival {
         case Received => Arrived.Received
         case Empty => Arrived.Empty
@@ -357,7 +449,7 @@ Field :: enum {
  * @param field Any of the four fields; any value but Flag, Shade and Memory is taken as Data.
  * @return Its offset in the message, in bytes from its start, the tag's byte.
  */
-offset_of_field :: fn(field: Field) -> usize {
+offset_of_field :: fn(field : Field) -> usize {
     payload :: payload_offset()
     if field == .Flag {
         return payload + offset_of(Everything, flag)
@@ -396,8 +488,16 @@ payload_offset :: fn() -> usize {
  * @param size How many bytes are set, at most 8; 0 sends a message of no bytes at all, not even a tag.
  * @return What receiving it gave, as arrival_code gives it.
  */
-refused :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.Channel, port: slop_os.Port, into: ptr[mut os.Incoming],
-    offset: usize, value: u64, size: usize) -> Arrived {
+refused :: fn(
+    end : slop_os.Channel,
+    sender_port : slop_os.Port,
+    reader : slop_os.Channel,
+    port : slop_os.Port,
+    into : ptr[mut os.Incoming],
+    offset : usize,
+    value : u64,
+    size : usize
+) -> Arrived {
     message : u64[64]
     bytes :: view_of(cast[ptr[mut u8]](&message[0]), size_of(Request))
     none : slop_os.Handle[1]
@@ -437,8 +537,15 @@ refused :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.C
  * @param count How many u64s the data has.
  * @return What receiving it gave, as arrival_code gives it.
  */
-refused_relative :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: slop_os.Channel, port: slop_os.Port,
-    into: ptr[mut os.Incoming], start: u32, count: u32) -> Arrived {
+refused_relative :: fn(
+    end : slop_os.Channel,
+    sender_port : slop_os.Port,
+    reader : slop_os.Channel,
+    port : slop_os.Port,
+    into : ptr[mut os.Incoming],
+    start : u32,
+    count : u32
+) -> Arrived {
     data_at :: offset_of_field(.Data)
     message : u64[64]
     bytes :: view_of(cast[ptr[mut u8]](&message[0]), size_of(Request) + 64)
@@ -465,7 +572,7 @@ refused_relative :: fn(end: slop_os.Channel, sender_port: slop_os.Port, reader: 
  * @param at The byte's index; one past the end is ignored.
  * @param value What it's set to.
  */
-put :: fn(bytes: mut u8[], at: usize, value: u8) {
+put :: fn(bytes : mut u8[], at : usize, value : u8) {
     if at < bytes.count {
         bytes[at] = value
     }

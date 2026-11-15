@@ -9,9 +9,9 @@ package kernel_entry
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../../arch_interface"
 import text_buffer from "std:text_buffer"
 import kernel from ".."
+import arch_interface from "../../arch_interface"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../../arch/x86_64"
@@ -51,7 +51,7 @@ InterruptSource :: union {
  * @param registers The user registers the entry stub saved on this CPU's kernel stack, the call's number and
  *     arguments among them; copied into the thread.
  */
-syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
+syscall #never_returns :: fn(registers : ptr[mut arch.UserRegisters]) {
     arch.debug_off()
     kernel.left_boot_stack()
     kernel.note_user_control_flow()
@@ -67,8 +67,8 @@ syscall #never_returns :: fn(registers: ptr[mut arch.UserRegisters]) {
  * @param registers The user registers the entry stub saved on this CPU's kernel stack; copied into the thread.
  * @param fault What faulted: for a page fault, its address and access.
  */
-//TODO(claude): faults in user threads (M4 to M6)
-user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: arch_interface.Fault) {
+// TODO(claude): faults in user threads (M4 to M6)
+user_fault #never_returns :: fn(registers : ptr[mut arch.UserRegisters], fault : arch_interface.Fault) {
     arch.debug_off()
     kernel.left_boot_stack()
     kernel.note_user_control_flow()
@@ -90,7 +90,7 @@ user_fault #never_returns :: fn(registers: ptr[mut arch.UserRegisters], fault: a
  * @param from What was interrupted: a user thread, with its saved registers, or idle.
  * @param source What raised the interrupt.
  */
-interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
+interrupt #never_returns :: fn(from : Interrupted, source : InterruptSource) {
     kernel.left_boot_stack()
     from_user := false
     match from {
@@ -139,7 +139,7 @@ interrupt #never_returns :: fn(from: Interrupted, source: InterruptSource) {
  * @param fault What faulted: for a page fault, the address and access, and whether a mapping was there.
  * @param instruction_pointer The virtual address of the faulting instruction, in the kernel image.
  */
-kernel_fault #never_returns :: fn(fault: arch_interface.Fault, instruction_pointer: arch_interface.VirtualAddress) {
+kernel_fault #never_returns :: fn(fault : arch_interface.Fault, instruction_pointer : arch_interface.VirtualAddress) {
     storage : u8[160]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "kernel fault: ")
@@ -159,12 +159,15 @@ kernel_fault #never_returns :: fn(fault: arch_interface.Fault, instruction_point
  * @param fault The fault, as the entry stub decoded it: for a page fault, its access, address and whether a mapping
  *     was there, all written; for any other kind, its name alone.
  */
-append_fault :: fn(line: ptr[mut text_buffer.TextBuffer], fault: arch_interface.Fault) {
+append_fault :: fn(line : ptr[mut text_buffer.TextBuffer], fault : arch_interface.Fault) {
     match fault {
         case Page(page) => {
             text_buffer.append(line, "page fault, ")
             text_buffer.append(line, access_name(page.access))
-            text_buffer.append(line, if page.present { " breaking the protection at " } else { " of nothing mapped at " })
+            text_buffer.append(
+                line,
+                if page.present { " breaking the protection at " } else { " of nothing mapped at " }
+            )
             text_buffer.append_address(line, cast[u64](page.address))
         }
         case InvalidInstruction => text_buffer.append(line, "invalid instruction")
@@ -192,7 +195,7 @@ append_fault :: fn(line: ptr[mut text_buffer.TextBuffer], fault: arch_interface.
  * @param access The kind of access that faulted.
  * @return A constant name: "read", "write" or "execute".
  */
-access_name :: fn(access: arch_interface.Access) -> string {
+access_name :: fn(access : arch_interface.Access) -> string {
     return match access {
         case .Read => "read"
         case .Write => "write"
@@ -212,7 +215,7 @@ access_name :: fn(access: arch_interface.Access) -> string {
  * @param registers The interrupted code's registers, in the order arch.nmi_register_name names them; read only during
  *     the call.
  */
-nmi :: fn(pc: u64, frame_pointer: u64, registers: u64[]) {
+nmi :: fn(pc : u64, frame_pointer : u64, registers : u64[]) {
     cpu :: kernel.per_cpu()
     intrinsics.atomic_store_u32_release(&cpu.nmi_count, cpu.nmi_count + 1)
     kernel.note_lockup(cpu.kernel, cpu, pc, frame_pointer, registers)
@@ -225,7 +228,7 @@ nmi :: fn(pc: u64, frame_pointer: u64, registers: u64[]) {
  *
  * @param event The event: a machine check or a double fault; the arch layer sends NMIs to nmi instead.
  */
-fatal_critical #never_returns :: fn(event: arch_interface.CriticalEvent) {
+fatal_critical #never_returns :: fn(event : arch_interface.CriticalEvent) {
     runtime.log_fatal(match event {
         case .Nmi => "NMI"
         case .DoubleFault => "double fault"

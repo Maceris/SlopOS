@@ -21,7 +21,8 @@ import bundle from "../../bundle"
  * Write a bundle store's directory on the host from programs the build made.
  *
  * Its arguments are the store's folder, made if it isn't there, then the programs' paths, each an object with a
- * bundle, and its <name>.manifest and <name>.docs beside it objects too when they're there. Objects already in the folder are written
+ * bundle, and its <name>.manifest and <name>.docs beside it objects too when they're there. Objects already in the
+ * folder are written
  * again; root is replaced.
  *
  * @return 0 once the store is written; 1 for too few arguments, 2 if the folder or its objects/ couldn't be made, 3 if
@@ -102,7 +103,7 @@ main :: fn() -> int {
  * @param bytes The whole object, hashed and written as it is; empty writes an empty file.
  * @return Their hash; null, logged, if the file couldn't be written.
  */
-put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
+put :: fn(objects : string, bytes : u8[]) -> bundle.Hash? {
     hash :: bundle.hash_of(bytes)
     hex_storage : u8[64]
     name_storage : u8[1024]
@@ -123,7 +124,7 @@ put :: fn(objects: string, bytes: u8[]) -> bundle.Hash? {
  * @param path The path, with / or \ separators.
  * @return What's before the last part's last dot, a view into path; all of path without one.
  */
-without_extension :: fn(path: string) -> string {
+without_extension :: fn(path : string) -> string {
     kept :: path.count - extension_bytes(path)
     if kept > path.count {
         return path
@@ -137,7 +138,7 @@ without_extension :: fn(path: string) -> string {
  * @param path The path, with / or \ separators.
  * @return How many bytes from its last part's last dot to its end, the dot's among them; 0 without one.
  */
-extension_bytes :: fn(path: string) -> usize {
+extension_bytes :: fn(path : string) -> usize {
     count : usize = 0
     for character, i in path {
         if character == '/' || character == '\\' {
@@ -157,7 +158,7 @@ extension_bytes :: fn(path: string) -> usize {
  * @return What's after the last separator and before the last dot after it, a view into path; empty if that's
  *     nothing, as for a name that starts with its only dot.
  */
-stem :: fn(path: string) -> string {
+stem :: fn(path : string) -> string {
     start : usize = 0
     end := path.count
     for character, i in path {
@@ -183,7 +184,7 @@ stem :: fn(path: string) -> string {
  * @param storage Where they're written; what's past its 1024 bytes is dropped.
  * @return The joined text, a view into storage, good while it is; empty if both are.
  */
-joined :: fn(a: string, b: string, storage: ptr[mut u8[1024]]) -> string {
+joined :: fn(a : string, b : string, storage : ptr[mut u8[1024]]) -> string {
     count : usize = 0
     for text in string.[a, b] {
         for character in text {

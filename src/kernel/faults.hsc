@@ -24,7 +24,7 @@ log_failure :: fn() {
  *     running out; false otherwise, always without robustness=on, and before this CPU has the kernel's state, when
  *     the pass isn't counted.
  */
-fails :: fn(point: robustness.Point) -> bool {
+fails :: fn(point : robustness.Point) -> bool {
     #if robustness.ON {
         if intrinsics.carrier().program_data == null {
             return false

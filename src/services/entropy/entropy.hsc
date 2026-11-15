@@ -12,11 +12,11 @@ package entropy
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import entropy as protocol from "../../protocols/entropy"
 import rng from "../../protocols/rng"
 import random_stream from "../../random_stream"
-import service_kit from "../../libraries/service_kit"
 
 /**
  * The most hardware sources the service takes in its life; an AddSource past this many has its channel closed. A
@@ -66,7 +66,7 @@ Entropy :: struct {
  * @return 1 when the startup block's seed is all zeros, 2 when no port could be made, 3 when the listener couldn't
  *     be bound to it; it doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, clients: os.Listener[protocol.Entropy]) -> int {
+main :: fn(log : slop_os.DebugLog?, clients : os.Listener[protocol.Entropy]) -> int {
     block :: slop_os.startup_block()
     service := Entropy.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
     seeded := false
@@ -117,7 +117,12 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[protocol.Entropy]) -> in
  * @param index Which client, an index in connected; one past its end, or a freed place, is nothing to serve.
  * @param into Where each request is received, reused for each and left holding the last.
  */
-serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(
+    service : ptr[mut Entropy],
+    connected : ptr[mut service_kit.Clients],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= connected.ends.count {
         return void
     }
@@ -141,7 +146,10 @@ serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], 
         match os.message_of[protocol.Request](into)^ {
             case Fill(count) => {
                 bytes : u8[protocol.MAX_BYTES]
-                filled :: view_of(&bytes[0], cast[usize](if count < protocol.MAX_BYTES { count } else { protocol.MAX_BYTES }))
+                filled :: view_of(
+                    &bytes[0],
+                    cast[usize](if count < protocol.MAX_BYTES { count } else { protocol.MAX_BYTES })
+                )
                 random_stream.fill(&service.stream, filled)
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
@@ -173,7 +181,7 @@ serve :: fn(service: ptr[mut Entropy], connected: ptr[mut service_kit.Clients], 
  * @param end The driver's channel, which moves to the service: kept as a source, or closed when MAX_SOURCES are
  *     already taken or it can't be bound.
  */
-add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
+add_source :: fn(service : ptr[mut Entropy], end : slop_os.Channel) {
     index := service.source_count
     for i in 0..<service.source_count {
         if i < service.sources.count && cast[slop_os.Handle](service.sources[i]) == slop_os.NO_HANDLE {
@@ -186,7 +194,13 @@ add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
         _ = slop_os.handle_close(cast[slop_os.Handle](end))
         return void
     }
-    match slop_os.port_bind(service.port, cast[slop_os.Handle](end), signals, SOURCE_KEY + cast[u64](index), .Persistent) {
+    match slop_os.port_bind(
+        service.port,
+        cast[slop_os.Handle](end),
+        signals,
+        SOURCE_KEY + cast[u64](index),
+        .Persistent
+    ) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -207,7 +221,7 @@ add_source :: fn(service: ptr[mut Entropy], end: slop_os.Channel) {
  * @param index Which source; one out of range, or one gone, is skipped. A send that fails is ignored, the source's
  *     loss found when it's next read.
  */
-ask :: fn(service: ptr[mut Entropy], index: usize) {
+ask :: fn(service : ptr[mut Entropy], index : usize) {
     if index >= service.sources.count || cast[slop_os.Handle](service.sources[index]) == slop_os.NO_HANDLE {
         return void
     }
@@ -228,7 +242,7 @@ ask :: fn(service: ptr[mut Entropy], index: usize) {
  * @param index Which source; one out of range, or one gone, is skipped.
  * @param into Where each answer is received, reused for each.
  */
-take_bytes :: fn(service: ptr[mut Entropy], index: usize, into: ptr[mut os.Incoming]) {
+take_bytes :: fn(service : ptr[mut Entropy], index : usize, into : ptr[mut os.Incoming]) {
     if index >= service.sources.count {
         return void
     }

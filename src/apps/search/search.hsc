@@ -6,12 +6,12 @@ package search
 
 import runtime from "base:runtime"
 import os from "std:os"
-import regex from "std:regex"
-import strings from "std:strings"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import stream from "std:os/slop_os/stream"
+import regex from "std:regex"
+import strings from "std:strings"
+import unicode from "std:unicode"
 import file_tools from "../../file_tools"
 
 /** The most bytes of a file that are searched: 4 MiB. What's past them isn't. */
@@ -89,14 +89,24 @@ Search :: struct {
  * @error NotFound There's nothing at that path; search a directory or file that's there.
  * @error Unreadable The directory couldn't be read, or what was found written.
  */
-main :: fn(pattern: string, here: os.Channel[dir.Dir], path: string?, ignore_case: bool, names: bool, output: os.Sink[Found]?) -> Result[u64,
-    SearchError] {
+main :: fn(
+    pattern : string,
+    here : os.Channel[dir.Dir],
+    path : string?,
+    ignore_case : bool,
+    names : bool,
+    output : os.Sink[Found]?
+) -> Result[u64, SearchError] {
     asked :: if path is_some { "path" } else { "here" }
     problem :: Problem.{parameter = os.ParameterName.{name = asked}}
     search := Search.{names = names}
     match regex.compile(pattern, regex.Flags.{ignore_case = ignore_case}) {
         case Ok(compiled) => search.pattern = compiled
-        case Error(error) => return .Error(.BadPattern(PatternProblem.{parameter = os.ParameterName.{name = "pattern"}, at = cast[u64](error.at)}))
+        case Error(
+            error
+        ) => return .Error(
+            .BadPattern(PatternProblem.{parameter = os.ParameterName.{name = "pattern"}, at = cast[u64](error.at)})
+        )
     }
     defer regex.free(&search.pattern)
     directory, opened :: os.directory_on(here.end)
@@ -142,7 +152,13 @@ main :: fn(pattern: string, here: os.Channel[dir.Dir], path: string?, ignore_cas
  * @return False if what was found couldn't be written, which ends the search; true otherwise, also when a directory
  *     or a file couldn't be read, which is passed over.
  */
-search_directory :: fn(search: ptr[mut Search], source: file_tools.Source, directory: os.Directory, path: string, depth: usize) -> bool {
+search_directory :: fn(
+    search : ptr[mut Search],
+    source : file_tools.Source,
+    directory : os.Directory,
+    path : string,
+    depth : usize
+) -> bool {
     if depth > MAX_DEPTH {
         return true
     }
@@ -177,7 +193,7 @@ search_directory :: fn(search: ptr[mut Search], source: file_tools.Source, direc
  * @param path The file's path beneath it.
  * @return False if what was found couldn't be written; true otherwise, also for a file that couldn't be read.
  */
-search_file :: fn(search: ptr[mut Search], directory: os.Directory, path: string) -> bool {
+search_file :: fn(search : ptr[mut Search], directory : os.Directory, path : string) -> bool {
     if search.names {
         if regex.is_match(&search.pattern, file_tools.last_name(path)) {
             return found(search, path, 0, "")
@@ -256,7 +272,7 @@ search_file :: fn(search: ptr[mut Search], directory: os.Directory, path: string
  * @param text The line, copied; empty for a name.
  * @return False if it couldn't be copied or written.
  */
-found :: fn(search: ptr[mut Search], path: string, line: u64, text: string) -> bool {
+found :: fn(search : ptr[mut Search], path : string, line : u64, text : string) -> bool {
     search.count += 1
     if !search.writing {
         return true
@@ -272,7 +288,7 @@ found :: fn(search: ptr[mut Search], path: string, line: u64, text: string) -> b
  * @param line The line.
  * @return A view of its start: the whole line if it fits.
  */
-cut :: fn(line: string) -> string {
+cut :: fn(line : string) -> string {
     bytes :: string_bytes(line)
     if bytes.count <= MAX_TEXT_BYTES {
         return line

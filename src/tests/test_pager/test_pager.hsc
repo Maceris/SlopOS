@@ -21,9 +21,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -84,7 +84,7 @@ Paged :: struct {
  *
  * @param shared What the program and the pager share, which outlives the pager.
  */
-pager #calling_convention(.c) #no_context :: fn(shared: ptr[mut Shared]) #never_returns {
+pager #calling_convention(.c) #no_context :: fn(shared : ptr[mut Shared]) #never_returns {
     loop {
         packets : slop_os.Packet[4]
         _ = slop_os.port_wait(shared.port, packets, slop_os.NO_DEADLINE)
@@ -114,7 +114,7 @@ pager #calling_convention(.c) #no_context :: fn(shared: ptr[mut Shared]) #never_
  * @param t The test's state, which a step that failed is recorded in.
  * @return The paged memory, its pager running; Error(Failed), recorded, if any of it couldn't be made.
  */
-set_up :: fn(t: ptr[mut testing.T]) -> Result[Paged, testing.Stopped] {
+set_up :: fn(t : ptr[mut testing.T]) -> Result[Paged, testing.Stopped] {
     block :: slop_os.startup_block()
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the pager")?
     shared :: runtime.new(Shared)
@@ -122,23 +122,72 @@ set_up :: fn(t: ptr[mut testing.T]) -> Result[Paged, testing.Stopped] {
     testing.require_ok(t, slop_os.port_bind_wake(shared.port, PAGER_KEY), "the paged memory's wake binding is made")?
     testing.require_ok(t, slop_os.port_bind_wake(shared.port, STOP_KEY), "the stopping wake binding is made")?
     // Its own budget pays for the paged memory, a page at a time
-    paying :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget to pay for the paged memory")?
-    shared.paged = testing.require_ok(t, slop_os.memory_create_paged(paying, shared.port, PAGER_KEY, PAGES * PAGE), "paged memory on a key with a wake binding is made")?
+    paying :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 1 << 20),
+        "a budget to pay for the paged memory"
+    )?
+    shared.paged = testing.require_ok(
+        t,
+        slop_os.memory_create_paged(paying, shared.port, PAGER_KEY, PAGES * PAGE),
+        "paged memory on a key with a wake binding is made"
+    )?
     unsupplied :: testing.require_ok(t, slop_os.memory_budget_info(paying), "the paying budget can be read")?
     // The pages it's supplied from: page i full of i + 1 times 0x11
-    shared.source = testing.require_ok(t, slop_os.memory_create(block.budget, PAGES * PAGE), "the memory pages are supplied from is made")?
+    shared.source = testing.require_ok(
+        t,
+        slop_os.memory_create(block.budget, PAGES * PAGE),
+        "the memory pages are supplied from is made"
+    )?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    source_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGES * PAGE)), "addresses to map the source at")?
-    testing.require_ok(t, slop_os.memory_map(shared.source, block.space, source_at, 0, PAGES * PAGE, read_write), "the source is mapped to write")?
+    source_at :: testing.require_some(
+        t,
+        runtime.reserve_addresses(cast[usize](PAGES * PAGE)),
+        "addresses to map the source at"
+    )?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(shared.source, block.space, source_at, 0, PAGES * PAGE, read_write),
+        "the source is mapped to write"
+    )?
     for i in cast[u64](0)..<PAGES * PAGE {
         intrinsics.volatile_store_u8(cast[ptr[mut u8]](source_at + i), cast[u8]((i / PAGE + 1) * 0x11))
     }
-    first :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGES * PAGE)), "addresses to map the paged memory at")?
-    second :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGES * PAGE)), "addresses to map the paged memory at again")?
-    testing.require_ok(t, slop_os.memory_map(shared.paged, block.space, first, 0, PAGES * PAGE, slop_os.PROTECTION_READ), "paged memory maps read-only")?
-    testing.require_ok(t, slop_os.memory_map(shared.paged, block.space, second, 0, PAGES * PAGE, slop_os.PROTECTION_READ), "paged memory maps read-only twice")?
-    thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](pager), cast[u64](shared)), "the pager starts")?
-    return .Ok(Paged.{shared = shared, paying = paying, unsupplied = unsupplied.used, first = first, second = second, thread = thread})
+    first :: testing.require_some(
+        t,
+        runtime.reserve_addresses(cast[usize](PAGES * PAGE)),
+        "addresses to map the paged memory at"
+    )?
+    second :: testing.require_some(
+        t,
+        runtime.reserve_addresses(cast[usize](PAGES * PAGE)),
+        "addresses to map the paged memory at again"
+    )?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(shared.paged, block.space, first, 0, PAGES * PAGE, slop_os.PROTECTION_READ),
+        "paged memory maps read-only"
+    )?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(shared.paged, block.space, second, 0, PAGES * PAGE, slop_os.PROTECTION_READ),
+        "paged memory maps read-only twice"
+    )?
+    thread :: testing.require_ok(
+        t,
+        test_kit.start_thread(budget, cast[u64](pager), cast[u64](shared)),
+        "the pager starts"
+    )?
+    return .Ok(
+        Paged.{
+            shared = shared,
+            paying = paying,
+            unsupplied = unsupplied.used,
+            first = first,
+            second = second,
+            thread = thread,
+        }
+    )
 }
 
 /**
@@ -146,7 +195,7 @@ set_up :: fn(t: ptr[mut testing.T]) -> Result[Paged, testing.Stopped] {
  *
  * @param paged What set_up made; its pager ends, and its thread's handle is closed.
  */
-stop_pager :: fn(paged: Paged) {
+stop_pager :: fn(paged : Paged) {
     intrinsics.atomic_store_u64(&paged.shared.stop, 1)
     _ = slop_os.port_wake(paged.shared.port, STOP_KEY, 1)
     _ = slop_os.handle_close(cast[slop_os.Handle](paged.thread))
@@ -160,24 +209,73 @@ stop_pager :: fn(paged: Paged) {
  * @param t The test's state.
  * @return Ok once it's run; Error if the paged memory, its pager or the read-only handle couldn't be made.
  */
-pages_are_supplied_as_they_are_touched #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+pages_are_supplied_as_they_are_touched #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     paged :: set_up(t)?
     shared :: paged.shared
-    testing.expect_eq(t, intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first)), 0x11, "page 0, touched, is supplied from the source's page 0")
-    testing.expect_eq(t, intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first + 2 * PAGE + 8)), 0x33, "page 2, touched, is supplied from the source's page 2")
-    testing.expect_eq(t, intrinsics.volatile_load_u8(cast[ptr[u8]](paged.second + 100)), 0x11, "page 0 through the second mapping is the page already supplied")
-    testing.expect_eq(t, intrinsics.atomic_load_u64(&shared.supplied), 2, "a page is supplied once, whichever mapping touches it")
-    // Writing it is refused, as is asking what it's waited for without the right to write it, and a pager with no binding
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first)),
+        0x11,
+        "page 0, touched, is supplied from the source's page 0"
+    )
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first + 2 * PAGE + 8)),
+        0x33,
+        "page 2, touched, is supplied from the source's page 2"
+    )
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u8(cast[ptr[u8]](paged.second + 100)),
+        0x11,
+        "page 0 through the second mapping is the page already supplied"
+    )
+    testing.expect_eq(
+        t,
+        intrinsics.atomic_load_u64(&shared.supplied),
+        2,
+        "a page is supplied once, whichever mapping touches it"
+    )
+    /*
+     * Writing it is refused, as is asking what it's waited for without the right to write it, and a pager with no
+     * binding
+     */
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    writable :: slop_os.memory_map(shared.paged, block.space, runtime.reserve_addresses(cast[usize](PAGE)) or_else 0, 0, PAGE, read_write)
-    testing.expect_error(t, writable, slop_os.MemoryError.MissingRight, "paged memory can't be mapped to write, only its pager supplies it")
+    writable :: slop_os.memory_map(
+        shared.paged,
+        block.space,
+        runtime.reserve_addresses(cast[usize](PAGE)) or_else 0,
+        0,
+        PAGE,
+        read_write
+    )
+    testing.expect_error(
+        t,
+        writable,
+        slop_os.MemoryError.MissingRight,
+        "paged memory can't be mapped to write, only its pager supplies it"
+    )
     read_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ))
-    reader :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](shared.paged), read_rights), "the paged memory's handle is copied with only the right to read")?
+    reader :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](shared.paged), read_rights),
+        "the paged memory's handle is copied with only the right to read"
+    )?
     wanted :: slop_os.memory_page_wanted(cast[slop_os.Memory](reader))
-    testing.expect_error(t, wanted, slop_os.MemoryError.MissingRight, "only a handle that can write paged memory can ask what's wanted of it")
+    testing.expect_error(
+        t,
+        wanted,
+        slop_os.MemoryError.MissingRight,
+        "only a handle that can write paged memory can ask what's wanted of it"
+    )
     no_binding :: slop_os.memory_create_paged(block.budget, shared.port, 99, PAGE)
-    testing.expect_error(t, no_binding, slop_os.MemoryError.NoPager, "paged memory needs a wake binding for its key, to wake its pager")
+    testing.expect_error(
+        t,
+        no_binding,
+        slop_os.MemoryError.NoPager,
+        "paged memory needs a wake binding for its key, to wake its pager"
+    )
     not_paged :: slop_os.memory_page_wanted(shared.source)
     testing.expect_error(t, not_paged, slop_os.MemoryError.NotPaged, "only paged memory has pages wanted")
     stop_pager(paged)
@@ -194,7 +292,7 @@ pages_are_supplied_as_they_are_touched #test :: fn(t: ptr[mut testing.T]) -> tes
  * @return Ok once it's run; Error if the paged memory, its pager, or the pressure watch or threshold couldn't be made,
  *     or the paying budget couldn't be read.
  */
-pages_are_charged_and_given_back_under_pressure #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+pages_are_charged_and_given_back_under_pressure #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     paged :: set_up(t)?
     shared :: paged.shared
@@ -202,29 +300,76 @@ pages_are_charged_and_given_back_under_pressure #test :: fn(t: ptr[mut testing.T
     _ = intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first))
     _ = intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first + 2 * PAGE + 8))
     two :: testing.require_ok(t, slop_os.memory_budget_info(paged.paying), "the paying budget can be read")?
-    testing.expect_eq(t, (two.used - paged.unsupplied) / PAGE, 2, "the paying budget is charged a page for each page supplied")
+    testing.expect_eq(
+        t,
+        (two.used - paged.unsupplied) / PAGE,
+        2,
+        "the paying budget is charged a page for each page supplied"
+    )
     // Page 0 was touched, and isn't once that's been asked
-    testing.expect_eq(t, slop_os.memory_page_accessed(shared.paged, 0) or_else 99, 1, "a page read since it was supplied is reported touched")
-    testing.expect_eq(t, slop_os.memory_page_accessed(shared.paged, 0) or_else 99, 0, "asking clears a page's touch, so it isn't reported again until touched again")
+    testing.expect_eq(
+        t,
+        slop_os.memory_page_accessed(shared.paged, 0) or_else 99,
+        1,
+        "a page read since it was supplied is reported touched"
+    )
+    testing.expect_eq(
+        t,
+        slop_os.memory_page_accessed(shared.paged, 0) or_else 99,
+        0,
+        "asking clears a page's touch, so it isn't reported again until touched again"
+    )
     // A threshold a page above what the budget has: touching page 1 reaches it, raising pressure on another port
     watch :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to watch for pressure")?
-    testing.require_ok(t, slop_os.port_bind(watch, cast[slop_os.Handle](paged.paying), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Once), "the paying budget's pressure is watched")?
+    testing.require_ok(
+        t,
+        slop_os.port_bind(watch, cast[slop_os.Handle](paged.paying), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Once),
+        "the paying budget's pressure is watched"
+    )?
     now :: testing.require_ok(t, slop_os.memory_budget_info(paged.paying), "the paying budget can be read")?
-    testing.require_ok(t, slop_os.memory_budget_set_threshold(paged.paying, now.used + PAGE), "a threshold a page above what's charged is set")?
-    testing.expect_eq(t, intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first + PAGE)), 0x22, "page 1, touched, is supplied from the source's page 1")
+    testing.require_ok(
+        t,
+        slop_os.memory_budget_set_threshold(paged.paying, now.used + PAGE),
+        "a threshold a page above what's charged is set"
+    )?
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u8(cast[ptr[u8]](paged.first + PAGE)),
+        0x22,
+        "page 1, touched, is supplied from the source's page 1"
+    )
     packets : slop_os.Packet[1]
     waited :: slop_os.port_wait(watch, packets, (slop_os.clock_monotonic() or_else 0) + PRESSURE_WAIT) or_else 0
-    testing.expect(t, waited == 1 && packets[0].key == PRESSURE_KEY, "a page charged up to the budget's threshold raises SIGNAL_PRESSURE")
+    testing.expect(
+        t,
+        waited == 1 && packets[0].key == PRESSURE_KEY,
+        "a page charged up to the budget's threshold raises SIGNAL_PRESSURE"
+    )
     // Page 0 given back: uncharged, not there to give back again, and read again, supplied again
     evicted :: slop_os.memory_evict(shared.paged, 0)
     testing.expect_ok(t, evicted, "a supplied page can be given back")
     evicted_again :: slop_os.memory_evict(shared.paged, 0)
-    testing.expect_error(t, evicted_again, slop_os.MemoryError.NotSupplied, "a page given back isn't there to give back again")
+    testing.expect_error(
+        t,
+        evicted_again,
+        slop_os.MemoryError.NotSupplied,
+        "a page given back isn't there to give back again"
+    )
     never :: slop_os.memory_evict(shared.paged, 3 * PAGE)
     testing.expect_error(t, never, slop_os.MemoryError.NotSupplied, "a page never supplied can't be given back")
     after :: testing.require_ok(t, slop_os.memory_budget_info(paged.paying), "the paying budget can be read")?
-    testing.expect_eq(t, (after.used - paged.unsupplied) / PAGE, 2, "a page given back is uncharged: of pages 0, 1 and 2, only 1 and 2 are charged")
-    testing.expect_eq(t, intrinsics.volatile_load_u8(cast[ptr[u8]](paged.second + 50)), 0x11, "page 0, read again once given back, is supplied again")
+    testing.expect_eq(
+        t,
+        (after.used - paged.unsupplied) / PAGE,
+        2,
+        "a page given back is uncharged: of pages 0, 1 and 2, only 1 and 2 are charged"
+    )
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u8(cast[ptr[u8]](paged.second + 50)),
+        0x11,
+        "page 0, read again once given back, is supplied again"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](watch))
     stop_pager(paged)
     return .Ok
@@ -243,8 +388,16 @@ pages_are_charged_and_given_back_under_pressure #test :: fn(t: ptr[mut testing.T
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
@@ -257,7 +410,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  * @param t The test's state.
  * @return Ok once it's run; Error if the paged memory or its pager couldn't be made.
  */
-paged_memory_is_read_without_a_mapping #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+paged_memory_is_read_without_a_mapping #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     paged :: set_up(t)?
     shared :: paged.shared
     // The last byte of page 1 and the first of page 2, neither supplied yet
@@ -266,14 +419,29 @@ paged_memory_is_read_without_a_mapping #test :: fn(t: ptr[mut testing.T]) -> tes
     testing.expect_ok(t, read, "paged memory reads through memory_read, waiting for its pager")
     testing.expect_eq(t, across[0], 0x22, "the read's first byte is page 1's, supplied for it")
     testing.expect_eq(t, across[1], 0x33, "the read's second byte is page 2's, supplied for it")
-    testing.expect_eq(t, intrinsics.atomic_load_u64(&shared.supplied), 2, "each page the read crossed was supplied once")
+    testing.expect_eq(
+        t,
+        intrinsics.atomic_load_u64(&shared.supplied),
+        2,
+        "each page the read crossed was supplied once"
+    )
     written :: slop_os.memory_write(shared.paged, 0, across)
-    testing.expect_error(t, written, slop_os.MemoryError.WrongKind, "paged memory isn't written through memory_write, only its pager supplies it")
+    testing.expect_error(
+        t,
+        written,
+        slop_os.MemoryError.WrongKind,
+        "paged memory isn't written through memory_write, only its pager supplies it"
+    )
     // Its pager gone, a page it never supplied reads as gone
     stop_pager(paged)
     _ = slop_os.handle_close(cast[slop_os.Handle](shared.port))
     last : u8[1]
     gone :: slop_os.memory_read(shared.paged, 3 * PAGE, last)
-    testing.expect_error(t, gone, slop_os.MemoryError.ObjectGone, "a page its gone pager never supplied reads as ObjectGone, not a fault")
+    testing.expect_error(
+        t,
+        gone,
+        slop_os.MemoryError.ObjectGone,
+        "a page its gone pager never supplied reads as ObjectGone, not a fault"
+    )
     return .Ok
 }

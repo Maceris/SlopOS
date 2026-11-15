@@ -33,7 +33,7 @@ MADE_TEXT :: "Written to a volume made at run time"
  * @return Ok once it's run; Error if the container wasn't found, the buffer or a port couldn't be made, or a volume
  *     couldn't be made.
  */
-volumes_are_made_at_run_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+volumes_are_made_at_run_time #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     // Beside the system volume, so skipped without it
     _ = system_of(t, given)?
@@ -45,12 +45,19 @@ volumes_are_made_at_run_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
         sealed :: i == 1
         root :: match create(manager.end, manager.port, container, name, if sealed { MADE_PASSPHRASE } else { "" }) {
             case OpenedFiles(opened) => opened
-            case _ => return stopped(t, "the storage manager makes a new volume in the container, plain or sealed, and opens it")
+            case _ => return stopped(
+                t,
+                "the storage manager makes a new volume in the container, plain or sealed, and opens it"
+            )
         }
         bound :: os.port_for(budget, root.end)
         root_port :: testing.require_some(t, bound, "the budget has room for a port")?
-        testing.expect(t, write_new(root.end, root_port, MADE_FILE, MADE_TEXT, buffer) && holds(root.end, root_port, MADE_FILE, MADE_TEXT, buffer),
-            "a volume made at run time takes a file, which reads back")
+        testing.expect(
+            t,
+            write_new(root.end, root_port, MADE_FILE, MADE_TEXT, buffer)
+                && holds(root.end, root_port, MADE_FILE, MADE_TEXT, buffer),
+            "a volume made at run time takes a file, which reads back"
+        )
         _ = slop_os.handle_close(cast[slop_os.Handle](root_port))
         _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
         match create(manager.end, manager.port, container, name, if sealed { MADE_PASSPHRASE } else { "" }) {
@@ -66,7 +73,11 @@ volumes_are_made_at_run_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
         case OpenedFiles(again) => {
             again_bound :: os.port_for(budget, again.end)
             again_port :: testing.require_some(t, again_bound, "the budget has room for a port")?
-            testing.expect(t, holds(again.end, again_port, MADE_FILE, MADE_TEXT, buffer), "a sealed volume opened again has the file written to it")
+            testing.expect(
+                t,
+                holds(again.end, again_port, MADE_FILE, MADE_TEXT, buffer),
+                "a sealed volume opened again has the file written to it"
+            )
             _ = slop_os.handle_close(cast[slop_os.Handle](again_port))
             _ = slop_os.handle_close(cast[slop_os.Handle](again.end))
         }
@@ -86,10 +97,28 @@ volumes_are_made_at_run_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
  * @return The storage manager's answer: OpenedFiles with the volume's root, which the caller owns, AlreadyExists for a
  *     name taken, or another refusal; Unsupported if it couldn't be asked.
  */
-create :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, name: string, passphrase: string) -> storage.Response {
+create :: fn(
+    manager : slop_os.Channel,
+    port : slop_os.Port,
+    container : u32,
+    name : string,
+    passphrase : string
+) -> storage.Response {
     out := os.Outgoing.{}
     creating :: os.begin[storage.Request](&out)
-    creating^ = .CreateVolume(storage.NewVolume.{partition = container, name = bytes_of(&out, name), passphrase = bytes_of(&out, passphrase),
-        cipher = if passphrase.count > 0 { cast[u8](slopfs.Cipher.Aes256Gcm) } else { cast[u8](slopfs.Cipher.None) }, now = 1})
+    creating^ = .CreateVolume(
+        storage.NewVolume.{
+            partition = container,
+            name = bytes_of(&out, name),
+            passphrase = bytes_of(&out, passphrase),
+            cipher = if passphrase.count > 0 {
+                cast[u8](slopfs.Cipher.Aes256Gcm)
+            }
+            else {
+                cast[u8](slopfs.Cipher.None)
+            },
+            now = 1,
+        }
+    )
     return ask_storage(manager, port, &out)
 }

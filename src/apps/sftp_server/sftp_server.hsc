@@ -6,9 +6,9 @@
 package sftp_server
 
 import os from "std:os"
-import ssh from "std:ssh"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import ssh from "std:ssh"
 import pipe from "../../protocols/pipe"
 import sftp from "../../sftp"
 
@@ -19,7 +19,7 @@ import sftp from "../../sftp"
  * @param stream The pipe to the SSH service, the client's bytes on it.
  * @return 0 once the client's finished; 1 if a packet couldn't be one; 2 if the home or the pipe couldn't be used.
  */
-main :: fn(home: os.Channel[dir.Dir], stream: os.Channel[pipe.Pipe]) -> int {
+main :: fn(home : os.Channel[dir.Dir], stream : os.Channel[pipe.Pipe]) -> int {
     directory, opened :: os.directory_on(home.end)
     if opened != null {
         return 2
@@ -33,7 +33,12 @@ main :: fn(home: os.Channel[dir.Dir], stream: os.Channel[pipe.Pipe]) -> int {
             if state.outbox_count == 0 {
                 break
             }
-            chunk :: if state.outbox_count < pipe.CHUNK_BYTES { state.outbox_count } else { cast[usize](pipe.CHUNK_BYTES) }
+            chunk :: if state.outbox_count < pipe.CHUNK_BYTES {
+                state.outbox_count
+            }
+            else {
+                cast[usize](pipe.CHUNK_BYTES)
+            }
             out := os.Outgoing.{}
             request :: os.begin[pipe.Request](&out)
             request^ = .Write(os.append(&out, ssh.range(state.outbox[0..<sftp.OUTBOX_BYTES], 0, chunk)))
@@ -43,8 +48,10 @@ main :: fn(home: os.Channel[dir.Dir], stream: os.Channel[pipe.Pipe]) -> int {
             sftp.sent(state, chunk)
         }
         while true
-        // Requests that came already, answered before reading more: one's answer can fill the outbox, and the client
-        // waits on the rest
+        /*
+         * Requests that came already, answered before reading more: one's answer can fill the outbox, and the client
+         * waits on the rest
+         */
         waiting :: state.inbox_count
         if !sftp.serve(state) {
             return 1
@@ -58,7 +65,9 @@ main :: fn(home: os.Channel[dir.Dir], stream: os.Channel[pipe.Pipe]) -> int {
             return 1
         }
         asking := os.Outgoing.{}
-        os.begin[pipe.Request](&asking)^ = .Read(cast[u32](if room < pipe.CHUNK_BYTES { room } else { cast[usize](pipe.CHUNK_BYTES) }))
+        os.begin[pipe.Request](
+            &asking
+        )^ = .Read(cast[u32](if room < pipe.CHUNK_BYTES { room } else { cast[usize](pipe.CHUNK_BYTES) }))
         if pipe.send_request(stream.end, port, &asking) is_some {
             return 2
         }

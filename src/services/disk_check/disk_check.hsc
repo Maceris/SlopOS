@@ -25,11 +25,11 @@ import compiler from "base:compiler"
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import testing from "std:testing"
-import text_buffer from "std:text_buffer"
 import dir from "std:os/slop_os/dir"
 import file_set from "std:os/slop_os/file_set"
 import read_only_dir from "std:os/slop_os/read_only_dir"
+import testing from "std:testing"
+import text_buffer from "std:text_buffer"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
 import partitions from "../../protocols/partitions"
@@ -86,7 +86,7 @@ ORDER :: string.[
     "links_reach_another_volume_and_grant_nothing_further",
     "snapshots_read_as_the_volume_was_and_clone",
     "a_quota_refuses_what_is_past_it",
-    "volumes_are_made_at_run_time",
+    "volumes_are_made_at_run_time"
 ]
 
 /** A connection to the storage manager, and the port its answers wake. */
@@ -155,8 +155,12 @@ Disk :: struct {
  * @param system The system volume's root. Without it, the tests of it and the volumes beside it skip themselves.
  * @return How many tests failed: 0 when every one passed or skipped itself, or with no storage manager.
  */
-main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, working_directory: os.Channel[dir.Dir]?,
-    system: os.Channel[dir.Dir]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    storage : os.Channel[connector.Connector]?,
+    working_directory : os.Channel[dir.Dir]?,
+    system : os.Channel[dir.Dir]?
+) -> int {
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     if storage is_none {
         runtime.log_info("no storage manager")
@@ -176,7 +180,7 @@ main :: fn(log: slop_os.DebugLog?, storage: os.Channel[connector.Connector]?, wo
  * @return The tests to run, from the context's allocator, which the caller frees: ORDER's, in its order, then any test
  *     it doesn't name, in the order tests has them.
  */
-in_order :: fn(tests: testing.Test[]) -> testing.Test[..] {
+in_order :: fn(tests : testing.Test[]) -> testing.Test[..] {
     chosen : testing.Test[..]
     for name in ORDER {
         for test in tests {
@@ -205,7 +209,7 @@ in_order :: fn(tests: testing.Test[]) -> testing.Test[..] {
  * @param location Where the step is; the caller's own.
  * @return Error(Failed), for the test to return.
  */
-stopped :: fn(t: ptr[mut testing.T], message: string, location := #caller_location) -> testing.Outcome {
+stopped :: fn(t : ptr[mut testing.T], message : string, location := #caller_location) -> testing.Outcome {
     testing.fail(t, message, location)
     return .Error(.Failed)
 }
@@ -218,8 +222,17 @@ stopped :: fn(t: ptr[mut testing.T], message: string, location := #caller_locati
  * @param location Where the test asked; the caller's own.
  * @return The connection; Error(Failed), recorded, if it wasn't dialed.
  */
-manager_of :: fn(t: ptr[mut testing.T], given: ptr[Given], location := #caller_location) -> Result[Manager, testing.Stopped] {
-    return testing.require_some(t, given.manager, "dials_the_storage_manager, run first, dialed the storage manager", location)
+manager_of :: fn(
+    t : ptr[mut testing.T],
+    given : ptr[Given],
+    location := #caller_location
+) -> Result[Manager, testing.Stopped] {
+    return testing.require_some(
+        t,
+        given.manager,
+        "dials_the_storage_manager, run first, dialed the storage manager",
+        location
+    )
 }
 
 /**
@@ -229,7 +242,7 @@ manager_of :: fn(t: ptr[mut testing.T], given: ptr[Given], location := #caller_l
  * @param given What main was given.
  * @return The root, borrowed from given; Error(Skipped) if it wasn't given, for the test to return with ?.
  */
-system_of :: fn(t: ptr[mut testing.T], given: ptr[Given]) -> Result[os.Channel[dir.Dir], testing.Stopped] {
+system_of :: fn(t : ptr[mut testing.T], given : ptr[Given]) -> Result[os.Channel[dir.Dir], testing.Stopped] {
     match given.system {
         case Some(system) => return .Ok(system)
         case None => {
@@ -246,7 +259,7 @@ system_of :: fn(t: ptr[mut testing.T], given: ptr[Given]) -> Result[os.Channel[d
  * @param given What main was given.
  * @return The root, borrowed from given; Error(Skipped) if it wasn't given, for the test to return with ?.
  */
-working_directory_of :: fn(t: ptr[mut testing.T], given: ptr[Given]) -> Result[os.Channel[dir.Dir], testing.Stopped] {
+working_directory_of :: fn(t : ptr[mut testing.T], given : ptr[Given]) -> Result[os.Channel[dir.Dir], testing.Stopped] {
     match given.working_directory {
         case Some(directory) => return .Ok(directory)
         case None => {
@@ -262,9 +275,13 @@ working_directory_of :: fn(t: ptr[mut testing.T], given: ptr[Given]) -> Result[o
  * @param t The test's state.
  * @return Ok once it's dialed, kept in Given's manager; Error if a port couldn't be made or the dial failed.
  */
-dials_the_storage_manager #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+dials_the_storage_manager #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
-    dialing :: testing.require_some(t, given.storage, "main runs the tests only with a connector to the storage manager")?
+    dialing :: testing.require_some(
+        t,
+        given.storage,
+        "main runs the tests only with a connector to the storage manager"
+    )?
     budget :: slop_os.startup_block().budget
     dial_port :: os.port_for(budget, dialing.end)
     port_for_dial :: testing.require_some(t, dial_port, "the budget has room for a port")?
@@ -285,7 +302,7 @@ dials_the_storage_manager #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
  * @return Ok once it's run; Error if the partition couldn't be found, opened or described, its buffer had or mapped,
  *     it's too small, or a read or write the rest builds on failed.
  */
-the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     manager :: manager_of(t, given)?
     block_of_startup :: slop_os.startup_block()
@@ -305,7 +322,12 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
             case _ => break
         }
     }
-    testing.require_ne(t, found, cast[u32](0xffffffff), "tools/boot.py makes a partition named CHECKED, which the storage manager describes")?
+    testing.require_ne(
+        t,
+        found,
+        cast[u32](0xffffffff),
+        "tools/boot.py makes a partition named CHECKED, which the storage manager describes"
+    )?
     connection := os.Channel[block.Block].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match ask(manager.end, manager.port, .Open(found)) {
         case Opened(opened) => connection = opened
@@ -326,24 +348,50 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
         case Buffer(memory) => checked.window = memory
         case _ => return stopped(t, "a block connection gives its buffer when asked")
     }
-    testing.require_ge(t, info.block_count, 10, "tools/boot.py makes the partition 2048 blocks, past the 10 the check uses")?
+    testing.require_ge(
+        t,
+        info.block_count,
+        10,
+        "tools/boot.py makes the partition 2048 blocks, past the 10 the check uses"
+    )?
 
     // The host's mark, in block 0
-    testing.require_eq(t, run(&checked, .Read(block.Transfer.{tag = 1, first = 0, count = 1, offset = READ_AT})), block.Status.Done,
-        "block 0 of the partition reads")?
+    testing.require_eq(
+        t,
+        run(&checked, .Read(block.Transfer.{tag = 1, first = 0, count = 1, offset = READ_AT})),
+        block.Status.Done,
+        "block 0 of the partition reads"
+    )?
     testing.expect(t, starts_with(&checked, READ_AT, HOST_MARK), "tools/boot.py wrote its mark at the start of block 0")
     // Its own, in block 1, flushed, and read back
     put(&checked, WRITE_AT, GUEST_MARK)
-    testing.require_eq(t, run(&checked, .Write(block.Transfer.{tag = 2, first = 1, count = 1, offset = WRITE_AT})), block.Status.Done,
-        "block 1 of the partition is written")?
+    testing.require_eq(
+        t,
+        run(&checked, .Write(block.Transfer.{tag = 2, first = 1, count = 1, offset = WRITE_AT})),
+        block.Status.Done,
+        "block 1 of the partition is written"
+    )?
     testing.require_eq(t, run(&checked, .Flush(3)), block.Status.Done, "what was written is flushed to the disk")?
-    testing.require_eq(t, run(&checked, .Read(block.Transfer.{tag = 4, first = 1, count = 1, offset = CHECK_AT})), block.Status.Done,
-        "block 1 reads back")?
+    testing.require_eq(
+        t,
+        run(&checked, .Read(block.Transfer.{tag = 4, first = 1, count = 1, offset = CHECK_AT})),
+        block.Status.Done,
+        "block 1 reads back"
+    )?
     testing.expect(t, starts_with(&checked, CHECK_AT, GUEST_MARK), "block 1 reads back as it was written")
     // Eight at once, answered in whatever order the device finishes them
     for i in 0..<MANY {
-        send(&checked, .Read(block.Transfer.{tag = 100 + cast[u64](i), first = 2 + cast[u64](i), count = 1,
-            offset = MANY_AT + cast[u32](i) * cast[u32](block.BLOCK_BYTES)}))
+        send(
+            &checked,
+            .Read(
+                block.Transfer.{
+                    tag = 100 + cast[u64](i),
+                    first = 2 + cast[u64](i),
+                    count = 1,
+                    offset = MANY_AT + cast[u32](i) * cast[u32](block.BLOCK_BYTES),
+                }
+            )
+        )
     }
     answered := cast[u32](0)
     for i in 0..<MANY {
@@ -356,21 +404,44 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
             case _ => {}
         }
     }
-    testing.expect_eq(t, answered, (cast[u32](1) << MANY) - 1, "eight reads in flight at once are each answered Done, by its tag")
+    testing.expect_eq(
+        t,
+        answered,
+        (cast[u32](1) << MANY) - 1,
+        "eight reads in flight at once are each answered Done, by its tag"
+    )
     // The block past the partition's end, refused before it reaches the disk
-    testing.expect_eq(t, info.block_count, partition.info.count, "the connection is narrowed to the partition, so it has the partition's blocks")
-    testing.expect_eq(t, run(&checked, .Read(block.Transfer.{tag = 5, first = info.block_count, count = 1, offset = READ_AT})),
-        block.Status.OutOfRange, "a read past the partition's end is refused before it reaches the disk")
+    testing.expect_eq(
+        t,
+        info.block_count,
+        partition.info.count,
+        "the connection is narrowed to the partition, so it has the partition's blocks"
+    )
+    testing.expect_eq(
+        t,
+        run(&checked, .Read(block.Transfer.{tag = 5, first = info.block_count, count = 1, offset = READ_AT})),
+        block.Status.OutOfRange,
+        "a read past the partition's end is refused before it reaches the disk"
+    )
     wrong : u64? = null
     for i in 0..<MANY {
         storage_bytes : u8[16]
         label := text_buffer.make(storage_bytes)
         text_buffer.append_format(&label, "block %", 2 + i)
-        if (wrong is_none) && !starts_with(&checked, MANY_AT + cast[u32](i) * cast[u32](block.BLOCK_BYTES), text_buffer.as_string(&label)) {
+        if (wrong is_none)
+            && !starts_with(
+                &checked,
+                MANY_AT + cast[u32](i) * cast[u32](block.BLOCK_BYTES),
+                text_buffer.as_string(&label)
+            ) {
             wrong = 2 + cast[u64](i)
         }
     }
-    testing.expect_none(t, wrong, "tools/boot.py wrote each block's number at its start, and each read at once landed in its own place")
+    testing.expect_none(
+        t,
+        wrong,
+        "tools/boot.py wrote each block's number at its start, and each read at once landed in its own place"
+    )
     return .Ok
 }
 
@@ -383,7 +454,7 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t: ptr[m
  * @return Ok once it's run; Error if a host's file couldn't be read, or writing, making the directory, moving, listing
  *     or opening it failed.
  */
-std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+std_files_work_on_the_efi_system_partition #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     _ = working_directory_of(t, given)?
     host_read :: os.read_entire_file(HOST_FILE)
@@ -391,7 +462,12 @@ std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) ->
     long_read :: os.read_entire_file(LONG_FILE)
     long :: testing.require_ok(t, long_read, "tools/boot.py put a file with a long name on the EFI system partition")?
     testing.expect_eq(t, host, HOST_TEXT, "HOST_FILE holds what tools/boot.py wrote")
-    testing.expect_eq(t, long, LONG_TEXT, "the file with a long name holds what tools/boot.py wrote, found by its long name")
+    testing.expect_eq(
+        t,
+        long,
+        LONG_TEXT,
+        "the file with a long name holds what tools/boot.py wrote, found by its long name"
+    )
     written :: os.write_entire_file(GUEST_FILE, GUEST_TEXT)
     testing.require_none(t, written, "the EFI system partition takes a new file")?
     made_directory :: os.make_directory("EFI/SlopOS/made")
@@ -405,7 +481,8 @@ std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) ->
     // The bootloader's own files there, its seed and its last panic record (decisions/0134), aside
     count := entries.count
     for entry in entries {
-        if (entry.name == "hello.txt" && !entry.is_directory) || (entry.name == "made" && entry.is_directory)
+        if (entry.name == "hello.txt" && !entry.is_directory)
+            || (entry.name == "made" && entry.is_directory)
             || entry.name == "A long name, from the host.txt" {
             names += 1
         }
@@ -415,7 +492,12 @@ std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) ->
     }
     os.free_directory_listing(entries)
     testing.expect_eq(t, names, 3, "EFI/SlopOS lists the host's two files, and the directory made, as a directory")
-    testing.expect_eq(t, count, 3, "EFI/SlopOS lists nothing else but the bootloader's own files, the file having moved")
+    testing.expect_eq(
+        t,
+        count,
+        3,
+        "EFI/SlopOS lists nothing else but the bootloader's own files, the file having moved"
+    )
     opened :: os.open_directory("EFI/SlopOS/made")
     made :: testing.require_ok(t, opened, "the directory made opens")?
     defer os.close_directory(made)
@@ -423,7 +505,12 @@ std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) ->
     back :: testing.require_ok(t, back_read, "the file moved is in the directory it was moved to")?
     testing.expect_eq(t, back, GUEST_TEXT, "the file moved holds what was written, moved with it")
     above :: os.read_entire_file("../EFI/SlopOS/hello.txt")
-    testing.expect_error(t, above, .InvalidPath, "a path above the working directory is refused, as nothing above it is the process's")
+    testing.expect_error(
+        t,
+        above,
+        .InvalidPath,
+        "a path above the working directory is refused, as nothing above it is the process's"
+    )
     return .Ok
 }
 
@@ -435,7 +522,7 @@ std_files_work_on_the_efi_system_partition #test :: fn(t: ptr[mut testing.T]) ->
  * @param request The request, which holds no handles or arrays.
  * @return The answer, a copy; Unsupported if it couldn't be sent or the connection failed.
  */
-ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) -> storage.Response {
+ask :: fn(end : slop_os.Channel, port : slop_os.Port, request : storage.Request) -> storage.Response {
     out := os.Outgoing.{}
     made :: os.begin[storage.Request](&out)
     made^ = request
@@ -459,7 +546,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, request: storage.Request) ->
  *     one receive gives only when no other request is in flight.
  * @param request The request, copied into the message whole; it holds no handles or arrays to move.
  */
-send :: fn(disk: ptr[Disk], request: block.Request) {
+send :: fn(disk : ptr[Disk], request : block.Request) {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
     made^ = request
@@ -473,7 +560,7 @@ send :: fn(disk: ptr[Disk], request: block.Request) {
  *     fails.
  * @return The answer, a copy; Unsupported if the connection's gone.
  */
-receive :: fn(disk: ptr[Disk]) -> block.Response {
+receive :: fn(disk : ptr[Disk]) -> block.Response {
     into := os.Incoming.{}
     loop {
         match block.receive_response(disk.end, disk.port, &into, true) {
@@ -491,7 +578,7 @@ receive :: fn(disk: ptr[Disk]) -> block.Response {
  * @param request The request sent, copied whole: a Read or Write uses the connection's buffer, disk.window.
  * @return Its completion's status; DeviceError if the answer wasn't a completion, as when the connection's gone.
  */
-run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
+run :: fn(disk : ptr[Disk], request : block.Request) -> block.Status {
     send(disk, request)
     return match receive(disk) {
         case Finished(completion) => completion.status
@@ -507,7 +594,7 @@ run :: fn(disk: ptr[Disk], request: block.Request) -> block.Status {
  * @param offset Where in the buffer the block starts, in bytes; it and a block after it must be in the buffer.
  * @param text The text, at most block.BLOCK_BYTES bytes; what's past them is dropped.
  */
-put :: fn(disk: ptr[Disk], offset: u32, text: string) {
+put :: fn(disk : ptr[Disk], offset : u32, text : string) {
     bytes : u8[block.BLOCK_BYTES]
     for &byte, i in bytes {
         byte^ = if i < text.count { cast[u8](text[i]) } else { cast[u8](0) }
@@ -523,7 +610,7 @@ put :: fn(disk: ptr[Disk], offset: u32, text: string) {
  * @param text The bytes looked for, compared exactly, at most block.BLOCK_BYTES of them; empty is always there.
  * @return Whether the bytes there are text's; false if the buffer couldn't be read, or text is longer than a block.
  */
-starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
+starts_with :: fn(disk : ptr[Disk], offset : u32, text : string) -> bool {
     if cast[u64](text.count) > block.BLOCK_BYTES {
         return false
     }
@@ -551,7 +638,7 @@ starts_with :: fn(disk: ptr[Disk], offset: u32, text: string) -> bool {
  * @return Ok once it's run; Error if EFI/SlopOS couldn't be opened or narrowed, the set selected or listed, or a port
  *     made.
  */
-a_read_only_directory_selects_files_and_refuses_making_one #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_read_only_directory_selects_files_and_refuses_making_one #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     working_directory :: working_directory_of(t, given)?
     budget :: slop_os.startup_block().budget
@@ -605,12 +692,19 @@ a_read_only_directory_selects_files_and_refuses_making_one #test :: fn(t: ptr[mu
         }
     }
     while !ended && matched < 8
-    testing.expect_eq(t, matched, 2, "*.TXT matches the host's two files, ignoring case as FAT does, and not the directory the check made")
+    testing.expect_eq(
+        t,
+        matched,
+        2,
+        "*.TXT matches the host's two files, ignoring case as FAT does, and not the directory the check made"
+    )
     out = os.Outgoing.{}
     creating :: os.begin[file_set.Request](&out)
     creating^ = .OpenFile(file_set.OpenFile.{name = bytes_of(&out, "Made through the set.txt"), creation = .New})
     match ask_file_set(set, set_port, &out, &into) {
-        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "a set from a read-only directory makes no file, as it can't write")
+        case Failed(
+            error
+        ) => testing.expect_eq(t, error, .ReadOnly, "a set from a read-only directory makes no file, as it can't write")
         case _ => testing.fail(t, "a set from a read-only directory makes no file, as it can't write")
     }
     return .Ok
@@ -624,7 +718,7 @@ a_read_only_directory_selects_files_and_refuses_making_one #test :: fn(t: ptr[mu
  * @param text The text, as a path or a pattern.
  * @return Where the bytes are in the message, for a request's field.
  */
-bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] {
+bytes_of :: fn(out : ptr[mut os.Outgoing], text : string) -> slop_os.Relative[u8] {
     return os.append(out, string_bytes(text))
 }
 
@@ -638,7 +732,12 @@ bytes_of :: fn(out: ptr[mut os.Outgoing], text: string) -> slop_os.Relative[u8] 
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
+ask_dir :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -661,7 +760,12 @@ ask_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
+ask_read_only_dir :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> read_only_dir.Response {
     if read_only_dir.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -684,7 +788,12 @@ ask_read_only_dir :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut o
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-ask_file_set :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> file_set.Response {
+ask_file_set :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> file_set.Response {
     if file_set.send_request(end, port, out) is_some {
         return .Unsupported
     }

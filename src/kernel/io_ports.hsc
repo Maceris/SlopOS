@@ -53,14 +53,22 @@ IoPortError :: enum {
  * @error BudgetExceeded budget hadn't room for the object, or is closed.
  * @error OwnerGone owner is being destroyed; the range made for it is destroyed again.
  */
-create_io_ports :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, first: u32, count: u32) -> Result[ptr[mut IoPortRange], IoPortError] {
+create_io_ports :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    first : u32,
+    count : u32
+) -> Result[ptr[mut IoPortRange], IoPortError] {
     if !arch.has_io_ports() || count == 0 || cast[u64](first) + cast[u64](count) > 0x10000 {
         return .Error(.InvalidArgument)
     }
     object := cast[u64](0)
     match new_object(kernel, .IoPortRange, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { IoPortError.BudgetExceeded } else { IoPortError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(if error == .BudgetExceeded { IoPortError.BudgetExceeded } else { IoPortError.OutOfMemory })
     }
     ports :: cast[ptr[mut IoPortRange]](object)
     ports.first = first
@@ -83,7 +91,7 @@ create_io_ports :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, first: u
  * @param width How many bytes are read or written: 1, 2 or 4, so ports offset to offset + width - 1 are touched.
  * @return The port number, or null for another width, or when the ports touched aren't all in the range.
  */
-port_at :: fn(ports: ptr[IoPortRange], offset: u32, width: u32) -> u16? {
+port_at :: fn(ports : ptr[IoPortRange], offset : u32, width : u32) -> u16? {
     if (width != 1 && width != 2 && width != 4) || cast[u64](offset) + cast[u64](width) > cast[u64](ports.count) {
         return null
     }
@@ -96,8 +104,7 @@ port_at :: fn(ports: ptr[IoPortRange], offset: u32, width: u32) -> u16? {
  * @param kernel Unused: the range holds nothing of the kernel's.
  * @param ports The range being destroyed.
  */
-destroy_io_port_range :: fn(kernel: ptr[mut Kernel], ports: ptr[mut IoPortRange]) {
-}
+destroy_io_port_range :: fn(kernel : ptr[mut Kernel], ports : ptr[mut IoPortRange]) {}
 
 /**
  * Release a destroyed range of I/O ports' memory, as release_object does each kind once no CPU can still use it:
@@ -106,5 +113,4 @@ destroy_io_port_range :: fn(kernel: ptr[mut Kernel], ports: ptr[mut IoPortRange]
  * @param kernel Unused: the range holds nothing of the kernel's.
  * @param ports The destroyed range, whose memory release_object frees after this.
  */
-release_io_port_range :: fn(kernel: ptr[mut Kernel], ports: ptr[mut IoPortRange]) {
-}
+release_io_port_range :: fn(kernel : ptr[mut Kernel], ports : ptr[mut IoPortRange]) {}

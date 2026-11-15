@@ -9,7 +9,8 @@ import bundle from "../../bundle"
  * The bundle store's protocol (roadmap 9b, decisions/0094, design/software.md §2): objects by their BLAKE3-256 hashes.
  * Get gives an object as paged memory, read-only, which the store pages in as it's touched, one memory object per
  * object however many ask for it, which stays open while the store runs; Read gives a small one, a record, a manifest
- * or a program's documentation, as a copy of its own, keeping nothing open; Put takes one from memory given, kept only if its bytes have the hash given. Roots
+ * or a program's documentation, as a copy of its own, keeping nothing open; Put takes one from memory given, kept only
+ * if its bytes have the hash given. Roots
  * keep objects, and what bundles and roots they are refer to, from Collect, which removes everything else: the boot
  * root, and pins by name. Connections arrive on its listener, and as Connects. The pages it has supplied are a cache
  * it gives back under pressure on its budget (decisions/0111): CacheLimit sets how much of them it keeps, and
@@ -135,7 +136,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for every request: putting, pinning or collecting again changes nothing more.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return true
 }
 
@@ -154,7 +155,12 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The answer, copied out of into; Unsupported if the request couldn't be sent, the connection's gone, or its
  *     answer isn't the protocol.
  */
-ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
+ask :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
     }

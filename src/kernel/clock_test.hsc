@@ -28,8 +28,13 @@ CLOCK_TEST_SLACK : i64 : 1_000_000
  * @param kernel Not used: the test finds the kernel through per_cpu, whose counter_frequency has to be set (the timer
  *     started).
  */
-test_clock :: fn(kernel: ptr[Kernel]) {
-    _ = run_tests("test_clock", testing.Test.[.{name = "ten_ms_by_the_counter_is_ten_ms_by_the_clock", run = ten_ms_by_the_counter_is_ten_ms_by_the_clock}])
+test_clock :: fn(kernel : ptr[Kernel]) {
+    _ = run_tests(
+        "test_clock",
+        testing.Test.[
+            .{name = "ten_ms_by_the_counter_is_ten_ms_by_the_clock", run = ten_ms_by_the_counter_is_ten_ms_by_the_clock}
+        ]
+    )
 }
 
 /**
@@ -38,7 +43,7 @@ test_clock :: fn(kernel: ptr[Kernel]) {
  * @param t The test's state.
  * @return Ok once it's run.
  */
-ten_ms_by_the_counter_is_ten_ms_by_the_clock #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+ten_ms_by_the_counter_is_ten_ms_by_the_clock #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
     start :: time.monotonic()
     counter_start :: arch.counter()
@@ -47,7 +52,12 @@ ten_ms_by_the_counter_is_ten_ms_by_the_clock #test :: fn(t: ptr[mut testing.T]) 
     }
     while arch.counter() - counter_start < kernel.counter_frequency / 100
     elapsed :: cast[i64](time.monotonic()) - cast[i64](start)
-    testing.expect_within(t, elapsed, CLOCK_TEST_NANOSECONDS, CLOCK_TEST_NANOSECONDS + CLOCK_TEST_SLACK,
-        "the clock counts the counter's ticks, so 10 ms by the counter is 10 ms by it, give or take reading the two apart")
+    testing.expect_within(
+        t,
+        elapsed,
+        CLOCK_TEST_NANOSECONDS,
+        CLOCK_TEST_NANOSECONDS + CLOCK_TEST_SLACK,
+        "the clock counts the counter's ticks, so 10 ms by the counter is 10 ms by it, give or take reading the two apart"
+    )
     return .Ok
 }

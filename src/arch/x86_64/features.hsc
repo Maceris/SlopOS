@@ -80,7 +80,7 @@ FEATURE_BITS :: FeatureBit.[
     .{.X86Syscall, 0x80000001, 0, .Edx, 11},
     .{.X86NoExecute, 0x80000001, 0, .Edx, 20},
     .{.X86Pages1G, 0x80000001, 0, .Edx, 26},
-    .{.X86InvariantTsc, 0x80000007, 0, .Edx, 8},
+    .{.X86InvariantTsc, 0x80000007, 0, .Edx, 8}
 ]
 
 /**
@@ -88,9 +88,25 @@ FEATURE_BITS :: FeatureBit.[
  * includes v2, plus no-execute for W^X, SYSCALL, and a local APIC.
  */
 BASELINE :: slop_os.CpuFeature.[
-    .X86Cx16, .X86LahfSahf, .X86Popcnt, .X86Sse3, .X86Ssse3, .X86Sse41, .X86Sse42,
-    .X86Avx, .X86Avx2, .X86Bmi1, .X86Bmi2, .X86F16c, .X86Fma, .X86Lzcnt, .X86Movbe, .X86Xsave,
-    .X86NoExecute, .X86Syscall, .X86Apic,
+    .X86Cx16,
+    .X86LahfSahf,
+    .X86Popcnt,
+    .X86Sse3,
+    .X86Ssse3,
+    .X86Sse41,
+    .X86Sse42,
+    .X86Avx,
+    .X86Avx2,
+    .X86Bmi1,
+    .X86Bmi2,
+    .X86F16c,
+    .X86Fma,
+    .X86Lzcnt,
+    .X86Movbe,
+    .X86Xsave,
+    .X86NoExecute,
+    .X86Syscall,
+    .X86Apic
 ]
 
 /**
@@ -101,7 +117,7 @@ BASELINE :: slop_os.CpuFeature.[
  *     is simply not in the set.
  * @return Whether it's in the set.
  */
-has :: fn(features: ptr[slop_os.CpuFeatures], feature: slop_os.CpuFeature) -> bool {
+has :: fn(features : ptr[slop_os.CpuFeatures], feature : slop_os.CpuFeature) -> bool {
     return slop_os.has_feature(features, feature)
 }
 
@@ -135,7 +151,7 @@ detect_features :: fn() -> slop_os.CpuFeatures {
  * @param register Which register.
  * @return That register's value.
  */
-register_of :: fn(result: x86_64.CpuidResult, register: CpuidRegister) -> u32 {
+register_of :: fn(result : x86_64.CpuidResult, register : CpuidRegister) -> u32 {
     return match register {
         case .Eax => result.eax
         case .Ebx => result.ebx
@@ -150,7 +166,7 @@ register_of :: fn(result: x86_64.CpuidResult, register: CpuidRegister) -> u32 {
  * @param features The CPU's features, from detect_features.
  * @return The feature's name, as feature_name gives it, a constant string, or null if it has every one.
  */
-missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
+missing_baseline_feature :: fn(features : ptr[slop_os.CpuFeatures]) -> string? {
     for feature in BASELINE {
         if !has(features, feature) {
             return feature_name(feature)
@@ -165,7 +181,7 @@ missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
  * @param feature The feature, one of BASELINE's to be named.
  * @return The name, a constant string; "a feature" for any feature not in BASELINE.
  */
-feature_name :: fn(feature: slop_os.CpuFeature) -> string {
+feature_name :: fn(feature : slop_os.CpuFeature) -> string {
     return match feature {
         case .X86Cx16 => "CMPXCHG16B"
         case .X86LahfSahf => "LAHF/SAHF"

@@ -1,5 +1,6 @@
 /**
- * connect: open a TCP connection, send a message, and show what comes back until the other end finishes (decisions/0188,
+ * connect: open a TCP connection, send a message, and show what comes back until the other end finishes
+ * (decisions/0188,
  * 13c). It reaches the network through the session's connection, which allows public addresses; for an address it
  * doesn't allow, as a private one, it asks the powerbox for a connection to that address and port, which the user
  * allows, or doesn't, on the trusted path.
@@ -11,11 +12,11 @@ package connect
 import runtime from "base:runtime"
 import net from "std:net"
 import os from "std:os"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
 import net_address from "std:os/slop_os/net_address"
 import network from "std:os/slop_os/network"
 import stream from "std:os/slop_os/stream"
+import text_buffer from "std:text_buffer"
 import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** The most bytes of what comes back that are shown: 4 KiB. */
@@ -70,10 +71,19 @@ ConnectError :: union {
  * @param output Where what comes back goes, a line at a time; without it, it's only counted.
  * @return How many bytes came back; or what went wrong.
  */
-main :: fn(address: string, port: u16, message: string, network: os.Channel[network.Network],
-    powerbox: os.Channel[powerbox_protocol.Powerbox]?, output: os.Sink[Line]?) -> Result[u64, ConnectError] {
-    to :: net_address.Endpoint.{address = net_address.parse_v4(address) or_return .Error(.BadAddress(Problem.{
-        parameter = os.ParameterName.{name = "address"}})), port = port}
+main :: fn(
+    address : string,
+    port : u16,
+    message : string,
+    network : os.Channel[network.Network],
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?,
+    output : os.Sink[Line]?
+) -> Result[u64, ConnectError] {
+    to :: net_address.Endpoint.{
+        address = net_address.parse_v4(address)
+            or_return .Error(.BadAddress(Problem.{parameter = os.ParameterName.{name = "address"}})),
+        port = port,
+    }
     tcp := match net.open(network, to) {
         case Ok(opened) => opened
         case Error(failure) => {
@@ -84,7 +94,11 @@ main :: fn(address: string, port: u16, message: string, network: os.Channel[netw
             allowed :: ask(powerbox, to) or_return .Error(.NotAllowed)
             match net.open(allowed, to) {
                 case Ok(opened) => opened
-                case Error(again) => return .Error(if again == .NotAllowed { ConnectError.NotAllowed } else { ConnectError.Failed(failure_of(again)) })
+                case Error(
+                    again
+                ) => return .Error(
+                    if again == .NotAllowed { ConnectError.NotAllowed } else { ConnectError.Failed(failure_of(again)) }
+                )
             }
         }
     }
@@ -149,15 +163,23 @@ main :: fn(address: string, port: u16, message: string, network: os.Channel[netw
  * @param to The endpoint.
  * @return The connection the user allowed; null if they didn't, or there's no powerbox.
  */
-ask :: fn(powerbox: os.Channel[powerbox_protocol.Powerbox]?, to: net_address.Endpoint) -> os.Channel[network.Network]? {
+ask :: fn(
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?,
+    to : net_address.Endpoint
+) -> os.Channel[network.Network]? {
     box :: powerbox or_return null
     port :: os.port_for(slop_os.startup_block().budget, box.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     rule :: network.range_rule(to.address, 32, network.TRANSPORT_TCP, to.port, to.port)
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestNetwork(powerbox_protocol.NetworkRequest.{purpose = os.append(&out, string_bytes("to send it a message")),
-        connect = os.append(&out, network.Rule.[rule]), listen = os.append(&out, network.Rule.[])})
+    request^ = .RequestNetwork(
+        powerbox_protocol.NetworkRequest.{
+            purpose = os.append(&out, string_bytes("to send it a message")),
+            connect = os.append(&out, network.Rule.[rule]),
+            listen = os.append(&out, network.Rule.[]),
+        }
+    )
     if powerbox_protocol.send_request(box.end, port, &out) is_some {
         return null
     }
@@ -178,7 +200,7 @@ ask :: fn(powerbox: os.Channel[powerbox_protocol.Powerbox]?, to: net_address.End
  * @param failure std/net's.
  * @return Its own.
  */
-failure_of :: fn(failure: net.Failure) -> Failure {
+failure_of :: fn(failure : net.Failure) -> Failure {
     return match failure {
         case .Refused => .Refused
         case .TimedOut => .TimedOut

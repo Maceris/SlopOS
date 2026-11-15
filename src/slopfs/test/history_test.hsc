@@ -27,7 +27,7 @@ Kept :: struct {
  * @param t The test's state, which a failure is recorded in.
  * @return The volume apart, the caller's to free with free_kept; Error if any of it failed, the failure recorded.
  */
-kept_volume :: fn(t: ptr[mut testing.T]) -> Result[Kept, testing.Stopped] {
+kept_volume :: fn(t : ptr[mut testing.T]) -> Result[Kept, testing.Stopped] {
     device :: formatted(t, BLOCKS, 0)?
     mounting :: slopfs.mount(device)
     container :: match mounting {
@@ -39,7 +39,8 @@ kept_volume :: fn(t: ptr[mut testing.T]) -> Result[Kept, testing.Stopped] {
         }
     }
     creating :: slopfs.create_volume(container, "h", key_of_volume(), 1)
-    if !testing.expect_ok(t, creating, "a new container has room for a volume") || !commits(t, container, "a new volume commits") {
+    if !testing.expect_ok(t, creating, "a new container has room for a volume")
+        || !commits(t, container, "a new volume commits") {
         slopfs.unmount(container)
         free_device(device)
         return .Error(.Failed)
@@ -63,13 +64,15 @@ kept_volume :: fn(t: ptr[mut testing.T]) -> Result[Kept, testing.Stopped] {
  *
  * @param kept The volume, which isn't used after.
  */
-free_kept :: fn(kept: Kept) {
+free_kept :: fn(kept : Kept) {
     free_apart(kept.made)
     slopfs.unmount(kept.container)
     free_device(kept.device)
 }
 
-changes_come_in_order_beneath_a_directory_and_past_the_budget_resync #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+changes_come_in_order_beneath_a_directory_and_past_the_budget_resync #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     kept :: kept_volume(t)?
     defer free_kept(kept)
     volume :: kept.made.volume
@@ -129,7 +132,9 @@ changes_come_in_order_beneath_a_directory_and_past_the_budget_resync #test :: fn
     return .Ok
 }
 
-a_file_replaced_whole_reads_old_until_given_back_and_a_lost_orphan_is_swept #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_file_replaced_whole_reads_old_until_given_back_and_a_lost_orphan_is_swept #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     kept :: kept_volume(t)?
     defer free_kept(kept)
     volume :: kept.made.volume
@@ -157,10 +162,18 @@ a_file_replaced_whole_reads_old_until_given_back_and_a_lost_orphan_is_swept #tes
     now :: testing.require_ok(t, looking_now, "the name is looked up again")?
     reading_now :: slopfs.read(volume, now or_else 0, 0, back)
     read_now :: testing.require_ok(t, reading_now, "the name names a file that reads")?
-    testing.expect_none(t, difference(slopfs.part(back, 0, read_now), text_bytes("the new contents")), "the name reads as the replacement")
+    testing.expect_none(
+        t,
+        difference(slopfs.part(back, 0, read_now), text_bytes("the new contents")),
+        "the name reads as the replacement"
+    )
     reading_old :: slopfs.read(volume, old, 0, back)
     read_old :: testing.require_ok(t, reading_old, "the old file, orphaned, still reads")?
-    testing.expect_none(t, difference(slopfs.part(back, 0, read_old), text_bytes("some mores")), "the old file reads as it was until it's given back")
+    testing.expect_none(
+        t,
+        difference(slopfs.part(back, 0, read_old), text_bytes("some mores")),
+        "the old file reads as it was until it's given back"
+    )
     releasing :: slopfs.release_orphan(volume, old)
     testing.expect_ok(t, releasing, "the old file, orphaned, is given back")
     // An orphan left behind, as a crash would leave a replacement never installed, is swept
@@ -173,7 +186,9 @@ a_file_replaced_whole_reads_old_until_given_back_and_a_lost_orphan_is_swept #tes
     return .Ok
 }
 
-everything_since_a_commit_is_forgotten_and_undone_leaving_nothing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+everything_since_a_commit_is_forgotten_and_undone_leaving_nothing #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     kept :: kept_volume(t)?
     defer free_kept(kept)
     volume :: kept.made.volume
@@ -217,6 +232,6 @@ everything_since_a_commit_is_forgotten_and_undone_leaving_nothing #test :: fn(t:
  * @param text The text, whose bytes are viewed, not copied.
  * @return Its bytes, a view of it.
  */
-text_bytes :: fn(text: string) -> u8[] {
+text_bytes :: fn(text : string) -> u8[] {
     return string_bytes(text)
 }

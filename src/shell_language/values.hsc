@@ -1,9 +1,9 @@
 package shell_language
 
 import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
 import text_buffer from "std:text_buffer"
 import unicode from "std:unicode"
-import slop_os from "std:os/slop_os"
 
 /*
  * The shell's values (design/shell.md §2): typed, never re-parsed as text. Sizes are bytes and durations nanoseconds;
@@ -99,7 +99,7 @@ new_record :: fn() -> ptr[mut RecordValue] {
  * @param name The field's name, compared exactly.
  * @return The field's value, a copy sharing any list or record in it; null if the record has no such field.
  */
-field :: fn(record: ptr[RecordValue], name: string) -> Value? {
+field :: fn(record : ptr[RecordValue], name : string) -> Value? {
     for each, i in record.names {
         if each == name && i < record.values.count {
             return record.values[i]
@@ -115,7 +115,7 @@ field :: fn(record: ptr[RecordValue], name: string) -> Value? {
  * @param name The field's name, kept by the record as it's given when the field is added, so it has to live as long.
  * @param value The value, kept by the record.
  */
-set_field :: fn(record: ptr[mut RecordValue], name #escaping : string, value #escaping : Value) {
+set_field :: fn(record : ptr[mut RecordValue], name #escaping : string, value #escaping : Value) {
     for each, i in record.names {
         if each == name && i < record.values.count {
             record.values[i] = value
@@ -132,7 +132,7 @@ set_field :: fn(record: ptr[mut RecordValue], name #escaping : string, value #es
  * @param value Any value; only its kind is looked at, not what it holds.
  * @return Its kind with an article, like "an integer", or "null"; a literal, never freed.
  */
-type_name :: fn(value: Value) -> string {
+type_name :: fn(value : Value) -> string {
     return match value {
         case Null => "null"
         case Bool(_) => "a bool"
@@ -166,7 +166,7 @@ type_name :: fn(value: Value) -> string {
  * @param columns How wide a table may be, in the terminal's columns (decisions/0181, F1): wider, its widest columns are
  *     narrowed until it fits, and cells cut, ending in …; 0 for no limit.
  */
-render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = false, columns: usize = 0) {
+render :: fn(out : ptr[mut text_buffer.TextBuffer], value : Value, nested : bool = false, columns : usize = 0) {
     match value {
         case Null => text_buffer.append(out, "null")
         case Bool(truth) => text_buffer.append(out, if truth { "true" } else { "false" })
@@ -252,7 +252,7 @@ render :: fn(out: ptr[mut text_buffer.TextBuffer], value: Value, nested: bool = 
  * @param out The text appended to.
  * @param number The number, any i64, the smallest included.
  */
-append_signed :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
+append_signed :: fn(out : ptr[mut text_buffer.TextBuffer], number : i64) {
     if number < 0 {
         text_buffer.append(out, "-")
     }
@@ -265,7 +265,7 @@ append_signed :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
  * @param number The number, any i64.
  * @return Its magnitude: 2^63 for the smallest i64, which has no positive i64.
  */
-magnitude_of :: fn(number: i64) -> u64 {
+magnitude_of :: fn(number : i64) -> u64 {
     // Negated as a u64, which wraps where an i64 would overflow
     return if number < 0 { 0 - cast[u64](number) } else { cast[u64](number) }
 }
@@ -280,7 +280,7 @@ SIZE_UNITS :: string.["B", "KiB", "MiB", "GiB", "TiB"]
  * @param out The text appended to.
  * @param bytes The size, in bytes; past 1023 TiB it's still shown in TiB.
  */
-append_size :: fn(out: ptr[mut text_buffer.TextBuffer], bytes: u64) {
+append_size :: fn(out : ptr[mut text_buffer.TextBuffer], bytes : u64) {
     unit : usize = 0
     whole := bytes
     tenths := cast[u64](0)
@@ -307,7 +307,7 @@ append_size :: fn(out: ptr[mut text_buffer.TextBuffer], bytes: u64) {
  * @param out The text appended to.
  * @param nanos The duration, in nanoseconds; negative ones get a '-'. 0 is written "0 ns".
  */
-append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
+append_duration :: fn(out : ptr[mut text_buffer.TextBuffer], nanos : i64) {
     if nanos < 0 {
         text_buffer.append(out, "-")
     }
@@ -332,7 +332,7 @@ append_duration :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
  * @param out The text appended to.
  * @param nanos Nanoseconds since 1970-01-01T00:00:00Z; negative before it, rounded down to the second.
  */
-append_instant :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
+append_instant :: fn(out : ptr[mut text_buffer.TextBuffer], nanos : i64) {
     seconds :: if nanos >= 0 { nanos / 1000000000 } else { (nanos - 999999999) / 1000000000 }
     days :: if seconds >= 0 { seconds / 86400 } else { (seconds - 86399) / 86400 }
     in_day :: seconds - days * 86400
@@ -366,7 +366,7 @@ append_instant :: fn(out: ptr[mut text_buffer.TextBuffer], nanos: i64) {
  * @param out The text appended to.
  * @param number The number, 0 to 99.
  */
-append_two :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
+append_two :: fn(out : ptr[mut text_buffer.TextBuffer], number : i64) {
     if number < 10 {
         text_buffer.append(out, "0")
     }
@@ -379,7 +379,7 @@ append_two :: fn(out: ptr[mut text_buffer.TextBuffer], number: i64) {
  * @param list The list looked at, read only.
  * @return True if it has items and every one's a record.
  */
-is_table :: fn(list: ptr[ValueList]) -> bool {
+is_table :: fn(list : ptr[ValueList]) -> bool {
     for item in list.items {
         match item {
             case Record(_) => {}
@@ -401,7 +401,7 @@ is_table :: fn(list: ptr[ValueList]) -> bool {
  * @param list The list, every item a record (is_table); an item that isn't is a blank row.
  * @param columns How wide the table may be, in columns; 0 for no limit.
  */
-render_table :: fn(out: ptr[mut text_buffer.TextBuffer], list: ptr[ValueList], columns: usize = 0) {
+render_table :: fn(out : ptr[mut text_buffer.TextBuffer], list : ptr[ValueList], columns : usize = 0) {
     names : string[..]
     defer runtime.array_free(&names)
     widths : usize[..]
@@ -465,7 +465,7 @@ MIN_COLUMN :: 4
  * @param widths The columns' widths, changed in place.
  * @param columns How wide the table may be, two spaces between its columns counted.
  */
-fit_widths :: fn(widths: ptr[mut usize[..]], columns: usize) {
+fit_widths :: fn(widths : ptr[mut usize[..]], columns : usize) {
     loop {
         total := cast[usize](0)
         widest := cast[usize](0)
@@ -496,7 +496,7 @@ fit_widths :: fn(widths: ptr[mut usize[..]], columns: usize) {
  * @param wide The most columns it may take; 0 appends nothing.
  * @return How many columns were appended.
  */
-append_cut :: fn(out: ptr[mut text_buffer.TextBuffer], text: string, wide: usize) -> usize {
+append_cut :: fn(out : ptr[mut text_buffer.TextBuffer], text : string, wide : usize) -> usize {
     whole :: width_of(text)
     if whole <= wide {
         text_buffer.append(out, text)
@@ -536,7 +536,7 @@ append_cut :: fn(out: ptr[mut text_buffer.TextBuffer], text: string, wide: usize
  * @param text The text, UTF-8 or not, only read.
  * @return The columns it takes (unicode.text_width): wide characters 2, accents 0, a byte that isn't UTF-8 1.
  */
-width_of :: fn(text: string) -> usize {
+width_of :: fn(text : string) -> usize {
     return unicode.text_width(string_bytes(text))
 }
 
@@ -547,7 +547,7 @@ width_of :: fn(text: string) -> usize {
  * @param item The row's record; nothing's appended for anything else.
  * @param column The field's name; nothing's appended if the record hasn't the field.
  */
-render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: string) {
+render_cell :: fn(out : ptr[mut text_buffer.TextBuffer], item : Value, column : string) {
     match item {
         case Record(record) => {
             value :: field(record, column) or_return void
@@ -567,7 +567,7 @@ render_cell :: fn(out: ptr[mut text_buffer.TextBuffer], item: Value, column: str
  * @param column The field's name; 0 if the record hasn't the field.
  * @return The columns the cell takes (width_of), of its first 256 bytes: what's past them isn't counted.
  */
-cell_width :: fn(item: Value, column: string) -> usize {
+cell_width :: fn(item : Value, column : string) -> usize {
     storage : u8[256]
     out := text_buffer.make(storage)
     render_cell(&out, item, column)
@@ -580,7 +580,7 @@ cell_width :: fn(item: Value, column: string) -> usize {
  * @param out The text appended to.
  * @param count How many spaces.
  */
-pad :: fn(out: ptr[mut text_buffer.TextBuffer], count: usize) {
+pad :: fn(out : ptr[mut text_buffer.TextBuffer], count : usize) {
     for i in 0..<count {
         text_buffer.append(out, " ")
     }

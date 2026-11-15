@@ -24,6 +24,7 @@ package test_kit
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+
 #if TARGET_ARCH == .arm64 {
     import aarch64 from "base:intrinsics/aarch64"
 }
@@ -44,7 +45,7 @@ THREAD_STACK : u64 : 64 * 1024
  *     value is dropped.
  * @return 0 if result is Ok, or the error's u32 tag, widened, if it's an Error.
  */
-tag_of :: fn[T, E](result: Result[T, E]) -> u64 #no_context {
+tag_of :: fn[T, E](result : Result[T, E]) -> u64 #no_context {
     return match result {
         case Error(error) => cast[u64](cast[u32](error))
         case _ => 0
@@ -58,7 +59,7 @@ tag_of :: fn[T, E](result: Result[T, E]) -> u64 #no_context {
  * @param error The error a check expects, any of E's variants; only its tag is used.
  * @return The error's u32 tag, widened, the same word tag_of gives for a result with that error.
  */
-tag :: fn[E](error: E) -> u64 #no_context {
+tag :: fn[E](error : E) -> u64 #no_context {
     return cast[u64](cast[u32](error))
 }
 
@@ -78,7 +79,7 @@ tag :: fn[E](error: E) -> u64 #no_context {
  * @return 0 if every expected value matched, otherwise the index of the first result that didn't, counted from 1,
  *     so a test's exit code says which check failed.
  */
-check :: fn(log: slop_os.DebugLog, name: string, results: u64[], expected: u64[]) -> int {
+check :: fn(log : slop_os.DebugLog, name : string, results : u64[], expected : u64[]) -> int {
     for value, i in expected {
         found :: if i < results.count { results[i] } else { cast[u64](0xffffffffffffffff) }
         if found != value {
@@ -103,7 +104,7 @@ LogReporter :: struct #scoped {
  * @param target The LogReporter, which lasts while run does.
  * @param text The line, ending with its newline, which log_line adds again, so it's taken off.
  */
-write_log :: fn(target: rawptr, text: string) {
+write_log :: fn(target : rawptr, text : string) {
     reporting :: cast[ptr[LogReporter]](target)
     line :: if text.count > 0 && text[text.count - 1] == '\n' { text[0..<text.count - 1] } else { text }
     log_line.write(reporting.log, "%: %", reporting.name, line)
@@ -121,7 +122,7 @@ write_log :: fn(target: rawptr, text: string) {
  *     pushed as a context extension while the tests run; the copy is freed after.
  * @return How many tests failed, main's exit code: 0 when all passed.
  */
-run :: fn[G](log: slop_os.DebugLog, name: string, tests: testing.Test[], state: G) -> int {
+run :: fn[G](log : slop_os.DebugLog, name : string, tests : testing.Test[], state : G) -> int {
     reporting := LogReporter.{log = log, name = name}
     reporter :: testing.Reporter.{target = cast[rawptr](&reporting), write = write_log}
     held :: runtime.new(G)
@@ -142,7 +143,7 @@ run :: fn[G](log: slop_os.DebugLog, name: string, tests: testing.Test[], state: 
  * @param G What main was given, the type it passed to run.
  * @return It; Error(Failed), recorded, when the test wasn't run by run with a G.
  */
-given :: fn[G](t: ptr[mut testing.T], G: type, location := #caller_location) -> Result[ptr[mut G], testing.Stopped] {
+given :: fn[G](t : ptr[mut testing.T], G : type, location := #caller_location) -> Result[ptr[mut G], testing.Stopped] {
     found :: runtime.get_extension(G)
     held :: testing.require_some(t, found, "the test was run by test_kit.run with what main was given", location)?
     // run's own heap copy, which the tests may change for those after them
@@ -165,7 +166,11 @@ given :: fn[G](t: ptr[mut testing.T], G: type, location := #caller_location) -> 
  *     kernel had no memory for the thread.
  * @error ObjectGone The process or its address space was destroyed.
  */
-start_thread :: fn(budget: slop_os.MemoryBudget, entry: u64, argument: u64) -> Result[slop_os.Thread, slop_os.HandleError] {
+start_thread :: fn(
+    budget : slop_os.MemoryBudget,
+    entry : u64,
+    argument : u64
+) -> Result[slop_os.Thread, slop_os.HandleError] {
     block :: slop_os.startup_block()
     stack :: slop_os.memory_create(block.budget, THREAD_STACK) or_return .Error(.OutOfMemory)
     address :: runtime.reserve_addresses(cast[usize](THREAD_STACK)) or_return .Error(.OutOfMemory)
@@ -191,7 +196,7 @@ clock_now :: fn() -> u64 #no_context {
  * @param nanoseconds How long to wait at least; it may be longer, by however long the thread isn't run. 0 still reads
  *     the clock once more before returning.
  */
-wait_nanoseconds :: fn(nanoseconds: u64) #no_context {
+wait_nanoseconds :: fn(nanoseconds : u64) #no_context {
     started :: clock_now()
     loop {
         intrinsics.spin_hint()
@@ -207,7 +212,7 @@ wait_nanoseconds :: fn(nanoseconds: u64) #no_context {
  * @param nanoseconds How long to wait at most, on the monotonic clock; 0 checks only once or twice.
  * @return True if the word wasn't 0 by the time the wait ended, false if it still was after nanoseconds.
  */
-wait_for :: fn(address: ptr[u64], nanoseconds: u64) -> bool #no_context {
+wait_for :: fn(address : ptr[u64], nanoseconds : u64) -> bool #no_context {
     started :: clock_now()
     loop {
         if intrinsics.volatile_load_u64(address) != 0 {
@@ -226,7 +231,7 @@ wait_for :: fn(address: ptr[u64], nanoseconds: u64) -> bool #no_context {
  * @return The bytes charged to it, or all ones (0xffffffffffffffff) if memory_budget_info failed, as for a handle
  *     that isn't a budget, which no check of a real amount will match.
  */
-used :: fn(budget: slop_os.MemoryBudget) -> u64 #no_context {
+used :: fn(budget : slop_os.MemoryBudget) -> u64 #no_context {
     info :: slop_os.memory_budget_info(budget) or_else slop_os.BudgetInfo.{used = 0xffffffffffffffff}
     return info.used
 }
@@ -242,7 +247,7 @@ used :: fn(budget: slop_os.MemoryBudget) -> u64 #no_context {
  * @param nanoseconds How long to wait at most, on the monotonic clock.
  * @return True if the budget's charge was at most at_most by the time the wait ended, false if it still wasn't.
  */
-wait_for_budget :: fn(budget: slop_os.MemoryBudget, at_most: u64, nanoseconds: u64) -> bool #no_context {
+wait_for_budget :: fn(budget : slop_os.MemoryBudget, at_most : u64, nanoseconds : u64) -> bool #no_context {
     started :: clock_now()
     loop {
         if used(budget) <= at_most {
@@ -262,7 +267,7 @@ wait_for_budget :: fn(budget: slop_os.MemoryBudget, at_most: u64, nanoseconds: u
  * @param count How many packets the view has, not bytes.
  * @return A slice of count packets at address, which doesn't own them.
  */
-packets_at :: fn(address: u64, count: usize) -> mut slop_os.Packet[] #no_context {
+packets_at :: fn(address : u64, count : usize) -> mut slop_os.Packet[] #no_context {
     return bit_cast[mut slop_os.Packet[]](usize.[count, cast[usize](address)])
 }
 
@@ -274,7 +279,7 @@ packets_at :: fn(address: u64, count: usize) -> mut slop_os.Packet[] #no_context
  * @param count How many bytes the view has.
  * @return A slice of count bytes at address, which doesn't own them.
  */
-bytes_at :: fn(address: u64, count: usize) -> mut u8[] #no_context {
+bytes_at :: fn(address : u64, count : usize) -> mut u8[] #no_context {
     return bit_cast[mut u8[]](usize.[count, cast[usize](address)])
 }
 
@@ -285,7 +290,7 @@ bytes_at :: fn(address: u64, count: usize) -> mut u8[] #no_context {
  * @param word The word, whose low 32 bits are the handle; the rest are ignored.
  * @return The handle, which is borrowed: the word doesn't own it, and it's still the one handle, not a copy.
  */
-handle_at :: fn[H](word: u64) -> H #no_context {
+handle_at :: fn[H](word : u64) -> H #no_context {
     return cast[H](cast[slop_os.Handle](cast[u32](word)))
 }
 
@@ -330,7 +335,9 @@ tamper_with_return : runtime.ThreadFunction : fn(data #escaping : any) {
     }
 }
 
-/** How many bytes into landing_target branch_into_the_middle branches: past its landing pad and the instruction after. */
+/**
+ * How many bytes into landing_target branch_into_the_middle branches: past its landing pad and the instruction after.
+ */
 MIDDLE_OFFSET : u64 : 8
 
 /**
@@ -373,4 +380,3 @@ write_own_shadow_stack : runtime.ThreadFunction : fn(data #escaping : any) {
         }
     }
 }
-

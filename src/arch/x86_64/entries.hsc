@@ -41,7 +41,7 @@ FIRST_INTERRUPT_VECTOR : u64 : 32
  * @param frame The interrupted code's registers, with the vector and error code, as the generated stub saved them on
  *     the entry's stack; valid until the entry returns or leaves for good.
  */
-kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.RegisterFrame]) {
+kernel_entry_point #calling_convention(.entry) :: fn(frame : ptr[mut x86_64.RegisterFrame]) {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
     vector :: frame.vector
     if vector == NMI_VECTOR {
@@ -49,8 +49,26 @@ kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.Regis
         cpu.carrier.stack_limit = cpu.critical_stack_limits[cast[u8](arch_interface.CriticalEvent.Nmi)]
         intrinsics.set_carrier(cpu.carrier)
         push_context entry from cpu.context^ {
-            registers :: u64.[frame.rax, frame.rbx, frame.rcx, frame.rdx, frame.rsi, frame.rdi, frame.rbp, frame.rsp, frame.r8, frame.r9,
-                frame.r10, frame.r11, frame.r12, frame.r13, frame.r14, frame.r15, frame.rip, frame.rflags]
+            registers :: u64.[
+                frame.rax,
+                frame.rbx,
+                frame.rcx,
+                frame.rdx,
+                frame.rsi,
+                frame.rdi,
+                frame.rbp,
+                frame.rsp,
+                frame.r8,
+                frame.r9,
+                frame.r10,
+                frame.r11,
+                frame.r12,
+                frame.r13,
+                frame.r14,
+                frame.r15,
+                frame.rip,
+                frame.rflags
+            ]
             kernel_entry.nmi(frame.rip, frame.rbp, registers[0..<registers.count])
         }
         cpu.carrier.stack_limit = saved_limit
@@ -81,7 +99,7 @@ kernel_entry_point #calling_convention(.entry) :: fn(frame: ptr[mut x86_64.Regis
  * @param frame The user's registers as the generated code saved them, passed on as UserRegisters to
  *     kernel_entry.syscall, which never returns.
  */
-system_call_entry #calling_convention(.syscall_entry) :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
+system_call_entry #calling_convention(.syscall_entry) :: fn(frame : ptr[mut x86_64.RegisterFrame]) #never_returns {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](x86_64.read_gs_base())
     cpu.carrier.stack_limit = cpu.kernel_stack_limit
     intrinsics.set_carrier(cpu.carrier)
@@ -96,7 +114,7 @@ system_call_entry #calling_convention(.syscall_entry) :: fn(frame: ptr[mut x86_6
  * @param frame The interrupted code's registers.
  * @return True if cs's RPL is 3, user mode; false for the kernel, ring 0.
  */
-from_user_mode :: fn(frame: ptr[x86_64.RegisterFrame]) -> bool {
+from_user_mode :: fn(frame : ptr[x86_64.RegisterFrame]) -> bool {
     return (frame.cs & 3) == 3
 }
 
@@ -109,7 +127,7 @@ from_user_mode :: fn(frame: ptr[x86_64.RegisterFrame]) -> bool {
  *
  * @param frame The interrupted code's registers, which become the thread's UserRegisters when it came from user mode.
  */
-dispatch :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
+dispatch :: fn(frame : ptr[mut x86_64.RegisterFrame]) #never_returns {
     vector :: frame.vector
     if vector < FIRST_INTERRUPT_VECTOR {
         fault :: decode_fault(vector, frame.error_code)
@@ -136,7 +154,7 @@ dispatch :: fn(frame: ptr[mut x86_64.RegisterFrame]) #never_returns {
  *     FloatingPoint for device-not-available, x87 and SIMD errors, Page with what decode_page_fault says, Alignment,
  *     and Protection for every other vector, the segment and protection faults among them.
  */
-decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
+decode_fault :: fn(vector : u64, error_code : u64) -> arch_interface.Fault {
     return match vector {
         case 0 => .Arithmetic
         case 1 => decode_debug()
@@ -165,7 +183,7 @@ decode_fault :: fn(vector: u64, error_code: u64) -> arch_interface.Fault {
  * @return The faulting virtual address, from CR2, which has to still be the fault's; the access, Execute for an
  *     instruction fetch, otherwise Write or Read; and whether a mapping was present.
  */
-decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
+decode_page_fault :: fn(error_code : u64) -> arch_interface.PageFault {
     access : arch_interface.Access = .Read
     if (error_code >> 4) & 1 == 1 {
         access = .Execute
@@ -192,7 +210,7 @@ decode_page_fault :: fn(error_code: u64) -> arch_interface.PageFault {
  * @return Device with the vector for device_interrupt_range's vectors, Timer, Ipi with its kind, or Spurious for
  *     SPURIOUS_VECTOR and any vector nothing raises.
  */
-interrupt_source :: fn(vector: u64) -> kernel_entry.InterruptSource {
+interrupt_source :: fn(vector : u64) -> kernel_entry.InterruptSource {
     if vector >= cast[u64](FIRST_DEVICE_VECTOR) && vector < cast[u64](FIRST_DEVICE_VECTOR + DEVICE_VECTOR_COUNT) {
         return .Device(cast[arch_interface.InterruptId](vector))
     }
@@ -223,7 +241,7 @@ interrupt_source :: fn(vector: u64) -> kernel_entry.InterruptSource {
  *
  * @param system The shared state whose 256 IDT entries are written.
  */
-fill_idt :: fn(system: ptr[mut ArchSystem]) {
+fill_idt :: fn(system : ptr[mut ArchSystem]) {
     points :: x86_64.entry_points(kernel_entry_point)
     for vector in 0..<256 {
         stack := IST_KERNEL
@@ -246,7 +264,7 @@ fill_idt :: fn(system: ptr[mut ArchSystem]) {
  * @param index Its place: rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, then rflags.
  * @return Its name, a constant; "?" past them.
  */
-nmi_register_name :: fn(index: usize) -> string {
+nmi_register_name :: fn(index : usize) -> string {
     return match index {
         case 0 => "rax"
         case 1 => "rbx"

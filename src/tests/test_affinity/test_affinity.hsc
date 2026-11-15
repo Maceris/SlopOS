@@ -12,9 +12,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
@@ -64,7 +64,7 @@ CopyGrants :: struct {
  *
  * @param slot The slot, a u64 in the shared page, which only this thread writes; it wraps after 2^64 counts.
  */
-counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64]) #never_returns {
+counter #calling_convention(.c) #no_context :: fn(slot : ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(slot, intrinsics.volatile_load_u64(slot) + 1)
     }
@@ -91,25 +91,53 @@ Given :: struct {
  * @return Ok once it's run; Error if main wasn't given the root budget, the process manager or its module, or the
  *     manager's port, the memory budget, a CPU budget, the page, a copy or the port it sleeps on couldn't be made.
  */
-threads_run_only_on_their_budget_cpus #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+threads_run_only_on_their_budget_cpus #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     root :: testing.require_some(t, given.cpu_budget, "the root task grants the root CPU budget")?
     loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
-    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
-    memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a memory budget for the CPU budgets")?
-    spinning :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 20, 10 * MILLISECOND, 15 * MILLISECOND), "the spinner's budget, one and a half CPUs at priority 20")?
-    budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 10, 10 * MILLISECOND, 4 * MILLISECOND), "the counter's budget, at priority 10")?
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(block.budget, loader.end),
+        "a port for the process manager's replies"
+    )?
+    memory :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 1 << 20),
+        "a memory budget for the CPU budgets"
+    )?
+    spinning :: testing.require_ok(
+        t,
+        slop_os.cpu_budget_create(root, memory, 20, 10 * MILLISECOND, 15 * MILLISECOND),
+        "the spinner's budget, one and a half CPUs at priority 20"
+    )?
+    budget :: testing.require_ok(
+        t,
+        slop_os.cpu_budget_create(root, memory, 10, 10 * MILLISECOND, 4 * MILLISECOND),
+        "the counter's budget, at priority 10"
+    )?
     testing.require_ok(t, slop_os.cpu_budget_set_cpus(spinning, CPU_0), "the spinner's budget is kept to CPU 0")?
     kept_to_0 :: slop_os.cpu_budget_set_cpus(budget, CPU_0)
     testing.expect_ok(t, kept_to_0, "a budget can be kept to an online CPU within its parent's")
     counts :: testing.require_ok(t, slop_os.memory_create(block.budget, PAGE), "the page the copies count in")?
     counts_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGE)), "addresses to map the page at")?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    testing.require_ok(t, slop_os.memory_map(counts, block.space, counts_at, 0, PAGE, read_write), "the page is mapped to read the counts")?
-    spinner :: testing.require_some(t, launch_copy(given.log, loader, manager_port, executable, counts, spinning, SLOT_SPINNER), "the spinner's copy is launched on its budget")?
-    copy :: testing.require_some(t, launch_copy(given.log, loader, manager_port, executable, counts, budget, SLOT_COUNTER), "the counter's copy is launched on its budget")?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(counts, block.space, counts_at, 0, PAGE, read_write),
+        "the page is mapped to read the counts"
+    )?
+    spinner :: testing.require_some(
+        t,
+        launch_copy(given.log, loader, manager_port, executable, counts, spinning, SLOT_SPINNER),
+        "the spinner's copy is launched on its budget"
+    )?
+    copy :: testing.require_some(
+        t,
+        launch_copy(given.log, loader, manager_port, executable, counts, budget, SLOT_COUNTER),
+        "the counter's copy is launched on its budget"
+    )?
     sleeper :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to sleep on")?
     // Kept to CPU 0 under the spinner, then on CPU 1
     pause(sleeper, SETTLE_NANOSECONDS)
@@ -123,8 +151,17 @@ threads_run_only_on_their_budget_cpus #test :: fn(t: ptr[mut testing.T]) -> test
     _ = slop_os.process_kill(spinner)
     log_line.write(given.log, "%: the counter counted % kept to CPU 0, % on CPU 1", NAME, kept, moved)
     testing.expect_gt(t, spun, 0, "the spinner ran on CPU 0, where its budget keeps it")
-    testing.expect(t, moved > 0 && kept * 10 < moved, "kept to CPU 0 under the spinner, the counter hardly counts, as idle CPU 1 may not take it; moved there, it counts ten times as much")
-    testing.expect_eq(t, (slop_os.cpu_budget_describe(budget) or_else slop_os.CpuBudgetInfo.{}).cpus, CPU_1, "a budget's CPUs are those it was last set to")
+    testing.expect(
+        t,
+        moved > 0 && kept * 10 < moved,
+        "kept to CPU 0 under the spinner, the counter hardly counts, as idle CPU 1 may not take it; moved there, it counts ten times as much"
+    )
+    testing.expect_eq(
+        t,
+        (slop_os.cpu_budget_describe(budget) or_else slop_os.CpuBudgetInfo.{}).cpus,
+        CPU_1,
+        "a budget's CPUs are those it was last set to"
+    )
     // Their shares back to the root, for the tests after
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
     _ = slop_os.handle_close(cast[slop_os.Handle](spinning))
@@ -139,24 +176,56 @@ threads_run_only_on_their_budget_cpus #test :: fn(t: ptr[mut testing.T]) -> test
  * @return Ok once it's run; Error if main wasn't given the root budget, or the memory budget, the budget or its child
  *     couldn't be made, or the budget couldn't be kept to CPU 1.
  */
-cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     root :: testing.require_some(t, given.cpu_budget, "the root task grants the root CPU budget")?
-    memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a memory budget for the CPU budgets")?
-    budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 10, 10 * MILLISECOND, 4 * MILLISECOND), "a budget at priority 10")?
+    memory :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 1 << 20),
+        "a memory budget for the CPU budgets"
+    )?
+    budget :: testing.require_ok(
+        t,
+        slop_os.cpu_budget_create(root, memory, 10, 10 * MILLISECOND, 4 * MILLISECOND),
+        "a budget at priority 10"
+    )?
     testing.require_ok(t, slop_os.cpu_budget_set_cpus(budget, CPU_1), "the budget is kept to CPU 1")?
     // Refused: none, none online; a child starts with its parent's, and is within it, and its parent over it
     none :: slop_os.cpu_budget_set_cpus(budget, 0)
     testing.expect_error(t, none, slop_os.HandleError.InvalidArgument, "a budget has to have a CPU to run on")
     offline :: slop_os.cpu_budget_set_cpus(budget, cast[u64](1) << 40)
-    testing.expect_error(t, offline, slop_os.HandleError.InvalidArgument, "a budget has to have an online CPU, and CPU 40 isn't one on 2 CPUs")
-    child :: testing.require_ok(t, slop_os.cpu_budget_create(budget, memory, 5, 10 * MILLISECOND, MILLISECOND), "a child of the budget")?
-    testing.expect_eq(t, (slop_os.cpu_budget_describe(child) or_else slop_os.CpuBudgetInfo.{}).cpus, CPU_1, "a child starts with its parent's CPUs")
+    testing.expect_error(
+        t,
+        offline,
+        slop_os.HandleError.InvalidArgument,
+        "a budget has to have an online CPU, and CPU 40 isn't one on 2 CPUs"
+    )
+    child :: testing.require_ok(
+        t,
+        slop_os.cpu_budget_create(budget, memory, 5, 10 * MILLISECOND, MILLISECOND),
+        "a child of the budget"
+    )?
+    testing.expect_eq(
+        t,
+        (slop_os.cpu_budget_describe(child) or_else slop_os.CpuBudgetInfo.{}).cpus,
+        CPU_1,
+        "a child starts with its parent's CPUs"
+    )
     outside :: slop_os.cpu_budget_set_cpus(child, CPU_0)
-    testing.expect_error(t, outside, slop_os.HandleError.BudgetExceeded, "a child's CPUs have to be within its parent's")
+    testing.expect_error(
+        t,
+        outside,
+        slop_os.HandleError.BudgetExceeded,
+        "a child's CPUs have to be within its parent's"
+    )
     under :: slop_os.cpu_budget_set_cpus(budget, CPU_0)
-    testing.expect_error(t, under, slop_os.HandleError.BudgetExceeded, "a parent's CPUs have to stay over its children's")
+    testing.expect_error(
+        t,
+        under,
+        slop_os.HandleError.BudgetExceeded,
+        "a parent's CPUs have to stay over its children's"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](child))
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
     return .Ok
@@ -177,8 +246,16 @@ cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t: ptr[mut 
  * @return How many tests failed: 0 when every one passed. A copy ends only if it can't start counting: with 1 if it
  *     wasn't given the page, otherwise what run_copy gives.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     match peer {
         case Some(end) => return run_copy(end, test_device or_return 1)
         case None => {}
@@ -194,7 +271,7 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  * @param counts_at Where the test mapped the page the copies count in.
  * @return How much the counter's slot went up meanwhile.
  */
-counted :: fn(sleeper: slop_os.Port, counts_at: u64) -> u64 {
+counted :: fn(sleeper : slop_os.Port, counts_at : u64) -> u64 {
     before :: slot(counts_at, SLOT_COUNTER)
     pause(sleeper, RUN_NANOSECONDS)
     return slot(counts_at, SLOT_COUNTER) - before
@@ -207,7 +284,7 @@ counted :: fn(sleeper: slop_os.Port, counts_at: u64) -> u64 {
  * @param index Which slot, SLOT_SPINNER or SLOT_COUNTER.
  * @return What the slot holds now, read with a volatile load.
  */
-slot :: fn(counts_at: u64, index: u64) -> u64 {
+slot :: fn(counts_at : u64, index : u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](counts_at + index * 8))
 }
 
@@ -217,7 +294,7 @@ slot :: fn(counts_at: u64, index: u64) -> u64 {
  * @param sleeper A port nothing is bound to, so only the deadline wakes the wait.
  * @param nanoseconds How long to sleep, from now on the monotonic clock.
  */
-pause :: fn(sleeper: slop_os.Port, nanoseconds: u64) {
+pause :: fn(sleeper : slop_os.Port, nanoseconds : u64) {
     packets : slop_os.Packet[1]
     _ = slop_os.port_wait(sleeper, packets, (slop_os.clock_monotonic() or_else 0) + nanoseconds)
 }
@@ -236,19 +313,40 @@ pause :: fn(sleeper: slop_os.Port, nanoseconds: u64) {
  * @return An owning handle to the copy's process, which the test kills; or null if any step failed, leaving behind
  *     whatever it had made.
  */
-launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], manager_port: slop_os.Port,
-    program: slop_os.Memory, counts: slop_os.Memory, budget: slop_os.CpuBudget, which: u64) -> slop_os.Process? {
+launch_copy :: fn(
+    log : slop_os.DebugLog,
+    manager : os.Channel[process_manager.ProcessManager],
+    manager_port : slop_os.Port,
+    program : slop_os.Memory,
+    counts : slop_os.Memory,
+    budget : slop_os.CpuBudget,
+    which : u64
+) -> slop_os.Process? {
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
-    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     log_copy :: cast[slop_os.DebugLog](slop_os.handle_duplicate(cast[slop_os.Handle](log), log_rights) or_return null)
-    page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     page :: cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](counts), page_rights) or_return null)
     // A handle that may only bind, which the launch closes; the budget stays this program's
     bind_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_TRANSFER))
-    binding :: cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](budget), bind_rights) or_return null)
-    launched :: os.launch(manager, manager_port, "test_affinity copy", program, COPY_BUDGET, main,
-        CopyGrants.{log = log_copy, test_device = page, peer = pair.b}, os.LaunchOptions.{cpu_budget = binding}) or_return null
+    binding :: cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](budget), bind_rights)
+        or_return null)
+    launched :: os.launch(
+        manager,
+        manager_port,
+        "test_affinity copy",
+        program,
+        COPY_BUDGET,
+        main,
+        CopyGrants.{log = log_copy, test_device = page, peer = pair.b},
+        os.LaunchOptions.{cpu_budget = binding}
+    )
+        or_return null
     port :: os.port_for(block.budget, pair.a) or_return null
     told := which
     none : slop_os.Handle[1]
@@ -266,7 +364,7 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
  * @return 2 if no port could be made for peer, 3 if the slot couldn't be received, 4 if the page couldn't be mapped;
  *     it doesn't return otherwise.
  */
-run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
+run_copy :: fn(peer : slop_os.Channel, counts : slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 2
     which : u64 = 0

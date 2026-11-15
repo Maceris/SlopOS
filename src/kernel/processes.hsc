@@ -1,9 +1,10 @@
 package kernel
 
 import intrinsics from "base:intrinsics"
-import concurrency from "std:concurrency"
 import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
 }
@@ -16,7 +17,10 @@ import slop_os from "std:os/slop_os"
  * session are all one: what it owns (other processes, threads, address spaces, ...) and its handle
  * table. Destroying one destroys everything it owns, so killing a node reclaims the whole subtree.
  */
-//TODO(claude): destroying a large subtree in two phases, with preemption points (knowledge/design/kernel.md §2, Long operations)
+/*
+ * TODO(claude): destroying a large subtree in two phases, with preemption points (knowledge/design/kernel.md §2, Long
+ * operations)
+ */
 
 /** A process: a node of the ownership tree, with its handle table and what it owns. */
 Process :: struct #align(16) {
@@ -86,7 +90,11 @@ Process :: struct #align(16) {
  * @error BudgetExceeded The budget can't pay for its slot.
  * @error OwnerGone The owner is being destroyed; the process was destroyed again.
  */
-create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made #unrestricted : Result[ptr[mut Process], ObjectError]) {
+create_process :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64
+) -> (made #unrestricted : Result[ptr[mut Process], ObjectError]) {
     object :: new_object(kernel, .Process, budget, 0)?
     cast[ptr[mut Process]](object).table.account = object
     cast[ptr[mut Process]](object).pointer_key = u64.[random_bits(kernel), random_bits(kernel)]
@@ -113,10 +121,17 @@ create_process :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made 
  *     it's the root task, and everything owned is destroyed through destroy_object.
  * @param process The process, already dying, its generation advanced.
  */
-destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
+destroy_process :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) {
     leave_process_budget(kernel, process)
     ended :: if process.exited { cast[u64](process.exit_code) } else { slop_os.EXIT_KILLED }
-    raise_watchers(kernel, &process.watchers, &process.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_TERMINATED), ended)
+    raise_watchers(
+        kernel,
+        &process.watchers,
+        &process.watch_lock,
+        .Watchers,
+        cast[u32](slop_os.SIGNAL_TERMINATED),
+        ended
+    )
     /*
      * The root task's end is the machine's: once its subtree is destroyed and a grace period has passed, the
      * boot CPU's timer says what's left and stops (timer.hsc, root_task_ended)
@@ -148,7 +163,7 @@ destroy_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
  * @param kernel The kernel, whose frames the table's pages go back to, through this CPU's frame cache.
  * @param process The process, its grace period over.
  */
-release_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
+release_process :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) {
     free_table(kernel, &process.table)
 }
 
@@ -158,7 +173,7 @@ release_process :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
  * @param thread The thread, one a process owns, as every thread a system call runs on is.
  * @return Its owner; for a thread the kernel owns, a null pointer.
  */
-process_of :: fn(thread: ptr[Thread]) -> ptr[mut Process] {
+process_of :: fn(thread : ptr[Thread]) -> ptr[mut Process] {
     return cast[ptr[mut Process]](thread.header.owner)
 }
 
@@ -175,7 +190,11 @@ process_of :: fn(thread: ptr[Thread]) -> ptr[mut Process] {
  * @error BudgetExceeded The process's budget can't pay for the table's page.
  * @error InvalidHandle The table's free list is broken, which never happens.
  */
-install_owning :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64) -> Result[slop_os.Handle, slop_os.HandleError] {
+install_owning :: fn(
+    kernel : ptr[mut Kernel],
+    process : ptr[mut Process],
+    object : u64
+) -> Result[slop_os.Handle, slop_os.HandleError] {
     header :: cast[ptr[ObjectHeader]](object)
     return install(kernel, &process.table, object, header.generation, header.kind, slop_os.RIGHTS_ALL, true)
 }
@@ -201,8 +220,13 @@ install_owning :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object:
  *     moves, or InvalidHandle or ObjectGone for a handle that isn't one. BadBuffer also comes back when given can't be
  *     written at the end, after the handles have moved.
  */
-give_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], target: ptr[mut Process], handles: slop_os.UserBuffer,
-    given: slop_os.UserBuffer) -> slop_os.ControlError? {
+give_handles :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    target : ptr[mut Process],
+    handles : slop_os.UserBuffer,
+    given : slop_os.UserBuffer
+) -> slop_os.ControlError? {
     count :: handles.count
     if count > cast[u64](slop_os.MAX_HANDLES_PER_BATCH) {
         return slop_os.ControlError.TooBig
@@ -284,7 +308,7 @@ give_handles :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], target: ptr
  * @param generations Each end's generation when it was held; one destroyed since is skipped.
  * @param count How many of held to let go of, from the first, at most 64.
  */
-let_go_of_held :: fn(held: ptr[u64[64]], generations: ptr[u32[64]], count: usize) {
+let_go_of_held :: fn(held : ptr[u64[64]], generations : ptr[u32[64]], count : usize) {
     for i in 0..<count {
         let_go_of_end(cast[ptr[mut Channel]](held[i % 64]), generations[i % 64])
     }

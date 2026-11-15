@@ -5,13 +5,13 @@
  */
 package account_service
 
+import compiler from "base:compiler"
 import runtime from "base:runtime"
+import crypto from "std:crypto"
 import os from "std:os"
 import account_records from "../../account_records"
-import accounts from "../../protocols/accounts"
-import compiler from "base:compiler"
-import crypto from "std:crypto"
 import log_line from "../../log_line"
+import accounts from "../../protocols/accounts"
 
 /** What an account's keys' file name ends with, its account's name before it. */
 KEYS_SUFFIX :: ".keys"
@@ -26,7 +26,7 @@ KEYS_NEW_SUFFIX :: ".newkeys"
  * @param out The answer's message, which the keys' text is appended to.
  * @return KeysListed; NoSuchAccount for a name with no record; Failed if they couldn't be read.
  */
-list_keys :: fn(service: ptr[mut Service], name: u8[], out: ptr[mut os.Outgoing]) -> accounts.Response {
+list_keys :: fn(service : ptr[mut Service], name : u8[], out : ptr[mut os.Outgoing]) -> accounts.Response {
     if read_record(service, name) is_none {
         return .NoSuchAccount
     }
@@ -44,7 +44,7 @@ list_keys :: fn(service: ptr[mut Service], name: u8[], out: ptr[mut os.Outgoing]
  * @return Done; KeyRefused for a line that isn't a key; AlreadyExists for one it has; Refused when it has
  *     account_records.MAX_KEYS; NoSuchAccount; or Failed if they couldn't be read or written.
  */
-add_key :: fn(service: ptr[mut Service], name: u8[], line: u8[]) -> accounts.Response {
+add_key :: fn(service : ptr[mut Service], name : u8[], line : u8[]) -> accounts.Response {
     if read_record(service, name) is_none {
         return .NoSuchAccount
     }
@@ -77,7 +77,7 @@ add_key :: fn(service: ptr[mut Service], name: u8[], line: u8[]) -> accounts.Res
  * @param fingerprint The key's fingerprint, SHA256:...
  * @return Done; NoSuchKey if none of its keys has it; NoSuchAccount; or Failed.
  */
-remove_key :: fn(service: ptr[mut Service], name: u8[], fingerprint: u8[]) -> accounts.Response {
+remove_key :: fn(service : ptr[mut Service], name : u8[], fingerprint : u8[]) -> accounts.Response {
     if read_record(service, name) is_none {
         return .NoSuchAccount
     }
@@ -103,7 +103,7 @@ remove_key :: fn(service: ptr[mut Service], name: u8[], fingerprint: u8[]) -> ac
  * @param name The account's name, valid_name's.
  * @return The text, which free_keys gives back; "" when the account has no keys file; null if it couldn't be read.
  */
-read_keys :: fn(service: ptr[mut Service], name: u8[]) -> string? {
+read_keys :: fn(service : ptr[mut Service], name : u8[]) -> string? {
     path : u8[PATH_BYTES]
     text :: path_of(name, KEYS_SUFFIX, &path)
     match os.read_entire_file_in(service.store, text) {
@@ -113,7 +113,7 @@ read_keys :: fn(service: ptr[mut Service], name: u8[]) -> string? {
 }
 
 /** Give back what read_keys gave. */
-free_keys :: fn(keys: string) {
+free_keys :: fn(keys : string) {
     if keys.count > 0 {
         runtime.free_array(bit_cast[u8[]](keys))
     }
@@ -124,7 +124,7 @@ free_keys :: fn(keys: string) {
  *
  * @return True once they're in place and synced.
  */
-write_keys :: fn(service: ptr[mut Service], name: u8[], keys: u8[]) -> bool {
+write_keys :: fn(service : ptr[mut Service], name : u8[], keys : u8[]) -> bool {
     fresh : u8[PATH_BYTES]
     kept : u8[PATH_BYTES]
     fresh_path :: path_of(name, KEYS_NEW_SUFFIX, &fresh)
@@ -140,7 +140,7 @@ write_keys :: fn(service: ptr[mut Service], name: u8[], keys: u8[]) -> bool {
 }
 
 /** A name's bytes as text, for the log. */
-name_text :: fn(name: u8[]) -> string {
+name_text :: fn(name : u8[]) -> string {
     return if name.count > 0 { string_of(&name[0], name.count) } else { "" }
 }
 
@@ -167,7 +167,7 @@ UnlockedHome :: struct {
  * @param name The account's name.
  * @param home The home's secret, copied.
  */
-remember_home #constant_time :: fn(service: ptr[mut Service], name: u8[], home: ptr[crypto.Key256]) {
+remember_home #constant_time :: fn(service : ptr[mut Service], name : u8[], home : ptr[crypto.Key256]) {
     if name.count == 0 || name.count > account_records.MAX_NAME_BYTES {
         return void
     }
@@ -203,7 +203,7 @@ remember_home #constant_time :: fn(service: ptr[mut Service], name: u8[], home: 
  * @return OpenedHome; HomeLocked for the account's key whose home isn't unlocked; WrongCredentials for no such account
  *     or a key it doesn't have; Failed if its keys or volume couldn't be read or opened.
  */
-open_home_by_key :: fn(service: ptr[mut Service], name: u8[], blob: u8[]) -> accounts.Response {
+open_home_by_key :: fn(service : ptr[mut Service], name : u8[], blob : u8[]) -> accounts.Response {
     record := read_record(service, name) or_return .WrongCredentials
     keys :: read_keys(service, name) or_return .Failed
     defer free_keys(keys)
@@ -211,7 +211,10 @@ open_home_by_key :: fn(service: ptr[mut Service], name: u8[], blob: u8[]) -> acc
         return .WrongCredentials
     }
     for &kept in service.unlocked {
-        if kept.name_bytes == name.count && name.count > 0 && name.count <= kept.name.count && same(kept.name[0..<name.count], name) {
+        if kept.name_bytes == name.count
+            && name.count > 0
+            && name.count <= kept.name.count
+            && same(kept.name[0..<name.count], name) {
             return match open_volume_with(service, name, &kept.secret) {
                 case OpenedFiles(root) => {
                     join_shares(service, &record, &kept.secret, root.end)

@@ -26,7 +26,7 @@ KILL_WAIT : u64 : 500_000_000
  * @param supervisor The supervisor; each entry stopped is marked done and ended on request, so it isn't started again.
  *     Nothing else it does is handled meanwhile.
  */
-stop_everything :: fn(supervisor: ptr[mut Supervisor]) {
+stop_everything :: fn(supervisor : ptr[mut Supervisor]) {
     started_at :: slop_os.clock_monotonic() or_else 0
     deadline :: started_at + SHUTDOWN_DEADLINE
     // The watchdog first, so a long shutdown isn't cut short (watchdog.hsc)
@@ -68,13 +68,16 @@ stop_everything :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor.
  */
-commit_volumes :: fn(supervisor: ptr[mut Supervisor]) {
+commit_volumes :: fn(supervisor : ptr[mut Supervisor]) {
     if !is_running(supervisor, supervisor.storage_slot) {
         return void
     }
     match ask_storage_once(supervisor, supervisor.storage_slot, .CommitAll) {
         case Done => {}
-        case _ => log_line.write(supervisor.log, "supervisor: the volumes couldn't all be committed before shutting down")
+        case _ => log_line.write(
+            supervisor.log,
+            "supervisor: the volumes couldn't all be committed before shutting down"
+        )
     }
 }
 
@@ -86,7 +89,7 @@ commit_volumes :: fn(supervisor: ptr[mut Supervisor]) {
  * @param deadline The shutdown's deadline, which the entry's own STOP_DEADLINE is cut to.
  * @return True if it ended when asked; false if it had to be killed.
  */
-stop_entry :: fn(supervisor: ptr[mut Supervisor], index: usize, deadline: u64) -> bool {
+stop_entry :: fn(supervisor : ptr[mut Supervisor], index : usize, deadline : u64) -> bool {
     if index >= supervisor.started.count {
         return true
     }
@@ -117,7 +120,7 @@ stop_entry :: fn(supervisor: ptr[mut Supervisor], index: usize, deadline: u64) -
  * @param deadline When to stop waiting, in the monotonic clock's nanoseconds; one passed already waits not at all.
  * @return True if it's ended.
  */
-ended_by :: fn(supervisor: ptr[mut Supervisor], process: slop_os.Process, deadline: u64) -> bool {
+ended_by :: fn(supervisor : ptr[mut Supervisor], process : slop_os.Process, deadline : u64) -> bool {
     port :: slop_os.port_create(supervisor.block.budget) or_return false
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     if slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, 0, .Once) is_error {

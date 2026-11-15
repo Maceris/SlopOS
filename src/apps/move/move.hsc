@@ -4,8 +4,8 @@
 package move
 
 import os from "std:os"
-import strings from "std:strings"
 import dir from "std:os/slop_os/dir"
+import strings from "std:strings"
 import file_tools from "../../file_tools"
 
 /** An error naming the parameter it came from. */
@@ -43,7 +43,7 @@ MoveError :: union {
  * @error IntoItself That's inside what's moved; move it somewhere else.
  * @error Failed It couldn't go there, as a directory there isn't empty, or a directory on the way is missing.
  */
-main :: fn(here: os.Channel[dir.Dir], from: string, to: string) -> Result[Moved, MoveError] {
+main :: fn(here : os.Channel[dir.Dir], from : string, to : string) -> Result[Moved, MoveError] {
     from_problem :: Problem.{parameter = os.ParameterName.{name = "from"}}
     to_problem :: Problem.{parameter = os.ParameterName.{name = "to"}}
     directory, opened :: os.directory_on(here.end)

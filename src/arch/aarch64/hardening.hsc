@@ -1,7 +1,7 @@
 package arch_aarch64
 
-import runtime from "base:runtime"
 import aarch64 from "base:intrinsics/aarch64"
+import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
 import arch_interface from "../../arch_interface"
 
@@ -20,9 +20,13 @@ import arch_interface from "../../arch_interface"
  *
  * @param features The boot CPU's features, from detect_features.
  */
-log_hardening :: fn(features: ptr[slop_os.CpuFeatures]) {
-    runtime.log_info("cpu: control-flow integrity: branch target identification %, pointer authentication %, guarded control stack %",
-        yes_no(has(features, .Aarch64Bti)), yes_no(has(features, .Aarch64PointerAuthentication)), yes_no(has(features, .Aarch64Gcs)))
+log_hardening :: fn(features : ptr[slop_os.CpuFeatures]) {
+    runtime.log_info(
+        "cpu: control-flow integrity: branch target identification %, pointer authentication %, guarded control stack %",
+        yes_no(has(features, .Aarch64Bti)),
+        yes_no(has(features, .Aarch64PointerAuthentication)),
+        yes_no(has(features, .Aarch64Gcs))
+    )
     pfr0 :: id_register(.Pfr0)
     pfr1 :: id_register(.Pfr1)
     affected : LogLine
@@ -31,13 +35,22 @@ log_hardening :: fn(features: ptr[slop_os.CpuFeatures]) {
     line_add(if (pfr0 >> 56) & 0xf >= 1 { &unaffected } else { &affected }, "Spectre v2")
     line_add(if (pfr0 >> 60) & 0xf >= 1 { &unaffected } else { &affected }, "Meltdown")
     if affected.count == 0 {
-        runtime.log_info("cpu: transient execution: affected by Spectre v1; not affected by %", line_text(&unaffected, "anything"))
+        runtime.log_info(
+            "cpu: transient execution: affected by Spectre v1; not affected by %",
+            line_text(&unaffected, "anything")
+        )
     }
     else {
-        runtime.log_info("cpu: transient execution: affected by Spectre v1, %; not affected by %", line_text(&affected, ""),
-            line_text(&unaffected, "anything"))
+        runtime.log_info(
+            "cpu: transient execution: affected by Spectre v1, %; not affected by %",
+            line_text(&affected, ""),
+            line_text(&unaffected, "anything")
+        )
     }
-    runtime.log_info("cpu: mitigations on: PAN; speculative store bypass control (SSBS) %", yes_no((pfr1 >> 4) & 0xf >= 1))
+    runtime.log_info(
+        "cpu: mitigations on: PAN; speculative store bypass control (SSBS) %",
+        yes_no((pfr1 >> 4) & 0xf >= 1)
+    )
 }
 
 /**
@@ -46,7 +59,7 @@ log_hardening :: fn(features: ptr[slop_os.CpuFeatures]) {
  * @param value The answer.
  * @return "yes" or "no", constants.
  */
-yes_no :: fn(value: bool) -> string {
+yes_no :: fn(value : bool) -> string {
     return if value { "yes" } else { "no" }
 }
 
@@ -64,7 +77,7 @@ LogLine :: struct {
  * @param line The list.
  * @param name The name; its bytes past the buffer's end are left out.
  */
-line_add :: fn(line: ptr[mut LogLine], name: string) {
+line_add :: fn(line : ptr[mut LogLine], name : string) {
     if line.count > 0 {
         line_append(line, ", ")
     }
@@ -77,7 +90,7 @@ line_add :: fn(line: ptr[mut LogLine], name: string) {
  * @param line The list.
  * @param text The text; its bytes past the buffer's end are left out.
  */
-line_append :: fn(line: ptr[mut LogLine], text: string) {
+line_append :: fn(line : ptr[mut LogLine], text : string) {
     for byte in string_bytes(text) {
         at :: line.count
         if at >= line.bytes.count {
@@ -95,7 +108,7 @@ line_append :: fn(line: ptr[mut LogLine], text: string) {
  * @param empty What to give for an empty list.
  * @return The text, valid while the list is.
  */
-line_text :: fn(line: ptr[LogLine], empty: string) -> string {
+line_text :: fn(line : ptr[LogLine], empty : string) -> string {
     if line.count == 0 {
         return empty
     }
@@ -112,7 +125,7 @@ SCTLR_ENABLE_IA : u64 : 1 << 31
  * @param system The shared state, whose kernel_key is set.
  * @param key The key's 128 bits, random.
  */
-set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {
+set_kernel_pointer_key :: fn(system : ptr[mut ArchSystem], key : u64[2]) {
     system.kernel_key = key
 }
 
@@ -121,7 +134,7 @@ set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {
  *
  * @param key The thread's process's key's 128 bits, kept in the CPU's ArchCpu for return_to_user.
  */
-set_user_pointer_key :: fn(key: u64[2]) {
+set_user_pointer_key :: fn(key : u64[2]) {
     current_cpu().user_key = key
 }
 
@@ -139,7 +152,12 @@ kernel_control_flow :: fn() -> arch_interface.KernelControlFlow {
         // GCSCR_EL1 (S3_0_C2_C5_0)
         shadow_stack = shadow_stack,
         // GCSPR_EL1 (S3_0_C2_C5_1)
-        shadow_stack_pointer = if shadow_stack { aarch64.read_system_register_encoded(3, 0, 2, 5, 1) } else { cast[u64](0) },
+        shadow_stack_pointer = if shadow_stack {
+            aarch64.read_system_register_encoded(3, 0, 2, 5, 1)
+        }
+        else {
+            cast[u64](0)
+        },
     }
 }
 
@@ -161,7 +179,7 @@ has_kernel_shadow_stacks :: fn() -> bool {
  * @param base The GCS's lowest address.
  * @param size Its size in bytes.
  */
-set_kernel_shadow_stack :: fn(cpu: ptr[mut ArchCpu], base: u64, size: u64) {
+set_kernel_shadow_stack :: fn(cpu : ptr[mut ArchCpu], base : u64, size : u64) {
     cpu.kernel_shadow_top = base + size
 }
 
@@ -177,7 +195,8 @@ has_pointer_authentication :: fn() -> bool {
 }
 
 /*
- * Permission indirection (FEAT_S1PIE) and the Guarded Control Stack (FEAT_GCS), decisions/0186: a descriptor's UXN, PXN,
+ * Permission indirection (FEAT_S1PIE) and the Guarded Control Stack (FEAT_GCS), decisions/0186: a descriptor's UXN,
+ * PXN,
  * DBM and AP[1] bits read as a 4-bit index into PIR_EL1 for EL1's permissions and PIRE0_EL1 for EL0's, which can say
  * "a GCS page", as the plain bits can't. Each index leaf_entry makes:
  *     0x5 user RX (PXN, AP[1]), 0x8 kernel RX (UXN), 0xa kernel GCS (UXN, DBM), 0xb user GCS (UXN, DBM, AP[1]),
@@ -197,11 +216,18 @@ PERMISSION_RX : u64 : 0xa
 /** Read and write. */
 PERMISSION_RW : u64 : 0xc
 /** PIRE0_EL1: what EL0 may do through each index. */
-PERMISSIONS_EL0 : u64 : (PERMISSION_RX << (0x5 * 4)) | (PERMISSION_GCS << (0xb * 4)) | (PERMISSION_R << (0xd * 4))
+PERMISSIONS_EL0 : u64 : (PERMISSION_RX << (0x5 * 4))
+    | (PERMISSION_GCS << (0xb * 4))
+    | (PERMISSION_R << (0xd * 4))
     | (PERMISSION_RW << (0xf * 4))
 /** PIR_EL1: what EL1 may do through each index; a user GCS page, nothing. */
-PERMISSIONS_EL1 : u64 : (PERMISSION_R << (0x5 * 4)) | (PERMISSION_RX << (0x8 * 4)) | (PERMISSION_GCS << (0xa * 4))
-    | (PERMISSION_R << (0xc * 4)) | (PERMISSION_R << (0xd * 4)) | (PERMISSION_RW << (0xe * 4)) | (PERMISSION_RW << (0xf * 4))
+PERMISSIONS_EL1 : u64 : (PERMISSION_R << (0x5 * 4))
+    | (PERMISSION_RX << (0x8 * 4))
+    | (PERMISSION_GCS << (0xa * 4))
+    | (PERMISSION_R << (0xc * 4))
+    | (PERMISSION_R << (0xd * 4))
+    | (PERMISSION_RW << (0xe * 4))
+    | (PERMISSION_RW << (0xf * 4))
 /** TCR2_EL1.PIE (bit 1): permission indirection on. */
 TCR2_PIE : u64 : 1 << 1
 /** GCSCR_EL1.PCRSEL (bit 0): EL1's procedure returns checked against its GCS, GCSPR_EL1. */
@@ -229,7 +255,7 @@ has_permission_indirection :: fn() -> bool {
  *
  * @param system The shared state, whose gcs is set where it's turned on, on the boot CPU, and kept by the others.
  */
-enable_permission_indirection :: fn(system: ptr[mut ArchSystem]) {
+enable_permission_indirection :: fn(system : ptr[mut ArchSystem]) {
     features :: detect_features()
     if !has(&features, .Aarch64Gcs) || !has_permission_indirection() {
         return void
@@ -260,7 +286,7 @@ has_user_shadow_stacks :: fn() -> bool {
  * @param landing_pads Unused.
  * @param shadow_stack Its GCS pointer; 0 for none, which turns EL0's GCS off.
  */
-load_user_control_flow :: fn(landing_pads: bool, shadow_stack: u64) {
+load_user_control_flow :: fn(landing_pads : bool, shadow_stack : u64) {
     if !current_system().gcs {
         return void
     }

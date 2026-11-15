@@ -153,7 +153,9 @@ Event :: union {
     LeaseLost,
     /** An IPv6 address became the interface's. */
     AddressReady(Assigned),
-    /** A global IPv6 address's valid lifetime ended, its prefix not advertised again: it's no longer the interface's. */
+    /**
+     * A global IPv6 address's valid lifetime ended, its prefix not advertised again: it's no longer the interface's.
+     */
     AddressExpired(Ipv6),
     /** An address wanted was found in use by another, and isn't taken. */
     AddressConflict(IpAddress),
@@ -235,7 +237,9 @@ Address6 :: struct {
     prefix_length : u8,
     /** Tentative: when its check ends. Assigned: when it's no longer valid, 0 for never. */
     deadline : u64,
-    /** Tentative: when it'll no longer be valid, as its prefix was advertised, 0 for never; its deadline once assigned. */
+    /**
+     * Tentative: when it'll no longer be valid, as its prefix was advertised, 0 for never; its deadline once assigned.
+     */
     valid_until : u64,
 }
 
@@ -249,10 +253,10 @@ Router6 :: struct {
 
 /** A ping waiting for its answer. */
 Ping :: struct {
-    active : bool,
-    to : IpAddress,
+    active   : bool,
+    to       : IpAddress,
     sequence : u16,
-    sent : u64,
+    sent     : u64,
 }
 
 /** The stack's state for one interface, the caller's, set up by start. */
@@ -267,18 +271,18 @@ Stack :: struct {
      * network gives away, as DNS's IDs, ports and DHCP's transaction IDs mustn't be guessed. Its block, the words of it
      * not yet drawn, the block's number and the nonce, which counts the times the number's gone round.
      */
-    random_key : crypto.Key256,
-    random_block : u32[16],
-    random_left : usize,
+    random_key     : crypto.Key256,
+    random_block   : u32[16],
+    random_left    : usize,
     random_counter : u32,
-    random_round : u64,
+    random_round   : u64,
     /** A secret for stable IPv6 interface identifiers (RFC 7217) and TCP's initial sequence numbers (RFC 6528). */
     secret : u8[32],
 
-    outbox : Outgoing[OUTBOX],
+    outbox       : Outgoing[OUTBOX],
     outbox_first : usize,
     outbox_count : usize,
-    events : Event[EVENTS],
+    events       : Event[EVENTS],
     events_first : usize,
     events_count : usize,
     /** Whether an event was dropped as the queue was full, since take_events_lost last said (13h). */
@@ -287,42 +291,42 @@ Stack :: struct {
     dropped_frames : u64,
 
     // IPv4
-    ipv4 : Ipv4,
-    prefix_length : u8,
-    router : Ipv4,
-    dns : Ipv4,
-    arp : Neighbour[ARP_ENTRIES],
+    ipv4              : Ipv4,
+    prefix_length     : u8,
+    router            : Ipv4,
+    dns               : Ipv4,
+    arp               : Neighbour[ARP_ENTRIES],
     ip_identification : u16,
 
     // DHCPv4
-    dhcp : DhcpState,
-    xid : u32,
-    dhcp_server : Ipv4,
-    offered : Ipv4,
+    dhcp          : DhcpState,
+    xid           : u32,
+    dhcp_server   : Ipv4,
+    offered       : Ipv4,
     dhcp_deadline : u64,
-    dhcp_tries : u32,
-    dhcp_started : u64,
-    lease_t1 : u64,
-    lease_t2 : u64,
-    lease_end : u64,
+    dhcp_tries    : u32,
+    dhcp_started  : u64,
+    lease_t1      : u64,
+    lease_t2      : u64,
+    lease_end     : u64,
 
     // IPv6
-    link_local : Address6,
-    globals : Address6[GLOBAL_ADDRESSES],
-    routers : Router6[ROUTERS],
-    neighbours : Neighbour[NEIGHBOURS],
-    hop_limit : u8,
-    solicitations : u32,
+    link_local        : Address6,
+    globals           : Address6[GLOBAL_ADDRESSES],
+    routers           : Router6[ROUTERS],
+    neighbours        : Neighbour[NEIGHBOURS],
+    hop_limit         : u8,
+    solicitations     : u32,
     next_solicitation : u64,
 
     pings : Ping[PINGS],
     ping_sequence : u16,
 
     // TCP and UDP
-    tcbs : Tcb[TCP_CONNECTIONS],
+    tcbs      : Tcb[TCP_CONNECTIONS],
     listeners : TcpListener[TCP_LISTENERS],
-    sockets : UdpSocket[UDP_SOCKETS],
-    inbox : Datagram[UDP_INBOX],
+    sockets   : UdpSocket[UDP_SOCKETS],
+    inbox     : Datagram[UDP_INBOX],
     /** Datagrams dropped as the inbox was full. */
     dropped_datagrams : u64,
     /** How many times TCP's retransmitted on duplicate acknowledgements or SACK, and on its timer, for tests. */
@@ -358,7 +362,7 @@ Setup :: struct {
  * @param setup How it's set up.
  * @param now The time, in nanoseconds.
  */
-start :: fn(stack: ptr[mut Stack], setup: Setup, now: u64) {
+start :: fn(stack : ptr[mut Stack], setup : Setup, now : u64) {
     stack.mac = setup.mac
     stack.mtu = setup.mtu
     stack.now = now
@@ -386,7 +390,7 @@ start :: fn(stack: ptr[mut Stack], setup: Setup, now: u64) {
  *     kept.
  * @param now The time, in nanoseconds.
  */
-receive :: fn(stack: ptr[mut Stack], frame: u8[], now: u64) {
+receive :: fn(stack : ptr[mut Stack], frame : u8[], now : u64) {
     stack.now = now
     if frame.count < ETHERNET_HEADER {
         return void
@@ -412,7 +416,7 @@ receive :: fn(stack: ptr[mut Stack], frame: u8[], now: u64) {
  * @param stack The stack.
  * @param now The time, in nanoseconds, no earlier than any given before.
  */
-tick :: fn(stack: ptr[mut Stack], now: u64) {
+tick :: fn(stack : ptr[mut Stack], now : u64) {
     stack.now = now
     tick_dhcp(stack)
     tick_neighbours(stack, true)
@@ -433,7 +437,7 @@ tick :: fn(stack: ptr[mut Stack], now: u64) {
  * @param stack The stack.
  * @return The earliest time something's due, in nanoseconds; 0xffffffffffffffff for nothing.
  */
-next_deadline :: fn(stack: ptr[Stack]) -> u64 {
+next_deadline :: fn(stack : ptr[Stack]) -> u64 {
     soonest := ~cast[u64](0)
     if stack.dhcp != .Off && stack.dhcp_deadline < soonest {
         soonest = stack.dhcp_deadline
@@ -478,7 +482,7 @@ next_deadline :: fn(stack: ptr[Stack]) -> u64 {
  * @param into Where it's copied, MAX_FRAME bytes at least, as a send slot is.
  * @return Its length in bytes; null if none is waiting, or into is too short, when it's dropped.
  */
-take_frame :: fn(stack: ptr[mut Stack], into: mut u8[]) -> usize? {
+take_frame :: fn(stack : ptr[mut Stack], into : mut u8[]) -> usize? {
     if stack.outbox_count == 0 {
         return null
     }
@@ -506,7 +510,7 @@ take_frame :: fn(stack: ptr[mut Stack], into: mut u8[]) -> usize? {
  * @param stack The stack.
  * @return True if fewer than 4 frames' room is left: room kept for acknowledgements, ARP and the like.
  */
-outbox_full :: fn(stack: ptr[Stack]) -> bool {
+outbox_full :: fn(stack : ptr[Stack]) -> bool {
     return stack.outbox_count + 4 >= OUTBOX
 }
 
@@ -517,7 +521,7 @@ outbox_full :: fn(stack: ptr[Stack]) -> bool {
  * @param stack The stack, which forgets it once it's told.
  * @return True if one was.
  */
-take_events_lost :: fn(stack: ptr[mut Stack]) -> bool {
+take_events_lost :: fn(stack : ptr[mut Stack]) -> bool {
     lost :: stack.events_lost
     stack.events_lost = false
     return lost
@@ -529,7 +533,7 @@ take_events_lost :: fn(stack: ptr[mut Stack]) -> bool {
  * @param stack The stack, whose events give it up.
  * @return It; null if none is waiting.
  */
-take_event :: fn(stack: ptr[mut Stack]) -> Event? {
+take_event :: fn(stack : ptr[mut Stack]) -> Event? {
     if stack.events_count == 0 {
         return null
     }
@@ -547,7 +551,7 @@ take_event :: fn(stack: ptr[mut Stack]) -> Event? {
  * @param to Who's pinged.
  * @return The ping's sequence number; null if no address of the family can send it, or PINGS are waiting already.
  */
-ping :: fn(stack: ptr[mut Stack], to: IpAddress) -> u16? {
+ping :: fn(stack : ptr[mut Stack], to : IpAddress) -> u16? {
     slot := cast[usize](PINGS)
     for each, i in stack.pings {
         if !each.active {
@@ -579,7 +583,7 @@ ping :: fn(stack: ptr[mut Stack], to: IpAddress) -> u16? {
  * @param identifier The answer's identifier, which has to be ECHO_IDENTIFIER.
  * @param sequence The answer's sequence number.
  */
-echo_answered :: fn(stack: ptr[mut Stack], from: IpAddress, identifier: u16, sequence: u16) {
+echo_answered :: fn(stack : ptr[mut Stack], from : IpAddress, identifier : u16, sequence : u16) {
     if identifier != ECHO_IDENTIFIER {
         return void
     }
@@ -605,7 +609,7 @@ ECHO_IDENTIFIER : u16 : 0x5105
  * @param kind Its Ethernet type.
  * @param payload What follows the header, at most MAX_FRAME - ETHERNET_HEADER bytes; more is cut off.
  */
-queue_frame :: fn(stack: ptr[mut Stack], to: Mac, kind: u16, payload: u8[]) {
+queue_frame :: fn(stack : ptr[mut Stack], to : Mac, kind : u16, payload : u8[]) {
     if stack.outbox_count >= OUTBOX {
         stack.dropped_frames += 1
         return void
@@ -641,7 +645,7 @@ queue_frame :: fn(stack: ptr[mut Stack], to: Mac, kind: u16, payload: u8[]) {
  * @param stack The stack, whose events take it; it's dropped if they're full.
  * @param happened The event.
  */
-event :: fn(stack: ptr[mut Stack], happened: Event) {
+event :: fn(stack : ptr[mut Stack], happened : Event) {
     flood :: match happened {
         case Incoming(_) => true
         case EchoReplied(_) => true
@@ -665,7 +669,7 @@ event :: fn(stack: ptr[mut Stack], happened: Event) {
  * @param stack The stack, whose generator moves on.
  * @return The value, which can't be told from what's been drawn before without the key.
  */
-next_random :: fn(stack: ptr[mut Stack]) -> u64 {
+next_random :: fn(stack : ptr[mut Stack]) -> u64 {
     if stack.random_left < 2 || stack.random_left > stack.random_block.count {
         nonce : crypto.Nonce96
         for i in 0..<8 {
@@ -695,7 +699,12 @@ next_random :: fn(stack: ptr[mut Stack]) -> u64 {
  * @param nonce The nonce.
  * @param into Where the block's 16 words go.
  */
-keystream #constant_time :: fn(key: ptr[crypto.Key256], counter: u32, nonce: ptr[crypto.Nonce96], into: ptr[mut u32[16]]) {
+keystream #constant_time :: fn(
+    key : ptr[crypto.Key256],
+    counter : u32,
+    nonce : ptr[crypto.Nonce96],
+    into : ptr[mut u32[16]]
+) {
     block :: crypto.chacha20_block(key, counter, nonce)
     for &word, i in into^ {
         word^ = compiler.declassify(cast[u32](block[i]))
@@ -711,7 +720,7 @@ keystream #constant_time :: fn(key: ptr[crypto.Key256], counter: u32, nonce: ptr
  * @param address The address, an IPv4 one in its first four bytes for ARP's table.
  * @return Its index; null if it isn't there.
  */
-find_neighbour :: fn(table: Neighbour[], address: Ipv6) -> usize? {
+find_neighbour :: fn(table : Neighbour[], address : Ipv6) -> usize? {
     for each, i in table {
         if each.state != .Free && same_ipv6(each.address, address) {
             return i
@@ -731,7 +740,7 @@ find_neighbour :: fn(table: Neighbour[], address: Ipv6) -> usize? {
  * @param v4 True for ARP's table, false for IPv6's.
  * @return Its index; null if every entry is a router's.
  */
-free_neighbour :: fn(stack: ptr[Stack], table: Neighbour[], v4: bool) -> usize? {
+free_neighbour :: fn(stack : ptr[Stack], table : Neighbour[], v4 : bool) -> usize? {
     oldest : usize? = null
     asked : usize? = null
     for each, i in table {
@@ -769,10 +778,13 @@ free_neighbour :: fn(stack: ptr[Stack], table: Neighbour[], v4: bool) -> usize? 
  * @param address The address.
  * @return True if it's one.
  */
-is_router :: fn(stack: ptr[Stack], v4: bool, address: Ipv6) -> bool {
+is_router :: fn(stack : ptr[Stack], v4 : bool, address : Ipv6) -> bool {
     if v4 {
-        return !is_zero_ipv4(stack.router) && address.bytes[0] == stack.router.bytes[0] && address.bytes[1] == stack.router.bytes[1]
-            && address.bytes[2] == stack.router.bytes[2] && address.bytes[3] == stack.router.bytes[3]
+        return !is_zero_ipv4(stack.router)
+            && address.bytes[0] == stack.router.bytes[0]
+            && address.bytes[1] == stack.router.bytes[1]
+            && address.bytes[2] == stack.router.bytes[2]
+            && address.bytes[3] == stack.router.bytes[3]
     }
     for router in stack.routers {
         if !is_zero_ipv6(router.address) && same_ipv6(router.address, address) {
@@ -792,8 +804,13 @@ is_router :: fn(stack: ptr[Stack], v4: bool, address: Ipv6) -> bool {
  * @param mac Its MAC address.
  * @param create Whether to make an entry for it if there's none; otherwise only one there is updated.
  */
-learn_neighbour :: fn(stack: ptr[mut Stack], v4: bool, address: Ipv6, mac: Mac, create: bool) {
-    table :: if v4 { view_of(&stack.arp[0], stack.arp.count) } else { view_of(&stack.neighbours[0], stack.neighbours.count) }
+learn_neighbour :: fn(stack : ptr[mut Stack], v4 : bool, address : Ipv6, mac : Mac, create : bool) {
+    table :: if v4 {
+        view_of(&stack.arp[0], stack.arp.count)
+    }
+    else {
+        view_of(&stack.neighbours[0], stack.neighbours.count)
+    }
     index := find_neighbour(table, address)
     if index is_none {
         if !create {
@@ -828,8 +845,13 @@ learn_neighbour :: fn(stack: ptr[mut Stack], v4: bool, address: Ipv6, mac: Mac, 
  * @param packet The packet, from its IP header, MAX_FRAME - ETHERNET_HEADER bytes at most.
  * @return True once it's queued or waiting; false if no entry could be had for the hop.
  */
-send_to_hop :: fn(stack: ptr[mut Stack], v4: bool, hop: Ipv6, packet: u8[]) -> bool {
-    table :: if v4 { view_of(&stack.arp[0], stack.arp.count) } else { view_of(&stack.neighbours[0], stack.neighbours.count) }
+send_to_hop :: fn(stack : ptr[mut Stack], v4 : bool, hop : Ipv6, packet : u8[]) -> bool {
+    table :: if v4 {
+        view_of(&stack.arp[0], stack.arp.count)
+    }
+    else {
+        view_of(&stack.neighbours[0], stack.neighbours.count)
+    }
     kind :: if v4 { ETHER_IPV4 } else { ETHER_IPV6 }
     match find_neighbour(table, hop) {
         case Some(found) => if found < table.count && table[found].state == .Resolved {
@@ -875,7 +897,7 @@ send_to_hop :: fn(stack: ptr[mut Stack], v4: bool, hop: Ipv6, packet: u8[]) -> b
  * @param v4 True for ARP, false for IPv6.
  * @param entry The neighbour's entry, resolving, whose tries count up and deadline moves on.
  */
-ask_neighbour :: fn(stack: ptr[mut Stack], v4: bool, entry: ptr[mut Neighbour]) {
+ask_neighbour :: fn(stack : ptr[mut Stack], v4 : bool, entry : ptr[mut Neighbour]) {
     entry.tries += 1
     entry.deadline = stack.now + RESOLVE_INTERVAL
     if v4 {
@@ -892,8 +914,13 @@ ask_neighbour :: fn(stack: ptr[mut Stack], v4: bool, entry: ptr[mut Neighbour]) 
  * @param stack The stack.
  * @param v4 True for ARP's table, false for IPv6's.
  */
-tick_neighbours :: fn(stack: ptr[mut Stack], v4: bool) {
-    table :: if v4 { view_of(&stack.arp[0], stack.arp.count) } else { view_of(&stack.neighbours[0], stack.neighbours.count) }
+tick_neighbours :: fn(stack : ptr[mut Stack], v4 : bool) {
+    table :: if v4 {
+        view_of(&stack.arp[0], stack.arp.count)
+    }
+    else {
+        view_of(&stack.neighbours[0], stack.neighbours.count)
+    }
     for &entry in table {
         if entry.state == .Free || stack.now < entry.deadline {
             continue
@@ -916,7 +943,7 @@ tick_neighbours :: fn(stack: ptr[mut Stack], v4: bool) {
  * @param to Where it ends, past its last byte.
  * @return bytes[from..<to]; empty if the range isn't within them.
  */
-part :: fn(bytes: u8[], from: usize, to: usize) -> u8[] {
+part :: fn(bytes : u8[], from : usize, to : usize) -> u8[] {
     if to > bytes.count || from > to {
         return bytes[0..<0]
     }
@@ -930,7 +957,7 @@ part :: fn(bytes: u8[], from: usize, to: usize) -> u8[] {
  * @param at Its index.
  * @return It; 0 past bytes' end.
  */
-byte_at :: fn(bytes: u8[], at: usize) -> u8 {
+byte_at :: fn(bytes : u8[], at : usize) -> u8 {
     return if at < bytes.count { bytes[at] } else { cast[u8](0) }
 }
 
@@ -941,7 +968,7 @@ byte_at :: fn(bytes: u8[], at: usize) -> u8 {
  * @param at Where it starts.
  * @return It; its bytes past bytes' end read as 0.
  */
-u16_at :: fn(bytes: u8[], at: usize) -> u16 {
+u16_at :: fn(bytes : u8[], at : usize) -> u16 {
     return (cast[u16](byte_at(bytes, at)) << 8) | cast[u16](byte_at(bytes, at + 1))
 }
 
@@ -952,7 +979,7 @@ u16_at :: fn(bytes: u8[], at: usize) -> u16 {
  * @param at Where it starts.
  * @return It; its bytes past bytes' end read as 0.
  */
-u32_at :: fn(bytes: u8[], at: usize) -> u32 {
+u32_at :: fn(bytes : u8[], at : usize) -> u32 {
     return (cast[u32](u16_at(bytes, at)) << 16) | cast[u32](u16_at(bytes, at + 2))
 }
 
@@ -963,7 +990,7 @@ u32_at :: fn(bytes: u8[], at: usize) -> u32 {
  * @param at Where it starts.
  * @return It; its bytes past bytes' end read as 0.
  */
-mac_at :: fn(bytes: u8[], at: usize) -> Mac {
+mac_at :: fn(bytes : u8[], at : usize) -> Mac {
     mac := Mac.{}
     for &byte, i in mac.bytes {
         byte^ = byte_at(bytes, at + i)
@@ -978,7 +1005,7 @@ mac_at :: fn(bytes: u8[], at: usize) -> Mac {
  * @param at Where it starts.
  * @return It; its bytes past bytes' end read as 0.
  */
-ipv4_at :: fn(bytes: u8[], at: usize) -> Ipv4 {
+ipv4_at :: fn(bytes : u8[], at : usize) -> Ipv4 {
     address := Ipv4.{}
     for &byte, i in address.bytes {
         byte^ = byte_at(bytes, at + i)
@@ -993,7 +1020,7 @@ ipv4_at :: fn(bytes: u8[], at: usize) -> Ipv4 {
  * @param at Where it starts.
  * @return It; its bytes past bytes' end read as 0.
  */
-ipv6_at :: fn(bytes: u8[], at: usize) -> Ipv6 {
+ipv6_at :: fn(bytes : u8[], at : usize) -> Ipv6 {
     address := Ipv6.{}
     for &byte, i in address.bytes {
         byte^ = byte_at(bytes, at + i)
@@ -1008,7 +1035,7 @@ ipv6_at :: fn(bytes: u8[], at: usize) -> Ipv6 {
  * @param at Its index; past bytes' end, nothing's written.
  * @param value The byte.
  */
-put_u8 :: fn(bytes: mut u8[], at: usize, value: u8) {
+put_u8 :: fn(bytes : mut u8[], at : usize, value : u8) {
     if at < bytes.count {
         bytes[at] = value
     }
@@ -1021,7 +1048,7 @@ put_u8 :: fn(bytes: mut u8[], at: usize, value: u8) {
  * @param at Where it starts; bytes past bytes' end aren't written.
  * @param value The value.
  */
-put_u16 :: fn(bytes: mut u8[], at: usize, value: u16) {
+put_u16 :: fn(bytes : mut u8[], at : usize, value : u16) {
     put_u8(bytes, at, cast[u8](value >> 8))
     put_u8(bytes, at + 1, cast[u8](value))
 }
@@ -1033,7 +1060,7 @@ put_u16 :: fn(bytes: mut u8[], at: usize, value: u16) {
  * @param at Where it starts; bytes past bytes' end aren't written.
  * @param value The value.
  */
-put_u32 :: fn(bytes: mut u8[], at: usize, value: u32) {
+put_u32 :: fn(bytes : mut u8[], at : usize, value : u32) {
     put_u16(bytes, at, cast[u16](value >> 16))
     put_u16(bytes, at + 2, cast[u16](value))
 }
@@ -1045,7 +1072,7 @@ put_u32 :: fn(bytes: mut u8[], at: usize, value: u32) {
  * @param at Where they start; those past bytes' end aren't written.
  * @param from What's written.
  */
-put_bytes :: fn(bytes: mut u8[], at: usize, from: u8[]) {
+put_bytes :: fn(bytes : mut u8[], at : usize, from : u8[]) {
     for byte, i in from {
         put_u8(bytes, at + i, byte)
     }
@@ -1058,7 +1085,7 @@ put_bytes :: fn(bytes: mut u8[], at: usize, from: u8[]) {
  * @param at Where it starts.
  * @param mac The address.
  */
-put_mac :: fn(bytes: mut u8[], at: usize, mac: Mac) {
+put_mac :: fn(bytes : mut u8[], at : usize, mac : Mac) {
     for byte, i in mac.bytes {
         put_u8(bytes, at + i, byte)
     }
@@ -1071,7 +1098,7 @@ put_mac :: fn(bytes: mut u8[], at: usize, mac: Mac) {
  * @param bytes The bytes, from an even offset in what's checksummed.
  * @return The sum with them, not yet folded.
  */
-checksum_add :: fn(sum: u64, bytes: u8[]) -> u64 {
+checksum_add :: fn(sum : u64, bytes : u8[]) -> u64 {
     total := sum
     with {
         at : usize = 0
@@ -1093,7 +1120,7 @@ checksum_add :: fn(sum: u64, bytes: u8[]) -> u64 {
  * @param sum The running sum.
  * @return The checksum, as it's written; checking a whole header or packet with its checksum in it gives 0.
  */
-checksum_finish :: fn(sum: u64) -> u16 {
+checksum_finish :: fn(sum : u64) -> u16 {
     folded := sum
     loop {
         folded = (folded & 0xffff) + (folded >> 16)
@@ -1109,7 +1136,7 @@ checksum_finish :: fn(sum: u64) -> u16 {
  *
  * @return True if they're the same.
  */
-same_mac :: fn(a: Mac, b: Mac) -> bool {
+same_mac :: fn(a : Mac, b : Mac) -> bool {
     for byte, i in a.bytes {
         if i < b.bytes.count && byte != b.bytes[i] {
             return false
@@ -1123,7 +1150,7 @@ same_mac :: fn(a: Mac, b: Mac) -> bool {
  *
  * @return True if they're the same.
  */
-same_ipv4 :: fn(a: Ipv4, b: Ipv4) -> bool {
+same_ipv4 :: fn(a : Ipv4, b : Ipv4) -> bool {
     for byte, i in a.bytes {
         if i < b.bytes.count && byte != b.bytes[i] {
             return false
@@ -1137,7 +1164,7 @@ same_ipv4 :: fn(a: Ipv4, b: Ipv4) -> bool {
  *
  * @return True if they're the same.
  */
-same_ipv6 :: fn(a: Ipv6, b: Ipv6) -> bool {
+same_ipv6 :: fn(a : Ipv6, b : Ipv6) -> bool {
     for byte, i in a.bytes {
         if i < b.bytes.count && byte != b.bytes[i] {
             return false
@@ -1151,7 +1178,7 @@ same_ipv6 :: fn(a: Ipv6, b: Ipv6) -> bool {
  *
  * @return True if they're of the same family and the same.
  */
-same_address :: fn(a: IpAddress, b: IpAddress) -> bool {
+same_address :: fn(a : IpAddress, b : IpAddress) -> bool {
     return match a {
         case V4(x) => match b {
             case V4(y) => same_ipv4(x, y)
@@ -1170,7 +1197,7 @@ same_address :: fn(a: IpAddress, b: IpAddress) -> bool {
  * @param address The IPv4 address.
  * @return It, the rest zeroes.
  */
-ipv6_of4 :: fn(address: Ipv4) -> Ipv6 {
+ipv6_of4 :: fn(address : Ipv4) -> Ipv6 {
     held := Ipv6.{}
     for byte, i in address.bytes {
         if i < held.bytes.count {
@@ -1186,7 +1213,7 @@ ipv6_of4 :: fn(address: Ipv4) -> Ipv6 {
  * @param held The IPv6 address holding it.
  * @return Its first four bytes.
  */
-ipv4_of6 :: fn(held: Ipv6) -> Ipv4 {
+ipv4_of6 :: fn(held : Ipv6) -> Ipv4 {
     address := Ipv4.{}
     for &byte, i in address.bytes {
         if i < held.bytes.count {
@@ -1201,7 +1228,7 @@ ipv4_of6 :: fn(held: Ipv6) -> Ipv4 {
  *
  * @return True if every byte is 0.
  */
-is_zero_ipv4 :: fn(address: Ipv4) -> bool {
+is_zero_ipv4 :: fn(address : Ipv4) -> bool {
     return same_ipv4(address, Ipv4.{})
 }
 
@@ -1211,7 +1238,7 @@ is_zero_ipv4 :: fn(address: Ipv4) -> bool {
  * @param stack The stack; nothing in it changes.
  * @return True if one of its global addresses is assigned.
  */
-has_global_v6 :: fn(stack: ptr[Stack]) -> bool {
+has_global_v6 :: fn(stack : ptr[Stack]) -> bool {
     for each in stack.globals {
         if each.state == .Assigned {
             return true
@@ -1225,7 +1252,7 @@ has_global_v6 :: fn(stack: ptr[Stack]) -> bool {
  *
  * @return True if every byte is 0.
  */
-is_zero_ipv6 :: fn(address: Ipv6) -> bool {
+is_zero_ipv6 :: fn(address : Ipv6) -> bool {
     return same_ipv6(address, Ipv6.{})
 }
 
@@ -1237,7 +1264,7 @@ is_zero_ipv6 :: fn(address: Ipv6) -> bool {
  * @param length The prefix's length in bits, 0 to 32.
  * @return True if their first length bits are the same.
  */
-same_prefix_v4 :: fn(a: Ipv4, b: Ipv4, length: u8) -> bool {
+same_prefix_v4 :: fn(a : Ipv4, b : Ipv4, length : u8) -> bool {
     return prefix_matches(view_of(&a.bytes[0], a.bytes.count), view_of(&b.bytes[0], b.bytes.count), cast[usize](length))
 }
 
@@ -1249,7 +1276,7 @@ same_prefix_v4 :: fn(a: Ipv4, b: Ipv4, length: u8) -> bool {
  * @param bits The prefix's length in bits; past their bits, all of them.
  * @return True if their first bits are the same.
  */
-prefix_matches :: fn(a: u8[], b: u8[], bits: usize) -> bool {
+prefix_matches :: fn(a : u8[], b : u8[], bits : usize) -> bool {
     for byte, i in a {
         if i * 8 >= bits {
             return true

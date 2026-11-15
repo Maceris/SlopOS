@@ -14,10 +14,10 @@ import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import service_kit from "../../libraries/service_kit"
 import text_buffer from "std:text_buffer"
-import aml from "../../aml"
 import acpi_tables from "../../acpi_tables"
+import aml from "../../aml"
+import service_kit from "../../libraries/service_kit"
 import platform from "../../protocols/platform"
 import power as power_protocol from "../../protocols/power"
 
@@ -102,7 +102,7 @@ Acpi :: struct {
  *     claimed, 3 if the tables can't be read, 4 without a FADT, 5 without memory for the interpreter, 6 if the DSDT
  *     doesn't load.
  */
-main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[power_protocol.Power]?) -> int {
+main :: fn(platform_service : os.Channel[platform.Platform], power : os.Channel[power_protocol.Power]?) -> int {
     block :: slop_os.startup_block()
     made, error :: runtime.new_aligned(Acpi, align_of(Acpi))
     if error != null {
@@ -144,14 +144,27 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
     service.sci = hardware.sci
     service.fadt = acpi_tables.parse_fadt(acpi_tables.first_table(tables, "FACP")) or_return 4
 
-    host :: aml.Host.{state = cast[u64](service), read = host_read, write = host_write, sleep = host_sleep, stall = host_stall,
-        timer = host_timer, notify = host_notify, debug = host_debug}
+    host :: aml.Host.{
+        state = cast[u64](service),
+        read = host_read,
+        write = host_write,
+        sleep = host_sleep,
+        stall = host_stall,
+        timer = host_timer,
+        notify = host_notify,
+        debug = host_debug,
+    }
     service.interpreter = aml.make(host, aml.Limits.{}, view_of(cast[ptr[string]](null), 0)) or_return 5
     interpreter :: service.interpreter
     // The DSDT, then every SSDT
     match aml.load_table(interpreter, acpi_tables.first_table(tables, "DSDT")) {
         case Some(failure) => {
-            runtime.log_error("the DSDT didn't load: % at % (missing %)", failure, interpreter.failed_at, interpreter.missing)
+            runtime.log_error(
+                "the DSDT didn't load: % at % (missing %)",
+                failure,
+                interpreter.failed_at,
+                interpreter.missing
+            )
             return 6
         }
         case None => {}
@@ -175,7 +188,12 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
         case None => {}
     }
     initialize(service, interpreter.root)
-    runtime.log_info("% devices present, % _INI run, % of them failed", service.present, service.initialized, service.failed)
+    runtime.log_info(
+        "% devices present, % _INI run, % of them failed",
+        service.present,
+        service.initialized,
+        service.failed
+    )
     bridge :: host_bridge(service)
     give_windows(service, bridge)
     give_sleep_types(service)
@@ -187,7 +205,13 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
     events :: slop_os.port_create(block.budget) or_return 1
     _ = service_kit.watch_stop(events)
     if cast[slop_os.Handle](service.sci) != slop_os.NO_HANDLE {
-        if slop_os.port_bind(events, cast[slop_os.Handle](service.sci), cast[slop_os.Signals](0), SCI_KEY, .Persistent) is_error {
+        if slop_os.port_bind(
+            events,
+            cast[slop_os.Handle](service.sci),
+            cast[slop_os.Signals](0),
+            SCI_KEY,
+            .Persistent
+        ) is_error {
             runtime.log_error("the SCI can't be waited for")
         }
         enable_events(service)
@@ -229,7 +253,7 @@ BUTTON_PRESSED : u64 : 0x80
  * @param width The bits: 8 or 16.
  * @return What it read; 0 if it couldn't.
  */
-read_port :: fn(service: ptr[mut Acpi], port: u64, width: u32) -> u64 {
+read_port :: fn(service : ptr[mut Acpi], port : u64, width : u32) -> u64 {
     if port == 0 {
         return 0
     }
@@ -244,7 +268,7 @@ read_port :: fn(service: ptr[mut Acpi], port: u64, width: u32) -> u64 {
  * @param width The bits: 8 or 16.
  * @param value What's written.
  */
-write_port :: fn(service: ptr[mut Acpi], port: u64, width: u32, value: u64) {
+write_port :: fn(service : ptr[mut Acpi], port : u64, width : u32, value : u64) {
     if port != 0 {
         _ = host_write(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), port, width, value)
     }
@@ -256,7 +280,7 @@ write_port :: fn(service: ptr[mut Acpi], port: u64, width: u32, value: u64) {
  *
  * @param service The service.
  */
-enable_events :: fn(service: ptr[mut Acpi]) {
+enable_events :: fn(service : ptr[mut Acpi]) {
     fadt :: service.fadt
     half :: cast[u64](fadt.pm1_event_length / 2)
     if fadt.flags & acpi_tables.POWER_BUTTON_IS_DEVICE == 0 && half >= 2 {
@@ -305,7 +329,7 @@ GpeRegister :: struct {
  * @param name The method's name, a segment.
  * @return The number; 256 for a name that isn't one.
  */
-gpe_number :: fn(name: u32) -> u64 {
+gpe_number :: fn(name : u32) -> u64 {
     underscore :: name & 0xff
     kind :: (name >> 8) & 0xff
     high :: aml.digit_value(cast[u8]((name >> 16) & 0xff))
@@ -322,7 +346,7 @@ gpe_number :: fn(name: u32) -> u64 {
  * @param name The method's name.
  * @return True for _Lxx.
  */
-is_level :: fn(name: u32) -> bool {
+is_level :: fn(name : u32) -> bool {
     return (name >> 8) & 0xff == 0x4c
 }
 
@@ -333,19 +357,25 @@ is_level :: fn(name: u32) -> bool {
  * @param number The GPE.
  * @return Its registers and bit; null for one in neither block.
  */
-gpe_register :: fn(service: ptr[mut Acpi], number: u64) -> GpeRegister? {
+gpe_register :: fn(service : ptr[mut Acpi], number : u64) -> GpeRegister? {
     fadt :: service.fadt
     half0 :: cast[u64](fadt.gpe0_length / 2)
     if fadt.gpe0 != 0 && number < half0 * 8 {
-        return GpeRegister.{status = cast[u64](fadt.gpe0) + number / 8, enable = cast[u64](fadt.gpe0) + half0 + number / 8,
-            bit = cast[u64](1) << (number % 8)}
+        return GpeRegister.{
+            status = cast[u64](fadt.gpe0) + number / 8,
+            enable = cast[u64](fadt.gpe0) + half0 + number / 8,
+            bit = cast[u64](1) << (number % 8),
+        }
     }
     half1 :: cast[u64](fadt.gpe1_length / 2)
     base :: cast[u64](fadt.gpe1_base)
     if fadt.gpe1 != 0 && number >= base && number - base < half1 * 8 {
         index :: number - base
-        return GpeRegister.{status = cast[u64](fadt.gpe1) + index / 8, enable = cast[u64](fadt.gpe1) + half1 + index / 8,
-            bit = cast[u64](1) << (index % 8)}
+        return GpeRegister.{
+            status = cast[u64](fadt.gpe1) + index / 8,
+            enable = cast[u64](fadt.gpe1) + half1 + index / 8,
+            bit = cast[u64](1) << (index % 8),
+        }
     }
     return null
 }
@@ -356,7 +386,7 @@ gpe_register :: fn(service: ptr[mut Acpi], number: u64) -> GpeRegister? {
  *
  * @param service The service.
  */
-handle_sci :: fn(service: ptr[mut Acpi]) {
+handle_sci :: fn(service : ptr[mut Acpi]) {
     fadt :: service.fadt
     half :: cast[u64](fadt.pm1_event_length / 2)
     for block in u64.[cast[u64](fadt.pm1a_event), cast[u64](fadt.pm1b_event)] {
@@ -400,7 +430,7 @@ handle_sci :: fn(service: ptr[mut Acpi]) {
  *
  * @param service The service.
  */
-press :: fn(service: ptr[mut Acpi]) {
+press :: fn(service : ptr[mut Acpi]) {
     runtime.log_info("the power button was pressed")
     if service.pressed || cast[slop_os.Handle](service.power) == slop_os.NO_HANDLE {
         return void
@@ -414,7 +444,6 @@ press :: fn(service: ptr[mut Acpi]) {
     }
 }
 
-
 /**
  * Ask the platform service something and wait for its answer.
  *
@@ -422,7 +451,7 @@ press :: fn(service: ptr[mut Acpi]) {
  * @param request The request.
  * @return The answer, what it holds the caller's; null if the connection failed.
  */
-ask :: fn(service: ptr[mut Acpi], request #escaping : platform.Request) -> platform.Response? {
+ask :: fn(service : ptr[mut Acpi], request #escaping : platform.Request) -> platform.Response? {
     out := os.Outgoing.{}
     made :: os.begin[platform.Request](&out)
     made^ = request
@@ -449,7 +478,7 @@ ask :: fn(service: ptr[mut Acpi], request #escaping : platform.Request) -> platf
  * @param count Its ports.
  * @return The ports and the offset of first in them; null if the platform service refused them.
  */
-ports_for :: fn(service: ptr[mut Acpi], first: u64, count: u64) -> PortGrant? {
+ports_for :: fn(service : ptr[mut Acpi], first : u64, count : u64) -> PortGrant? {
     for grant, i in service.ports {
         if i >= service.port_count {
             break
@@ -487,7 +516,7 @@ ports_for :: fn(service: ptr[mut Acpi], first: u64, count: u64) -> PortGrant? {
  * @param count Its bytes.
  * @return Where address is mapped; null if the platform service refused it, or it can't be mapped.
  */
-memory_for :: fn(service: ptr[mut Acpi], address: u64, count: u64) -> u64? {
+memory_for :: fn(service : ptr[mut Acpi], address : u64, count : u64) -> u64? {
     for grant, i in service.memories {
         if i >= service.memory_count {
             break
@@ -528,7 +557,7 @@ memory_for :: fn(service: ptr[mut Acpi], address: u64, count: u64) -> u64? {
  * @param width The bits: 8, 16, 32 or 64.
  * @return The value; null for another space, or an access the platform service refused.
  */
-host_read :: fn(state: u64, space: u8, address: u64, width: u32) -> u64? {
+host_read :: fn(state : u64, space : u8, address : u64, width : u32) -> u64? {
     service :: cast[ptr[mut Acpi]](state)
     if width == 64 && space != cast[u8](aml.RegionSpace.SystemMemory) {
         low :: host_read(state, space, address, 32) or_return null
@@ -538,7 +567,8 @@ host_read :: fn(state: u64, space: u8, address: u64, width: u32) -> u64? {
     bytes :: cast[u64](width / 8)
     if space == cast[u8](aml.RegionSpace.SystemIo) {
         grant :: ports_for(service, address, bytes) or_return null
-        value :: slop_os.io_port_read(grant.ports, cast[u32](address - cast[u64](grant.first)), cast[u32](bytes)) or_return null
+        value :: slop_os.io_port_read(grant.ports, cast[u32](address - cast[u64](grant.first)), cast[u32](bytes))
+            or_return null
         return cast[u64](value)
     }
     if space == cast[u8](aml.RegionSpace.SystemMemory) {
@@ -574,15 +604,21 @@ host_read :: fn(state: u64, space: u8, address: u64, width: u32) -> u64? {
  * @param value What's written.
  * @return False for another space, or an access the platform service refused.
  */
-host_write :: fn(state: u64, space: u8, address: u64, width: u32, value: u64) -> bool {
+host_write :: fn(state : u64, space : u8, address : u64, width : u32, value : u64) -> bool {
     service :: cast[ptr[mut Acpi]](state)
     if width == 64 && space != cast[u8](aml.RegionSpace.SystemMemory) {
-        return host_write(state, space, address, 32, value & 0xffffffff) && host_write(state, space, address + 4, 32, value >> 32)
+        return host_write(state, space, address, 32, value & 0xffffffff)
+            && host_write(state, space, address + 4, 32, value >> 32)
     }
     bytes :: cast[u64](width / 8)
     if space == cast[u8](aml.RegionSpace.SystemIo) {
         grant :: ports_for(service, address, bytes) or_return false
-        return slop_os.io_port_write(grant.ports, cast[u32](address - cast[u64](grant.first)), cast[u32](bytes), cast[u32](value & 0xffffffff)) is_ok
+        return slop_os.io_port_write(
+            grant.ports,
+            cast[u32](address - cast[u64](grant.first)),
+            cast[u32](bytes),
+            cast[u32](value & 0xffffffff)
+        ) is_ok
     }
     if space == cast[u8](aml.RegionSpace.SystemMemory) {
         at :: memory_for(service, address, bytes) or_return false
@@ -601,7 +637,8 @@ host_write :: fn(state: u64, space: u8, address: u64, width: u32, value: u64) ->
         return true
     }
     if space == cast[u8](aml.RegionSpace.PciConfig) {
-        response :: ask(service, .ConfigWrite(platform.ConfigAccess.{address = address, width = width, value = value})) or_return false
+        response :: ask(service, .ConfigWrite(platform.ConfigAccess.{address = address, width = width, value = value}))
+            or_return false
         match response {
             case Done => return true
             case _ => return false
@@ -611,7 +648,7 @@ host_write :: fn(state: u64, space: u8, address: u64, width: u32, value: u64) ->
 }
 
 /** Sleep, for the AML interpreter: the service waits on a port nothing's bound to until the time's passed. */
-host_sleep :: fn(state: u64, milliseconds: u64) {
+host_sleep :: fn(state : u64, milliseconds : u64) {
     service :: cast[ptr[mut Acpi]](state)
     now :: slop_os.clock_monotonic() or_else 0
     packets : slop_os.Packet[1]
@@ -619,7 +656,7 @@ host_sleep :: fn(state: u64, milliseconds: u64) {
 }
 
 /** Stall, for the AML interpreter: spin until the time's passed. */
-host_stall :: fn(state: u64, microseconds: u64) {
+host_stall :: fn(state : u64, microseconds : u64) {
     until :: (slop_os.clock_monotonic() or_else 0) + microseconds * 1000
     loop {
         intrinsics.spin_hint()
@@ -628,7 +665,7 @@ host_stall :: fn(state: u64, microseconds: u64) {
 }
 
 /** The timer, for the AML interpreter: the monotonic clock in 100-nanosecond units. */
-host_timer :: fn(state: u64) -> u64 {
+host_timer :: fn(state : u64) -> u64 {
     return (slop_os.clock_monotonic() or_else 0) / 100
 }
 
@@ -636,7 +673,7 @@ host_timer :: fn(state: u64) -> u64 {
  * A notification, for the AML interpreter: a power button device's 0x80 is its pressing, told the supervisor; anything
  * else is logged.
  */
-host_notify :: fn(state: u64, node: ptr[aml.Node], value: u64) {
+host_notify :: fn(state : u64, node : ptr[aml.Node], value : u64) {
     service :: cast[ptr[mut Acpi]](state)
     if value == BUTTON_PRESSED {
         match aml.child_of(node, aml.segment_of("_HID")) {
@@ -663,7 +700,7 @@ host_notify :: fn(state: u64, node: ptr[aml.Node], value: u64) {
  * @param hid The device's _HID.
  * @return True for PNP0C0C.
  */
-is_power_button :: fn(service: ptr[mut Acpi], hid: ptr[aml.Node]) -> bool {
+is_power_button :: fn(service : ptr[mut Acpi], hid : ptr[aml.Node]) -> bool {
     if hid.kind != .Name {
         return false
     }
@@ -675,7 +712,7 @@ is_power_button :: fn(service: ptr[mut Acpi], hid: ptr[aml.Node]) -> bool {
 }
 
 /** What AML stores to the debug object, for the AML interpreter: logged. */
-host_debug :: fn(state: u64, text: string) {
+host_debug :: fn(state : u64, text : string) {
     runtime.log_info("AML says: %", text)
 }
 
@@ -687,13 +724,15 @@ host_debug :: fn(state: u64, text: string) {
  *
  * @param service The service, whose FADT says how.
  */
-enter_acpi_mode :: fn(service: ptr[mut Acpi]) {
+enter_acpi_mode :: fn(service : ptr[mut Acpi]) {
     fadt :: service.fadt
     control :: cast[u64](fadt.pm1a_control)
     if control == 0 {
         return void
     }
-    if (host_read(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), control, 16) or_else 0) & cast[u64](SCI_ENABLE) != 0 {
+    if (host_read(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), control, 16) or_else 0)
+        & cast[u64](SCI_ENABLE)
+        != 0 {
         runtime.log_info("the machine's in ACPI mode")
         return void
     }
@@ -701,10 +740,18 @@ enter_acpi_mode :: fn(service: ptr[mut Acpi]) {
         runtime.log_error("the machine isn't in ACPI mode, and has no way into it")
         return void
     }
-    _ = host_write(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), cast[u64](fadt.smi_command), 8, cast[u64](fadt.acpi_enable))
+    _ = host_write(
+        cast[u64](service),
+        cast[u8](aml.RegionSpace.SystemIo),
+        cast[u64](fadt.smi_command),
+        8,
+        cast[u64](fadt.acpi_enable)
+    )
     until :: (slop_os.clock_monotonic() or_else 0) + ACPI_MODE_WAIT
     loop {
-        if (host_read(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), control, 16) or_else 0) & cast[u64](SCI_ENABLE) != 0 {
+        if (host_read(cast[u64](service), cast[u8](aml.RegionSpace.SystemIo), control, 16) or_else 0)
+            & cast[u64](SCI_ENABLE)
+            != 0 {
             runtime.log_info("entered ACPI mode")
             return void
         }
@@ -721,7 +768,7 @@ enter_acpi_mode :: fn(service: ptr[mut Acpi]) {
  * @param service The service, whose counts grow.
  * @param node Where to start; its own _INI isn't run here.
  */
-initialize :: fn(service: ptr[mut Acpi], node: ptr[mut aml.Node]) {
+initialize :: fn(service : ptr[mut Acpi], node : ptr[mut aml.Node]) {
     interpreter :: service.interpreter
     none :: view_of(cast[ptr[aml.Value]](null), 0)
     child := node.first_child
@@ -773,8 +820,9 @@ initialize :: fn(service: ptr[mut Acpi], node: ptr[mut aml.Node]) {
  *
  * @param service The service.
  */
-give_sleep_types :: fn(service: ptr[mut Acpi]) {
-    value :: aml.evaluate(service.interpreter, "\\_S5", view_of(cast[ptr[aml.Value]](null), 0)) or_else aml.Value.Uninitialized
+give_sleep_types :: fn(service : ptr[mut Acpi]) {
+    value :: aml.evaluate(service.interpreter, "\\_S5", view_of(cast[ptr[aml.Value]](null), 0))
+        or_else aml.Value.Uninitialized
     types := platform.SleepTypes.{}
     match value {
         case Package(package) => {
@@ -793,7 +841,11 @@ give_sleep_types :: fn(service: ptr[mut Acpi]) {
     }
     match ask(service, .GiveSleepTypes(types)) {
         case Some(response) => match response {
-            case Done => runtime.log_info("S5's sleep types, % and %, given for turning the machine off", types.a, types.b)
+            case Done => runtime.log_info(
+                "S5's sleep types, % and %, given for turning the machine off",
+                types.a,
+                types.b
+            )
             case _ => runtime.log_error("S5's sleep types were refused")
         }
         case None => runtime.log_error("S5's sleep types couldn't be given")
@@ -806,7 +858,7 @@ give_sleep_types :: fn(service: ptr[mut Acpi]) {
  * @param value The element.
  * @return Its value; 0 for anything but an integer.
  */
-small_integer :: fn(value: aml.Value) -> u64 {
+small_integer :: fn(value : aml.Value) -> u64 {
     match value {
         case Integer(number) => return number
         case _ => return 0
@@ -819,7 +871,7 @@ small_integer :: fn(value: aml.Value) -> u64 {
  * @param service The service.
  * @return Its node; null if there's none.
  */
-host_bridge :: fn(service: ptr[mut Acpi]) -> ptr[mut aml.Node]? {
+host_bridge :: fn(service : ptr[mut Acpi]) -> ptr[mut aml.Node]? {
     interpreter :: service.interpreter
     bus :: aml.find(interpreter, "\\_SB") or_return null
     none :: view_of(cast[ptr[aml.Value]](null), 0)
@@ -829,7 +881,9 @@ host_bridge :: fn(service: ptr[mut Acpi]) -> ptr[mut aml.Node]? {
         child = inner.next
         number : u64 = 0
         match aml.child_of(inner, aml.segment_of("_HID")) {
-            case Some(hid) => number = small_integer(aml.evaluate_node(interpreter, hid, none) or_else aml.Value.Uninitialized)
+            case Some(
+                hid
+            ) => number = small_integer(aml.evaluate_node(interpreter, hid, none) or_else aml.Value.Uninitialized)
             case None => {}
         }
         if number == PCIE_HOST_BRIDGE || number == PCI_HOST_BRIDGE {
@@ -845,18 +899,22 @@ host_bridge :: fn(service: ptr[mut Acpi]) -> ptr[mut aml.Node]? {
  * @param service The service.
  * @param bridge The host bridge.
  */
-count_routes :: fn(service: ptr[mut Acpi], bridge: ptr[mut aml.Node]) {
+count_routes :: fn(service : ptr[mut Acpi], bridge : ptr[mut aml.Node]) {
     routes :: aml.child_of(bridge, aml.segment_of("_PRT")) or_return void
     match aml.evaluate_node(service.interpreter, routes, view_of(cast[ptr[aml.Value]](null), 0)) {
         case Ok(value) => match value {
-            case Package(package) => runtime.log_info("the host bridge's _PRT routes % interrupts", package.elements.count)
+            case Package(
+                package
+            ) => runtime.log_info("the host bridge's _PRT routes % interrupts", package.elements.count)
             case _ => runtime.log_error("the host bridge's _PRT isn't a package")
         }
         case Error(failure) => runtime.log_error("the host bridge's _PRT failed: %", failure)
     }
 }
 
-/** The smallest memory window of the host bridge's given to the platform service: legacy VGA's and the like are left. */
+/**
+ * The smallest memory window of the host bridge's given to the platform service: legacy VGA's and the like are left.
+ */
 SMALLEST_WINDOW : u64 : 1 << 20
 
 /**
@@ -867,12 +925,14 @@ SMALLEST_WINDOW : u64 : 1 << 20
  * @param service The service.
  * @param bridge The host bridge; null for none.
  */
-give_windows :: fn(service: ptr[mut Acpi], bridge: ptr[mut aml.Node]?) {
+give_windows :: fn(service : ptr[mut Acpi], bridge : ptr[mut aml.Node]?) {
     windows := platform.BridgeWindows.{}
     match bridge {
         case Some(found) => {
             match aml.child_of(found, aml.segment_of("_CRS")) {
-                case Some(resources) => match aml.evaluate_node(service.interpreter, resources, view_of(cast[ptr[aml.Value]](null), 0)) {
+                case Some(
+                    resources
+                ) => match aml.evaluate_node(service.interpreter, resources, view_of(cast[ptr[aml.Value]](null), 0)) {
                     case Ok(value) => match value {
                         case Buffer(bytes) => windows = windows_of(bytes.data)
                         case _ => runtime.log_error("the host bridge's _CRS isn't a buffer")
@@ -900,7 +960,7 @@ give_windows :: fn(service: ptr[mut Acpi], bridge: ptr[mut aml.Node]?) {
  * @param template The template, as _CRS gives it.
  * @return The windows; none if it has none, or ends early.
  */
-windows_of :: fn(template: u8[]) -> platform.BridgeWindows {
+windows_of :: fn(template : u8[]) -> platform.BridgeWindows {
     found := platform.BridgeWindows.{}
     at : u64 = 0
     total :: cast[u64](template.count)
@@ -932,7 +992,15 @@ windows_of :: fn(template: u8[]) -> platform.BridgeWindows {
             bytes :: acpi_tables.little(template, data + 3 + 4 * size, size)
             prefetchable :: (acpi_tables.little(template, data + 2, 1) >> 1) & 3 == 3
             if bytes >= SMALLEST_WINDOW {
-                add_window(&found, platform.BridgeWindow.{cpu = minimum + translation, pci = minimum, size = bytes, prefetchable = prefetchable})
+                add_window(
+                    &found,
+                    platform.BridgeWindow.{
+                        cpu = minimum + translation,
+                        pci = minimum,
+                        size = bytes,
+                        prefetchable = prefetchable,
+                    }
+                )
             }
         }
         at = data + length
@@ -946,7 +1014,7 @@ windows_of :: fn(template: u8[]) -> platform.BridgeWindows {
  * @param windows The windows.
  * @param window The window.
  */
-add_window :: fn(windows: ptr[mut platform.BridgeWindows], window: platform.BridgeWindow) {
+add_window :: fn(windows : ptr[mut platform.BridgeWindows], window : platform.BridgeWindow) {
     count :: cast[usize](windows.count)
     if count < windows.windows.count {
         windows.windows[count] = window

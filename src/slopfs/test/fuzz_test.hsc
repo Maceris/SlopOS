@@ -37,22 +37,30 @@ Survived :: struct {
     committed : u64,
 }
 
-an_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_fuzz(t, false)
 }
 
-an_encrypted_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_encrypted_image_damaged_many_ways_is_used_as_far_as_it_goes_without_crashing #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_fuzz(t, true)
 }
 
-an_image_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source])
-    -> testing.Outcome {
+an_image_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     kept :: testing.fixture[FuzzImage](source, make_plain_image, free_fuzz_image)
     return check_drawn(t, source, testing.require_some(t, kept, "the image to damage is set up")?)
 }
 
-an_encrypted_image_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T],
-    source: ptr[mut testing.Source]) -> testing.Outcome {
+an_encrypted_image_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     kept :: testing.fixture[FuzzImage](source, make_sealed_image, free_fuzz_image)
     return check_drawn(t, source, testing.require_some(t, kept, "the image to damage is set up")?)
 }
@@ -69,7 +77,11 @@ MOST_FLIPS :: 16
  * @param image The fixture: the device over the disk, and the undamaged image.
  * @return Ok.
  */
-check_drawn :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source], image: ptr[mut FuzzImage]) -> testing.Outcome {
+check_drawn :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source],
+    image : ptr[mut FuzzImage]
+) -> testing.Outcome {
     disk :: cast[ptr[mut Disk]](image.device.context)
     base :: image.base
     copy_into(disk.bytes, base)
@@ -141,7 +153,7 @@ make_sealed_image :: fn() -> FuzzImage? {
  * @param sealed Whether the volume is encrypted.
  * @return The image, freed by free_fuzz_image; null if any step failed, nothing left to free.
  */
-make_fuzz_image :: fn(sealed: bool) -> FuzzImage? {
+make_fuzz_image :: fn(sealed : bool) -> FuzzImage? {
     setup := testing.T.{name = "the fuzzer's image"}
     t :: &setup
     device :: formatted(t, FUZZ_BLOCKS, 0xf0) or_return null
@@ -153,7 +165,8 @@ make_fuzz_image :: fn(sealed: bool) -> FuzzImage? {
                 case Ok(volume) => {
                     made = true
                     for step in 0..<STEPS - 1 {
-                        if (workload(t, volume, step) is_error) || (require_commit(t, container, "each step of the workload commits") is_error) {
+                        if (workload(t, volume, step) is_error)
+                            || (require_commit(t, container, "each step of the workload commits") is_error) {
                             made = false
                             break
                         }
@@ -183,7 +196,7 @@ make_fuzz_image :: fn(sealed: bool) -> FuzzImage? {
  *
  * @param image The image, not used after.
  */
-free_fuzz_image :: fn(image: ptr[mut FuzzImage]) {
+free_fuzz_image :: fn(image : ptr[mut FuzzImage]) {
     runtime.free_array(image.base)
     free_device(image.device)
 }
@@ -200,7 +213,7 @@ free_fuzz_image :: fn(image: ptr[mut FuzzImage]) {
  * @return Ok once the rounds have run, whatever was found; Error(Failed), the failure recorded, if the volume to damage
  *     couldn't be set up.
  */
-check_fuzz :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+check_fuzz :: fn(t : ptr[mut testing.T], sealed : bool) -> testing.Outcome {
     device :: formatted(t, FUZZ_BLOCKS, 0xf0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
@@ -255,8 +268,15 @@ check_fuzz :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
         exercise(&device, &survived, sealed)
         survived.rounds += 1
     }
-    runtime.log_info("fuzz%: % rounds: % refused at mount, % mounted, % of those checked out whole, % committed after", if sealed { " (sealed)" } else { "" },
-        survived.rounds, survived.refused, survived.mounted, survived.verified, survived.committed)
+    runtime.log_info(
+        "fuzz%: % rounds: % refused at mount, % mounted, % of those checked out whole, % committed after",
+        if sealed { " (sealed)" } else { "" },
+        survived.rounds,
+        survived.refused,
+        survived.mounted,
+        survived.verified,
+        survived.committed
+    )
     testing.expect_gt(t, survived.mounted, 0, "some damage, most of all behind the seals, still mounts")
     return .Ok
 }
@@ -267,7 +287,7 @@ check_fuzz :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
  * @param text The text, digits only.
  * @return The number; null if the text is empty or has anything but digits. Overflow isn't checked.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     value : u64 = 0
     if text.count == 0 {
         return null
@@ -289,7 +309,7 @@ number_of :: fn(text: string) -> u64? {
  * @param survived The counts, updated.
  * @param sealed Whether the volumes are encrypted, opened with the tests' passphrase.
  */
-exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: bool) {
+exercise :: fn(device : ptr[slopfs.Device], survived : ptr[mut Survived], sealed : bool) {
     container := slopfs.Container.{}
     mounted := false
     match slopfs.mount(device^) {
@@ -299,7 +319,12 @@ exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: 
                 survived.verified += 1
             }
             for id in 1..=cast[u64](2) {
-                opened :: if sealed { slopfs.open_sealed_volume(made, id, passphrase()) } else { slopfs.open_volume(made, id) }
+                opened :: if sealed {
+                    slopfs.open_sealed_volume(made, id, passphrase())
+                }
+                else {
+                    slopfs.open_volume(made, id)
+                }
                 match opened {
                     case Ok(volume) => use_volume(volume)
                     case Error(failure) => {}
@@ -320,7 +345,7 @@ exercise :: fn(device: ptr[slopfs.Device], survived: ptr[mut Survived], sealed: 
  *
  * @param volume The volume under test, open.
  */
-use_volume :: fn(volume: ptr[mut slopfs.Volume]) {
+use_volume :: fn(volume : ptr[mut slopfs.Volume]) {
     _ = state_digest(volume)
     root :: slopfs.ROOT_OBJECT
     bytes : u8[5000]
@@ -346,7 +371,7 @@ use_volume :: fn(volume: ptr[mut slopfs.Volume]) {
  * @param disk The disk, changed in place.
  * @param random The generator choosing what changes.
  */
-mutate_sealed :: fn(disk: ptr[mut Disk], random: ptr[mut Random]) {
+mutate_sealed :: fn(disk : ptr[mut Disk], random : ptr[mut Random]) {
     newest : usize = 0
     newest_transaction : u64 = 0
     for slot in 0..<slopfs.RING_BLOCKS {
@@ -391,7 +416,13 @@ mutate_sealed :: fn(disk: ptr[mut Disk], random: ptr[mut Random]) {
  * @param depth How far down it is, from 0; nothing goes past 8 down.
  * @return True if the node, or one beneath it, was changed; false if the pointer points nowhere on the disk.
  */
-mutate_at :: fn(disk: ptr[mut Disk], pointer: ptr[mut slopfs.BlockPointer], volumes: bool, random: ptr[mut Random], depth: int) -> bool {
+mutate_at :: fn(
+    disk : ptr[mut Disk],
+    pointer : ptr[mut slopfs.BlockPointer],
+    volumes : bool,
+    random : ptr[mut Random],
+    depth : int
+) -> bool {
     start :: cast[usize](cast[u64](pointer.address) * slopfs.BLOCK_BYTES)
     length :: cast[usize](slopfs.NODE_BYTES)
     if cast[u64](pointer.address) == 0 || start + length > disk.bytes.count {

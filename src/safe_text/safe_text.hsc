@@ -35,7 +35,7 @@ Shown :: struct {
  * @return True if the cluster starts with LF or CR and has at most 2 bytes, false otherwise, or when at is past
  *     text's end.
  */
-is_line_break :: fn(text: u8[], at: usize, end: usize) -> bool {
+is_line_break :: fn(text : u8[], at : usize, end : usize) -> bool {
     return at < text.count && (text[at] == 0x0a || text[at] == 0x0d) && end - at <= 2
 }
 
@@ -47,7 +47,7 @@ is_line_break :: fn(text: u8[], at: usize, end: usize) -> bool {
  * @param end Where it ends, as std's unicode grapheme_end gives it.
  * @return True if the cluster is the one byte 0x09, false otherwise, or when at is past text's end.
  */
-is_tab :: fn(text: u8[], at: usize, end: usize) -> bool {
+is_tab :: fn(text : u8[], at : usize, end : usize) -> bool {
     return at < text.count && text[at] == 0x09 && end == at + 1
 }
 
@@ -61,7 +61,7 @@ is_tab :: fn(text: u8[], at: usize, end: usize) -> bool {
  *     as one U+FFFD, 1 column; one that's empty or runs past text's end shows nothing.
  * @param shown Where what's shown goes, overwritten whole: its bytes, their count, and their columns.
  */
-show :: fn(text: u8[], at: usize, end: usize, shown: ptr[mut Shown]) {
+show :: fn(text : u8[], at : usize, end : usize, shown : ptr[mut Shown]) {
     shown.count = 0
     shown.columns = 0
     if end <= at || end > text.count {
@@ -85,7 +85,10 @@ show :: fn(text: u8[], at: usize, end: usize, shown: ptr[mut Shown]) {
         }
         next :: position + length
         if unicode.is_control(point) {
-            append_point(shown, if point < 0x20 { 0x2400 + point } else if point == 0x7f { cast[u32](0x2421) } else { cast[u32](0) })
+            append_point(
+                shown,
+                if point < 0x20 { 0x2400 + point } else if point == 0x7f { cast[u32](0x2421) } else { cast[u32](0) }
+            )
             if point >= 0x80 {
                 append_written_out(shown, point)
             }
@@ -122,7 +125,7 @@ show :: fn(text: u8[], at: usize, end: usize, shown: ptr[mut Shown]) {
  * @return True for a variation selector, standard or supplementary, and for a ZWJ inside a cluster that starts with
  *     a pictograph; false for any other, which is written out.
  */
-kept_in_cluster :: fn(point: u32, pictographic: bool, more_after: bool) -> bool {
+kept_in_cluster :: fn(point : u32, pictographic : bool, more_after : bool) -> bool {
     // Variation selectors, standard and supplementary
     if (point >= 0xfe00 && point <= 0xfe0f) || (point >= 0xe0100 && point <= 0xe01ef) {
         return true
@@ -137,7 +140,7 @@ kept_in_cluster :: fn(point: u32, pictographic: bool, more_after: bool) -> bool 
  * @param shown What's shown so far, count moved on by one.
  * @param byte The byte; it's dropped if bytes is full.
  */
-append_byte :: fn(shown: ptr[mut Shown], byte: u8) {
+append_byte :: fn(shown : ptr[mut Shown], byte : u8) {
     if shown.count < shown.bytes.count {
         shown.bytes[shown.count] = byte
         shown.count += 1
@@ -151,7 +154,7 @@ append_byte :: fn(shown: ptr[mut Shown], byte: u8) {
  * @param point The code point; 0 adds nothing, which is how show says a control has no picture. Bytes past bytes'
  *     end are dropped, so a point may be cut short.
  */
-append_point :: fn(shown: ptr[mut Shown], point: u32) {
+append_point :: fn(shown : ptr[mut Shown], point : u32) {
     if point == 0 {
         return void
     }
@@ -173,11 +176,14 @@ HEX_DIGITS :: "0123456789ABCDEF"
  * @param shown What's shown so far; what doesn't fit in bytes is dropped.
  * @param point The code point: 4 digits up to U+FFFF, 5 up to U+FFFFF, 6 above.
  */
-append_written_out :: fn(shown: ptr[mut Shown], point: u32) {
+append_written_out :: fn(shown : ptr[mut Shown], point : u32) {
     append_point(shown, 0x27e8)
     append_byte(shown, cast[u8]('U'))
     append_byte(shown, cast[u8]('+'))
-    digits : usize = if point > 0xfffff { cast[usize](6) } else if point > 0xffff { cast[usize](5) } else { cast[usize](4) }
+    digits : usize = if point > 0xfffff {
+        cast[usize](6)
+    }
+    else if point > 0xffff { cast[usize](5) } else { cast[usize](4) }
     for i in 0..<digits {
         shift :: cast[u32](4 * (digits - 1 - i))
         digit :: cast[usize]((point >> shift) & 0xf)

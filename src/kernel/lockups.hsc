@@ -13,7 +13,8 @@ import runtime from "base:runtime"
 /*
  * Lockup detection (decisions/0183, 12a, design/lessons.md §6.2): each CPU's tick notes when it ticked, and checks
  * every other CPU did within LOCKUP_SECONDS, but those idle without ticking. One that didn't is stuck, as with
- * interrupts off in a loop: it's sent an NMI (x86-64's, or AArch64's pseudo-NMI through the GIC's priorities, decisions/
+ * interrupts off in a loop: it's sent an NMI (x86-64's, or AArch64's pseudo-NMI through the GIC's priorities,
+ * decisions/
  * 0185), which notes where it was, its registers, and its stack as its frame pointers chain it; and the kernel stops
  * with Lockup, the report logged as fatal, which the panic record keeps for the next boot.
  */
@@ -38,7 +39,7 @@ REGISTERS_PER_LINE :: 4
  * @param cpu The calling CPU.
  * @param now The counter now.
  */
-check_lockups :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
+check_lockups :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], now : u64) {
     intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
     // test_lockup: the second CPU stops making progress, interrupts off; with test_lockup_lock, holding a lock
     if kernel.options.test_lockup && cpu.index == 1 && cpu.timer_ticks >= TEST_LOCKUP_TICK {
@@ -55,7 +56,9 @@ check_lockups :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
         }
     }
     // test_lockup_lock: the boot CPU then waits for that lock, at a tick, so only its wait can see CPU 1 stuck
-    if kernel.options.test_lockup && kernel.options.test_lockup_lock && cpu.index == 0
+    if kernel.options.test_lockup
+        && kernel.options.test_lockup_lock
+        && cpu.index == 0
         && intrinsics.atomic_load_u32_acquire(&kernel.lockup_test_held) != 0 {
         runtime.log_info("test_lockup: CPU 0 waits for the lock CPU 1 holds")
         lock_at(&kernel.lockup_test_lock, .LockupTest)
@@ -71,7 +74,7 @@ check_lockups :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
  * @param kernel The kernel.
  * @param cpu The calling CPU, which waits.
  */
-check_lockups_while_waiting :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) {
+check_lockups_while_waiting :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu]) {
     now :: arch.counter()
     intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
     check_others(kernel, cpu, now)
@@ -86,7 +89,7 @@ check_lockups_while_waiting :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu])
  *
  * @param state Not used.
  */
-check_lockups_while_locking :: fn(state: rawptr) {
+check_lockups_while_locking :: fn(state : rawptr) {
     if intrinsics.carrier().program_data == null {
         return void
     }
@@ -106,7 +109,7 @@ check_lockups_while_locking :: fn(state: rawptr) {
  * @param cpu The calling CPU, which isn't checked.
  * @param now The counter now.
  */
-check_others :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
+check_others :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], now : u64) {
     // Before the counter's frequency is known, there's no telling how long a CPU hasn't ticked
     if kernel.counter_frequency == 0 {
         return void
@@ -141,7 +144,7 @@ check_others :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], now: u64) {
  * @param stuck The stuck CPU.
  * @param since The counter ticks since it last ticked.
  */
-report_lockup :: fn(kernel: ptr[mut Kernel], stuck: ptr[mut PerCpu], since: u64) #never_returns {
+report_lockup :: fn(kernel : ptr[mut Kernel], stuck : ptr[mut PerCpu], since : u64) #never_returns {
     seconds :: since / kernel.counter_frequency
     runtime.log_fatal("lockup: CPU % made no progress for % seconds", stuck.index, seconds)
     cpus :: kernel.cpus
@@ -173,7 +176,7 @@ report_lockup :: fn(kernel: ptr[mut Kernel], stuck: ptr[mut PerCpu], since: u64)
  *
  * @param stuck The stuck CPU, whose lockup_seen is set.
  */
-report_registers :: fn(stuck: ptr[PerCpu]) {
+report_registers :: fn(stuck : ptr[PerCpu]) {
     runtime.log_fatal("lockup: CPU %'s registers:", stuck.index)
     count :: cast[usize](stuck.lockup_register_count)
     registers :: stuck.lockup_registers
@@ -193,12 +196,32 @@ report_registers :: fn(stuck: ptr[PerCpu]) {
             }
         }
         if left >= 4 {
-            write_log_line("fatal", null, "  % %{#018x}  % %{#018x}  % %{#018x}  % %{#018x}", names[0], values[0], names[1], values[1],
-                names[2], values[2], names[3], values[3])
+            write_log_line(
+                "fatal",
+                null,
+                "  % %{#018x}  % %{#018x}  % %{#018x}  % %{#018x}",
+                names[0],
+                values[0],
+                names[1],
+                values[1],
+                names[2],
+                values[2],
+                names[3],
+                values[3]
+            )
         }
         else if left == 3 {
-            write_log_line("fatal", null, "  % %{#018x}  % %{#018x}  % %{#018x}", names[0], values[0], names[1], values[1], names[2],
-                values[2])
+            write_log_line(
+                "fatal",
+                null,
+                "  % %{#018x}  % %{#018x}  % %{#018x}",
+                names[0],
+                values[0],
+                names[1],
+                values[1],
+                names[2],
+                values[2]
+            )
         }
         else if left == 2 {
             write_log_line("fatal", null, "  % %{#018x}  % %{#018x}", names[0], values[0], names[1], values[1])
@@ -216,7 +239,7 @@ report_registers :: fn(stuck: ptr[PerCpu]) {
  * @param kernel The kernel, whose image base the addresses are made relative to.
  * @param stuck The stuck CPU, whose lockup_seen is set.
  */
-report_stack :: fn(kernel: ptr[Kernel], stuck: ptr[PerCpu]) {
+report_stack :: fn(kernel : ptr[Kernel], stuck : ptr[PerCpu]) {
     runtime.log_fatal("lockup: CPU %'s stack:", stuck.index)
     base :: kernel.image_base
     for address, i in stuck.lockup_frames {
@@ -246,7 +269,7 @@ report_stack :: fn(kernel: ptr[Kernel], stuck: ptr[PerCpu]) {
  * @param frame_pointer The interrupted code's frame pointer.
  * @param registers The interrupted code's registers; the first LOCKUP_REGISTERS are kept.
  */
-note_lockup :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu], pc: u64, frame_pointer: u64, registers: u64[]) {
+note_lockup :: fn(kernel : ptr[Kernel], cpu : ptr[mut PerCpu], pc : u64, frame_pointer : u64, registers : u64[]) {
     if intrinsics.atomic_load_u32_acquire(&kernel.lockup_target) != cpu.index + 1 {
         return void
     }

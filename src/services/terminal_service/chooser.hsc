@@ -12,10 +12,10 @@ package terminal_service
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import text_buffer from "std:text_buffer"
-import terminal from "std:os/slop_os/terminal"
-import read_only_dir from "std:os/slop_os/read_only_dir"
 import files from "std:os/slop_os/files"
+import read_only_dir from "std:os/slop_os/read_only_dir"
+import terminal from "std:os/slop_os/terminal"
+import text_buffer from "std:text_buffer"
 import account_records from "../../account_records"
 import prompt from "../../protocols/prompt"
 import screen from "../../screen"
@@ -136,7 +136,7 @@ Item :: struct {
  *     view as asking, a failed connection closed and set to NONE, and the status line drawn for the active view.
  * @param into Where requests are received; an Ask's home handle moves into the view's Asked.
  */
-take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
+take_prompts :: fn(service : ptr[mut Service], into : ptr[mut os.Incoming]) {
     for &each, i in service.views {
         if !each.in_use || each.prompt_end == NONE || each.asking {
             continue
@@ -162,20 +162,54 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
                 }
                 kept := Asked.{kind = asked.kind, write = asked.write, keep = asked.keep, home = asked.home.end}
                 if asked.kind == .AddKey {
-                    kept.key_line_count = copy_bytes(os.items(into, asked.suggested), kept.key_line[0..<kept.key_line.count])
+                    kept.key_line_count = copy_bytes(
+                        os.items(into, asked.suggested),
+                        kept.key_line[0..<kept.key_line.count]
+                    )
                 }
-                kept.requester_count = copy_bytes(os.items(into, asked.requester), kept.requester[0..<kept.requester.count])
+                kept.requester_count = copy_bytes(
+                    os.items(into, asked.requester),
+                    kept.requester[0..<kept.requester.count]
+                )
                 kept.purpose_count = copy_bytes(os.items(into, asked.purpose), kept.purpose[0..<kept.purpose.count])
-                kept.suggested_count = copy_bytes(os.items(into, asked.suggested), kept.suggested[0..<kept.suggested.count])
+                kept.suggested_count = copy_bytes(
+                    os.items(into, asked.suggested),
+                    kept.suggested[0..<kept.suggested.count]
+                )
                 each.ask = kept
                 each.asking = true
-                runtime.log_info("% asks for a %", bytes_text(first_of(kept.requester[0..<kept.requester.count], kept.requester_count)),
-                    if kept.kind == .Directory { "directory" } else if kept.kind == .Account { "new account" }
-                    else if kept.kind == .ShutDown { "shutdown" } else if kept.kind == .Restart { "restart" }
-                    else if kept.kind == .Debug || kept.kind == .DebugOther { "debugger" } else if kept.kind == .Trace { "trace" }
-                    else if kept.kind == .SystemLog { "read of the system's log" } else if kept.kind == .Network { "network connection" }
-                    else if kept.kind == .AddKey { "key added" } else if kept.kind == .RemoveKey { "key removed" }
-                    else { "file" })
+                runtime.log_info(
+                    "% asks for a %",
+                    bytes_text(first_of(kept.requester[0..<kept.requester.count], kept.requester_count)),
+                    if kept.kind == .Directory {
+                        "directory"
+                    }
+                    else if kept.kind == .Account {
+                        "new account"
+                    }
+                    else if kept.kind == .ShutDown {
+                        "shutdown"
+                    }
+                    else if kept.kind == .Restart {
+                        "restart"
+                    }
+                    else if kept.kind == .Debug || kept.kind == .DebugOther {
+                        "debugger"
+                    }
+                    else if kept.kind == .Trace {
+                        "trace"
+                    }
+                    else if kept.kind == .SystemLog {
+                        "read of the system's log"
+                    }
+                    else if kept.kind == .Network {
+                        "network connection"
+                    }
+                    else if kept.kind == .AddKey {
+                        "key added"
+                    }
+                    else if kept.kind == .RemoveKey { "key removed" } else { "file" }
+                )
                 if i == service.active && !service.attention && service.setup == .Off {
                     use_active(service)
                     update_status(service)
@@ -191,17 +225,40 @@ take_prompts :: fn(service: ptr[mut Service], into: ptr[mut os.Incoming]) {
  * @param status The status line's text so far; what doesn't fit its buffer is cut off as text_buffer does.
  * @param asked The request waiting, which isn't changed.
  */
-append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) {
+append_asking :: fn(status : ptr[mut text_buffer.TextBuffer], asked : ptr[Asked]) {
     text_buffer.append(status, " │ ")
     text_buffer.append(status, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
-    text_buffer.append(status, if asked.kind == .Directory { " asks for a directory" } else if asked.kind == .Account { " asks to make an account" }
-        else if asked.kind == .ShutDown { " asks to shut down" } else if asked.kind == .Restart { " asks to restart" }
-        else if asked.kind == .Debug || asked.kind == .DebugOther { " asks to debug a program" }
-        else if asked.kind == .Trace { " asks to trace the system" } else if asked.kind == .SystemLog { " asks to read the system's log" }
-        else if asked.kind == .Network { " asks to reach the network" }
-        else if asked.kind == .AddKey { " asks to add a key that logs in as you" }
-        else if asked.kind == .RemoveKey { " asks to remove a key" }
-        else { " asks for a file" })
+    text_buffer.append(
+        status,
+        if asked.kind == .Directory {
+            " asks for a directory"
+        }
+        else if asked.kind == .Account {
+            " asks to make an account"
+        }
+        else if asked.kind == .ShutDown {
+            " asks to shut down"
+        }
+        else if asked.kind == .Restart {
+            " asks to restart"
+        }
+        else if asked.kind == .Debug || asked.kind == .DebugOther {
+            " asks to debug a program"
+        }
+        else if asked.kind == .Trace {
+            " asks to trace the system"
+        }
+        else if asked.kind == .SystemLog {
+            " asks to read the system's log"
+        }
+        else if asked.kind == .Network {
+            " asks to reach the network"
+        }
+        else if asked.kind == .AddKey {
+            " asks to add a key that logs in as you"
+        }
+        else if asked.kind == .RemoveKey { " asks to remove a key" } else { " asks for a file" }
+    )
     text_buffer.append(status, ": Ctrl+Alt+Delete")
 }
 
@@ -213,13 +270,18 @@ append_asking :: fn(status: ptr[mut text_buffer.TextBuffer], asked: ptr[Asked]) 
  *
  * @param service The service, its secure attention key's screen up and its active view asking.
  */
-enter_chooser :: fn(service: ptr[mut Service]) {
+enter_chooser :: fn(service : ptr[mut Service]) {
     asked :: &view(service).ask
     service.choosing = true
     service.chooser = Chooser.{}
-    service.chooser.filter_count = copy_bytes(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count),
-        service.chooser.filter[0..<service.chooser.filter.count])
-    runtime.log_info("choosing for %", bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
+    service.chooser.filter_count = copy_bytes(
+        first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count),
+        service.chooser.filter[0..<service.chooser.filter.count]
+    )
+    runtime.log_info(
+        "choosing for %",
+        bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count))
+    )
     list_chooser(service)
     select_best(service)
     draw_chooser(service)
@@ -235,7 +297,7 @@ enter_chooser :: fn(service: ptr[mut Service]) {
  * @param event The key, by its USB HID usage and modifiers.
  * @param text The text the key typed, UTF-8, possibly empty; read only during the call.
  */
-chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) {
+chooser_key :: fn(service : ptr[mut Service], event : terminal.Event, text : u8[]) {
     chooser :: &service.chooser
     if event.code == USAGE_ESCAPE {
         answer_ask(service, null, false)
@@ -305,7 +367,7 @@ chooser_key :: fn(service: ptr[mut Service], event: terminal.Event, text: u8[]) 
  *
  * @param service The service, its chooser up.
  */
-activate :: fn(service: ptr[mut Service]) {
+activate :: fn(service : ptr[mut Service]) {
     chooser :: &service.chooser
     items : Item[CHOOSER_ENTRIES + 3]
     count :: items_of(service, &items)
@@ -348,7 +410,11 @@ activate :: fn(service: ptr[mut Service]) {
         }
         case .New => {
             storage : u8[PATH_BYTES]
-            answer_ask(service, joined(chooser, first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count), &storage), true)
+            answer_ask(
+                service,
+                joined(chooser, first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count), &storage),
+                true
+            )
         }
     }
 }
@@ -358,7 +424,7 @@ activate :: fn(service: ptr[mut Service]) {
  *
  * @param service The service, its chooser up, its path just changed.
  */
-opened_directory :: fn(service: ptr[mut Service]) {
+opened_directory :: fn(service : ptr[mut Service]) {
     service.chooser.filter_count = 0
     list_chooser(service)
     select_best(service)
@@ -377,19 +443,27 @@ opened_directory :: fn(service: ptr[mut Service]) {
  *     need only last the call.
  * @param new Whether the path names a new file for the program to make; ignored when refusing.
  */
-answer_ask :: fn(service: ptr[mut Service], path: u8[]?, new: bool) {
+answer_ask :: fn(service : ptr[mut Service], path : u8[]?, new : bool) {
     shown :: view(service)
     out := os.Outgoing.{}
     response :: os.begin[prompt.Response](&out)
     match path {
         case Some(chosen) => {
-            response^ = .Chosen(prompt.Choice.{path = os.append(&out, chosen), new = new, keep = shown.ask.keep && service.chooser.keep})
-            runtime.log_info("chose % for %", if chosen.count > 0 { bytes_text(chosen) } else { "the home" },
-                bytes_text(first_of(shown.ask.requester[0..<shown.ask.requester.count], shown.ask.requester_count)))
+            response^ = .Chosen(
+                prompt.Choice.{path = os.append(&out, chosen), new = new, keep = shown.ask.keep && service.chooser.keep}
+            )
+            runtime.log_info(
+                "chose % for %",
+                if chosen.count > 0 { bytes_text(chosen) } else { "the home" },
+                bytes_text(first_of(shown.ask.requester[0..<shown.ask.requester.count], shown.ask.requester_count))
+            )
         }
         case None => {
             response^ = .Refused
-            runtime.log_info("refused %", bytes_text(first_of(shown.ask.requester[0..<shown.ask.requester.count], shown.ask.requester_count)))
+            runtime.log_info(
+                "refused %",
+                bytes_text(first_of(shown.ask.requester[0..<shown.ask.requester.count], shown.ask.requester_count))
+            )
         }
     }
     if shown.prompt_end != NONE {
@@ -405,7 +479,7 @@ answer_ask :: fn(service: ptr[mut Service], path: u8[]?, new: bool) {
  *
  * @param each The view; if it isn't asking, its request is only cleared.
  */
-drop_ask :: fn(each: ptr[mut View]) {
+drop_ask :: fn(each : ptr[mut View]) {
     if each.asking && each.ask.home != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](each.ask.home))
     }
@@ -423,7 +497,7 @@ drop_ask :: fn(each: ptr[mut View]) {
  *
  * @param service The service, its chooser up.
  */
-list_chooser :: fn(service: ptr[mut Service]) {
+list_chooser :: fn(service : ptr[mut Service]) {
     chooser :: &service.chooser
     chooser.entry_count = 0
     home :: view(service).ask.home
@@ -451,7 +525,12 @@ list_chooser :: fn(service: ptr[mut Service]) {
             _ = slop_os.handle_close(cast[slop_os.Handle](listed))
         }
     }
-    port :: if listed == home { home_port } else { os.port_for(budget, listed) or_else cast[slop_os.Port](slop_os.NO_HANDLE) }
+    port :: if listed == home {
+        home_port
+    }
+    else {
+        os.port_for(budget, listed) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    }
     if cast[slop_os.Handle](port) == slop_os.NO_HANDLE {
         return void
     }
@@ -494,7 +573,12 @@ list_chooser :: fn(service: ptr[mut Service]) {
  *     used again.
  * @return The answer; Unsupported also when the request couldn't be sent or the connection failed.
  */
-ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_dir.Response {
+ask_read_only :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> read_only_dir.Response {
     if read_only_dir.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -518,7 +602,7 @@ ask_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
  * @param items Where the items go, the first of them as many as are returned; null to only count them.
  * @return How many items there are, 0 to CHOOSER_ENTRIES + 3.
  */
-items_of :: fn(service: ptr[mut Service], items: ptr[mut Item[CHOOSER_ENTRIES + 3]]?) -> usize {
+items_of :: fn(service : ptr[mut Service], items : ptr[mut Item[CHOOSER_ENTRIES + 3]]?) -> usize {
     chooser :: &service.chooser
     asked :: &view(service).ask
     filter :: first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count)
@@ -562,7 +646,7 @@ items_of :: fn(service: ptr[mut Service], items: ptr[mut Item[CHOOSER_ENTRIES + 
  *
  * @param service The service, its chooser up; only its selected changes.
  */
-select_best :: fn(service: ptr[mut Service]) {
+select_best :: fn(service : ptr[mut Service]) {
     chooser :: &service.chooser
     items : Item[CHOOSER_ENTRIES + 3]
     count :: items_of(service, &items)
@@ -600,7 +684,7 @@ NO_ITEM : usize : 0xffffffff
  *
  * @param service The service, its chooser up.
  */
-draw_chooser :: fn(service: ptr[mut Service]) {
+draw_chooser :: fn(service : ptr[mut Service]) {
     screen.show_panel(&view(service).screen, true)
     panel :: &view(service).screen.panel
     asked :: &view(service).ask
@@ -626,7 +710,13 @@ draw_chooser :: fn(service: ptr[mut Service]) {
     text_buffer.append(&line, bytes_text(first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count)))
     screen.write_at(panel, 5, 2, text_buffer.as_string(&line), plain)
     if asked.keep {
-        screen.write_at(panel, 6, 2, if chooser.keep { "[x] Keep for next time (Tab)" } else { "[ ] Keep for next time (Tab)" }, plain)
+        screen.write_at(
+            panel,
+            6,
+            2,
+            if chooser.keep { "[x] Keep for next time (Tab)" } else { "[ ] Keep for next time (Tab)" },
+            plain
+        )
     }
     items : Item[CHOOSER_ENTRIES + 3]
     count :: items_of(service, &items)
@@ -657,13 +747,27 @@ draw_chooser :: fn(service: ptr[mut Service]) {
             }
             case .New => {
                 text_buffer.append(&line, "new file: ")
-                text_buffer.append(&line, bytes_text(first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count)))
+                text_buffer.append(
+                    &line,
+                    bytes_text(first_of(chooser.filter[0..<chooser.filter.count], chooser.filter_count))
+                )
             }
         }
-        screen.write_at(panel, ITEMS_ROW + cast[u16](i - first), 4, text_buffer.as_string(&line), if i == chooser.selected { chosen_style } else { plain })
+        screen.write_at(
+            panel,
+            ITEMS_ROW + cast[u16](i - first),
+            4,
+            text_buffer.as_string(&line),
+            if i == chooser.selected { chosen_style } else { plain }
+        )
     }
-    screen.write_at(panel, ITEMS_ROW + cast[u16](ITEMS_SHOWN) + 1, 2,
-        "Up and Down choose, Enter opens or chooses, typing narrows the list, Esc refuses.", plain)
+    screen.write_at(
+        panel,
+        ITEMS_ROW + cast[u16](ITEMS_SHOWN) + 1,
+        2,
+        "Up and Down choose, Enter opens or chooses, typing narrows the list, Esc refuses.",
+        plain
+    )
     redraw(service)
 }
 
@@ -674,7 +778,7 @@ draw_chooser :: fn(service: ptr[mut Service]) {
  * @param chooser The chooser, whose path changes.
  * @param name The entry's name, without a /; read only during the call.
  */
-join :: fn(chooser: ptr[mut Chooser], name: u8[]) {
+join :: fn(chooser : ptr[mut Chooser], name : u8[]) {
     storage : u8[PATH_BYTES]
     path :: joined(chooser, name, &storage)
     chooser.path_count = copy_bytes(path, chooser.path[0..<chooser.path.count])
@@ -688,7 +792,7 @@ join :: fn(chooser: ptr[mut Chooser], name: u8[]) {
  * @param storage Where the path is made; what doesn't fit its PATH_BYTES is cut off.
  * @return The path, a view of storage, good while storage is and until it's used again.
  */
-joined :: fn(chooser: ptr[Chooser], name: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] {
+joined :: fn(chooser : ptr[Chooser], name : u8[], storage : ptr[mut u8[PATH_BYTES]]) -> u8[] {
     count : usize = 0
     path :: first_of(chooser.path[0..<chooser.path.count], chooser.path_count)
     add_part(storage, &count, path)
@@ -707,7 +811,7 @@ joined :: fn(chooser: ptr[Chooser], name: u8[], storage: ptr[mut u8[PATH_BYTES]]
  * @param count How many bytes of storage are used, moved on by as many as are appended, to PATH_BYTES at most.
  * @param part The bytes to append; read only during the call.
  */
-add_part :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], part: u8[]) {
+add_part :: fn(storage : ptr[mut u8[PATH_BYTES]], count : ptr[mut usize], part : u8[]) {
     for byte in part {
         at :: count^
         if at < storage.count {
@@ -724,7 +828,7 @@ add_part :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], part: u8
  * @param into Where they go; bytes past those copied aren't touched.
  * @return How many were copied: the smaller of from's count and into's.
  */
-copy_bytes :: fn(from: u8[], into: mut u8[]) -> usize {
+copy_bytes :: fn(from : u8[], into : mut u8[]) -> usize {
     count : usize = 0
     for byte in from {
         if count < into.count {
@@ -742,7 +846,7 @@ copy_bytes :: fn(from: u8[], into: mut u8[]) -> usize {
  * @param part The bytes looked for; empty is in every name.
  * @return True if part appears anywhere in name, matched exactly, case and all.
  */
-contains :: fn(name: u8[], part: u8[]) -> bool {
+contains :: fn(name : u8[], part : u8[]) -> bool {
     if part.count == 0 {
         return true
     }
@@ -765,7 +869,7 @@ contains :: fn(name: u8[], part: u8[]) -> bool {
  * @param count How many of its bytes are used.
  * @return A view of bytes' first count bytes, or all of them if count is past its end; good while bytes is.
  */
-first_of :: fn(bytes: u8[], count: usize) -> u8[] {
+first_of :: fn(bytes : u8[], count : usize) -> u8[] {
     return if count <= bytes.count { bytes[0..<count] } else { bytes }
 }
 
@@ -775,6 +879,6 @@ first_of :: fn(bytes: u8[], count: usize) -> u8[] {
  * @param bytes The bytes viewed, any of them, not copied.
  * @return A string over the same bytes, good while they are; "" for none.
  */
-bytes_text :: fn(bytes: u8[]) -> string {
+bytes_text :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }

@@ -14,9 +14,9 @@ package config_service
 
 import runtime from "base:runtime"
 import os from "std:os"
-import time from "std:time"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import time from "std:time"
 import service_kit from "../../libraries/service_kit"
 import config from "../../protocols/config"
 
@@ -122,7 +122,11 @@ Store :: struct {
  * @return 99 without the memory for its state, 1 if its port couldn't be made, 2 if store couldn't be opened as a
  *     directory, and 3 if admin or users couldn't be added as a client. It doesn't return otherwise.
  */
-main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue], users: os.Listener[config.ConfigValue]?) -> int {
+main :: fn(
+    store : os.Channel[dir.Dir],
+    admin : os.Listener[config.ConfigValue],
+    users : os.Listener[config.ConfigValue]?
+) -> int {
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     service_made, service_error :: runtime.new_aligned(Store, align_of(Store))
     if service_error != null {
@@ -153,7 +157,10 @@ main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue], u
     runtime.log_info("serving")
     into := os.Incoming.{}
     loop {
-        // Every client, those ValueFor adds as it goes too: a channel wakes the port only once a read has found it empty
+        /*
+         * Every client, those ValueFor adds as it goes too: a channel wakes the port only once a read has found it
+         * empty
+         */
         i := cast[usize](0)
         loop {
             if i >= service.connected.count {
@@ -185,7 +192,7 @@ main :: fn(store: os.Channel[dir.Dir], admin: os.Listener[config.ConfigValue], u
  * @param index The connection's index in service.connected; one past them, or one already dropped, is left alone.
  * @param into Where each request is read into, reused from one to the next.
  */
-serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(service : ptr[mut Store], index : usize, into : ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count || index >= service.clients.count {
         return void
     }
@@ -217,13 +224,20 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                     continue
                 }
                 response :: os.begin[config.Response](&out)
-                match connection_for(service, as_text(os.items(into, wanted.owner)), as_text(os.items(into, wanted.name))) {
+                match connection_for(
+                    service,
+                    as_text(os.items(into, wanted.owner)),
+                    as_text(os.items(into, wanted.name))
+                ) {
                     case Some(connection) => response^ = .Opened(connection)
                     case None => response^ = .Failed(.Refused)
                 }
             }
             case Forget(owner) => {
-                // A user's values only on the session manager's, when an installation of theirs is removed (decisions/0153)
+                /*
+                 * A user's values only on the session manager's, when an installation of theirs is removed
+                 * (decisions/0153)
+                 */
                 if !client.admin && !(client.users && is_users(as_text(os.items(into, owner)))) {
                     refuse(end, service.port, .Refused)
                     continue
@@ -272,8 +286,14 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
  * @return False for a Next that waits for a version past the newest, to be answered later; true when out holds the
  *     answer.
  */
-answer :: fn(service: ptr[mut Store], client: ptr[mut Client], value: ptr[mut Value], request: config.Request, into: ptr[os.Incoming],
-    out: ptr[mut os.Outgoing]) -> bool {
+answer :: fn(
+    service : ptr[mut Store],
+    client : ptr[mut Client],
+    value : ptr[mut Value],
+    request : config.Request,
+    into : ptr[os.Incoming],
+    out : ptr[mut os.Outgoing]
+) -> bool {
     match request {
         case Declare(declared) => {
             default :: os.items(into, declared.default)
@@ -318,7 +338,7 @@ answer :: fn(service: ptr[mut Store], client: ptr[mut Client], value: ptr[mut Va
  * @param port The service's port, waited on while the ring is full.
  * @param error Why the request is refused.
  */
-refuse :: fn(end: slop_os.Channel, port: slop_os.Port, error: config.ConfigError) {
+refuse :: fn(end : slop_os.Channel, port : slop_os.Port, error : config.ConfigError) {
     out := os.Outgoing.{}
     failed(&out, error)
     _ = config.send_response(end, port, &out)
@@ -330,7 +350,7 @@ refuse :: fn(end: slop_os.Channel, port: slop_os.Port, error: config.ConfigError
  * @param out The answer, which the caller sends.
  * @param error Why the request failed.
  */
-failed :: fn(out: ptr[mut os.Outgoing], error: config.ConfigError) {
+failed :: fn(out : ptr[mut os.Outgoing], error : config.ConfigError) {
     os.begin[config.Response](out)^ = .Failed(error)
 }
 
@@ -344,7 +364,12 @@ failed :: fn(out: ptr[mut os.Outgoing], error: config.ConfigError) {
  * @param out The answer, which the caller sends.
  * @param made What writing the version gave: its number, or why it wasn't written.
  */
-wrote :: fn(service: ptr[mut Store], value: usize, out: ptr[mut os.Outgoing], made: Result[u64, config.ConfigError]) {
+wrote :: fn(
+    service : ptr[mut Store],
+    value : usize,
+    out : ptr[mut os.Outgoing],
+    made : Result[u64, config.ConfigError]
+) {
     match made {
         case Ok(version) => {
             os.begin[config.Response](out)^ = .Written(version)
@@ -363,7 +388,7 @@ wrote :: fn(service: ptr[mut Store], value: usize, out: ptr[mut os.Outgoing], ma
  *     directory.
  * @param value The value's index in service.values; one past them wakes no one.
  */
-wake :: fn(service: ptr[mut Store], value: usize) {
+wake :: fn(service : ptr[mut Store], value : usize) {
     if value >= service.values.count {
         return void
     }
@@ -371,7 +396,11 @@ wake :: fn(service: ptr[mut Store], value: usize) {
     for i in cast[usize](0)..<service.clients.count {
         client :: &service.clients[i]
         end :: service.connected.ends[i]
-        if client.admin || client.value != value || !client.waiting || entry.newest <= client.seen || cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
+        if client.admin
+            || client.value != value
+            || !client.waiting
+            || entry.newest <= client.seen
+            || cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
             continue
         }
         client.waiting = false
@@ -390,7 +419,7 @@ wake :: fn(service: ptr[mut Store], value: usize) {
  *     Failed(NotDeclared).
  * @param out The answer, which the caller sends.
  */
-current :: fn(service: ptr[mut Store], value: ptr[Value], out: ptr[mut os.Outgoing]) {
+current :: fn(service : ptr[mut Store], value : ptr[Value], out : ptr[mut os.Outgoing]) {
     match read_version(service, value, value.newest) {
         case Some(stored) => {
             defer runtime.free_array(stored)
@@ -398,7 +427,9 @@ current :: fn(service: ptr[mut Store], value: ptr[Value], out: ptr[mut os.Outgoi
             response :: os.begin[config.Response](out)
             default :: os.append(out, os.items_of(stored, held.default))
             override :: os.append(out, os.items_of(stored, held.override))
-            response^ = .Current(config.Current.{version = held.version, default = default, fields = held.fields, override = override})
+            response^ = .Current(
+                config.Current.{version = held.version, default = default, fields = held.fields, override = override}
+            )
         }
         case None => failed(out, .NotDeclared)
     }
@@ -415,7 +446,7 @@ current :: fn(service: ptr[mut Store], value: ptr[Value], out: ptr[mut os.Outgoi
  *     versions kept, or past the first version, the answer is NoMore, as it is when the version's file can't be read.
  * @param out The answer, which the caller sends.
  */
-kept :: fn(service: ptr[mut Store], value: ptr[Value], back: u64, out: ptr[mut os.Outgoing]) {
+kept :: fn(service : ptr[mut Store], value : ptr[Value], back : u64, out : ptr[mut os.Outgoing]) {
     os.begin[config.Response](out)^ = .NoMore
     if back >= config.MAX_VERSIONS || back >= value.newest {
         return void
@@ -426,7 +457,9 @@ kept :: fn(service: ptr[mut Store], value: ptr[Value], back: u64, out: ptr[mut o
             held :: os.typed_value[Stored](stored)
             response :: os.begin[config.Response](out)
             author :: os.append(out, os.items_of(stored, held.author))
-            response^ = .Kept(config.Version.{version = held.version, written = held.written, author = author, fields = held.fields})
+            response^ = .Kept(
+                config.Version.{version = held.version, written = held.written, author = author, fields = held.fields}
+            )
         }
         case None => {}
     }
@@ -447,7 +480,12 @@ kept :: fn(service: ptr[mut Store], value: ptr[Value], back: u64, out: ptr[mut o
  * @return Null once the value has the type and default, written or already there; NotKept if the newest version
  *     couldn't be read, or the new one or newest couldn't be written.
  */
-declare :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32], default: u8[]) -> config.ConfigError? {
+declare :: fn(
+    service : ptr[mut Store],
+    value : ptr[mut Value],
+    schema : u8[32],
+    default : u8[]
+) -> config.ConfigError? {
     if value.newest == 0 {
         return write_stored(service, value, schema, default, 0, string_bytes(""))
     }
@@ -477,8 +515,14 @@ declare :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32], de
  * @error WrongType Checked, and schema isn't the newest version's type.
  * @error NotKept The version, or newest, couldn't be written.
  */
-write_version :: fn(service: ptr[mut Store], value: ptr[mut Value], fields: u64, override: u8[], checked: bool, schema: u8[32])
-    -> Result[u64, config.ConfigError] {
+write_version :: fn(
+    service : ptr[mut Store],
+    value : ptr[mut Value],
+    fields : u64,
+    override : u8[],
+    checked : bool,
+    schema : u8[32]
+) -> Result[u64, config.ConfigError] {
     stored :: read_version(service, value, value.newest) or_return .Error(.NotDeclared)
     defer runtime.free_array(stored)
     held :: os.typed_value[Stored](stored)
@@ -504,7 +548,7 @@ write_version :: fn(service: ptr[mut Store], value: ptr[mut Value], fields: u64,
  * @error NotDeclared The newest version couldn't be read.
  * @error NotKept The version, or newest, couldn't be written.
  */
-roll_back :: fn(service: ptr[mut Store], value: ptr[mut Value], version: u64) -> Result[u64, config.ConfigError] {
+roll_back :: fn(service : ptr[mut Store], value : ptr[mut Value], version : u64) -> Result[u64, config.ConfigError] {
     if version == 0 || version > value.newest || value.newest - version >= config.MAX_VERSIONS {
         return .Error(.NotFound)
     }
@@ -532,8 +576,14 @@ roll_back :: fn(service: ptr[mut Store], value: ptr[mut Value], version: u64) ->
  * @return Null once the version is written and named newest; NotKept if either file couldn't be written, the value's
  *     newest left as it was.
  */
-write_stored :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32], default: u8[], fields: u64, override: u8[])
-    -> config.ConfigError? {
+write_stored :: fn(
+    service : ptr[mut Store],
+    value : ptr[mut Value],
+    schema : u8[32],
+    default : u8[],
+    fields : u64,
+    override : u8[]
+) -> config.ConfigError? {
     // Its directory made again, if its owner's values were forgotten since it was opened
     owner :: owner_of(value)
     if os.path_kind_in(service.directory, owner) != .DIRECTORY {
@@ -562,7 +612,8 @@ write_stored :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32
     }
     newest_out := os.Outgoing.{}
     os.begin[Newest](&newest_out)^ = Newest.{version = version}
-    if os.write_typed_in[Newest](service.directory, value_path(&path, value, "newest"), os.value_bytes(&newest_out)) != null {
+    if os.write_typed_in[Newest](service.directory, value_path(&path, value, "newest"), os.value_bytes(&newest_out))
+        != null {
         return config.ConfigError.NotKept
     }
     value.newest = version
@@ -581,7 +632,7 @@ write_stored :: fn(service: ptr[mut Store], value: ptr[mut Value], schema: u8[32
  * @return The file's bytes, from the context's allocator, which the caller frees; null for version 0, or if the file
  *     isn't there, isn't a Stored, or couldn't be read.
  */
-read_version :: fn(service: ptr[mut Store], value: ptr[Value], version: u64) -> u8[]? {
+read_version :: fn(service : ptr[mut Store], value : ptr[Value], version : u64) -> u8[]? {
     if version == 0 {
         return null
     }
@@ -606,7 +657,7 @@ read_version :: fn(service: ptr[mut Store], value: ptr[Value], version: u64) -> 
  * @return The other end of the connection, which the caller owns and passes on; null for an owner or a name that isn't
  *     valid, MAX_VALUES values reached already, directories that couldn't be made, or no channel or client room.
  */
-connection_for :: fn(service: ptr[mut Store], owner: string, name: string) -> os.Channel[config.ConfigValue]? {
+connection_for :: fn(service : ptr[mut Store], owner : string, name : string) -> os.Channel[config.ConfigValue]? {
     if !valid_owner(owner) || !valid_name(name) {
         return null
     }
@@ -652,14 +703,16 @@ connection_for :: fn(service: ptr[mut Store], owner: string, name: string) -> os
  *     value never declared.
  * @return Whether both directories are there; false if either couldn't be made.
  */
-open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
+open_value :: fn(service : ptr[mut Store], value : ptr[mut Value]) -> bool {
     owner :: owner_of(value)
-    if os.path_kind_in(service.directory, owner) != .DIRECTORY && os.make_directory_in(service.directory, owner) != null {
+    if os.path_kind_in(service.directory, owner) != .DIRECTORY
+        && os.make_directory_in(service.directory, owner) != null {
         return false
     }
     path := Path.{}
     folder :: value_path(&path, value, "")
-    if os.path_kind_in(service.directory, folder) != .DIRECTORY && os.make_directory_in(service.directory, folder) != null {
+    if os.path_kind_in(service.directory, folder) != .DIRECTORY
+        && os.make_directory_in(service.directory, folder) != null {
         return false
     }
     value.newest = 0
@@ -686,7 +739,7 @@ open_value :: fn(service: ptr[mut Store], value: ptr[mut Value]) -> bool {
  * @return Whether everything was removed, or there was nothing; false for an owner that isn't valid, a directory that
  *     couldn't be listed, or anything left.
  */
-forget :: fn(service: ptr[mut Store], owner: string) -> bool {
+forget :: fn(service : ptr[mut Store], owner : string) -> bool {
     if !valid_owner(owner) {
         return false
     }
@@ -732,7 +785,7 @@ forget :: fn(service: ptr[mut Store], owner: string) -> bool {
  * @param end The new directory's end, which the service takes over, even when it fails.
  * @return Whether it's used; false if a port for it couldn't be made, the directory before kept.
  */
-use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
+use_directory :: fn(service : ptr[mut Store], end : slop_os.Channel) -> bool {
     directory, error :: os.directory_on(end)
     if error != null {
         return false
@@ -759,7 +812,7 @@ Path :: struct {
  * @param file The file's name in the value's directory, or "" for the directory itself.
  * @return <owner>/<name>/<file>, or <owner>/<name> for no file, a view of path's bytes, good while path is unchanged.
  */
-value_path :: fn(path: ptr[mut Path], value: ptr[Value], file: string) -> string {
+value_path :: fn(path : ptr[mut Path], value : ptr[Value], file : string) -> string {
     path.count = 0
     add(path, owner_of(value))
     add(path, "/")
@@ -779,7 +832,7 @@ value_path :: fn(path: ptr[mut Path], value: ptr[Value], file: string) -> string
  * @param version The version's number, from 1, written in decimal with no leading zeros.
  * @return <owner>/<name>/<version>, a view of path's bytes, good while path is unchanged.
  */
-version_path :: fn(path: ptr[mut Path], value: ptr[Value], version: u64) -> string {
+version_path :: fn(path : ptr[mut Path], value : ptr[Value], version : u64) -> string {
     _ = value_path(path, value, "")
     add(path, "/")
     digits : u8[20]
@@ -809,7 +862,7 @@ version_path :: fn(path: ptr[mut Path], value: ptr[Value], version: u64) -> stri
  * @param path The path being made, added to at its count, which grows by the bytes that fit in its 160.
  * @param text The bytes appended, as they are; those past the path's 160 bytes are dropped.
  */
-add :: fn(path: ptr[mut Path], text: string) {
+add :: fn(path : ptr[mut Path], text : string) {
     for character in text {
         if path.count < path.bytes.count {
             path.bytes[path.count] = cast[u8](character)
@@ -824,7 +877,7 @@ add :: fn(path: ptr[mut Path], text: string) {
  * @param path The path made so far; only read.
  * @return A view of path's bytes, good while path is unchanged; "" for an empty path.
  */
-text_of_path :: fn(path: ptr[Path]) -> string {
+text_of_path :: fn(path : ptr[Path]) -> string {
     return if path.count > 0 { string_of(&path.bytes[0], path.count) } else { "" }
 }
 
@@ -834,7 +887,7 @@ text_of_path :: fn(path: ptr[Path]) -> string {
  * @param value The value whose owner is given; only read.
  * @return A view of value's owner bytes, good while value is unchanged.
  */
-owner_of :: fn(value: ptr[Value]) -> string {
+owner_of :: fn(value : ptr[Value]) -> string {
     return if value.owner_count > 0 { string_of(&value.owner[0], value.owner_count) } else { "" }
 }
 
@@ -844,7 +897,7 @@ owner_of :: fn(value: ptr[Value]) -> string {
  * @param value The value whose name is given; only read.
  * @return A view of value's name bytes, good while value is unchanged.
  */
-name_of :: fn(value: ptr[Value]) -> string {
+name_of :: fn(value : ptr[Value]) -> string {
     return if value.name_count > 0 { string_of(&value.name[0], value.name_count) } else { "" }
 }
 
@@ -856,7 +909,7 @@ name_of :: fn(value: ptr[Value]) -> string {
  * @param count Set to how many bytes were copied.
  * @param name The name, an owner or a value's name, checked already.
  */
-copy_name :: fn(into: ptr[mut u8[MAX_OWNER]], count: ptr[mut usize], name: string) {
+copy_name :: fn(into : ptr[mut u8[MAX_OWNER]], count : ptr[mut usize], name : string) {
     copied := cast[usize](0)
     for character in name {
         if copied < into.count {
@@ -874,12 +927,15 @@ copy_name :: fn(into: ptr[mut u8[MAX_OWNER]], count: ptr[mut usize], name: strin
  *     read.
  * @return Whether it's 1 to MAX_NAME bytes, each an ASCII letter, a digit or an underscore.
  */
-valid_name :: fn(name: string) -> bool {
+valid_name :: fn(name : string) -> bool {
     if name.count == 0 || name.count > MAX_NAME {
         return false
     }
     for character in name {
-        if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '_') {
+        if !((character >= 'a' && character <= 'z')
+            || (character >= 'A' && character <= 'Z')
+            || (character >= '0' && character <= '9')
+            || character == '_') {
             return false
         }
     }
@@ -893,7 +949,7 @@ valid_name :: fn(name: string) -> bool {
  * @param b The second bytes compared; only read.
  * @return Whether they're as long as each other, with the same bytes.
  */
-same_bytes :: fn(a: u8[], b: u8[]) -> bool {
+same_bytes :: fn(a : u8[], b : u8[]) -> bool {
     return as_text(a) == as_text(b)
 }
 
@@ -903,7 +959,7 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
  * @param bytes The bytes, kept by the caller; the view points into them, so they must outlive it.
  * @return A view of them, good while they are; "" for none.
  */
-as_text :: fn(bytes: u8[]) -> string {
+as_text :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
@@ -915,7 +971,7 @@ as_text :: fn(bytes: u8[]) -> string {
  *     that (decisions/0152, 0153).
  * @return Whether it's one of those, MAX_OWNER bytes at most, with no empty part around a ":".
  */
-valid_owner :: fn(owner: string) -> bool {
+valid_owner :: fn(owner : string) -> bool {
     if !is_users(owner) {
         return valid_name(owner)
     }
@@ -934,8 +990,11 @@ valid_owner :: fn(owner: string) -> bool {
                 return false
             }
         }
-        else if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')
-            || character == '_' || character == '-') {
+        else if !((character >= 'a' && character <= 'z')
+            || (character >= 'A' && character <= 'Z')
+            || (character >= '0' && character <= '9')
+            || character == '_'
+            || character == '-') {
             return false
         }
         previous = character
@@ -949,7 +1008,7 @@ valid_owner :: fn(owner: string) -> bool {
  * @param owner The owner, not yet checked.
  * @return Whether it starts with "user:" and has something after it.
  */
-is_users :: fn(owner: string) -> bool {
+is_users :: fn(owner : string) -> bool {
     prefix :: "user:"
     return owner.count > prefix.count && owner[0..<prefix.count] == prefix
 }

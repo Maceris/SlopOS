@@ -20,12 +20,12 @@ DwarfSection :: struct {
 
 /** The DWARF sections a file has. */
 Dwarf :: struct {
-    info : DwarfSection,
-    abbrev : DwarfSection,
-    strings : DwarfSection,
-    line : DwarfSection,
+    info      : DwarfSection,
+    abbrev    : DwarfSection,
+    strings   : DwarfSection,
+    line      : DwarfSection,
     locations : DwarfSection,
-    ranges : DwarfSection,
+    ranges    : DwarfSection,
 }
 
 /** The most levels of entries a unit is followed into; deeper ones are skipped. */
@@ -34,25 +34,25 @@ MAX_DEPTH :: 64
 MAX_ABBREVIATIONS :: 4096
 
 /** Tags read. */
-TAG_FORMAL_PARAMETER : u64 : 0x05
-TAG_LEXICAL_BLOCK : u64 : 0x0b
-TAG_COMPILE_UNIT : u64 : 0x11
+TAG_FORMAL_PARAMETER   : u64 : 0x05
+TAG_LEXICAL_BLOCK      : u64 : 0x0b
+TAG_COMPILE_UNIT       : u64 : 0x11
 TAG_INLINED_SUBROUTINE : u64 : 0x1d
-TAG_SUBPROGRAM : u64 : 0x2e
-TAG_VARIABLE : u64 : 0x34
+TAG_SUBPROGRAM         : u64 : 0x2e
+TAG_VARIABLE           : u64 : 0x34
 
 /** Attributes read. */
-AT_LOCATION : u64 : 0x02
-AT_NAME : u64 : 0x03
-AT_STMT_LIST : u64 : 0x10
-AT_RANGES : u64 : 0x55
-AT_LOW_PC : u64 : 0x11
-AT_HIGH_PC : u64 : 0x12
-AT_DECL_LINE : u64 : 0x3b
-AT_ABSTRACT_ORIGIN : u64 : 0x31
-AT_FRAME_BASE : u64 : 0x40
-AT_SPECIFICATION : u64 : 0x47
-AT_LINKAGE_NAME : u64 : 0x6e
+AT_LOCATION          : u64 : 0x02
+AT_NAME              : u64 : 0x03
+AT_STMT_LIST         : u64 : 0x10
+AT_RANGES            : u64 : 0x55
+AT_LOW_PC            : u64 : 0x11
+AT_HIGH_PC           : u64 : 0x12
+AT_DECL_LINE         : u64 : 0x3b
+AT_ABSTRACT_ORIGIN   : u64 : 0x31
+AT_FRAME_BASE        : u64 : 0x40
+AT_SPECIFICATION     : u64 : 0x47
+AT_LINKAGE_NAME      : u64 : 0x6e
 AT_MIPS_LINKAGE_NAME : u64 : 0x2007
 
 /** What an attribute's value is, by its form. */
@@ -101,18 +101,18 @@ DwarfUnit :: struct {
 /** An entry read: what's needed of its attributes. */
 DwarfEntry :: struct {
     /** 0 for the null entry that ends a list of children. */
-    tag : u64,
-    children : bool,
-    name : DwarfValue,
-    linkage : DwarfValue,
-    low : DwarfValue,
-    high : DwarfValue,
-    location : DwarfValue,
+    tag        : u64,
+    children   : bool,
+    name       : DwarfValue,
+    linkage    : DwarfValue,
+    low        : DwarfValue,
+    high       : DwarfValue,
+    location   : DwarfValue,
     frame_base : DwarfValue,
-    decl_line : DwarfValue,
-    origin : DwarfValue,
-    lines : DwarfValue,
-    ranges : DwarfValue,
+    decl_line  : DwarfValue,
+    origin     : DwarfValue,
+    lines      : DwarfValue,
+    ranges     : DwarfValue,
 }
 
 /**
@@ -121,11 +121,13 @@ DwarfEntry :: struct {
  * @param file An ELF64 file.
  * @return Its sections; null if it has no section names, or no .debug_info.
  */
-find_dwarf :: fn(file: u8[]) -> Dwarf? {
+find_dwarf :: fn(file : u8[]) -> Dwarf? {
     sections :: word(file, 0x28, 8)
     count :: word(file, 0x3c, 2)
     names_index :: word(file, 0x3e, 2)
-    if word(file, 0x3a, 2) != SECTION_HEADER_SIZE || !fits(file, sections, count * SECTION_HEADER_SIZE) || names_index >= count {
+    if word(file, 0x3a, 2) != SECTION_HEADER_SIZE
+        || !fits(file, sections, count * SECTION_HEADER_SIZE)
+        || names_index >= count {
         return null
     }
     names :: word(file, sections + names_index * SECTION_HEADER_SIZE + 0x18, 8)
@@ -178,7 +180,7 @@ find_dwarf :: fn(file: u8[]) -> Dwarf? {
  * @param end Where what it's in ends; text reaching it is cut there.
  * @return The text; "" if it's empty or starts past the end.
  */
-text_at :: fn(file: u8[], at: u64, end: u64) -> string {
+text_at :: fn(file : u8[], at : u64, end : u64) -> string {
     count := cast[u64](0)
     loop {
         index :: at + count
@@ -202,7 +204,7 @@ text_at :: fn(file: u8[], at: u64, end: u64) -> string {
  * @param end Where what it's in ends; a number reaching it is cut there.
  * @return Its value; bits past 64 are dropped.
  */
-uleb :: fn(file: u8[], at: ptr[mut u64], end: u64) -> u64 {
+uleb :: fn(file : u8[], at : ptr[mut u64], end : u64) -> u64 {
     value : u64 = 0
     shift : u64 = 0
     loop {
@@ -230,7 +232,7 @@ uleb :: fn(file: u8[], at: ptr[mut u64], end: u64) -> u64 {
  * @param end Where what it's in ends.
  * @return Its value.
  */
-sleb :: fn(file: u8[], at: ptr[mut u64], end: u64) -> i64 {
+sleb :: fn(file : u8[], at : ptr[mut u64], end : u64) -> i64 {
     value : u64 = 0
     shift : u64 = 0
     loop {
@@ -261,7 +263,7 @@ sleb :: fn(file: u8[], at: ptr[mut u64], end: u64) -> i64 {
  * @param count How many bytes, 1 to 8.
  * @return Its value.
  */
-take :: fn(file: u8[], at: ptr[mut u64], count: u64) -> u64 {
+take :: fn(file : u8[], at : ptr[mut u64], count : u64) -> u64 {
     value :: word(file, at^, count)
     at^ += count
     return value
@@ -275,7 +277,7 @@ take :: fn(file: u8[], at: ptr[mut u64], count: u64) -> u64 {
  * @param at Where the header starts, in .debug_info.
  * @return The unit; null if it isn't a 32-bit DWARF 2 to 4 unit with 8-byte addresses that fits.
  */
-unit_at :: fn(file: u8[], dwarf: Dwarf, at: u64) -> DwarfUnit? {
+unit_at :: fn(file : u8[], dwarf : Dwarf, at : u64) -> DwarfUnit? {
     info_end :: dwarf.info.at + dwarf.info.size
     length :: word(file, at, 4)
     if length >= 0xfffffff0 || at + 4 + length > info_end {
@@ -289,7 +291,12 @@ unit_at :: fn(file: u8[], dwarf: Dwarf, at: u64) -> DwarfUnit? {
     if abbreviations >= dwarf.abbrev.size {
         return null
     }
-    made := DwarfUnit.{start = at, entries = at + 11, end = at + 4 + length, abbreviations = dwarf.abbrev.at + abbreviations}
+    made := DwarfUnit.{
+        start = at,
+        entries = at + 11,
+        end = at + 4 + length,
+        abbreviations = dwarf.abbrev.at + abbreviations,
+    }
     // Its own entry, for its base address and line program
     cursor := made.entries
     match entry_at(file, dwarf, made, &cursor) {
@@ -311,7 +318,7 @@ unit_at :: fn(file: u8[], dwarf: Dwarf, at: u64) -> DwarfUnit? {
  * @param code The code, not 0.
  * @return Where its tag starts; null if the table hasn't the code.
  */
-abbreviation :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, code: u64) -> u64? {
+abbreviation :: fn(file : u8[], dwarf : Dwarf, unit : DwarfUnit, code : u64) -> u64? {
     end :: dwarf.abbrev.at + dwarf.abbrev.size
     at := unit.abbreviations
     for i in 0..<MAX_ABBREVIATIONS {
@@ -346,7 +353,7 @@ abbreviation :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, code: u64) -> u64?
  * @param at Where the value starts, moved past it.
  * @return The value; Missing for a form not known, after which nothing more of the entry can be read.
  */
-value_of :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, form: u64, at: ptr[mut u64]) -> DwarfValue {
+value_of :: fn(file : u8[], dwarf : Dwarf, unit : DwarfUnit, form : u64, at : ptr[mut u64]) -> DwarfValue {
     end :: unit.end
     made := DwarfValue.{kind = .Number, form = form}
     if form == 0x01 || form == 0x07 || form == 0x14 || form == 0x20 {
@@ -385,7 +392,13 @@ value_of :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, form: u64, at: ptr[mut
         }
     }
     else if form == 0x09 || form == 0x18 || form == 0x0a || form == 0x03 || form == 0x04 {
-        size :: if form == 0x0a { take(file, at, 1) } else if form == 0x03 { take(file, at, 2) } else if form == 0x04 { take(file, at, 4) } else { uleb(file, at, end) }
+        size :: if form == 0x0a {
+            take(file, at, 1)
+        }
+        else if form == 0x03 {
+            take(file, at, 2)
+        }
+        else if form == 0x04 { take(file, at, 4) } else { uleb(file, at, end) }
         made.kind = .Block
         made.at = at^
         made.size = size
@@ -419,7 +432,7 @@ value_of :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, form: u64, at: ptr[mut
  * @return The entry, tag 0 for a null one; null if its abbreviation isn't there, it has a form not known, or it runs
  *     past its unit.
  */
-entry_at :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, at: ptr[mut u64]) -> DwarfEntry? {
+entry_at :: fn(file : u8[], dwarf : Dwarf, unit : DwarfUnit, at : ptr[mut u64]) -> DwarfEntry? {
     if at^ >= unit.end {
         return null
     }
@@ -486,10 +499,11 @@ entry_at :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, at: ptr[mut u64]) -> D
  * @param unit Its unit, where the other entry is.
  * @param entry The entry, filled in.
  */
-complete :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, entry: ptr[mut DwarfEntry]) {
+complete :: fn(file : u8[], dwarf : Dwarf, unit : DwarfUnit, entry : ptr[mut DwarfEntry]) {
     origin := entry.origin
     for i in 0..<4 {
-        if origin.kind != .Reference || (entry.name.kind == .Text && entry.linkage.kind == .Text && entry.decl_line.kind == .Number) {
+        if origin.kind != .Reference
+            || (entry.name.kind == .Text && entry.linkage.kind == .Text && entry.decl_line.kind == .Number) {
             return void
         }
         at := origin.number
@@ -514,7 +528,7 @@ complete :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, entry: ptr[mut DwarfEn
  * @param value The value.
  * @return Its text; "" for any other kind.
  */
-text_of_value :: fn(file: u8[], value: DwarfValue) -> string {
+text_of_value :: fn(file : u8[], value : DwarfValue) -> string {
     if value.kind != .Text {
         return ""
     }
@@ -531,7 +545,7 @@ text_of_value :: fn(file: u8[], value: DwarfValue) -> string {
  * @param address The address.
  * @return True when one of its ranges holds the address; false without any.
  */
-covers :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, entry: DwarfEntry, address: u64) -> bool {
+covers :: fn(file : u8[], dwarf : Dwarf, unit : DwarfUnit, entry : DwarfEntry, address : u64) -> bool {
     if entry.ranges.kind == .Number && entry.ranges.number < dwarf.ranges.size {
         end :: dwarf.ranges.at + dwarf.ranges.size
         at := dwarf.ranges.at + entry.ranges.number
@@ -573,7 +587,7 @@ covers :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, entry: DwarfEntry, addre
  * @param address The address, an offset in the image: a program counter, or a return address less one.
  * @param into Where the lines go.
  */
-describe_locals :: fn(file: u8[], dwarf: Dwarf, address: u64, into: ptr[mut text_buffer.TextBuffer]) {
+describe_locals :: fn(file : u8[], dwarf : Dwarf, address : u64, into : ptr[mut text_buffer.TextBuffer]) {
     info_end :: dwarf.info.at + dwarf.info.size
     start := dwarf.info.at
     loop {
@@ -599,7 +613,13 @@ describe_locals :: fn(file: u8[], dwarf: Dwarf, address: u64, into: ptr[mut text
  *
  * @return True once the function holding the address was found and described; false if this unit hasn't it.
  */
-locals_in_unit :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, address: u64, into: ptr[mut text_buffer.TextBuffer]) -> bool {
+locals_in_unit :: fn(
+    file : u8[],
+    dwarf : Dwarf,
+    unit : DwarfUnit,
+    address : u64,
+    into : ptr[mut text_buffer.TextBuffer]
+) -> bool {
     at := unit.entries
     // Whether each level holds the address: the function's, the lexical blocks' and the inlined calls' within it
     in_scope : bool[MAX_DEPTH]
@@ -649,7 +669,10 @@ locals_in_unit :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, address: u64, in
                 break
             }
         }
-        else if function_depth < MAX_DEPTH && outer && entry.tag == TAG_INLINED_SUBROUTINE && covers(file, dwarf, unit, entry, address) {
+        else if function_depth < MAX_DEPTH
+            && outer
+            && entry.tag == TAG_INLINED_SUBROUTINE
+            && covers(file, dwarf, unit, entry, address) {
             // An inlined call holding the address: its locals, not the function's
             complete(file, dwarf, unit, &entry)
             function_name = text_buffer.make(name_storage)
@@ -660,9 +683,12 @@ locals_in_unit :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, address: u64, in
             holds = true
         }
         else if function_depth < MAX_DEPTH && outer && entry.tag == TAG_LEXICAL_BLOCK {
-            holds = covers(file, dwarf, unit, entry, address) || (entry.low.kind != .Number && entry.ranges.kind != .Number)
+            holds = covers(file, dwarf, unit, entry, address)
+                || (entry.low.kind != .Number && entry.ranges.kind != .Number)
         }
-        else if function_depth < MAX_DEPTH && outer && parent_owner == owner
+        else if function_depth < MAX_DEPTH
+            && outer
+            && parent_owner == owner
             && (entry.tag == TAG_VARIABLE || entry.tag == TAG_FORMAL_PARAMETER) {
             complete(file, dwarf, unit, &entry)
             name :: text_of_value(file, entry.name)
@@ -700,7 +726,7 @@ locals_in_unit :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, address: u64, in
  * @param entry The function's entry.
  * @param into Where the line goes; nothing for a frame base that isn't one register.
  */
-say_frame_base :: fn(file: u8[], entry: DwarfEntry, into: ptr[mut text_buffer.TextBuffer]) {
+say_frame_base :: fn(file : u8[], entry : DwarfEntry, into : ptr[mut text_buffer.TextBuffer]) {
     base :: entry.frame_base
     if base.kind != .Block || base.size == 0 {
         return void
@@ -725,7 +751,14 @@ say_frame_base :: fn(file: u8[], entry: DwarfEntry, into: ptr[mut text_buffer.Te
  * @param address The address.
  * @param into Where it's said.
  */
-say_location :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, location: DwarfValue, address: u64, into: ptr[mut text_buffer.TextBuffer]) {
+say_location :: fn(
+    file : u8[],
+    dwarf : Dwarf,
+    unit : DwarfUnit,
+    location : DwarfValue,
+    address : u64,
+    into : ptr[mut text_buffer.TextBuffer]
+) {
     if location.kind == .Block {
         say_expression(file, location.at, location.size, into)
         return void
@@ -763,7 +796,8 @@ say_location :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, location: DwarfVal
 /**
  * Say where a DWARF expression puts a value, as one word: "m:<register>:<offset>" in memory at a register's value plus
  * an offset ("m:f:<offset>" from the function's frame base), "r:<register>" in a register, "a:<address>" at an address
- * in the image, "c:<value>" a constant, or "n" where it isn't kept, or is kept in a way not read here. A value in pieces
+ * in the image, "c:<value>" a constant, or "n" where it isn't kept, or is kept in a way not read here. A value in
+ * pieces
  * is "p:" and its pieces, "<bytes>=<where>" each, joined by commas, like "p:8=m:f:-88,8=n". Registers are DWARF's
  * numbers, and numbers are in decimal.
  *
@@ -772,7 +806,7 @@ say_location :: fn(file: u8[], dwarf: Dwarf, unit: DwarfUnit, location: DwarfVal
  * @param size How many bytes it has.
  * @param into Where it's said.
  */
-say_expression :: fn(file: u8[], at: u64, size: u64, into: ptr[mut text_buffer.TextBuffer]) {
+say_expression :: fn(file : u8[], at : u64, size : u64, into : ptr[mut text_buffer.TextBuffer]) {
     end :: at + size
     if size == 0 || !fits(file, at, size) {
         text_buffer.append(into, "n")
@@ -797,7 +831,12 @@ say_expression :: fn(file: u8[], at: u64, size: u64, into: ptr[mut text_buffer.T
             if piece_count > 0 {
                 text_buffer.append(&pieces, ",")
             }
-            text_buffer.append_format(&pieces, "%=%", bytes, if has_place { text_buffer.as_string(&place) } else { "n" })
+            text_buffer.append_format(
+                &pieces,
+                "%=%",
+                bytes,
+                if has_place { text_buffer.as_string(&place) } else { "n" }
+            )
             piece_count += 1
             place = text_buffer.make(place_storage)
             has_place = false
@@ -880,12 +919,12 @@ LineProgram :: struct {
     at : u64,
     end : u64,
     /** Where its file names start. */
-    files : u64,
-    minimum_length : u64,
+    files             : u64,
+    minimum_length    : u64,
     default_statement : bool,
-    line_base : i64,
-    line_range : u64,
-    opcode_base : u64,
+    line_base         : i64,
+    line_range        : u64,
+    opcode_base       : u64,
     /** Where the standard opcodes' lengths are. */
     lengths : u64,
     /** The state machine. */
@@ -900,7 +939,7 @@ LineProgram :: struct {
  * @param offset The program's offset in .debug_line.
  * @return The program, at its first opcode; null if its header doesn't read, or it isn't version 2 to 4.
  */
-line_program :: fn(file: u8[], dwarf: Dwarf, offset: u64) -> LineProgram? {
+line_program :: fn(file : u8[], dwarf : Dwarf, offset : u64) -> LineProgram? {
     if offset >= dwarf.line.size {
         return null
     }
@@ -948,7 +987,7 @@ line_program :: fn(file: u8[], dwarf: Dwarf, offset: u64) -> LineProgram? {
  *
  * @param program The program.
  */
-reset_row :: fn(program: ptr[mut LineProgram]) {
+reset_row :: fn(program : ptr[mut LineProgram]) {
     program.row = LineRow.{file_index = 1, line = 1, is_statement = program.default_statement}
 }
 
@@ -959,7 +998,7 @@ reset_row :: fn(program: ptr[mut LineProgram]) {
  * @param program The program, moved on.
  * @return The row; null at the program's end, or where it stops reading.
  */
-next_row :: fn(file: u8[], program: ptr[mut LineProgram]) -> LineRow? {
+next_row :: fn(file : u8[], program : ptr[mut LineProgram]) -> LineRow? {
     // A row that ended a sequence was given; the next starts afresh
     if program.row.ends {
         reset_row(program)
@@ -973,7 +1012,9 @@ next_row :: fn(file: u8[], program: ptr[mut LineProgram]) -> LineRow? {
         if opcode >= program.opcode_base {
             adjusted :: opcode - program.opcode_base
             program.row.address += (adjusted / program.line_range) * program.minimum_length
-            program.row.line = cast[u64](cast[i64](program.row.line) + program.line_base + cast[i64](adjusted % program.line_range))
+            program.row.line = cast[u64](cast[i64](program.row.line)
+                + program.line_base
+                + cast[i64](adjusted % program.line_range))
             return program.row
         }
         if opcode == 0 {
@@ -1033,7 +1074,7 @@ next_row :: fn(file: u8[], program: ptr[mut LineProgram]) -> LineRow? {
  * @param index The index, from 1.
  * @return Its name, as the program has it; "?" if there's no such file.
  */
-file_name :: fn(file: u8[], program: LineProgram, index: u64) -> string {
+file_name :: fn(file : u8[], program : LineProgram, index : u64) -> string {
     at := program.files
     for i in cast[u64](1)..<(index + 1) {
         if at >= program.end {
@@ -1062,7 +1103,7 @@ file_name :: fn(file: u8[], program: LineProgram, index: u64) -> string {
  * @param address The address: a program counter, or a return address less one.
  * @param into Where it's said.
  */
-describe_line :: fn(file: u8[], dwarf: Dwarf, address: u64, into: ptr[mut text_buffer.TextBuffer]) {
+describe_line :: fn(file : u8[], dwarf : Dwarf, address : u64, into : ptr[mut text_buffer.TextBuffer]) {
     offset := cast[u64](0)
     loop {
         if offset >= dwarf.line.size {
@@ -1089,7 +1130,12 @@ describe_line :: fn(file: u8[], dwarf: Dwarf, address: u64, into: ptr[mut text_b
                             text_buffer.append(into, "?\n")
                         }
                         else {
-                            text_buffer.append_format(into, "%:%\n", file_name(file, program, before.file_index), before.line)
+                            text_buffer.append_format(
+                                into,
+                                "%:%\n",
+                                file_name(file, program, before.file_index),
+                                before.line
+                            )
                         }
                         return void
                     }
@@ -1111,7 +1157,13 @@ describe_line :: fn(file: u8[], dwarf: Dwarf, address: u64, into: ptr[mut text_b
  * @param line The line.
  * @param into Where it's said.
  */
-describe_address :: fn(file: u8[], dwarf: Dwarf, wanted: string, line: u64, into: ptr[mut text_buffer.TextBuffer]) {
+describe_address :: fn(
+    file : u8[],
+    dwarf : Dwarf,
+    wanted : string,
+    line : u64,
+    into : ptr[mut text_buffer.TextBuffer]
+) {
     best : u64? = null
     offset := cast[u64](0)
     loop {
@@ -1154,7 +1206,7 @@ describe_address :: fn(file: u8[], dwarf: Dwarf, wanted: string, line: u64, into
  * @param wanted The name wanted.
  * @return True if they match.
  */
-names_file :: fn(name: string, wanted: string) -> bool {
+names_file :: fn(name : string, wanted : string) -> bool {
     if wanted.count == 0 || wanted.count > name.count {
         return false
     }

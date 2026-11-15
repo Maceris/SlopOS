@@ -1,7 +1,7 @@
 package arch_x86_64
 
-import runtime from "base:runtime"
 import x86_64 from "base:intrinsics/x86_64"
+import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
 import arch_interface from "../../arch_interface"
 
@@ -48,7 +48,7 @@ ISSUES :: Issue.[
     .{"BHI", 1 << 20},
     .{"PBRSB", 1 << 24},
     .{"GDS", 1 << 26},
-    .{"RFDS", 1 << 27},
+    .{"RFDS", 1 << 27}
 ]
 
 /**
@@ -89,9 +89,12 @@ enable_speculation_controls :: fn() {
  *
  * @param features The boot CPU's features, from detect_features.
  */
-log_hardening :: fn(features: ptr[slop_os.CpuFeatures]) {
-    runtime.log_info("cpu: control-flow integrity: shadow stacks %, indirect branch tracking %", yes_no(has(features, .X86ShadowStack)),
-        yes_no(has(features, .X86Ibt)))
+log_hardening :: fn(features : ptr[slop_os.CpuFeatures]) {
+    runtime.log_info(
+        "cpu: control-flow integrity: shadow stacks %, indirect branch tracking %",
+        yes_no(has(features, .X86ShadowStack)),
+        yes_no(has(features, .X86Ibt))
+    )
     affected : LogLine
     unaffected : LogLine
     match arch_capabilities() {
@@ -113,11 +116,17 @@ log_hardening :: fn(features: ptr[slop_os.CpuFeatures]) {
         }
     }
     if affected.count == 0 {
-        runtime.log_info("cpu: transient execution: affected by Spectre v1; not affected by %", line_text(&unaffected, "anything"))
+        runtime.log_info(
+            "cpu: transient execution: affected by Spectre v1; not affected by %",
+            line_text(&unaffected, "anything")
+        )
     }
     else {
-        runtime.log_info("cpu: transient execution: affected by Spectre v1, %; not affected by %", line_text(&affected, ""),
-            line_text(&unaffected, "anything"))
+        runtime.log_info(
+            "cpu: transient execution: affected by Spectre v1, %; not affected by %",
+            line_text(&affected, ""),
+            line_text(&unaffected, "anything")
+        )
     }
     mitigations : LogLine
     if has(features, .X86Smep) {
@@ -138,7 +147,7 @@ log_hardening :: fn(features: ptr[slop_os.CpuFeatures]) {
  * @param value The answer.
  * @return "yes" or "no", constants.
  */
-yes_no :: fn(value: bool) -> string {
+yes_no :: fn(value : bool) -> string {
     return if value { "yes" } else { "no" }
 }
 
@@ -156,7 +165,7 @@ LogLine :: struct {
  * @param line The list.
  * @param name The name; its bytes past the buffer's end are left out.
  */
-line_add :: fn(line: ptr[mut LogLine], name: string) {
+line_add :: fn(line : ptr[mut LogLine], name : string) {
     if line.count > 0 {
         line_append(line, ", ")
     }
@@ -169,7 +178,7 @@ line_add :: fn(line: ptr[mut LogLine], name: string) {
  * @param line The list.
  * @param text The text; its bytes past the buffer's end are left out.
  */
-line_append :: fn(line: ptr[mut LogLine], text: string) {
+line_append :: fn(line : ptr[mut LogLine], text : string) {
     for byte in string_bytes(text) {
         at :: line.count
         if at >= line.bytes.count {
@@ -187,7 +196,7 @@ line_append :: fn(line: ptr[mut LogLine], text: string) {
  * @param empty What to give for an empty list.
  * @return The text, valid while the list is.
  */
-line_text :: fn(line: ptr[LogLine], empty: string) -> string {
+line_text :: fn(line : ptr[LogLine], empty : string) -> string {
     if line.count == 0 {
         return empty
     }
@@ -200,7 +209,7 @@ line_text :: fn(line: ptr[LogLine], empty: string) -> string {
  * @param system Unused.
  * @param key Unused.
  */
-set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {}
+set_kernel_pointer_key :: fn(system : ptr[mut ArchSystem], key : u64[2]) {}
 
 /**
  * Say which key the calling CPU returns to user mode with (arch_interface.set_user_pointer_key): x86-64 has none, so
@@ -208,7 +217,7 @@ set_kernel_pointer_key :: fn(system: ptr[mut ArchSystem], key: u64[2]) {}
  *
  * @param key Unused.
  */
-set_user_pointer_key :: fn(key: u64[2]) {}
+set_user_pointer_key :: fn(key : u64[2]) {}
 
 // CET for user mode (decisions/0186): CR4.CET on each CPU, and per thread IA32_U_CET and IA32_PL3_SSP
 /** CR4.CET (bit 23): CET's shadow stacks and indirect branch tracking can be turned on. */
@@ -230,14 +239,15 @@ IA32_PL3_SSP : u32 : 0x6a7
 IA32_S_CET : u32 : 0x6a2
 
 /**
- * Turn on CR4.CET on the calling CPU where it has CET's shadow stacks or indirect branch tracking, with CR0.WP, which it
+ * Turn on CR4.CET on the calling CPU where it has CET's shadow stacks or indirect branch tracking, with CR0.WP, which
+ * it
  * needs, and note which, for load_user_control_flow. With indirect branch tracking, the kernel's own is turned on too
  * (IA32_S_CET), as every indirect branch in it lands on endbr64 (decisions/0186, Hd). Called by init_cpu, on each CPU.
  *
  * @param cpu The CPU's state, whose shadow_stacks and indirect_branch_tracking are set.
  * @param features The CPU's features.
  */
-enable_control_flow :: fn(cpu: ptr[mut ArchCpu], features: ptr[slop_os.CpuFeatures]) {
+enable_control_flow :: fn(cpu : ptr[mut ArchCpu], features : ptr[slop_os.CpuFeatures]) {
     cpu.shadow_stacks = has(features, .X86ShadowStack)
     cpu.indirect_branch_tracking = has(features, .X86Ibt)
     if !cpu.shadow_stacks && !cpu.indirect_branch_tracking {
@@ -277,7 +287,7 @@ has_kernel_shadow_stacks :: fn() -> bool {
  * @param base Unused.
  * @param size Unused.
  */
-set_kernel_shadow_stack :: fn(cpu: ptr[mut ArchCpu], base: u64, size: u64) {}
+set_kernel_shadow_stack :: fn(cpu : ptr[mut ArchCpu], base : u64, size : u64) {}
 
 /**
  * Tell whether the calling CPU gives user threads shadow stacks (arch_interface.has_user_shadow_stacks).
@@ -295,7 +305,7 @@ has_user_shadow_stacks :: fn() -> bool {
  * @param landing_pads Whether its indirect branches must land on endbr64, where the CPU has indirect branch tracking.
  * @param shadow_stack Its shadow-stack pointer; 0 for none.
  */
-load_user_control_flow :: fn(landing_pads: bool, shadow_stack: u64) {
+load_user_control_flow :: fn(landing_pads : bool, shadow_stack : u64) {
     cpu :: current_cpu()
     if !cpu.shadow_stacks && !cpu.indirect_branch_tracking {
         return void
@@ -322,4 +332,3 @@ read_user_shadow_stack :: fn() -> u64 {
     }
     return x86_64.rdmsr(IA32_PL3_SSP)
 }
-

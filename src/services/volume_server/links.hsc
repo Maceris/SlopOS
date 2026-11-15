@@ -1,7 +1,6 @@
 package volume_server
 
 import os from "std:os"
-import random from "std:random"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
@@ -9,9 +8,10 @@ import files from "std:os/slop_os/files"
 import grant from "std:os/slop_os/grant"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
-import slopfs from "../../slopfs"
+import random from "std:random"
 import links from "../../protocols/links"
 import volume as volume_protocol from "../../protocols/volume"
+import slopfs from "../../slopfs"
 
 /*
  * Stored links (roadmap 8f, design/security.md §8, slopfs/links.hsc), from both ends.
@@ -63,8 +63,17 @@ Followed :: union {
  *     that; Asked once the storage manager's asked; Failed if the link can't be read, or the storage manager can't be
  *     asked (Unavailable).
  */
-follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, opening: links.Opening) -> Followed {
-    if index >= server.connections.count || server.connections[index].linked || server.connections[index].past != 0 || path.count == 0 {
+follow :: fn(
+    server : ptr[mut Server],
+    index : usize,
+    directory : u64,
+    path : string,
+    opening : links.Opening
+) -> Followed {
+    if index >= server.connections.count
+        || server.connections[index].linked
+        || server.connections[index].past != 0
+        || path.count == 0 {
         return .Local
     }
     walked := slopfs.Walked.{}
@@ -82,8 +91,15 @@ follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string
     }
     out := os.Outgoing.{}
     request :: os.begin[links.Request](&out)
-    request^ = .Resolve(links.Resolving.{container = link.container, volume = cast[u64](link.volume), number = cast[u64](link.number),
-        path = os.append(&out, string_bytes(walked.rest)), opening = opening})
+    request^ = .Resolve(
+        links.Resolving.{
+            container = link.container,
+            volume = cast[u64](link.volume),
+            number = cast[u64](link.number),
+            path = os.append(&out, string_bytes(walked.rest)),
+            opening = opening,
+        }
+    )
     if !ask_links(server, &out, Asked.{client = index, claim = null}) {
         return .Failed(.Unavailable)
     }
@@ -100,7 +116,7 @@ follow :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string
  * @return Whether it was sent and queued; false if MAX_CONNECTIONS are waiting already, the storage manager's gone, or
  *     it couldn't be sent.
  */
-ask_links :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing], asked: Asked) -> bool {
+ask_links :: fn(server : ptr[mut Server], out : ptr[mut os.Outgoing], asked : Asked) -> bool {
     if server.asked_count >= server.asked.count || cast[slop_os.Handle](server.links) == slop_os.NO_HANDLE {
         return false
     }
@@ -127,7 +143,7 @@ ask_links :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing], asked: Asked
  * @param index The links connection's slot.
  * @param into Where each answer is read into, reused.
  */
-serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_links :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     loop {
         match links.receive_response(server.links, server.port, into, false) {
             case Received => {}
@@ -161,7 +177,7 @@ serve_links :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
  * @param server The server, whose queue isn't empty.
  * @return What was first.
  */
-take_asked :: fn(server: ptr[mut Server]) -> Asked {
+take_asked :: fn(server : ptr[mut Server]) -> Asked {
     asked :: server.asked[server.asked_first % server.asked.count]
     server.asked_first = (server.asked_first + 1) % server.asked.count
     server.asked_count -= 1
@@ -177,7 +193,7 @@ take_asked :: fn(server: ptr[mut Server]) -> Asked {
  * @param asked What the answer is for.
  * @param answer The storage manager's answer, whose connection, if it has one the client can't take, is closed.
  */
-finish :: fn(server: ptr[mut Server], asked: Asked, answer: links.Response) {
+finish :: fn(server : ptr[mut Server], asked : Asked, answer : links.Response) {
     match asked.claim {
         case Some(claim) => {
             error : files.FileError? = files.FileError.Unavailable
@@ -201,13 +217,17 @@ finish :: fn(server: ptr[mut Server], asked: Asked, answer: links.Response) {
  * @param number The number the link is issued under, by the volume it leads into.
  * @return Null once it's made; why not, otherwise, Unavailable for a slot past them.
  */
-made_link :: fn(server: ptr[mut Server], claim: usize, number: u64) -> files.FileError? {
+made_link :: fn(server : ptr[mut Server], claim : usize, number : u64) -> files.FileError? {
     if claim >= server.connections.count {
         return files.FileError.Unavailable
     }
     connection :: &server.connections[claim]
-    record := slopfs.LinkRecord.{container = connection.claim.container, volume = cast[u64le](connection.claim.volume),
-        number = cast[u64le](number), write = if connection.claim.write { cast[u8](1) } else { cast[u8](0) }}
+    record := slopfs.LinkRecord.{
+        container = connection.claim.container,
+        volume = cast[u64le](connection.claim.volume),
+        number = cast[u64le](number),
+        write = if connection.claim.write { cast[u8](1) } else { cast[u8](0) },
+    }
     match slopfs.create_link(server.volume, connection.target, name_of(connection), &record) {
         case Ok(_) => return null
         case Error(error) => return file_error(error)
@@ -222,7 +242,7 @@ made_link :: fn(server: ptr[mut Server], claim: usize, number: u64) -> files.Fil
  * @param answer The storage manager's answer: the connection opened, which moves to the client, or why not. One the
  *     client's protocol can't take, as a writable file for a read-only directory, is closed, and Unavailable answered.
  */
-answer_opened :: fn(server: ptr[mut Server], client: usize, answer: links.Response) {
+answer_opened :: fn(server : ptr[mut Server], client : usize, answer : links.Response) {
     if client >= server.connections.count || !server.connections[client].waiting {
         close_opened(answer)
         return void
@@ -264,7 +284,7 @@ answer_opened :: fn(server: ptr[mut Server], client: usize, answer: links.Respon
  *
  * @param answer An answer of the storage manager's; an Opened one's connection is closed, and anything else left.
  */
-close_opened :: fn(answer: links.Response) {
+close_opened :: fn(answer : links.Response) {
     handle :: match answer {
         case OpenedFile(made) => cast[slop_os.Handle](made.end)
         case OpenedReadOnlyFile(made) => cast[slop_os.Handle](made.end)
@@ -292,7 +312,13 @@ close_opened :: fn(answer: links.Response) {
  * @return Null once it's begun, the answer to come; why not, now: AlreadyExists for something at path, NoSpace without
  *     a slot, Unavailable if the claim couldn't be sent, or why the path couldn't be followed.
  */
-begin_link :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, given: os.Channel[grant.Grant]) -> files.FileError? {
+begin_link :: fn(
+    server : ptr[mut Server],
+    index : usize,
+    directory : u64,
+    path : string,
+    given : os.Channel[grant.Grant]
+) -> files.FileError? {
     leaf := slopfs.Leaf.{}
     match slopfs.leaf_of(server.volume, directory, path) {
         case Ok(found) => leaf = found
@@ -339,7 +365,7 @@ begin_link :: fn(server: ptr[mut Server], index: usize, directory: u64, path: st
  * @param index The claim's connection's slot; one claimed already is left alone.
  * @param into Where the answer is read into.
  */
-serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_claim :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count || server.connections[index].claimed {
         return void
     }
@@ -379,7 +405,7 @@ serve_claim :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
  * @param claim The claim's connection's slot.
  * @param error Why the link wasn't made; null for Done.
  */
-end_claim :: fn(server: ptr[mut Server], claim: usize, error: files.FileError?) {
+end_claim :: fn(server : ptr[mut Server], claim : usize, error : files.FileError?) {
     if claim >= server.connections.count {
         return void
     }
@@ -415,7 +441,7 @@ end_claim :: fn(server: ptr[mut Server], claim: usize, error: files.FileError?) 
  * @return Granted with the grant's other end, which the caller sends; Failed with ReadOnly, IsALink for a link,
  *     NoSpace without a slot, or why the path couldn't be followed.
  */
-grant_of :: fn(server: ptr[mut Server], index: usize, directory: u64, path: string, write: bool) -> dir.Response {
+grant_of :: fn(server : ptr[mut Server], index : usize, directory : u64, path : string, write : bool) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
     }
@@ -446,7 +472,7 @@ grant_of :: fn(server: ptr[mut Server], index: usize, directory: u64, path: stri
  * @param index The grant's connection's slot.
  * @param into Where each request is read into, reused.
  */
-serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_grant :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -473,8 +499,14 @@ serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
         else {
             random.fill(connection.ticket)
             connection.claimed = true
-            response^ = .Claimed(grant.Claim.{container = server.described.container, volume = server.described.id, ticket = connection.ticket,
-                write = !connection.read_only})
+            response^ = .Claimed(
+                grant.Claim.{
+                    container = server.described.container,
+                    volume = server.described.id,
+                    ticket = connection.ticket,
+                    write = !connection.read_only,
+                }
+            )
         }
         _ = grant.send_response(end, server.port, &out)
     }
@@ -487,7 +519,7 @@ serve_grant :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomi
  * @param b The other ticket, 32 bytes.
  * @return Whether every byte is the same.
  */
-same_ticket :: fn(a: u8[32], b: u8[32]) -> bool {
+same_ticket :: fn(a : u8[32], b : u8[32]) -> bool {
     differ : u8 = 0
     for byte, i in a {
         differ |= byte ~ b[i]
@@ -506,14 +538,24 @@ same_ticket :: fn(a: u8[32], b: u8[32]) -> bool {
  * @return Issued with the link's number, once committed; Failed if the commit failed; Refused with NotFound for a
  *     ticket no unissued grant has, or why it couldn't be issued.
  */
-issue_to :: fn(server: ptr[mut Server], to: volume_protocol.IssueTo) -> volume_protocol.Response {
+issue_to :: fn(server : ptr[mut Server], to : volume_protocol.IssueTo) -> volume_protocol.Response {
     for &connection, i in server.connections {
-        if i >= server.count || connection.kind != .Grant || !connection.claimed || connection.issued || !same_ticket(connection.ticket, to.ticket) {
+        if i >= server.count
+            || connection.kind != .Grant
+            || !connection.claimed
+            || connection.issued
+            || !same_ticket(connection.ticket, to.ticket) {
             continue
         }
         connection.issued = true
         server.volume.now = slop_os.clock_monotonic() or_else 0
-        match slopfs.issue(server.volume, connection.object, !connection.read_only, to.recipient_container, to.recipient) {
+        match slopfs.issue(
+            server.volume,
+            connection.object,
+            !connection.read_only,
+            to.recipient_container,
+            to.recipient
+        ) {
             case Ok(number) => {
                 if !commit(server) {
                     return .Failed
@@ -539,13 +581,18 @@ issue_to :: fn(server: ptr[mut Server], to: volume_protocol.IssueTo) -> volume_p
  *     only to read, AlreadyExists for a New file that is the link's target, NoSpace without a slot, or why the path
  *     couldn't be opened.
  */
-open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, path: string) -> volume_protocol.Response {
+open_issued :: fn(
+    server : ptr[mut Server],
+    asked : volume_protocol.OpenIssued,
+    path : string
+) -> volume_protocol.Response {
     record := slopfs.IssuedRecord.{}
     match slopfs.issued(server.volume, asked.number) {
         case Ok(found) => record = found or_return .Refused(.Revoked)
         case Error(error) => return .Refused(file_error(error))
     }
-    if record.recipient_container != asked.recipient_container || cast[u64](record.recipient_volume) != asked.recipient {
+    if record.recipient_container != asked.recipient_container
+        || cast[u64](record.recipient_volume) != asked.recipient {
         return .Refused(.Revoked)
     }
     write :: record.write != 0
@@ -560,7 +607,12 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
     if kind == .File || kind == .ReadOnlyFile {
         found := object
         if path.count != 0 {
-            opened :: if kind == .File { open_file_object(volume, object, path, asked.opening.creation, no_schema()) } else { readable_file(volume, object, path) }
+            opened :: if kind == .File {
+                open_file_object(volume, object, path, asked.opening.creation, no_schema())
+            }
+            else {
+                readable_file(volume, object, path)
+            }
             match opened {
                 case Ok(made) => found = made
                 case Error(error) => return .Refused(file_error(error))
@@ -585,7 +637,8 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
             made :: open_connection[file.File](server, .File, found, false, path) or_return .Refused(.NoSpace)
             return .OpenedFile(made)
         }
-        made :: open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, found, true, path) or_return .Refused(.NoSpace)
+        made :: open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, found, true, path)
+            or_return .Refused(.NoSpace)
         return .OpenedReadOnlyFile(made)
     }
     found := object
@@ -605,7 +658,8 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
         made :: open_connection[dir.Dir](server, .Dir, found, false, path) or_return .Refused(.NoSpace)
         return .OpenedDirectory(made)
     }
-    made :: open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, found, true, path) or_return .Refused(.NoSpace)
+    made :: open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, found, true, path)
+        or_return .Refused(.NoSpace)
     return .OpenedReadOnlyDirectory(made)
 }
 
@@ -623,7 +677,7 @@ open_issued :: fn(server: ptr[mut Server], asked: volume_protocol.OpenIssued, pa
  * @error DeviceError A block couldn't be read.
  * @error Corrupt The tree couldn't be read as one.
  */
-readable_file :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string) -> Result[u64, slopfs.Error] {
+readable_file :: fn(volume : ptr[mut slopfs.Volume], directory : u64, path : string) -> Result[u64, slopfs.Error] {
     object :: slopfs.resolve(volume, directory, path)?
     slopfs.file_record(volume, object)?
     return .Ok(object)
@@ -644,7 +698,13 @@ readable_file :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string
  * @return Issued with its number, the path, whether it's to write, when it was made and the next cursor; End past the
  *     last; or Failed.
  */
-issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor: u64, out: ptr[mut os.Outgoing]) -> dir.Response {
+issued_link :: fn(
+    server : ptr[mut Server],
+    index : usize,
+    directory : u64,
+    cursor : u64,
+    out : ptr[mut os.Outgoing]
+) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
     }
@@ -667,8 +727,15 @@ issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor:
             continue
         }
         shown :: if length < path.count { length } else { path.count }
-        return .Issued(files.IssuedLink.{number = found.number, path = os.append(out, path[0..<shown]), write = found.record.write != 0,
-            created = cast[u64](found.record.created), next = at})
+        return .Issued(
+            files.IssuedLink.{
+                number = found.number,
+                path = os.append(out, path[0..<shown]),
+                write = found.record.write != 0,
+                created = cast[u64](found.record.created),
+                next = at,
+            }
+        )
     }
 }
 
@@ -683,7 +750,7 @@ issued_link :: fn(server: ptr[mut Server], index: usize, directory: u64, cursor:
  * @return Done once it's revoked, durable with the volume's next commit; Failed with NotFound for no such link, or one
  *     not beneath the directory, or why it couldn't be revoked.
  */
-revoked :: fn(server: ptr[mut Server], index: usize, directory: u64, number: u64) -> dir.Response {
+revoked :: fn(server : ptr[mut Server], index : usize, directory : u64, number : u64) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
     }
@@ -693,7 +760,8 @@ revoked :: fn(server: ptr[mut Server], index: usize, directory: u64, number: u64
         case Error(error) => return .Failed(file_error(error))
     }
     // One for an object that's gone is anyone's beneath the root to revoke
-    beneath :: slopfs.is_beneath(server.volume, cast[u64](record.object), directory) or_else directory == slopfs.ROOT_OBJECT
+    beneath :: slopfs.is_beneath(server.volume, cast[u64](record.object), directory)
+        or_else directory == slopfs.ROOT_OBJECT
     if !beneath {
         return .Failed(.NotFound)
     }

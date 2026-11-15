@@ -2,8 +2,8 @@ package power
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import trace from "../trace"
 import events from "../events"
+import trace from "../trace"
 
 /*
  * Asking for the system to shut down or restart (decisions/0180, 0182): the supervisor serves it, to the terminal
@@ -71,7 +71,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True: shutting down or restarting again changes nothing.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return true
 }
 

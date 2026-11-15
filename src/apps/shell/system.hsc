@@ -1,13 +1,13 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import programs from "../../protocols/programs"
 import powerbox from "../../protocols/powerbox"
+import programs from "../../protocols/programs"
 import trace from "../../protocols/trace"
+import shell_language as language from "../../shell_language"
 
 /*
  * The system, as a session sees it (decisions/0179, 11e4): processes, the session's programs and the shell's jobs as a
@@ -27,7 +27,7 @@ MAX_GRANTS :: 64
  * @param into Where the answer goes.
  * @return Whether it came; false without the connection, or if it's gone.
  */
-ask_session :: fn(shell: ptr[mut Shell], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
+ask_session :: fn(shell : ptr[mut Shell], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> bool {
     connection :: shell.programs or_return false
     if programs.send_request(connection.end, shell.programs_port, out) is_some {
         return false
@@ -52,7 +52,7 @@ ask_session :: fn(shell: ptr[mut Shell], out: ptr[mut os.Outgoing], into: ptr[mu
  *     session, its CPU budget's; share, the CPU budget's guaranteed share in millionths of a CPU, and budget, the time
  *     run on it, for the session and each job with a CPU budget of its own (decisions/0187), 0 for none.
  */
-list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+list_processes :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 0 {
         return error_at(tree.at, "processes takes nothing")
     }
@@ -68,14 +68,30 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
     if cast[slop_os.Handle](shell.cpu_budget) != slop_os.NO_HANDLE {
         session = slop_os.cpu_budget_describe(shell.cpu_budget) or_else session
     }
-    runtime.array_add(&made.items, process_record("session", "", "running", 0, 0, session.ran, session.lent, 0, session.share, session.ran))
+    runtime.array_add(
+        &made.items,
+        process_record("session", "", "running", 0, 0, session.ran, session.lent, 0, session.share, session.ran)
+    )
     match os.message_of[programs.Response](&into)^ {
         case RunningPrograms(running) => {
             for each in os.items(&into, running) {
                 name :: copied_first(each.name[0..<each.name.count], cast[usize](each.name_bytes))
                 state :: if each.responding != 0 { "running" } else { "not responding" }
-                runtime.array_add(&made.items, process_record(name, "session", state, each.memory, each.memory_limit, each.cpu_ns,
-                    each.lent_ns, each.charged, 0, 0))
+                runtime.array_add(
+                    &made.items,
+                    process_record(
+                        name,
+                        "session",
+                        state,
+                        each.memory,
+                        each.memory_limit,
+                        each.cpu_ns,
+                        each.lent_ns,
+                        each.charged,
+                        0,
+                        0
+                    )
+                )
             }
         }
         case _ => return error_at(tree.at, "the session manager couldn't be asked")
@@ -102,8 +118,21 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
             if cast[slop_os.Handle](call.cpu_budget) != slop_os.NO_HANDLE {
                 own = slop_os.cpu_budget_describe(call.cpu_budget) or_else own
             }
-            runtime.array_add(&made.items, process_record(message("% (job %)", call.tree.text, job.number), "shell", state, used, limit,
-                cpu.run_ns, cpu.lent_ns, charged, own.share, own.ran))
+            runtime.array_add(
+                &made.items,
+                process_record(
+                    message("% (job %)", call.tree.text, job.number),
+                    "shell",
+                    state,
+                    used,
+                    limit,
+                    cpu.run_ns,
+                    cpu.lent_ns,
+                    charged,
+                    own.share,
+                    own.ran
+                )
+            )
         }
     }
     return .Ok(.List(made))
@@ -124,8 +153,18 @@ list_processes :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Ev
  * @param budget The time run on its CPU budget, in nanoseconds; 0 for none of its own.
  * @return The record.
  */
-process_record :: fn(name #escaping : string, parent #escaping : string, state #escaping : string, memory: u64, limit: u64, cpu: u64,
-    lent: u64, charged: u64, share: u64, budget: u64) -> Value {
+process_record :: fn(
+    name #escaping : string,
+    parent #escaping : string,
+    state #escaping : string,
+    memory : u64,
+    limit : u64,
+    cpu : u64,
+    lent : u64,
+    charged : u64,
+    share : u64,
+    budget : u64
+) -> Value {
     record :: new_record()
     set_field(record, "name", .Text(name))
     set_field(record, "parent", .Text(parent))
@@ -149,7 +188,7 @@ process_record :: fn(name #escaping : string, parent #escaping : string, state #
  * @param tree The Call node of end, its one argument the installation's name.
  * @return Null.
  */
-end_installation :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+end_installation :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     name :: one_name(shell, tree, "end takes an installation's name: end tally")?
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
@@ -169,7 +208,7 @@ end_installation :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
  * @param tree The Call node of install.
  * @return Null.
  */
-install_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+install_program :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     program := ""
     name := ""
     skip := false
@@ -200,7 +239,12 @@ install_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
     }
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
-    request^ = .Install(programs.Installing.{name = os.append(&out, string_bytes(name)), program = os.append(&out, string_bytes(program))})
+    request^ = .Install(
+        programs.Installing.{
+            name = os.append(&out, string_bytes(name)),
+            program = os.append(&out, string_bytes(program)),
+        }
+    )
     return session_done(shell, tree, &out, name)
 }
 
@@ -214,7 +258,7 @@ install_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
  * @param tree The Call node of uninstall, its one argument the name.
  * @return Null.
  */
-uninstall_installation :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+uninstall_installation :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     name :: one_name(shell, tree, "uninstall takes an installation's name: uninstall tally")?
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
@@ -231,7 +275,7 @@ uninstall_installation :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) 
  * @param tree The Call node of installations.
  * @return A list of records: name, program, and whose, "system" or "yours".
  */
-list_installations :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+list_installations :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 0 {
         return error_at(tree.at, "installations takes nothing")
     }
@@ -271,7 +315,7 @@ list_installations :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value
  * @return A list of records: number, which --revoke takes, path, beneath the home, and writes, whether it may write
  *     what it reaches; Null after a revoke, or when there are none, which is said.
  */
-kept_grants :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+kept_grants :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     home :: shell.home or_return error_at(tree.at, "the shell has no home, so no kept grants")
     children :: tree.children
     if children.count > 0 {
@@ -349,7 +393,7 @@ kept_grants :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[V
  * @param into Where the answer goes.
  * @return Whether it came; false without a home, or if it's gone.
  */
-ask_home :: fn(shell: ptr[mut Shell], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
+ask_home :: fn(shell : ptr[mut Shell], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> bool {
     home :: shell.home or_return false
     if dir.send_request(home.end, shell.home_port, out) is_some {
         return false
@@ -370,7 +414,12 @@ ask_home :: fn(shell: ptr[mut Shell], out: ptr[mut os.Outgoing], into: ptr[mut o
  * @param name The installation's name, for the error.
  * @return Null once it's done.
  */
-session_done :: fn(shell: ptr[mut Shell], tree: ptr[Node], out: ptr[mut os.Outgoing], name: string) -> Result[Value, EvalError] {
+session_done :: fn(
+    shell : ptr[mut Shell],
+    tree : ptr[Node],
+    out : ptr[mut os.Outgoing],
+    name : string
+) -> Result[Value, EvalError] {
     into := os.Incoming.{}
     if !ask_session(shell, out, &into) {
         return error_at(tree.at, "the session manager couldn't be asked")
@@ -378,8 +427,16 @@ session_done :: fn(shell: ptr[mut Shell], tree: ptr[Node], out: ptr[mut os.Outgo
     return match os.message_of[programs.Response](&into)^ {
         case Done => .Ok(.Null)
         case Refused(problem) => error_at(tree.at, message("%1: %2", name, install_problem(problem)))
-        case NeedsParameter(parameter) => error_at(tree.at, message("%1: its program needs its %2, which an installation isn't given: only a data directory, settings, the clock and the locale",
-            name, copied(os.items(&into, parameter))))
+        case NeedsParameter(
+            parameter
+        ) => error_at(
+            tree.at,
+            message(
+                "%1: its program needs its %2, which an installation isn't given: only a data directory, settings, the clock and the locale",
+                name,
+                copied(os.items(&into, parameter))
+            )
+        )
         case _ => error_at(tree.at, "the session manager couldn't be asked")
     }
 }
@@ -390,7 +447,7 @@ session_done :: fn(shell: ptr[mut Shell], tree: ptr[Node], out: ptr[mut os.Outgo
  * @param problem Why, as the session manager said.
  * @return A phrase, static text.
  */
-install_problem :: fn(problem: programs.InstallProblem) -> string {
+install_problem :: fn(problem : programs.InstallProblem) -> string {
     return match problem {
         case .NoUser => "this session has no user, so no installations of its own"
         case .BadName => "an installation's name is 1 to 31 letters, digits and _"
@@ -415,7 +472,7 @@ install_problem :: fn(problem: programs.InstallProblem) -> string {
  * @param usage What's said when it hasn't exactly one argument.
  * @return The name.
  */
-one_name :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], usage: string) -> Result[string, EvalError] {
+one_name :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node], usage : string) -> Result[string, EvalError] {
     children :: tree.children
     if children.count != 1 {
         return .Error(EvalError.{message = usage, at = tree.at})
@@ -434,7 +491,7 @@ one_name :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], usage: string)
  * @param argument The argument's node.
  * @return The word.
  */
-word_of :: fn(shell: ptr[mut Shell], argument #escaping : ptr[Node]) -> Result[string, EvalError] {
+word_of :: fn(shell : ptr[mut Shell], argument #escaping : ptr[Node]) -> Result[string, EvalError] {
     if argument.kind == .Word {
         return .Ok(argument.text)
     }
@@ -455,7 +512,7 @@ word_of :: fn(shell: ptr[mut Shell], argument #escaping : ptr[Node]) -> Result[s
  * @param bytes UTF-8, as a message holds a name.
  * @return The copy, on the heap, never freed; "" for none.
  */
-copied :: fn(bytes: u8[]) -> string {
+copied :: fn(bytes : u8[]) -> string {
     if bytes.count == 0 {
         return ""
     }
@@ -476,7 +533,7 @@ copied :: fn(bytes: u8[]) -> string {
  * @param count How many of its bytes are the text; those past the field aren't taken.
  * @return The copy, on the heap, never freed; "" for none.
  */
-copied_first :: fn(bytes: u8[], count: usize) -> string {
+copied_first :: fn(bytes : u8[], count : usize) -> string {
     kept : u8[..]
     for byte, i in bytes {
         if i < count {
@@ -500,18 +557,26 @@ copied_first :: fn(bytes: u8[], count: usize) -> string {
  * @return Null once it's allowed, as the system goes down; an error without a powerbox, for arguments, or if it's
  *     refused.
  */
-power_down :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], restart: bool) -> Result[Value, EvalError] {
+power_down :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node], restart : bool) -> Result[Value, EvalError] {
     if tree.children.count > 0 {
         return .Error(EvalError.{message = message("% takes nothing", tree.text), at = tree.at})
     }
-    end :: powerbox_connection(shell, "shell") or_return .Error(EvalError.{message = message("% needs the session's powerbox, which this session hasn't",
-        tree.text), at = tree.at})
+    end :: powerbox_connection(shell, "shell")
+        or_return .Error(
+            EvalError.{
+                message = message("% needs the session's powerbox, which this session hasn't", tree.text),
+                at = tree.at,
+            }
+        )
     defer slop_os.handle_close(cast[slop_os.Handle](end))
-    port :: os.port_for(slop_os.startup_block().budget, end) or_return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+    port :: os.port_for(slop_os.startup_block().budget, end)
+        or_return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     out := os.Outgoing.{}
     request :: os.begin[powerbox.Request](&out)
-    request^ = .RequestPower(powerbox.PowerRequest.{purpose = os.append(&out, string_bytes("as you asked in the shell")), restart = restart})
+    request^ = .RequestPower(
+        powerbox.PowerRequest.{purpose = os.append(&out, string_bytes("as you asked in the shell")), restart = restart}
+    )
     if powerbox.send_request(end, port, &out) != null {
         return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
     }
@@ -528,7 +593,12 @@ power_down :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], restart: boo
             say(shell, if restart { "Restarting." } else { "Shutting down." })
             return .Ok(.Null)
         }
-        case Busy => return .Error(EvalError.{message = "the powerbox is asking the user something else; try again once that's answered", at = tree.at})
+        case Busy => return .Error(
+            EvalError.{
+                message = "the powerbox is asking the user something else; try again once that's answered",
+                at = tree.at,
+            }
+        )
         case _ => return .Error(EvalError.{message = message("% was refused", tree.text), at = tree.at})
     }
 }
@@ -541,7 +611,7 @@ power_down :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], restart: boo
  * @param program The program's name, which the powerbox shows the user when it asks.
  * @return The connection's end, the caller's to give; null without a session manager, or a session without a powerbox.
  */
-powerbox_connection :: fn(shell: ptr[mut Shell], program: string) -> slop_os.Channel? {
+powerbox_connection :: fn(shell : ptr[mut Shell], program : string) -> slop_os.Channel? {
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
     request^ = .Powerbox(os.append(&out, string_bytes(program)))
@@ -565,7 +635,7 @@ powerbox_connection :: fn(shell: ptr[mut Shell], program: string) -> slop_os.Cha
  * @param tree The Call node of trace, its one argument the seconds, 1 to 10; 1 without one.
  * @return Null once it's said; an error without a powerbox, for arguments, or if it's refused.
  */
-trace_system :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+trace_system :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     seconds := cast[u64](1)
     if tree.children.count > 1 {
         return error_at(tree.at, "trace takes the seconds to trace for, 1 to 10")
@@ -576,9 +646,11 @@ trace_system :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
     if seconds == 0 || seconds * 1000 > cast[u64](trace.MAX_MILLISECONDS) {
         return error_at(tree.at, "trace takes the seconds to trace for, 1 to 10")
     }
-    end :: powerbox_connection(shell, "shell") or_return error_at(tree.at, "trace needs the session's powerbox, which this session hasn't")
+    end :: powerbox_connection(shell, "shell")
+        or_return error_at(tree.at, "trace needs the session's powerbox, which this session hasn't")
     defer slop_os.handle_close(cast[slop_os.Handle](end))
-    port :: os.port_for(slop_os.startup_block().budget, end) or_return error_at(tree.at, "the powerbox can't be reached")
+    port :: os.port_for(slop_os.startup_block().budget, end)
+        or_return error_at(tree.at, "the powerbox can't be reached")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     out := os.Outgoing.{}
     request :: os.begin[powerbox.Request](&out)
@@ -597,11 +669,15 @@ trace_system :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
     connection := os.Channel[trace.Trace].{}
     match os.message_of[powerbox.Response](&into)^ {
         case TraceGranted(given) => connection = given
-        case Busy => return error_at(tree.at, "the powerbox is asking the user something else; try again once that's answered")
+        case Busy => return error_at(
+            tree.at,
+            "the powerbox is asking the user something else; try again once that's answered"
+        )
         case _ => return error_at(tree.at, "trace was refused")
     }
     defer slop_os.handle_close(cast[slop_os.Handle](connection.end))
-    traced :: os.port_for(slop_os.startup_block().budget, connection.end) or_return error_at(tree.at, "the supervisor can't be reached")
+    traced :: os.port_for(slop_os.startup_block().budget, connection.end)
+        or_return error_at(tree.at, "the supervisor can't be reached")
     defer slop_os.handle_close(cast[slop_os.Handle](traced))
     asking := os.Outgoing.{}
     os.begin[trace.Request](&asking)^ = .Trace(cast[u32](seconds * 1000))
@@ -620,7 +696,12 @@ trace_system :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
         case Traced(result) => {
             say(shell, message("% events in % s", result.events, seconds))
             for row in os.items(&answer, result.rows) {
-                name :: if row.name_bytes > 0 && cast[usize](row.name_bytes) <= row.name.count { string_of(&row.name[0], cast[usize](row.name_bytes)) } else { "?" }
+                name :: if row.name_bytes > 0 && cast[usize](row.name_bytes) <= row.name.count {
+                    string_of(&row.name[0], cast[usize](row.name_bytes))
+                }
+                else {
+                    "?"
+                }
                 say(shell, message("  %: % switches, % wakes", name, row.switches, row.wakes))
             }
             return .Ok(.Null)
@@ -629,4 +710,3 @@ trace_system :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
         case _ => return error_at(tree.at, "the supervisor couldn't trace")
     }
 }
-

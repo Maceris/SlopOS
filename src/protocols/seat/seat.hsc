@@ -13,7 +13,8 @@ import slop_os from "std:os/slop_os"
  * listener as Connects.
  *
  * The reader can lend the seat (decisions/0192, 15c): while it's lent, keys and the pointer go to the borrower, the
- * client that said it borrows (Borrow), the compositor, instead; the pointer goes only to a borrower. The secure attention key
+ * client that said it borrows (Borrow), the compositor, instead; the pointer goes only to a borrower. The secure
+ * attention key
  * ends the lending, and goes to the reader as itself, the events waiting for the borrower dropped.
  */
 
@@ -147,7 +148,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return False for Read, which asked again is another Read, taking other events; true for SetLayout, Connect and Lend.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
         case SetLayout(_) => true
@@ -166,7 +167,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @param keyboard Which keyboard it's from, an index from 0.
  * @return The event, with kind's value, keyboard, and no code, modifiers, waiting code or text.
  */
-event_of :: fn(kind: EventKind, keyboard: u8) -> Event {
+event_of :: fn(kind : EventKind, keyboard : u8) -> Event {
     return Event.{kind = cast[u8](kind), keyboard = keyboard}
 }
 
@@ -177,7 +178,7 @@ event_of :: fn(kind: EventKind, keyboard: u8) -> Event {
  * @return Its kind; null for a kind value this version doesn't have, as from a newer input service, which a client
  *     skips.
  */
-kind_of :: fn(event: Event) -> EventKind? {
+kind_of :: fn(event : Event) -> EventKind? {
     return match event.kind {
         case 1 => EventKind.Key
         case 2 => EventKind.SecureAttention
@@ -204,7 +205,7 @@ kind_of :: fn(event: Event) -> EventKind? {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Seat]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Seat]? {
     pair :: os.channel_for[Seat](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

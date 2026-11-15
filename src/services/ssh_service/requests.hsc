@@ -9,8 +9,8 @@ package ssh_service
 
 import compiler from "base:compiler"
 import os from "std:os"
-import ssh from "std:ssh"
 import slop_os from "std:os/slop_os"
+import ssh from "std:ssh"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
@@ -52,7 +52,7 @@ Queue :: struct {
 }
 
 /** Add a request to a queue; false if it's full. */
-push :: fn(queue: ptr[mut Queue], item: Waiting) -> bool {
+push :: fn(queue : ptr[mut Queue], item : Waiting) -> bool {
     if queue.count >= QUEUED {
         return false
     }
@@ -62,7 +62,7 @@ push :: fn(queue: ptr[mut Queue], item: Waiting) -> bool {
 }
 
 /** Take the oldest request from a queue; null if there's none. */
-pop :: fn(queue: ptr[mut Queue]) -> Waiting? {
+pop :: fn(queue : ptr[mut Queue]) -> Waiting? {
     if queue.count == 0 {
         return null
     }
@@ -73,7 +73,7 @@ pop :: fn(queue: ptr[mut Queue]) -> Waiting? {
 }
 
 /** The connection that asked, if it's still there: the one in its place with its serial. */
-asker :: fn(service: ptr[mut Service], item: Waiting) -> ptr[mut Remote]? {
+asker :: fn(service : ptr[mut Service], item : Waiting) -> ptr[mut Remote]? {
     if item.slot >= service.remotes.count {
         return null
     }
@@ -86,7 +86,7 @@ asker :: fn(service: ptr[mut Service], item: Waiting) -> ptr[mut Remote]? {
  *
  * @return True once it's sent; false if the account service couldn't be reached, or too much waits already.
  */
-send_accounts :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], item: Waiting) -> bool {
+send_accounts :: fn(service : ptr[mut Service], out : ptr[mut os.Outgoing], item : Waiting) -> bool {
     if service.accounts_end == NONE && !dial_accounts(service) {
         return false
     }
@@ -101,7 +101,7 @@ send_accounts :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], item: 
 }
 
 /** Dial the account service, bind its connection to the service's port, and mark it Remote. */
-dial_accounts :: fn(service: ptr[mut Service]) -> bool {
+dial_accounts :: fn(service : ptr[mut Service]) -> bool {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, service.accounts_dialing) or_return false
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -112,7 +112,13 @@ dial_accounts :: fn(service: ptr[mut Service]) -> bool {
         return false
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(service.port, cast[slop_os.Handle](connection.end), signals, ACCOUNTS_KEY, .Persistent) is_error {
+    if slop_os.port_bind(
+        service.port,
+        cast[slop_os.Handle](connection.end),
+        signals,
+        ACCOUNTS_KEY,
+        .Persistent
+    ) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_answers))
         _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
         return false
@@ -130,7 +136,7 @@ dial_accounts :: fn(service: ptr[mut Service]) -> bool {
 }
 
 /** The account service's connection failed: closed, and every login waiting on it refused. */
-accounts_gone :: fn(service: ptr[mut Service]) {
+accounts_gone :: fn(service : ptr[mut Service]) {
     if service.accounts_end != NONE {
         _ = slop_os.port_unbind(service.port, ACCOUNTS_KEY)
         _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_answers))
@@ -152,7 +158,7 @@ accounts_gone :: fn(service: ptr[mut Service]) {
 }
 
 /** Take every answer the account service has given: each login it's for answered, if its connection's still there. */
-take_accounts :: fn(service: ptr[mut Service]) {
+take_accounts :: fn(service : ptr[mut Service]) {
     loop {
         if service.accounts_end == NONE {
             break
@@ -197,7 +203,7 @@ take_accounts :: fn(service: ptr[mut Service]) {
  *
  * @return True once it's sent.
  */
-send_sessions :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], item: Waiting) -> bool {
+send_sessions :: fn(service : ptr[mut Service], out : ptr[mut os.Outgoing], item : Waiting) -> bool {
     if service.sessions_end == NONE || service.sessions_queue.count >= QUEUED {
         return false
     }
@@ -208,7 +214,7 @@ send_sessions :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], item: 
 }
 
 /** Take every answer the session manager has given: each session start finished, or undone if its connection's gone. */
-take_sessions :: fn(service: ptr[mut Service]) {
+take_sessions :: fn(service : ptr[mut Service]) {
     loop {
         if service.sessions_end == NONE {
             break
@@ -258,7 +264,7 @@ take_sessions :: fn(service: ptr[mut Service]) {
 }
 
 /** The session manager's connection failed: closed, and every session start waiting on it refused. */
-sessions_gone :: fn(service: ptr[mut Service]) {
+sessions_gone :: fn(service : ptr[mut Service]) {
     _ = slop_os.port_unbind(service.port, SESSIONS_KEY)
     _ = slop_os.handle_close(cast[slop_os.Handle](service.sessions_end))
     service.sessions_end = NONE

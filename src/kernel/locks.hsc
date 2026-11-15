@@ -86,7 +86,10 @@ LockRank :: enum #backed_by(u32) {
     ObjectList = 290,
     /** The kernel's console_lock, held while a line is written out (log.hsc). */
     Console = 300,
-    /** A process's debug_lock, which guards its breakpoints and watchpoints (process_set_debug), taken returning to user. */
+    /**
+     * A process's debug_lock, which guards its breakpoints and watchpoints (process_set_debug), taken returning to
+     * user.
+     */
     ProcessDebug = 305,
     /** A CPU's trace ring's lock, taken in the scheduler's paths under any other (tracing.hsc). */
     Trace = 310,
@@ -104,7 +107,7 @@ LockRank :: enum #backed_by(u32) {
  * @param spin_lock The lock, which stays held until unlock_at gives it back with the same rank.
  * @param rank The lock's rank in the kernel's order: above every rank this CPU holds.
  */
-lock_at :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
+lock_at :: fn(spin_lock : ptr[mut concurrency.SpinLock], rank : LockRank) {
     #if robustness.ON {
         match held_ranks() {
             case Some(held) => {
@@ -130,7 +133,7 @@ lock_at :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
  * @param spin_lock The lock, which stays held until unlock_at gives it back with the same rank.
  * @param rank The lock's rank: above every rank held, or equal to the newest's with spin_lock at a higher address.
  */
-lock_after :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
+lock_after :: fn(spin_lock : ptr[mut concurrency.SpinLock], rank : LockRank) {
     #if robustness.ON {
         match held_ranks() {
             case Some(held) => {
@@ -156,7 +159,7 @@ lock_after :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
  * @param spin_lock The lock, held by this CPU.
  * @param rank The rank it was taken with.
  */
-unlock_at :: fn(spin_lock: ptr[mut concurrency.SpinLock], rank: LockRank) {
+unlock_at :: fn(spin_lock : ptr[mut concurrency.SpinLock], rank : LockRank) {
     #if robustness.ON {
         match held_ranks() {
             case Some(held) => {
@@ -201,7 +204,7 @@ held_ranks :: fn() -> ptr[mut concurrency.HeldRanks]? {
  *
  * @param rank The rank of the lock being taken, for the report.
  */
-check_interrupts :: fn(rank: LockRank) {
+check_interrupts :: fn(rank : LockRank) {
     if arch.interrupts_enabled() {
         lock_order_broken(rank, "taken with interrupts on")
     }
@@ -216,7 +219,7 @@ check_interrupts :: fn(rank: LockRank) {
  * @param rank The rank of the lock taken or given back out of order.
  * @param what What was wrong, as a phrase that follows "a <rank> lock", like "taken with interrupts on".
  */
-lock_order_broken :: fn(rank: LockRank, what: string) #never_returns {
+lock_order_broken :: fn(rank : LockRank, what : string) #never_returns {
     cpu :: per_cpu()
     cpu.reporting_locks = true
     runtime.log_fatal("lock order: a % lock % on CPU % (decisions/0106)", rank, what, cpu.index)

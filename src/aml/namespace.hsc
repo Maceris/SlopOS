@@ -134,7 +134,7 @@ Node :: struct {
  * @param text Four characters; a shorter text is padded with `_`, a longer cut to four.
  * @return The segment.
  */
-segment_of :: fn(text: string) -> u32 {
+segment_of :: fn(text : string) -> u32 {
     bytes :: string_bytes(text)
     segment : u32 = 0
     for i in 0..<4 {
@@ -152,7 +152,7 @@ segment_of :: fn(text: string) -> u32 {
  * @param name The child's segment.
  * @return The child, following an Alias to what it names; null if there's none.
  */
-child_of :: fn(parent: ptr[Node], name: u32) -> ptr[mut Node]? {
+child_of :: fn(parent : ptr[Node], name : u32) -> ptr[mut Node]? {
     child := parent.first_child
     loop {
         node :: child or_break
@@ -170,7 +170,7 @@ child_of :: fn(parent: ptr[Node], name: u32) -> ptr[mut Node]? {
  * @param node The node.
  * @return What it names; itself if it isn't an Alias, or an Alias whose target isn't a node.
  */
-resolved :: fn(node: ptr[mut Node]) -> ptr[mut Node] {
+resolved :: fn(node : ptr[mut Node]) -> ptr[mut Node] {
     at := node
     for hop in 0..<8 {
         if at.kind != .Alias {
@@ -194,7 +194,13 @@ resolved :: fn(node: ptr[mut Node]) -> ptr[mut Node] {
  * @param temporary Whether a method makes it, so it's removed when the method returns.
  * @return The node, its other fields zero; null if the budget or the heap can't hold it.
  */
-add_node :: fn(interpreter: ptr[mut Interpreter], parent #escaping : ptr[mut Node], name: u32, kind: NodeKind, temporary: bool) -> ptr[mut Node]? {
+add_node :: fn(
+    interpreter : ptr[mut Interpreter],
+    parent #escaping : ptr[mut Node],
+    name : u32,
+    kind : NodeKind,
+    temporary : bool
+) -> ptr[mut Node]? {
     if interpreter.namespace_bytes + size_of(Node) > interpreter.limits.namespace_bytes {
         return null
     }
@@ -217,7 +223,7 @@ add_node :: fn(interpreter: ptr[mut Interpreter], parent #escaping : ptr[mut Nod
  * @param interpreter The interpreter, whose namespace_bytes are given back.
  * @param node The node, a child of its parent.
  */
-remove_node :: fn(interpreter: ptr[mut Interpreter], node: ptr[mut Node]) {
+remove_node :: fn(interpreter : ptr[mut Interpreter], node : ptr[mut Node]) {
     child := node.first_child
     loop {
         inner :: child or_break
@@ -252,7 +258,7 @@ remove_node :: fn(interpreter: ptr[mut Interpreter], node: ptr[mut Node]) {
  * @param out Where it's written; what doesn't fit is cut.
  * @param node The node.
  */
-write_path :: fn(out: ptr[mut text_buffer.TextBuffer], node: ptr[Node]) {
+write_path :: fn(out : ptr[mut text_buffer.TextBuffer], node : ptr[Node]) {
     segments : u32[32]
     count : usize = 0
     at := node
@@ -287,7 +293,11 @@ write_path :: fn(out: ptr[mut text_buffer.TextBuffer], node: ptr[Node]) {
  * @param state Passed to visit as it is: the caller's own, as an address.
  * @return False if visit stopped it.
  */
-walk :: fn(node #escaping : ptr[mut Node], visit: (fn(node #escaping : ptr[mut Node], state: u64) -> bool), state: u64) -> bool {
+walk :: fn(
+    node #escaping : ptr[mut Node],
+    visit : (fn(node #escaping : ptr[mut Node], state : u64) -> bool),
+    state : u64
+) -> bool {
     if !visit(node, state) {
         return false
     }

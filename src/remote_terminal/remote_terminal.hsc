@@ -14,9 +14,9 @@
  */
 package remote_terminal
 
+import terminal from "std:os/slop_os/terminal"
 import text_buffer from "std:text_buffer"
 import unicode from "std:unicode"
-import terminal from "std:os/slop_os/terminal"
 import safe_text from "../safe_text"
 import vt from "../vt"
 
@@ -47,7 +47,7 @@ RemoteTerminal :: struct {
 }
 
 /** A terminal of a size: the client's, or 80 by 24 for 0. */
-make :: fn(columns: u32, rows: u32) -> RemoteTerminal {
+make :: fn(columns : u32, rows : u32) -> RemoteTerminal {
     made := RemoteTerminal.{}
     resize(&made, columns, rows)
     return made
@@ -61,8 +61,11 @@ make_plain :: fn() -> RemoteTerminal {
 }
 
 /** Take a new size: the client's terminal was resized. */
-resize :: fn(term: ptr[mut RemoteTerminal], columns: u32, rows: u32) {
-    term.columns = if columns == 0 { cast[u16](80) } else if columns > 1000 { cast[u16](1000) } else { cast[u16](columns) }
+resize :: fn(term : ptr[mut RemoteTerminal], columns : u32, rows : u32) {
+    term.columns = if columns == 0 {
+        cast[u16](80)
+    }
+    else if columns > 1000 { cast[u16](1000) } else { cast[u16](columns) }
     term.rows = if rows == 0 { cast[u16](24) } else if rows > 1000 { cast[u16](1000) } else { cast[u16](rows) }
     if term.column >= term.columns {
         term.column = 0
@@ -70,10 +73,20 @@ resize :: fn(term: ptr[mut RemoteTerminal], columns: u32, rows: u32) {
 }
 
 /** What the terminal can show: Describe's answer. */
-features :: fn(term: ptr[RemoteTerminal]) -> terminal.Features {
-    return terminal.Features.{columns = term.columns, rows = term.rows, colors = .Rgb,
-        attributes = terminal.BOLD | terminal.DIM | terminal.ITALIC | terminal.UNDERLINE | terminal.INVERSE | terminal.STRIKETHROUGH,
-        links = true, unicode = 17 * 256}
+features :: fn(term : ptr[RemoteTerminal]) -> terminal.Features {
+    return terminal.Features.{
+        columns = term.columns,
+        rows = term.rows,
+        colors = .Rgb,
+        attributes = terminal.BOLD
+            | terminal.DIM
+            | terminal.ITALIC
+            | terminal.UNDERLINE
+            | terminal.INVERSE
+            | terminal.STRIKETHROUGH,
+        links = true,
+        unicode = 17 * 256,
+    }
 }
 
 /**
@@ -85,7 +98,13 @@ features :: fn(term: ptr[RemoteTerminal]) -> terminal.Features {
  * @param links The links' targets.
  * @param out Where the VT bytes go.
  */
-write :: fn(term: ptr[mut RemoteTerminal], bytes: u8[], runs: terminal.Run[], links: u8[], out: ptr[mut text_buffer.TextBuffer]) {
+write :: fn(
+    term : ptr[mut RemoteTerminal],
+    bytes : u8[],
+    runs : terminal.Run[],
+    links : u8[],
+    out : ptr[mut text_buffer.TextBuffer]
+) {
     hide_input(term, out)
     plain :: terminal.Style.{}
     current := plain
@@ -168,7 +187,7 @@ write :: fn(term: ptr[mut RemoteTerminal], bytes: u8[], runs: terminal.Run[], li
 }
 
 /** Move the output's column on by what was written, wrapping at the client's width. */
-advance :: fn(term: ptr[mut RemoteTerminal], columns: usize) {
+advance :: fn(term : ptr[mut RemoteTerminal], columns : usize) {
     if term.whole {
         return void
     }
@@ -183,7 +202,7 @@ advance :: fn(term: ptr[mut RemoteTerminal], columns: usize) {
  * @param position Where, from 0.
  * @param out Where the VT bytes go.
  */
-move_cursor :: fn(term: ptr[mut RemoteTerminal], position: terminal.Position, out: ptr[mut text_buffer.TextBuffer]) {
+move_cursor :: fn(term : ptr[mut RemoteTerminal], position : terminal.Position, out : ptr[mut text_buffer.TextBuffer]) {
     if term.plain {
         return void
     }
@@ -203,7 +222,7 @@ move_cursor :: fn(term: ptr[mut RemoteTerminal], position: terminal.Position, ou
  * Clear an area: on a whole screen, its cells made blank; on lines, the line being written from the area's column, for
  * an area on the row being written, or nothing.
  */
-clear :: fn(term: ptr[mut RemoteTerminal], area: terminal.Area, out: ptr[mut text_buffer.TextBuffer]) {
+clear :: fn(term : ptr[mut RemoteTerminal], area : terminal.Area, out : ptr[mut text_buffer.TextBuffer]) {
     if term.plain {
         return void
     }
@@ -219,9 +238,16 @@ clear :: fn(term: ptr[mut RemoteTerminal], area: terminal.Area, out: ptr[mut tex
         vt.append_clear_screen(out)
         return void
     }
-    last_row :: if cast[u32](area.row) + cast[u32](area.rows) < cast[u32](term.rows) { area.row + area.rows } else { term.rows }
-    width :: if cast[u32](area.column) + cast[u32](area.columns) < cast[u32](term.columns) { area.columns }
-        else if area.column < term.columns { term.columns - area.column } else { cast[u16](0) }
+    last_row :: if cast[u32](area.row) + cast[u32](area.rows) < cast[u32](term.rows) {
+        area.row + area.rows
+    }
+    else {
+        term.rows
+    }
+    width :: if cast[u32](area.column) + cast[u32](area.columns) < cast[u32](term.columns) {
+        area.columns
+    }
+    else if area.column < term.columns { term.columns - area.column } else { cast[u16](0) }
     for row in area.row..<last_row {
         vt.append_move(out, row, area.column)
         if area.column + width >= term.columns {
@@ -236,18 +262,22 @@ clear :: fn(term: ptr[mut RemoteTerminal], area: terminal.Area, out: ptr[mut tex
 }
 
 /** Scroll an area's rows, on a whole screen; on lines, nothing. The margins are put back to the whole screen. */
-scroll :: fn(term: ptr[mut RemoteTerminal], scrolled: terminal.ScrollArea, out: ptr[mut text_buffer.TextBuffer]) {
+scroll :: fn(term : ptr[mut RemoteTerminal], scrolled : terminal.ScrollArea, out : ptr[mut text_buffer.TextBuffer]) {
     if !term.whole || scrolled.area.rows == 0 || scrolled.area.row >= term.rows {
         return void
     }
-    last :: if cast[u32](scrolled.area.row) + cast[u32](scrolled.area.rows) <= cast[u32](term.rows) { scrolled.area.row + scrolled.area.rows - 1 }
-        else { term.rows - 1 }
+    last :: if cast[u32](scrolled.area.row) + cast[u32](scrolled.area.rows) <= cast[u32](term.rows) {
+        scrolled.area.row + scrolled.area.rows - 1
+    }
+    else {
+        term.rows - 1
+    }
     vt.append_scroll(out, scrolled.area.row, last, scrolled.lines)
     vt.append_margins(out, 0, term.rows - 1)
 }
 
 /** Take the whole screen for the program, blank, or go back to lines. */
-use_screen :: fn(term: ptr[mut RemoteTerminal], whole: bool, out: ptr[mut text_buffer.TextBuffer]) {
+use_screen :: fn(term : ptr[mut RemoteTerminal], whole : bool, out : ptr[mut text_buffer.TextBuffer]) {
     if whole == term.whole || term.plain {
         return void
     }
@@ -265,7 +295,7 @@ use_screen :: fn(term: ptr[mut RemoteTerminal], whole: bool, out: ptr[mut text_b
 }
 
 /** Set the line being typed, and where its cursor is; drawn at once on lines. */
-set_input :: fn(term: ptr[mut RemoteTerminal], text: u8[], cursor: u32, out: ptr[mut text_buffer.TextBuffer]) {
+set_input :: fn(term : ptr[mut RemoteTerminal], text : u8[], cursor : u32, out : ptr[mut text_buffer.TextBuffer]) {
     hide_input(term, out)
     term.input_count = if text.count < term.input.count { text.count } else { term.input.count }
     for byte, i in text {
@@ -278,14 +308,14 @@ set_input :: fn(term: ptr[mut RemoteTerminal], text: u8[], cursor: u32, out: ptr
 }
 
 /** Take the line being typed away, from the screen and from the terminal. */
-drop_input :: fn(term: ptr[mut RemoteTerminal], out: ptr[mut text_buffer.TextBuffer]) {
+drop_input :: fn(term : ptr[mut RemoteTerminal], out : ptr[mut text_buffer.TextBuffer]) {
     hide_input(term, out)
     term.input_count = 0
     term.input_cursor = 0
 }
 
 /** Draw the line being typed after the output, if there's one and the program's on lines. */
-show_input :: fn(term: ptr[mut RemoteTerminal], out: ptr[mut text_buffer.TextBuffer]) {
+show_input :: fn(term : ptr[mut RemoteTerminal], out : ptr[mut text_buffer.TextBuffer]) {
     if term.input_drawn || term.whole || term.plain || term.input_count == 0 || term.input_count > term.input.count {
         return void
     }
@@ -330,13 +360,16 @@ show_input :: fn(term: ptr[mut RemoteTerminal], out: ptr[mut text_buffer.TextBuf
         text_buffer.append_unsigned(out, cast[u64](row - cursor_row))
         text_buffer.append(out, "A")
     }
-    vt.append_column(out, cast[u16](if cursor_column < cast[usize](term.columns) { cursor_column } else { cast[usize](term.columns) - 1 }))
+    vt.append_column(
+        out,
+        cast[u16](if cursor_column < cast[usize](term.columns) { cursor_column } else { cast[usize](term.columns) - 1 })
+    )
     term.input_cursor_row = cursor_row
     term.input_drawn = true
 }
 
 /** Take the drawn line being typed off the screen, putting the cursor back where the output ended. */
-hide_input :: fn(term: ptr[mut RemoteTerminal], out: ptr[mut text_buffer.TextBuffer]) {
+hide_input :: fn(term : ptr[mut RemoteTerminal], out : ptr[mut text_buffer.TextBuffer]) {
     if !term.input_drawn {
         return void
     }
@@ -354,15 +387,16 @@ hide_input :: fn(term: ptr[mut RemoteTerminal], out: ptr[mut text_buffer.TextBuf
         text_buffer.append(out, "[A")
     }
     vt.append_column(out, term.column)
-
 }
 
 /** Whether two styles are the same. */
-same_style :: fn(a: terminal.Style, b: terminal.Style) -> bool {
-    return a.attributes == b.attributes && same_color(a.foreground, b.foreground) && same_color(a.background, b.background)
+same_style :: fn(a : terminal.Style, b : terminal.Style) -> bool {
+    return a.attributes == b.attributes
+        && same_color(a.foreground, b.foreground)
+        && same_color(a.background, b.background)
 }
 
 /** Whether two colours are the same. */
-same_color :: fn(a: terminal.Color, b: terminal.Color) -> bool {
+same_color :: fn(a : terminal.Color, b : terminal.Color) -> bool {
     return a.kind == b.kind && a.index == b.index && a.red == b.red && a.green == b.green && a.blue == b.blue
 }

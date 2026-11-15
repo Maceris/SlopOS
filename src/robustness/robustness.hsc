@@ -77,7 +77,7 @@ Faults :: struct {
     /** The number of the pass that failed at its point, from 1, once failed is set. */
     failed_pass : u64,
     /** Called when a pass fails, after saying so, by whoever made this: the kernel logs where it failed from. */
-    on_fail : fn()?,
+    on_fail : (fn())?,
 }
 
 /**
@@ -88,7 +88,7 @@ Faults :: struct {
  * @return What it asks for, or null if it isn't one of those, its point isn't a name NAMES has, or n isn't a number
  *     from 1.
  */
-fail_of :: fn(text: string) -> FailSpec? {
+fail_of :: fn(text : string) -> FailSpec? {
     if text == "count" {
         return FailSpec.{mode = .Count}
     }
@@ -119,7 +119,7 @@ fail_of :: fn(text: string) -> FailSpec? {
  * @param text The number's digits, nothing else: no sign, space or other byte.
  * @return The number, or null if text is empty, has more than 19 digits, or has a byte that isn't a digit.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     if text.count == 0 || text.count > 19 {
         return null
     }
@@ -145,7 +145,7 @@ number_of :: fn(text: string) -> u64? {
  * @return True if this is the pass fail= asked to fail, which the caller treats as the resource running out; false
  *     otherwise, and always false without robustness=on, which leaves the rest out.
  */
-fails :: fn(faults: ptr[mut Faults], point: Point) -> bool {
+fails :: fn(faults : ptr[mut Faults], point : Point) -> bool {
     #if ON {
         if faults.spec.mode == .Off {
             return false
@@ -181,14 +181,23 @@ fails :: fn(faults: ptr[mut Faults], point: Point) -> bool {
  *
  * @param faults The kernel's injection state; nothing is logged when its spec is Off, or without robustness=on.
  */
-report :: fn(faults: ptr[Faults]) {
+report :: fn(faults : ptr[Faults]) {
     #if ON {
         if faults.spec.mode == .Off {
             return void
         }
         passes :: faults.passes
-        runtime.log_info("faults: passes frame %, slab %, heap %, budget %, handles %, timers %, iova %, all %", passes[0],
-            passes[1], passes[2], passes[3], passes[4], passes[5], passes[6], faults.all)
+        runtime.log_info(
+            "faults: passes frame %, slab %, heap %, budget %, handles %, timers %, iova %, all %",
+            passes[0],
+            passes[1],
+            passes[2],
+            passes[3],
+            passes[4],
+            passes[5],
+            passes[6],
+            faults.all
+        )
         if faults.failed {
             index :: cast[usize](faults.failed_point)
             name :: if index < NAMES.count { NAMES[index] } else { "?" }

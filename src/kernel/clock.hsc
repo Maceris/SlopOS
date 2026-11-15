@@ -48,7 +48,7 @@ init_clock :: fn(kernel #escaping : ptr[mut Kernel]) {
  *
  * @param kernel The kernel, whose counter_frequency is set; its clock_start and clock_frequency are written.
  */
-start_clock :: fn(kernel: ptr[mut Kernel]) {
+start_clock :: fn(kernel : ptr[mut Kernel]) {
     kernel.clock_start = arch.counter()
     kernel.clock_frequency = kernel.counter_frequency
 }
@@ -62,7 +62,7 @@ start_clock :: fn(kernel: ptr[mut Kernel]) {
  * @param data The Kernel, as init_clock set it.
  * @return Nanoseconds since start_clock, plus MONOTONIC_START; MONOTONIC_START before start_clock.
  */
-kernel_monotonic :: fn(data: mut rawptr) -> runtime.MonotonicTime {
+kernel_monotonic :: fn(data : mut rawptr) -> runtime.MonotonicTime {
     kernel :: cast[ptr[Kernel]](data)
     frequency :: kernel.clock_frequency
     if frequency == 0 {
@@ -72,7 +72,8 @@ kernel_monotonic :: fn(data: mut rawptr) -> runtime.MonotonicTime {
     // Whole seconds and what's left, so the nanoseconds don't overflow
     seconds :: ticks / frequency
     left :: ticks % frequency
-    return cast[runtime.MonotonicTime](MONOTONIC_START + seconds * runtime.NANOSECONDS_PER_SECOND
+    return cast[runtime.MonotonicTime](MONOTONIC_START
+        + seconds * runtime.NANOSECONDS_PER_SECOND
         + left * runtime.NANOSECONDS_PER_SECOND / frequency)
 }
 
@@ -83,6 +84,6 @@ kernel_monotonic :: fn(data: mut rawptr) -> runtime.MonotonicTime {
  * @return Never a time: the kernel has no wall clock.
  * @error Unavailable Always.
  */
-kernel_wall :: fn(data: mut rawptr) -> Result[runtime.Instant, runtime.ClockError] {
+kernel_wall :: fn(data : mut rawptr) -> Result[runtime.Instant, runtime.ClockError] {
     return .Error(.Unavailable)
 }

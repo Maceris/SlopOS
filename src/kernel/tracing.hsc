@@ -61,7 +61,7 @@ SampleRing :: struct {
  * @param thread The thread's ID.
  * @param other What else, as kind says.
  */
-trace_event :: fn(kernel: ptr[mut Kernel], kind: slop_os.TraceKind, thread: u64, other: u64) {
+trace_event :: fn(kernel : ptr[mut Kernel], kind : slop_os.TraceKind, thread : u64, other : u64) {
     if intrinsics.atomic_load_u32_acquire(&kernel.tracing) == 0 {
         return void
     }
@@ -71,8 +71,13 @@ trace_event :: fn(kernel: ptr[mut Kernel], kind: slop_os.TraceKind, thread: u64,
         return void
     }
     ring :: cast[ptr[mut TraceRing]](address)
-    event :: slop_os.TraceEvent.{time = cast[u64](kernel_monotonic(cast[mut rawptr](kernel))), kind = kind, cpu = cpu.index, thread = thread,
-        other = other}
+    event :: slop_os.TraceEvent.{
+        time = cast[u64](kernel_monotonic(cast[mut rawptr](kernel))),
+        kind = kind,
+        cpu = cpu.index,
+        thread = thread,
+        other = other,
+    }
     lock_at(&ring.lock, .Trace)
     ring.events[cast[usize](ring.written % cast[u64](slop_os.TRACE_EVENTS))] = event
     ring.written += 1
@@ -86,7 +91,7 @@ trace_event :: fn(kernel: ptr[mut Kernel], kind: slop_os.TraceKind, thread: u64,
  * @param on Whether it's on from now.
  * @return False, with tracing as it was, if a ring couldn't be made.
  */
-set_tracing :: fn(kernel: ptr[mut Kernel], on: bool) -> bool {
+set_tracing :: fn(kernel : ptr[mut Kernel], on : bool) -> bool {
     if on {
         per_cpus :: kernel.per_cpus
         for address, index in per_cpus {
@@ -117,7 +122,7 @@ set_tracing :: fn(kernel: ptr[mut Kernel], on: bool) -> bool {
  * @param capacity How many fit.
  * @return How many were written; null if the buffer couldn't be written.
  */
-read_trace :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], buffer: u64, capacity: u64) -> u32? {
+read_trace :: fn(kernel : ptr[mut Kernel], space : ptr[mut AddressSpace], buffer : u64, capacity : u64) -> u32? {
     count : u64 = 0
     per_cpus :: kernel.per_cpus
     for address, index in per_cpus {
@@ -133,7 +138,12 @@ read_trace :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], buffer: 
         loop {
             event := slop_os.TraceEvent.{}
             lock_at(&ring.lock, .Trace)
-            kept :: if ring.written > cast[u64](slop_os.TRACE_EVENTS) { ring.written - cast[u64](slop_os.TRACE_EVENTS) } else { 0 }
+            kept :: if ring.written > cast[u64](slop_os.TRACE_EVENTS) {
+                ring.written - cast[u64](slop_os.TRACE_EVENTS)
+            }
+            else {
+                0
+            }
             if ring.taken < kept {
                 ring.taken = kept
             }
@@ -146,8 +156,13 @@ read_trace :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], buffer: 
             if !more || count >= capacity {
                 break
             }
-            if !copy_to_user(kernel, space, buffer + count * cast[u64](size_of(slop_os.TraceEvent)), cast[u64](&event),
-                cast[u64](size_of(slop_os.TraceEvent))) {
+            if !copy_to_user(
+                kernel,
+                space,
+                buffer + count * cast[u64](size_of(slop_os.TraceEvent)),
+                cast[u64](&event),
+                cast[u64](size_of(slop_os.TraceEvent))
+            ) {
                 return null
             }
             count += 1
@@ -163,7 +178,7 @@ read_trace :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], buffer: 
  *
  * @param kernel The kernel.
  */
-take_sample :: fn(kernel: ptr[mut Kernel]) {
+take_sample :: fn(kernel : ptr[mut Kernel]) {
     if intrinsics.atomic_load_u32_acquire(&kernel.intercepts) == 0 {
         return void
     }
@@ -186,7 +201,10 @@ take_sample :: fn(kernel: ptr[mut Kernel]) {
     frame := arch.get_user_register(&thread.registers, SAMPLE_FRAME_REGISTER)
     for depth in cast[usize](1)..<sample.frames.count {
         record : u64[2]
-        if frame == 0 || frame & 7 != 0 || !copy_from_user(kernel, thread.space, frame, cast[u64](&record[0]), 16) || record[1] == 0 {
+        if frame == 0
+            || frame & 7 != 0
+            || !copy_from_user(kernel, thread.space, frame, cast[u64](&record[0]), 16)
+            || record[1] == 0 {
             break
         }
         sample.frames[depth] = without_authentication(record[1])
@@ -213,7 +231,7 @@ take_sample :: fn(kernel: ptr[mut Kernel]) {
  * @param on Whether it samples from now.
  * @return False, with sampling as it was, if its ring couldn't be made.
  */
-set_sampling :: fn(intercept: ptr[mut Intercept], on: bool) -> bool {
+set_sampling :: fn(intercept : ptr[mut Intercept], on : bool) -> bool {
     if on && intrinsics.atomic_load_u64_acquire(&intercept.samples) == 0 {
         ring, failed :: runtime.new_aligned(SampleRing, align_of(SampleRing))
         if failed != null {
@@ -243,7 +261,13 @@ set_sampling :: fn(intercept: ptr[mut Intercept], on: bool) -> bool {
  * @param capacity How many fit.
  * @return How many were written; null if the buffer couldn't be written.
  */
-read_samples :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space: ptr[mut AddressSpace], buffer: u64, capacity: u64) -> u32? {
+read_samples :: fn(
+    kernel : ptr[mut Kernel],
+    intercept : ptr[mut Intercept],
+    space : ptr[mut AddressSpace],
+    buffer : u64,
+    capacity : u64
+) -> u32? {
     ring_address :: intrinsics.atomic_load_u64_acquire(&intercept.samples)
     if ring_address == 0 {
         return 0
@@ -266,7 +290,13 @@ read_samples :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space
         if !more {
             break
         }
-        if !copy_to_user(kernel, space, buffer + count * cast[u64](size_of(slop_os.Sample)), cast[u64](&sample), cast[u64](size_of(slop_os.Sample))) {
+        if !copy_to_user(
+            kernel,
+            space,
+            buffer + count * cast[u64](size_of(slop_os.Sample)),
+            cast[u64](&sample),
+            cast[u64](size_of(slop_os.Sample))
+        ) {
             return null
         }
         count += 1
@@ -280,7 +310,7 @@ read_samples :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space
  *
  * @param intercept The intercept, whose sampling and samples are 0 after.
  */
-free_samples :: fn(intercept: ptr[mut Intercept]) {
+free_samples :: fn(intercept : ptr[mut Intercept]) {
     lock_at(&intercept.lock, .Intercept)
     address :: intercept.samples
     intrinsics.atomic_store_u32_release(&intercept.sampling, 0)

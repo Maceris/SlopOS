@@ -43,8 +43,10 @@ Options :: struct {
      */
     test_branch : bool,
     /**
-     * test_shadow_write: once the boot CPU has gone idle, write to its kernel shadow stack with an ordinary store, which
-     * its pages refuse, stopping the kernel with a page fault (decisions/0186, Hd); skipped, said so, where it has none.
+     * test_shadow_write: once the boot CPU has gone idle, write to its kernel shadow stack with an ordinary store,
+     * which
+     * its pages refuse, stopping the kernel with a page fault (decisions/0186, Hd); skipped, said so, where it has
+     * none.
      */
     test_shadow_write : bool,
     /** trace_boot: the trace is on from the kernel's start, for a boot's timeline (decisions/0183, tracing.hsc). */
@@ -132,7 +134,7 @@ Options :: struct {
  * @return The options the words set, every other one false or 0. A word given twice is applied twice, so the last
  *     kernel_reserve= or fail= wins.
  */
-parse_command_line :: fn(command_line: string) -> Options {
+parse_command_line :: fn(command_line : string) -> Options {
     options : Options
     with {
         start : usize = 0
@@ -160,7 +162,7 @@ parse_command_line :: fn(command_line: string) -> Options {
  *     after the =, and fail= is read only in a kernel built with robustness=on, its value ignored if fail_of can't
  *     parse it.
  */
-apply_option :: fn(options: ptr[mut Options], word: string) {
+apply_option :: fn(options : ptr[mut Options], word : string) {
     if word == "test_exit" {
         options.test_exit = true
     }
@@ -264,7 +266,7 @@ apply_option :: fn(options: ptr[mut Options], word: string) {
  * @param text The digits, with no sign or spaces.
  * @return Its value, or 0 if any character isn't a digit; a value past u64's range wraps around.
  */
-number_of :: fn(text: string) -> u64 {
+number_of :: fn(text : string) -> u64 {
     value : u64 = 0
     for character in text {
         if character < '0' || character > '9' {

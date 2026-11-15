@@ -43,7 +43,7 @@ PCI_VALUE : u64 : 0x12345678
  * @param width The bits, 8 to 64.
  * @return The value; null for another space.
  */
-host_read :: fn(state: u64, space: u8, address: u64, width: u32) -> u64? {
+host_read :: fn(state : u64, space : u8, address : u64, width : u32) -> u64? {
     host :: cast[ptr[mut TestHost]](state)
     if space == 2 {
         host.pci = address
@@ -73,7 +73,7 @@ host_read :: fn(state: u64, space: u8, address: u64, width: u32) -> u64? {
  * @param value What's written.
  * @return False for a space other than those three.
  */
-host_write :: fn(state: u64, space: u8, address: u64, width: u32, value: u64) -> bool {
+host_write :: fn(state : u64, space : u8, address : u64, width : u32, value : u64) -> bool {
     host :: cast[ptr[mut TestHost]](state)
     if space == 2 {
         host.pci = address
@@ -93,30 +93,30 @@ host_write :: fn(state: u64, space: u8, address: u64, width: u32, value: u64) ->
 }
 
 /** Count the milliseconds slept. */
-host_sleep :: fn(state: u64, milliseconds: u64) {
+host_sleep :: fn(state : u64, milliseconds : u64) {
     host :: cast[ptr[mut TestHost]](state)
     host.slept += milliseconds
 }
 
 /** Stall: nothing to wait for here. */
-host_stall :: fn(state: u64, microseconds: u64) {}
+host_stall :: fn(state : u64, microseconds : u64) {}
 
 /** The timer: a count that goes up by one each time it's read. */
-host_timer :: fn(state: u64) -> u64 {
+host_timer :: fn(state : u64) -> u64 {
     host :: cast[ptr[mut TestHost]](state)
     host.accesses += 1
     return cast[u64](host.accesses)
 }
 
 /** Keep what was notified. */
-host_notify :: fn(state: u64, node: ptr[aml.Node], value: u64) {
+host_notify :: fn(state : u64, node : ptr[aml.Node], value : u64) {
     host :: cast[ptr[mut TestHost]](state)
     host.notified = value
     host.notifications += 1
 }
 
 /** Keep what was stored to the debug object. */
-host_debug :: fn(state: u64, text: string) {
+host_debug :: fn(state : u64, text : string) {
     host :: cast[ptr[mut TestHost]](state)
     runtime.array_free(&host.debug)
     for byte in string_bytes(text) {
@@ -141,8 +141,12 @@ Loaded :: struct {
  * @param revision The DSDT's revision.
  * @return The interpreter and its host, both on the heap, never freed; or the test failed if the table didn't load.
  */
-loaded :: fn(t: ptr[mut testing.T], body: ptr[Assembler], limits: aml.Limits = aml.Limits.{}, revision: u8 = 2)
-    -> Result[Loaded, testing.Stopped] {
+loaded :: fn(
+    t : ptr[mut testing.T],
+    body : ptr[Assembler],
+    limits : aml.Limits = aml.Limits.{},
+    revision : u8 = 2
+) -> Result[Loaded, testing.Stopped] {
     host :: runtime.new(TestHost)
     interpreter :: testing.require_some(t, made(host, limits), "the interpreter's made")?
     problem :: aml.load_table(interpreter, table(body, "DSDT", revision))
@@ -160,9 +164,17 @@ INTERFACES :: string.["SlopOS Test"]
  * @param limits The limits.
  * @return The interpreter; null without the memory.
  */
-made :: fn(host: ptr[mut TestHost], limits: aml.Limits) -> ptr[mut aml.Interpreter]? {
-    callbacks :: aml.Host.{state = cast[u64](host), read = host_read, write = host_write, sleep = host_sleep, stall = host_stall,
-        timer = host_timer, notify = host_notify, debug = host_debug}
+made :: fn(host : ptr[mut TestHost], limits : aml.Limits) -> ptr[mut aml.Interpreter]? {
+    callbacks :: aml.Host.{
+        state = cast[u64](host),
+        read = host_read,
+        write = host_write,
+        sleep = host_sleep,
+        stall = host_stall,
+        timer = host_timer,
+        notify = host_notify,
+        debug = host_debug,
+    }
     return aml.make(callbacks, limits, INTERFACES[0..<INTERFACES.count])
 }
 
@@ -172,7 +184,7 @@ made :: fn(host: ptr[mut TestHost], limits: aml.Limits) -> ptr[mut aml.Interpret
  * @param result What evaluate gave.
  * @return The integer; null if it failed, or gave something else.
  */
-integer_from :: fn(result: Result[aml.Value, aml.Error]) -> u64? {
+integer_from :: fn(result : Result[aml.Value, aml.Error]) -> u64? {
     match result {
         case Ok(value) => match value {
             case Integer(number) => return number
@@ -189,7 +201,7 @@ integer_from :: fn(result: Result[aml.Value, aml.Error]) -> u64? {
  * @param result What evaluate gave.
  * @return The error; null if it didn't fail.
  */
-error_from :: fn(result: Result[aml.Value, aml.Error]) -> aml.Error? {
+error_from :: fn(result : Result[aml.Value, aml.Error]) -> aml.Error? {
     match result {
         case Ok(_) => return null
         case Error(error) => return error
@@ -202,7 +214,7 @@ NONE : aml.Value[0] : aml.Value.[]
 // ---- Names, integers and methods
 
 /** A Name's integer is its value, and a method returns what it computes from its arguments. */
-names_and_methods #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+names_and_methods #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Name (INT1, 0x1234)
     op(&a, 0x08)
@@ -217,9 +229,19 @@ names_and_methods #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     close(&a, method)
     setup :: loaded(t, &a)?
     interpreter :: setup.interpreter
-    testing.expect_eq(t, integer_from(aml.evaluate(interpreter, "\\INT1", NONE[0..<0])) or_else 0, 0x1234, "INT1 is 0x1234")
+    testing.expect_eq(
+        t,
+        integer_from(aml.evaluate(interpreter, "\\INT1", NONE[0..<0])) or_else 0,
+        0x1234,
+        "INT1 is 0x1234"
+    )
     arguments :: aml.Value.[.Integer(40), .Integer(2)]
-    testing.expect_eq(t, integer_from(aml.evaluate(interpreter, "ADDM", arguments[0..<2])) or_else 0, 42, "ADDM(40, 2) is 42")
+    testing.expect_eq(
+        t,
+        integer_from(aml.evaluate(interpreter, "ADDM", arguments[0..<2])) or_else 0,
+        42,
+        "ADDM(40, 2) is 42"
+    )
     return .Ok
 }
 
@@ -233,7 +255,7 @@ names_and_methods #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
  * @param arguments How many arguments it takes, 0 to 7.
  * @return The mark for close.
  */
-method :: fn(a: ptr[mut Assembler], method: string, arguments: u8) -> usize {
+method :: fn(a : ptr[mut Assembler], method : string, arguments : u8) -> usize {
     mark :: open(a, u8.[0x14])
     name(a, method)
     op(a, arguments)
@@ -247,7 +269,7 @@ method :: fn(a: ptr[mut Assembler], method: string, arguments: u8) -> usize {
  * @param n The name.
  * @param value The integer.
  */
-name_integer :: fn(a: ptr[mut Assembler], n: string, value: u64) {
+name_integer :: fn(a : ptr[mut Assembler], n : string, value : u64) {
     op(a, 0x08)
     name(a, n)
     integer(a, value)
@@ -259,7 +281,7 @@ name_integer :: fn(a: ptr[mut Assembler], n: string, value: u64) {
  * @param result What evaluate gave.
  * @return The text; "" if it failed, or gave something else.
  */
-text_from :: fn(result: Result[aml.Value, aml.Error]) -> string {
+text_from :: fn(result : Result[aml.Value, aml.Error]) -> string {
     match result {
         case Ok(value) => match value {
             case String(text) => return aml.text_of(text.data)
@@ -277,7 +299,7 @@ text_from :: fn(result: Result[aml.Value, aml.Error]) -> string {
  * @param path The path.
  * @return What evaluate gave.
  */
-run :: fn(interpreter: ptr[mut aml.Interpreter], path: string) -> Result[aml.Value, aml.Error] {
+run :: fn(interpreter : ptr[mut aml.Interpreter], path : string) -> Result[aml.Value, aml.Error] {
     return aml.evaluate(interpreter, path, NONE[0..<0])
 }
 
@@ -289,7 +311,7 @@ run :: fn(interpreter: ptr[mut aml.Interpreter], path: string) -> Result[aml.Val
  * @param argument The argument.
  * @return What evaluate gave.
  */
-run_with :: fn(interpreter: ptr[mut aml.Interpreter], path: string, argument: u64) -> Result[aml.Value, aml.Error] {
+run_with :: fn(interpreter : ptr[mut aml.Interpreter], path : string, argument : u64) -> Result[aml.Value, aml.Error] {
     arguments :: aml.Value.[.Integer(argument)]
     return aml.evaluate(interpreter, path, arguments[0..<1])
 }
@@ -297,7 +319,7 @@ run_with :: fn(interpreter: ptr[mut aml.Interpreter], path: string, argument: u6
 // ---- Control flow
 
 /** While, a local and Increment sum the numbers to an argument, and If and Else choose. */
-loops_and_conditions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+loops_and_conditions #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     /*
      * Method (SUMN, 1) { Store (0, Local0) Store (0, Local1) While (LLess (Local1, Arg0)) { Increment (Local1)
@@ -343,7 +365,7 @@ loops_and_conditions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** A name of one segment is found in the scopes its scope is in, and a path finds what's in a device. */
-scopes_and_searching #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+scopes_and_searching #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     name_integer(&a, "INT1", 0x55)
     // Scope (\_SB) { Device (PCI0) { Method (_STA) { Return (0x0F) } Method (UP__) { Return (INT1) } } }
@@ -371,7 +393,7 @@ scopes_and_searching #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** Objects a method makes go when it returns, so it makes them again each call; CondRefOf finds what's there. */
-temporary_objects_and_conditional_references #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+temporary_objects_and_conditional_references #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     name_integer(&a, "INT1", 9)
     // Method (TMPN) { Name (TMP_, 5) Return (TMP_) }
@@ -402,14 +424,19 @@ temporary_objects_and_conditional_references #test :: fn(t: ptr[mut testing.T]) 
     testing.expect_eq(t, integer_from(run(interpreter, "TMPN")) or_else 0, 5, "the method's Name has its value")
     testing.expect_eq(t, integer_from(run(interpreter, "TMPN")) or_else 0, 5, "and the second call makes it again")
     testing.expect(t, aml.find(interpreter, "\\TMPN.TMP") is_none, "the Name is gone once the method's returned")
-    testing.expect_eq(t, integer_from(run(interpreter, "CREF")) or_else 0, 9, "CondRefOf passes over \\NOPE and finds \\INT1")
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "CREF")) or_else 0,
+        9,
+        "CondRefOf passes over \\NOPE and finds \\INT1"
+    )
     return .Ok
 }
 
 // ---- Data
 
 /** A package's element is changed through Index, and kept in the namespace; SizeOf counts its elements. */
-packages_and_index #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+packages_and_index #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Name (PKG_, Package (3) { 1, "two", Buffer (2) { 3, 4 } })
     op(&a, 0x08)
@@ -443,7 +470,12 @@ packages_and_index #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     close(&a, byte)
     setup :: loaded(t, &a)?
     interpreter :: setup.interpreter
-    testing.expect_eq(t, integer_from(run(interpreter, "SETP")) or_else 0, 42, "the element stored through Index reads back")
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "SETP")) or_else 0,
+        42,
+        "the element stored through Index reads back"
+    )
     testing.expect_eq(t, integer_from(run(interpreter, "SIZE")) or_else 0, 3, "the package has 3 elements")
     testing.expect_eq(t, integer_from(run(interpreter, "BYTE")) or_else 0, 4, "the buffer in it has 4 at 1")
     match run(interpreter, "PKG") {
@@ -464,7 +496,7 @@ packages_and_index #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** Strings concatenate, convert to and from integers, and compare. */
-strings_and_conversions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+strings_and_conversions #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Method (CATS) { Return (Concatenate ("ab", "cd")) }
     joined :: method(&a, "CATS", 0)
@@ -511,14 +543,19 @@ strings_and_conversions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     testing.expect_eq(t, text_from(run(interpreter, "HEXS")), "000000000000001F", "0x1F in hex, 64 bits of it")
     testing.expect_eq(t, text_from(run(interpreter, "DECS")), "1234", "1234 in decimal")
     testing.expect_eq(t, integer_from(run(interpreter, "TOIN")) or_else 0, 0x2a, "\"0x2A\" is 42")
-    testing.expect_eq(t, integer_from(run(interpreter, "EQLS")) or_else 0, 0xffffffffffffffff, "equal strings are equal: Ones")
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "EQLS")) or_else 0,
+        0xffffffffffffffff,
+        "equal strings are equal: Ones"
+    )
     testing.expect_eq(t, integer_from(run(interpreter, "LESS")) or_else 0, 0xffffffffffffffff, "abc is less than abd")
     testing.expect_eq(t, text_from(run(interpreter, "MIDS")), "ell", "Mid takes 3 from 1")
     return .Ok
 }
 
 /** Before a DSDT of revision 2, integers are 32 bits: Ones is 0xFFFFFFFF, and adding past it wraps. */
-integers_are_32_bits_before_revision_2 #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+integers_are_32_bits_before_revision_2 #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Method (WRAP) { Return (Add (0xFFFFFFFF, 1)) } Method (ONES) { Return (Ones) }
     wrap :: method(&a, "WRAP", 0)
@@ -537,7 +574,7 @@ integers_are_32_bits_before_revision_2 #test :: fn(t: ptr[mut testing.T]) -> tes
 // ---- Fields
 
 /** A field's write keeps the bits of its unit that aren't its, and reads back; others in the unit are untouched. */
-fields_in_a_region #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+fields_in_a_region #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // OperationRegion (REG0, SystemIO, 0x10, 0x10)
     raw(&a, u8.[0x5b, 0x80])
@@ -547,7 +584,13 @@ fields_in_a_region #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     fields :: open(&a, u8.[0x5b, 0x81])
     name(&a, "REG0")
     op(&a, 0x01)
-    raw(&a, u8.[0x46, 0x31, 0x5f, 0x5f, 0x08, 0x46, 0x32, 0x5f, 0x5f, 0x04, 0x46, 0x33, 0x5f, 0x5f, 0x04, 0x46, 0x34, 0x5f, 0x5f, 0x10])
+    raw(
+        &a,
+        u8.[
+            0x46, 0x31, 0x5f, 0x5f, 0x08, 0x46, 0x32, 0x5f, 0x5f, 0x04, 0x46, 0x33, 0x5f, 0x5f, 0x04, 0x46, 0x34, 0x5f,
+            0x5f, 0x10
+        ]
+    )
     close(&a, fields)
     // Method (WRIT) { Store (0xAB, F1__) Store (5, F3__) Store (3, F2__) Store (0xBEEF, F4__) Return (F2__) }
     write :: method(&a, "WRIT", 0)
@@ -575,7 +618,7 @@ fields_in_a_region #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** An index field's unit is reached by writing its offset to the index field, then the data field. */
-index_fields #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+index_fields #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // OperationRegion (IDXR, SystemIO, 0x20, 2) Field (IDXR, ByteAcc, NoLock, Preserve) { INDX, 8, DATA, 8 }
     raw(&a, u8.[0x5b, 0x80])
@@ -608,7 +651,7 @@ index_fields #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** A buffer field is bits of its buffer, and storing into it changes the buffer. */
-buffer_fields #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+buffer_fields #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Name (BUF_, Buffer (8) {})
     op(&a, 0x08)
@@ -630,13 +673,23 @@ buffer_fields #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     close(&a, field)
     setup :: loaded(t, &a)?
     interpreter :: setup.interpreter
-    testing.expect_eq(t, integer_from(run(interpreter, "BFLD")) or_else 0, 0x44, "the field's low byte is the buffer's byte 2")
-    testing.expect_eq(t, integer_from(run(interpreter, "BFLD")) or_else 0, 0x44, "and the field's made again on the next call")
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "BFLD")) or_else 0,
+        0x44,
+        "the field's low byte is the buffer's byte 2"
+    )
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "BFLD")) or_else 0,
+        0x44,
+        "and the field's made again on the next call"
+    )
     return .Ok
 }
 
 /** A PCI_Config region's accesses name its device's function, from its _ADR. */
-pci_config_regions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+pci_config_regions #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     /*
      * Device (PCI0) { Name (_ADR, 0x00030001) OperationRegion (PCFG, PCI_Config, 0x40, 4)
@@ -657,7 +710,12 @@ pci_config_regions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     setup :: loaded(t, &a)?
     interpreter :: setup.interpreter
     host :: setup.host
-    testing.expect_eq(t, integer_from(run(interpreter, "\\PCI0.VAL")) or_else 0, PCI_VALUE, "the field reads what the host gives")
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "\\PCI0.VAL")) or_else 0,
+        PCI_VALUE,
+        "the field reads what the host gives"
+    )
     testing.expect_eq(t, host.pci, aml.pci_address(0, 0, 3, 1, 0x40), "device 3, function 1, offset 0x40")
     return .Ok
 }
@@ -665,7 +723,7 @@ pci_config_regions #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 // ---- The host
 
 /** Notify reaches the host with its value, Debug shows it what's stored, and _OSI answers for what's claimed. */
-notify_debug_and_interfaces #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+notify_debug_and_interfaces #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Device (DEV_) {} Method (NTFY) { Notify (DEV_, 0x80) Store ("hello", Debug) }
     device :: open(&a, u8.[0x5b, 0x82])
@@ -695,8 +753,18 @@ notify_debug_and_interfaces #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
     host :: setup.host
     testing.require(t, run(interpreter, "NTFY") is_ok, "NTFY runs")?
     testing.expect_eq(t, host.notified, 0x80, "the host is notified with 0x80")
-    testing.expect_eq(t, aml.text_of(host.debug[0..<host.debug.count]), "hello", "the debug object shows the host hello")
-    testing.expect_eq(t, integer_from(run(interpreter, "OSIW")) or_else 0, 0xffffffffffffffff, "Windows 2015 is claimed")
+    testing.expect_eq(
+        t,
+        aml.text_of(host.debug[0..<host.debug.count]),
+        "hello",
+        "the debug object shows the host hello"
+    )
+    testing.expect_eq(
+        t,
+        integer_from(run(interpreter, "OSIW")) or_else 0,
+        0xffffffffffffffff,
+        "Windows 2015 is claimed"
+    )
     testing.expect_eq(t, integer_from(run(interpreter, "OSIL")) or_else 1, 0, "Linux isn't")
     testing.expect_eq(t, integer_from(run(interpreter, "OSIS")) or_else 0, 0xffffffffffffffff, "the interface given is")
     return .Ok
@@ -705,7 +773,7 @@ notify_debug_and_interfaces #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
 // ---- Bounds
 
 /** A loop that doesn't end runs out of steps, a recursion out of depth, and growing without end out of memory. */
-every_bound_ends_what_passes_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+every_bound_ends_what_passes_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     // Method (SPIN) { While (One) {} }
     spin :: method(&a, "SPIN", 0)
@@ -733,26 +801,38 @@ every_bound_ends_what_passes_it #test :: fn(t: ptr[mut testing.T]) -> testing.Ou
     interpreter :: setup.interpreter
     testing.expect(t, error_from(run(interpreter, "SPIN")) == .Steps, "a loop that doesn't end runs out of steps")
     testing.expect(t, error_from(run(interpreter, "RECR")) == .Depth, "a method calling itself runs out of depth")
-    testing.expect(t, error_from(run(interpreter, "GROW")) == .Memory, "a buffer that grows without end runs out of memory")
+    testing.expect(
+        t,
+        error_from(run(interpreter, "GROW")) == .Memory,
+        "a buffer that grows without end runs out of memory"
+    )
     testing.expect_eq(t, integer_from(run(interpreter, "INT1")) or_else 0, 3, "and the interpreter goes on after each")
     return .Ok
 }
 
 /** A namespace's budget bounds what a table loads. */
-the_namespace_has_a_budget #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_namespace_has_a_budget #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     names :: string.["NA00", "NA01", "NA02", "NA03", "NA04", "NA05", "NA06", "NA07", "NA08", "NA09"]
     for each in names {
         name_integer(&a, each, 1)
     }
     host :: runtime.new(TestHost)
-    interpreter :: testing.require_some(t, made(host, aml.Limits.{namespace_bytes = 16 * size_of(aml.Node)}), "it's made")?
-    testing.expect(t, aml.load_table(interpreter, table(&a)) == .Memory, "ten names and the table don't fit in 16 nodes' room")
+    interpreter :: testing.require_some(
+        t,
+        made(host, aml.Limits.{namespace_bytes = 16 * size_of(aml.Node)}),
+        "it's made"
+    )?
+    testing.expect(
+        t,
+        aml.load_table(interpreter, table(&a)) == .Memory,
+        "ten names and the table don't fit in 16 nodes' room"
+    )
     return .Ok
 }
 
 /** What a table's header says is checked: a short table, a length past its bytes, a signature that isn't a DSDT's. */
-tables_are_checked #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+tables_are_checked #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     host :: runtime.new(TestHost)
     interpreter :: testing.require_some(t, made(host, aml.Limits.{}), "it's made")?
     a := Assembler.{}
@@ -762,14 +842,18 @@ tables_are_checked #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
         return testing.require(t, false, "the table has its header and a Name")
     }
     testing.expect(t, aml.load_table(interpreter, whole[0..<20]) == .BadTable, "20 bytes are no table")
-    testing.expect(t, aml.load_table(interpreter, whole[0..<(whole.count - 1)]) == .BadTable, "a length past the bytes is refused")
+    testing.expect(
+        t,
+        aml.load_table(interpreter, whole[0..<(whole.count - 1)]) == .BadTable,
+        "a length past the bytes is refused"
+    )
     testing.expect(t, aml.load_table(interpreter, table(&a, "FACP")) == .BadTable, "a FACP is no definition block")
     testing.expect(t, aml.load_table(interpreter, table(&a, "SSDT")) is_none, "an SSDT loads")
     return .Ok
 }
 
 /** Bytes drawn at random as a table's AML fail or load, never fault; any methods they make run within the bounds. */
-random_tables_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+random_tables_never_fault #test :: fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     a := Assembler.{}
     // A valid start sometimes, so what's drawn after it is run inside a method or a scope
     if testing.draw_bool(source) {
@@ -779,7 +863,11 @@ random_tables_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mut tes
     }
     raw(&a, testing.draw_bytes(source, 256))
     host :: runtime.new(TestHost)
-    interpreter :: testing.require_some(t, made(host, aml.Limits.{steps = 10_000, evaluation_bytes = 64 * 1024}), "it's made")?
+    interpreter :: testing.require_some(
+        t,
+        made(host, aml.Limits.{steps = 10_000, evaluation_bytes = 64 * 1024}),
+        "it's made"
+    )?
     _ = aml.load_table(interpreter, table(&a))
     match aml.find(interpreter, "\\RAND") {
         case Some(node) => _ = aml.evaluate_node(interpreter, node, NONE[0..<0])
@@ -794,15 +882,20 @@ random_tables_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mut tes
  *
  * @param a The assembler.
  */
-rich_table :: fn(a: ptr[mut Assembler]) {
+rich_table :: fn(a : ptr[mut Assembler]) {
     raw(a, u8.[0x5b, 0x80])
     name(a, "REG0")
     raw(a, u8.[0x01, 0x0a, 0x10, 0x0a, 0x20])
     fields :: open(a, u8.[0x5b, 0x81])
     name(a, "REG0")
     op(a, 0x01)
-    raw(a, u8.[0x46, 0x31, 0x5f, 0x5f, 0x08, 0x46, 0x32, 0x5f, 0x5f, 0x04, 0x46, 0x33, 0x5f, 0x5f, 0x04, 0x49, 0x4e, 0x44, 0x58, 0x08,
-        0x44, 0x41, 0x54, 0x41, 0x08, 0x01, 0x03, 0x00, 0x46, 0x34, 0x5f, 0x5f, 0x20])
+    raw(
+        a,
+        u8.[
+            0x46, 0x31, 0x5f, 0x5f, 0x08, 0x46, 0x32, 0x5f, 0x5f, 0x04, 0x46, 0x33, 0x5f, 0x5f, 0x04, 0x49, 0x4e, 0x44,
+            0x58, 0x08, 0x44, 0x41, 0x54, 0x41, 0x08, 0x01, 0x03, 0x00, 0x46, 0x34, 0x5f, 0x5f, 0x20
+        ]
+    )
     close(a, fields)
     indexed :: open(a, u8.[0x5b, 0x86])
     name(a, "INDX")
@@ -863,7 +956,7 @@ rich_table :: fn(a: ptr[mut Assembler]) {
 }
 
 /** The rich table loads, and its methods run as they're written. */
-the_rich_table_runs #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_rich_table_runs #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     a := Assembler.{}
     rich_table(&a)
     setup :: loaded(t, &a)?
@@ -886,7 +979,7 @@ Methods :: struct {
  * @param state The Methods' address.
  * @return True, to go on.
  */
-visit_methods :: fn(node #escaping : ptr[mut aml.Node], state: u64) -> bool {
+visit_methods :: fn(node #escaping : ptr[mut aml.Node], state : u64) -> bool {
     if node.kind == .Method {
         methods :: cast[ptr[mut Methods]](state)
         runtime.array_add(&methods.found, node)
@@ -895,7 +988,7 @@ visit_methods :: fn(node #escaping : ptr[mut aml.Node], state: u64) -> bool {
 }
 
 /** The rich table with bytes changed at random loads or fails, and its methods run or fail, but never fault. */
-changed_tables_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+changed_tables_never_fault #test :: fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     a := Assembler.{}
     rich_table(&a)
     for change in 0..<testing.draw_count(source, 6) {
@@ -909,7 +1002,11 @@ changed_tables_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mut te
         }
     }
     host :: runtime.new(TestHost)
-    interpreter :: testing.require_some(t, made(host, aml.Limits.{steps = 20_000, evaluation_bytes = 64 * 1024}), "it's made")?
+    interpreter :: testing.require_some(
+        t,
+        made(host, aml.Limits.{steps = 20_000, evaluation_bytes = 64 * 1024}),
+        "it's made"
+    )?
     _ = aml.load_table(interpreter, table(&a))
     methods := Methods.{}
     _ = aml.walk(interpreter.root, visit_methods, cast[u64](&methods))
@@ -934,19 +1031,26 @@ QEMU_Q35_DSDT :: #file_data("qemu_q35_dsdt.aml")
  * @param t The test.
  * @return The interpreter and its host; or the test failed if the table didn't load.
  */
-qemu_loaded :: fn(t: ptr[mut testing.T]) -> Result[Loaded, testing.Stopped] {
+qemu_loaded :: fn(t : ptr[mut testing.T]) -> Result[Loaded, testing.Stopped] {
     host :: runtime.new(TestHost)
     interpreter :: testing.require_some(t, made(host, aml.Limits.{}), "the interpreter's made")?
     problem :: aml.load_table(interpreter, QEMU_Q35_DSDT[0..<QEMU_Q35_DSDT.count])
     if problem is_some {
-        testing.note(t, "% at % missing %: %", problem, interpreter.failed_at, interpreter.missing, interpreter.failed_bytes)
+        testing.note(
+            t,
+            "% at % missing %: %",
+            problem,
+            interpreter.failed_at,
+            interpreter.missing,
+            interpreter.failed_bytes
+        )
     }
     testing.require(t, problem is_none, "QEMU's DSDT loads")?
     return .Ok(Loaded.{interpreter = interpreter, host = host})
 }
 
 /** QEMU's DSDT loads; its \_S5 gives S5's sleep types, and its host bridge is PNP0A08, with resources. */
-qemu_dsdt_loads_and_answers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+qemu_dsdt_loads_and_answers #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     setup :: qemu_loaded(t)?
     interpreter :: setup.interpreter
     match run(interpreter, "\\_S5") {
@@ -991,7 +1095,7 @@ qemu_dsdt_loads_and_answers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
  * Every method in QEMU's DSDT runs to its end, given zeros as its arguments, but those that need a buffer for one:
  * `_SRS` and `_OSC`, which fail as WrongType.
  */
-every_qemu_method_runs_or_fails_cleanly #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+every_qemu_method_runs_or_fails_cleanly #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     setup :: qemu_loaded(t)?
     interpreter :: setup.interpreter
     methods := Methods.{}
@@ -999,7 +1103,15 @@ every_qemu_method_runs_or_fails_cleanly #test :: fn(t: ptr[mut testing.T]) -> te
     testing.require(t, methods.found.count > 20, "QEMU's DSDT has its methods")?
     ran : usize = 0
     for node in methods.found {
-        arguments :: aml.Value.[.Integer(0), .Integer(0), .Integer(0), .Integer(0), .Integer(0), .Integer(0), .Integer(0)]
+        arguments :: aml.Value.[
+            .Integer(0),
+            .Integer(0),
+            .Integer(0),
+            .Integer(0),
+            .Integer(0),
+            .Integer(0),
+            .Integer(0)
+        ]
         match aml.evaluate_node(interpreter, node, arguments[0..<7]) {
             case Ok(_) => ran += 1
             case Error(error) => {
@@ -1019,7 +1131,10 @@ every_qemu_method_runs_or_fails_cleanly #test :: fn(t: ptr[mut testing.T]) -> te
 }
 
 /** QEMU's DSDT with bytes changed at random loads or fails, and its methods run or fail, but never fault. */
-changed_qemu_dsdts_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+changed_qemu_dsdts_never_fault #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     changed : u8[..]
     defer runtime.array_free(&changed)
     for byte in QEMU_Q35_DSDT {
@@ -1034,7 +1149,11 @@ changed_qemu_dsdts_never_fault #test :: fn(t: ptr[mut testing.T], source: ptr[mu
         }
     }
     host :: runtime.new(TestHost)
-    interpreter :: testing.require_some(t, made(host, aml.Limits.{steps = 50_000, evaluation_bytes = 256 * 1024}), "it's made")?
+    interpreter :: testing.require_some(
+        t,
+        made(host, aml.Limits.{steps = 50_000, evaluation_bytes = 256 * 1024}),
+        "it's made"
+    )?
     _ = aml.load_table(interpreter, changed[0..<changed.count])
     methods := Methods.{}
     _ = aml.walk(interpreter.root, visit_methods, cast[u64](&methods))

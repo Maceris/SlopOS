@@ -5,8 +5,8 @@
 package remove
 
 import os from "std:os"
-import strings from "std:strings"
 import dir from "std:os/slop_os/dir"
+import strings from "std:strings"
 import file_tools from "../../file_tools"
 
 /** An error naming the parameter it came from. */
@@ -47,7 +47,7 @@ RemoveError :: union {
  * @error Unrecoverable The volume can't take a snapshot, so it couldn't be recovered; remove it with --forever.
  * @error Failed Something couldn't be removed; what went before it can be recovered.
  */
-main :: fn(here: os.Channel[dir.Dir], path: string, forever: bool) -> Result[Removed, RemoveError] {
+main :: fn(here : os.Channel[dir.Dir], path : string, forever : bool) -> Result[Removed, RemoveError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "path"}}
     snapshot := ""
     if !forever {
@@ -80,7 +80,7 @@ main :: fn(here: os.Channel[dir.Dir], path: string, forever: bool) -> Result[Rem
  * @param count How many entries have been removed, added to.
  * @return Whether it's all gone; false at the first that couldn't be removed.
  */
-removed :: fn(source: file_tools.Source, directory: os.Directory, path: string, count: ptr[mut u64]) -> bool {
+removed :: fn(source : file_tools.Source, directory : os.Directory, path : string, count : ptr[mut u64]) -> bool {
     match file_tools.kind_at(source, path) {
         case .Missing => return false
         case .File => {

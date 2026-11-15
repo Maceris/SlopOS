@@ -19,7 +19,12 @@ MAX_FIELD_BITS : u64 : 1 << 20
  * @error NotFound The region, or the index, data or bank field, isn't there.
  * @error AlreadyExists A field's name is in use in its scope.
  */
-define_fields :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor], opcode: u8) -> Result[void, Error] {
+define_fields :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor],
+    opcode : u8
+) -> Result[void, Error] {
     end :: package_end(cursor)?
     first := read_name(cursor)?
     region :: resolve(interpreter, frame.scope, &first) or_return .Error(not_found(interpreter, &first))
@@ -33,7 +38,10 @@ define_fields :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cu
         bank = evaluate_integer(interpreter, frame, cursor)?
     }
     flags :: read_byte(cursor)?
-    kind :: if opcode == 0x81 { NodeKind.Field } else if opcode == 0x86 { NodeKind.IndexField } else { NodeKind.BankField }
+    kind :: if opcode == 0x81 {
+        NodeKind.Field
+    }
+    else if opcode == 0x86 { NodeKind.IndexField } else { NodeKind.BankField }
     access := access_type(flags & 15)
     update :: update_rule((flags >> 5) & 3)
     offset : u64 = 0
@@ -100,7 +108,7 @@ define_fields :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cu
  * @return The bits.
  * @error Truncated At the end before it.
  */
-read_field_length :: fn(cursor: ptr[mut Cursor]) -> Result[u64, Error] {
+read_field_length :: fn(cursor : ptr[mut Cursor]) -> Result[u64, Error] {
     lead :: read_byte(cursor)?
     following :: cast[u32](lead >> 6)
     if following == 0 {
@@ -124,7 +132,12 @@ read_field_length :: fn(cursor: ptr[mut Cursor]) -> Result[u64, Error] {
  * @error AlreadyExists Something of that name is in the scope.
  * @error Memory The namespace's budget can't hold it.
  */
-define_segment :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], segment: u32, kind: NodeKind) -> Result[ptr[mut Node], Error] {
+define_segment :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    segment : u32,
+    kind : NodeKind
+) -> Result[ptr[mut Node], Error] {
     if child_of(frame.scope, segment) is_some {
         return .Error(.AlreadyExists)
     }
@@ -143,7 +156,7 @@ define_segment :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], s
  * @param value The flags' low 4 bits.
  * @return The type; Any for a value past Buffer.
  */
-access_type :: fn(value: u8) -> AccessType {
+access_type :: fn(value : u8) -> AccessType {
     return if value <= 5 { cast[AccessType](value) } else { AccessType.Any }
 }
 
@@ -153,7 +166,7 @@ access_type :: fn(value: u8) -> AccessType {
  * @param value The flags' bits 5 and 6.
  * @return The rule; Preserve for 3.
  */
-update_rule :: fn(value: u8) -> UpdateRule {
+update_rule :: fn(value : u8) -> UpdateRule {
     return if value <= 2 { cast[UpdateRule](value) } else { UpdateRule.Preserve }
 }
 
@@ -163,7 +176,7 @@ update_rule :: fn(value: u8) -> UpdateRule {
  * @param access The field's access type.
  * @return 1, 2, 4 or 8.
  */
-access_bytes :: fn(access: AccessType) -> u64 {
+access_bytes :: fn(access : AccessType) -> u64 {
     match access {
         case .Word => return 2
         case .DWord => return 4
@@ -185,7 +198,14 @@ access_bytes :: fn(access: AccessType) -> u64 {
  * @error WrongType A source that isn't a buffer or a string.
  * @error OutOfRange A field past the buffer's end.
  */
-create_buffer_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], source #escaping : Value, offset: u64, bits: u64, name: ptr[NameString]) -> Result[Flow, Error] {
+create_buffer_field :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    source #escaping : Value,
+    offset : u64,
+    bits : u64,
+    name : ptr[NameString]
+) -> Result[Flow, Error] {
     bytes : ptr[mut Bytes]? = null
     match source {
         case Buffer(found) => bytes = found
@@ -193,7 +213,10 @@ create_buffer_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Fram
         case _ => return .Error(.WrongType)
     }
     buffer :: bytes or_return .Error(.WrongType)
-    if bits == 0 || bits > MAX_FIELD_BITS || offset > cast[u64](buffer.data.count) * 8 || bits > cast[u64](buffer.data.count) * 8 - offset {
+    if bits == 0
+        || bits > MAX_FIELD_BITS
+        || offset > cast[u64](buffer.data.count) * 8
+        || bits > cast[u64](buffer.data.count) * 8 - offset {
         return .Error(.OutOfRange)
     }
     node :: define(interpreter, frame, name, .BufferField)?
@@ -211,7 +234,7 @@ create_buffer_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Fram
  * @param value The bits.
  * @param count How many of value's low bits, at most 64.
  */
-put_bits :: fn(into: mut u8[], at: u64, value: u64, count: u64) {
+put_bits :: fn(into : mut u8[], at : u64, value : u64, count : u64) {
     for i in 0..<count {
         bit :: at + i
         index :: cast[usize](bit / 8)
@@ -235,7 +258,7 @@ put_bits :: fn(into: mut u8[], at: u64, value: u64, count: u64) {
  * @param count How many, at most 64.
  * @return The bits, bit at of from as its bit 0; a bit past from's end reads 0.
  */
-take_bits :: fn(from: u8[], at: u64, count: u64) -> u64 {
+take_bits :: fn(from : u8[], at : u64, count : u64) -> u64 {
     value : u64 = 0
     for i in 0..<count {
         bit :: at + i
@@ -255,7 +278,7 @@ take_bits :: fn(from: u8[], at: u64, count: u64) -> u64 {
  * @return The bytes.
  * @error WrongType A value that's none of those.
  */
-field_bytes :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value) -> Result[u8[], Error] #unrestricted {
+field_bytes :: fn(interpreter : ptr[mut Interpreter], value #escaping : Value) -> Result[u8[], Error] #unrestricted {
     match value {
         case Buffer(bytes) => return .Ok(bytes.data)
         case String(text) => return .Ok(text.data)
@@ -276,7 +299,7 @@ field_bytes :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value) ->
  * @param bits How many.
  * @return The value.
  */
-field_value :: fn(interpreter: ptr[mut Interpreter], bytes: ptr[mut Bytes], bits: u64) -> Value {
+field_value :: fn(interpreter : ptr[mut Interpreter], bytes : ptr[mut Bytes], bits : u64) -> Value {
     if bits <= 8 * cast[u64](integer_bytes(interpreter)) {
         return .Integer(take_bits(bytes.data, 0, if bits < 64 { bits } else { 64 }))
     }
@@ -292,7 +315,10 @@ field_value :: fn(interpreter: ptr[mut Interpreter], bytes: ptr[mut Bytes], bits
  * @error OutOfRange Its buffer's shrunk below it.
  * @error Memory The evaluation's budget can't hold it.
  */
-read_buffer_field :: fn(interpreter: ptr[mut Interpreter], node: ptr[mut Node]) -> Result[Value, Error] #unrestricted {
+read_buffer_field :: fn(
+    interpreter : ptr[mut Interpreter],
+    node : ptr[mut Node]
+) -> Result[Value, Error] #unrestricted {
     buffer :: node.buffer or_return .Error(.WrongType)
     if node.bit_offset + node.bit_length > cast[u64](buffer.data.count) * 8 {
         return .Error(.OutOfRange)
@@ -315,7 +341,11 @@ read_buffer_field :: fn(interpreter: ptr[mut Interpreter], node: ptr[mut Node]) 
  * @error OutOfRange Its buffer's shrunk below it.
  * @error WrongType A value that's none of those.
  */
-write_buffer_field :: fn(interpreter: ptr[mut Interpreter], node: ptr[mut Node], value #escaping : Value) -> Result[void, Error] {
+write_buffer_field :: fn(
+    interpreter : ptr[mut Interpreter],
+    node : ptr[mut Node],
+    value #escaping : Value
+) -> Result[void, Error] {
     buffer :: node.buffer or_return .Error(.WrongType)
     if node.bit_offset + node.bit_length > cast[u64](buffer.data.count) * 8 {
         return .Error(.OutOfRange)
@@ -340,7 +370,11 @@ write_buffer_field :: fn(interpreter: ptr[mut Interpreter], node: ptr[mut Node],
  * @error RegionFailed The host couldn't read it.
  * @error Memory The evaluation's budget can't hold it.
  */
-read_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node: ptr[mut Node]) -> Result[Value, Error] #unrestricted {
+read_field :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    node : ptr[mut Node]
+) -> Result[Value, Error] #unrestricted {
     made :: temporary_bytes(interpreter, (node.bit_length + 7) / 8)?
     width :: access_bytes(node.access)
     unit_bits :: width * 8
@@ -354,7 +388,12 @@ read_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node:
         // The bits of this unit that are the field's
         unit_start :: unit * unit_bits
         from :: if node.bit_offset > unit_start { node.bit_offset } else { unit_start }
-        to :: if node.bit_offset + node.bit_length < unit_start + unit_bits { node.bit_offset + node.bit_length } else { unit_start + unit_bits }
+        to :: if node.bit_offset + node.bit_length < unit_start + unit_bits {
+            node.bit_offset + node.bit_length
+        }
+        else {
+            unit_start + unit_bits
+        }
         put_bits(made.data, from - node.bit_offset, value >> (from - unit_start), to - from)
     }
     return .Ok(field_value(interpreter, made, node.bit_length))
@@ -371,7 +410,12 @@ read_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node:
  * @error RegionFailed The host couldn't read or write it.
  * @error WrongType A value that's none of those.
  */
-write_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node: ptr[mut Node], value #escaping : Value) -> Result[void, Error] {
+write_field :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    node : ptr[mut Node],
+    value #escaping : Value
+) -> Result[void, Error] {
     source :: field_bytes(interpreter, value)?
     width :: access_bytes(node.access)
     unit_bits :: width * 8
@@ -384,7 +428,12 @@ write_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node
     for unit in first..=last {
         unit_start :: unit * unit_bits
         from :: if node.bit_offset > unit_start { node.bit_offset } else { unit_start }
-        to :: if node.bit_offset + node.bit_length < unit_start + unit_bits { node.bit_offset + node.bit_length } else { unit_start + unit_bits }
+        to :: if node.bit_offset + node.bit_length < unit_start + unit_bits {
+            node.bit_offset + node.bit_length
+        }
+        else {
+            unit_start + unit_bits
+        }
         whole :: from == unit_start && to == unit_start + unit_bits
         // What the unit's other bits are written as
         base : u64 = 0
@@ -418,7 +467,15 @@ write_field :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node
  * @error OutOfRange A unit past its region's end.
  * @error RegionFailed The host couldn't.
  */
-access_unit :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node: ptr[mut Node], offset: u64, width: u64, write: bool, value: u64) -> Result[u64, Error] {
+access_unit :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    node : ptr[mut Node],
+    offset : u64,
+    width : u64,
+    write : bool,
+    value : u64
+) -> Result[u64, Error] {
     if node.kind == .IndexField {
         // The unit's offset to the index field, then the data field read or written
         index :: node.region or_return .Error(.NotFound)
@@ -452,7 +509,9 @@ access_unit :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node
         }
         return .Ok(0)
     }
-    return .Ok(interpreter.host.read(interpreter.host.state, region.space, address, bits) or_return .Error(.RegionFailed))
+    return .Ok(
+        interpreter.host.read(interpreter.host.state, region.space, address, bits) or_return .Error(.RegionFailed)
+    )
 }
 
 /**
@@ -464,7 +523,11 @@ access_unit :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node
  * @param region The region; its pci_found and pci are set.
  * @return The function, as pci_address makes it, with offset 0.
  */
-pci_function :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], region: ptr[mut Node]) -> Result[u64, Error] {
+pci_function :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    region : ptr[mut Node]
+) -> Result[u64, Error] {
     if region.pci_found {
         return .Ok(region.pci)
     }
@@ -487,7 +550,13 @@ pci_function :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], reg
  * @param upward Whether the scopes scope is in are looked in too, the nearest first.
  * @return Its value; 0 if it isn't there.
  */
-optional_integer :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], scope: ptr[mut Node], name: string, upward: bool) -> Result[u64, Error] {
+optional_integer :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    scope : ptr[mut Node],
+    name : string,
+    upward : bool
+) -> Result[u64, Error] {
     at := scope
     loop {
         match child_of(at, segment_of(name)) {
@@ -513,6 +582,10 @@ optional_integer :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame],
  * @return The segment in bits 32 to 47, the bus in 24 to 31, the device in 19 to 23, the function in 16 to 18 and
  *     the offset in 0 to 15.
  */
-pci_address :: fn(segment: u64, bus: u64, device: u64, function: u64, offset: u64) -> u64 {
-    return ((segment & 0xffff) << 32) | ((bus & 0xff) << 24) | ((device & 0x1f) << 19) | ((function & 7) << 16) | (offset & 0xffff)
+pci_address :: fn(segment : u64, bus : u64, device : u64, function : u64, offset : u64) -> u64 {
+    return ((segment & 0xffff) << 32)
+        | ((bus & 0xff) << 24)
+        | ((device & 0x1f) << 19)
+        | ((function & 7) << 16)
+        | (offset & 0xffff)
 }

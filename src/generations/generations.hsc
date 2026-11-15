@@ -124,14 +124,17 @@ RECORDS :: "boot/generations"
  * @return Null if it's a generation's record, or why it isn't: a constant phrase to follow "the record", such as
  *     "has no number".
  */
-check :: fn(generation: ptr[Generation]) -> string? {
+check :: fn(generation : ptr[Generation]) -> string? {
     if generation.magic != MAGIC {
         return "isn't a generation's record"
     }
     if generation.number == 0 {
         return "has no number"
     }
-    if generation.state > STATE_RECOVERY || generation.kaslr > 1 || generation.tries_left > TRIES || generation.development > 1 {
+    if generation.state > STATE_RECOVERY
+        || generation.kaslr > 1
+        || generation.tries_left > TRIES
+        || generation.development > 1 {
         return "has a state or a flag that isn't one"
     }
     if (generation.state == STATE_RECOVERY) != (generation.number == RECOVERY_NUMBER) {
@@ -163,7 +166,7 @@ check :: fn(generation: ptr[Generation]) -> string? {
  * @param bytes The record's bytes, exactly size_of(Generation) of them; copied, not kept.
  * @return A copy of the generation, or null if bytes are another size or check refuses them.
  */
-generation_of :: fn(bytes: u8[]) -> Generation? {
+generation_of :: fn(bytes : u8[]) -> Generation? {
     if bytes.count != size_of(Generation) {
         return null
     }
@@ -181,7 +184,7 @@ generation_of :: fn(bytes: u8[]) -> Generation? {
  * @param generation The generation; it's not copied.
  * @return Its size_of(Generation) bytes, a view of generation itself, good as long as it is.
  */
-bytes_of :: fn(generation: ptr[Generation]) -> u8[] {
+bytes_of :: fn(generation : ptr[Generation]) -> u8[] {
     return view_of(cast[ptr[u8]](generation), size_of(Generation))
 }
 
@@ -192,7 +195,7 @@ bytes_of :: fn(generation: ptr[Generation]) -> u8[] {
  * @param storage Where the path's bytes are written: 77 of them, the rest left as they were.
  * @return The path, a view of storage, good as long as storage is and isn't written again.
  */
-object_path :: fn(hash: bundle.Hash, storage: ptr[mut u8[128]]) -> string {
+object_path :: fn(hash : bundle.Hash, storage : ptr[mut u8[128]]) -> string {
     hex_storage : u8[64]
     return joined(OBJECTS, "/", bundle.hex(hash, &hex_storage), storage)
 }
@@ -204,7 +207,7 @@ object_path :: fn(hash: bundle.Hash, storage: ptr[mut u8[128]]) -> string {
  * @param storage Where the path's bytes are written: 18 to 37 of them, the rest left as they were.
  * @return The path, a view of storage, good as long as storage is and isn't written again.
  */
-record_path :: fn(number: u64, storage: ptr[mut u8[128]]) -> string {
+record_path :: fn(number : u64, storage : ptr[mut u8[128]]) -> string {
     digits : u8[20]
     return joined(RECORDS, "/", decimal(number, &digits), storage)
 }
@@ -217,7 +220,7 @@ record_path :: fn(number: u64, storage: ptr[mut u8[128]]) -> string {
  * @return Its bytes up to the first zero, all NAME_BYTES of them if there's none, as a view of name, good as long as
  *     name is; empty if the first byte is zero.
  */
-text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
+text_of :: fn(name : ptr[u8[NAME_BYTES]]) -> string {
     count := cast[usize](0)
     for byte in name^ {
         if byte == 0 {
@@ -235,7 +238,7 @@ text_of :: fn(name: ptr[u8[NAME_BYTES]]) -> string {
  * @return Its bytes up to the first zero, all COMMAND_LINE_BYTES of them if there's none, as a view of line, good as
  *     long as line is; empty if the first byte is zero.
  */
-line_of :: fn(line: ptr[u8[COMMAND_LINE_BYTES]]) -> string {
+line_of :: fn(line : ptr[u8[COMMAND_LINE_BYTES]]) -> string {
     count := cast[usize](0)
     for byte in line^ {
         if byte == 0 {
@@ -253,7 +256,7 @@ line_of :: fn(line: ptr[u8[COMMAND_LINE_BYTES]]) -> string {
  * @param text The name, at most NAME_BYTES - 1 bytes, so a zero follows it; its bytes are copied as they are.
  * @return True if text fit, false if it's NAME_BYTES or more bytes long, leaving name all zeros.
  */
-set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
+set_name :: fn(name : ptr[mut u8[NAME_BYTES]], text : string) -> bool {
     for i in cast[usize](0)..<name.count {
         name^[i] = 0
     }
@@ -275,7 +278,7 @@ set_name :: fn(name: ptr[mut u8[NAME_BYTES]], text: string) -> bool {
  * @param text The command line, at most COMMAND_LINE_BYTES - 1 bytes, so a zero follows it; copied as it is.
  * @return True if text fit, false if it's COMMAND_LINE_BYTES or more bytes long, leaving line all zeros.
  */
-set_line :: fn(line: ptr[mut u8[COMMAND_LINE_BYTES]], text: string) -> bool {
+set_line :: fn(line : ptr[mut u8[COMMAND_LINE_BYTES]], text : string) -> bool {
     for i in cast[usize](0)..<line.count {
         line^[i] = 0
     }
@@ -296,7 +299,7 @@ set_line :: fn(line: ptr[mut u8[COMMAND_LINE_BYTES]], text: string) -> bool {
  * @param name A boot-set file's name field, as a record holds it; only read, all NAME_BYTES of it.
  * @return True if any of its bytes is zero.
  */
-ended :: fn(name: ptr[u8[NAME_BYTES]]) -> bool {
+ended :: fn(name : ptr[u8[NAME_BYTES]]) -> bool {
     for byte in name^ {
         if byte == 0 {
             return true
@@ -311,7 +314,7 @@ ended :: fn(name: ptr[u8[NAME_BYTES]]) -> bool {
  * @param line The command line's bytes.
  * @return True if any of its bytes is zero.
  */
-ended_line :: fn(line: ptr[u8[COMMAND_LINE_BYTES]]) -> bool {
+ended_line :: fn(line : ptr[u8[COMMAND_LINE_BYTES]]) -> bool {
     for byte in line^ {
         if byte == 0 {
             return true
@@ -326,7 +329,7 @@ ended_line :: fn(line: ptr[u8[COMMAND_LINE_BYTES]]) -> bool {
  * @param into Where the bytes go; bytes past from's count are left as they were.
  * @param from The bytes copied; those past into's count aren't copied. It mustn't overlap into.
  */
-copy_into :: fn(into: mut u8[], from: u8[]) {
+copy_into :: fn(into : mut u8[], from : u8[]) {
     for i in 0..<into.count {
         if i < from.count {
             into[i] = from[i]
@@ -341,7 +344,7 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
  * @param digits Where the digits are written, 1 to 20 of them, the rest left as they were.
  * @return The digits, a view of digits, good as long as digits is and isn't written again.
  */
-decimal :: fn(value: u64, digits: ptr[mut u8[20]]) -> string {
+decimal :: fn(value : u64, digits : ptr[mut u8[20]]) -> string {
     reversed : u8[20]
     count := cast[usize](0)
     left := value
@@ -372,7 +375,7 @@ decimal :: fn(value: u64, digits: ptr[mut u8[20]]) -> string {
  * @return The joined text, at most 128 bytes, a view of storage, good as long as storage is and isn't written again;
  *     empty if all three are.
  */
-joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[128]]) -> string {
+joined :: fn(a : string, b : string, c : string, storage : ptr[mut u8[128]]) -> string {
     count := cast[usize](0)
     for text in string.[a, b, c] {
         for character in text {

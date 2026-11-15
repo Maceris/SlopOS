@@ -5,7 +5,11 @@
  * the supervisor on its power connection, which shuts the system down. Where there's no such button, as where ACPI's
  * SCI brings it instead, it ends with 0, and isn't started again.
  */
-//SPEC: Arm PrimeCell GPIO (PL061) Technical Reference Manual, §3.3 (GPIODIR, GPIOIS, GPIOIBE, GPIOIEV, GPIOIE, GPIOMIS, GPIOIC)
+/*
+ * SPEC: Arm PrimeCell GPIO (PL061) Technical Reference Manual, §3.3 (GPIODIR, GPIOIS, GPIOIBE, GPIOIEV, GPIOIE,
+ * GPIOMIS, GPIOIC)
+ */
+
 package power_button
 
 import intrinsics from "base:intrinsics"
@@ -43,7 +47,7 @@ IRQ_KEY : u64 : 1
  * @return 0 where there's no such power button, so it isn't started again; on failing to start, 1 without a port, 2
  *     if the registers can't be mapped, 3 if the IRQ can't be waited for.
  */
-main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[power_protocol.Power]?) -> int {
+main :: fn(platform_service : os.Channel[platform.Platform], power : os.Channel[power_protocol.Power]?) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, platform_service.end) or_return 1
     out := os.Outgoing.{}
@@ -80,7 +84,13 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
     write(registers, ENABLE, read(registers, ENABLE) | bit)
     events :: slop_os.port_create(block.budget) or_return 1
     _ = service_kit.watch_stop(events)
-    if slop_os.port_bind(events, cast[slop_os.Handle](button.irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) is_error {
+    if slop_os.port_bind(
+        events,
+        cast[slop_os.Handle](button.irq),
+        cast[slop_os.Signals](0),
+        IRQ_KEY,
+        .Persistent
+    ) is_error {
         return 3
     }
     runtime.log_info("serving, the power button on pin %", button.pin)
@@ -114,7 +124,7 @@ main :: fn(platform_service: os.Channel[platform.Platform], power: os.Channel[po
  * @param power The power connection; null for none.
  * @return True if it was told.
  */
-tell :: fn(power: os.Channel[power_protocol.Power]?) -> bool {
+tell :: fn(power : os.Channel[power_protocol.Power]?) -> bool {
     connection :: power or_return false
     port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return false
     out := os.Outgoing.{}
@@ -130,7 +140,7 @@ tell :: fn(power: os.Channel[power_protocol.Power]?) -> bool {
  * @param offset The register's offset.
  * @return Its value; the PL061's are 8 bits, read as 32.
  */
-read :: fn(registers: u64, offset: u64) -> u32 {
+read :: fn(registers : u64, offset : u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](registers + offset))
 }
 
@@ -141,6 +151,6 @@ read :: fn(registers: u64, offset: u64) -> u32 {
  * @param offset The register's offset.
  * @param value What's written; its low 8 bits are the PL061's.
  */
-write :: fn(registers: u64, offset: u64, value: u32) {
+write :: fn(registers : u64, offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](registers + offset), value)
 }

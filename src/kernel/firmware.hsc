@@ -2,8 +2,8 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import boot_info from "../boot_info"
 import slop_os from "std:os/slop_os"
+import boot_info from "../boot_info"
 import frames from "frames"
 
 /*
@@ -20,9 +20,11 @@ import frames from "frames"
  * slop_os.FramebufferLayout at the framebuffer's physical address, for the terminal service to draw on
  * (decisions/0138).
  */
-//SPEC: ACPI Specification 6.5, §5.2.5 (RSDP), §5.2.6 (system description table header), §5.2.7-8 (RSDT, XSDT)
-//SPEC: ACPI Specification 6.5, §5.2.9 (FADT), §5.2.10 (FACS)
-//SPEC: Devicetree Specification 0.4, §5.2 (the header)
+/*
+ * SPEC: ACPI Specification 6.5, §5.2.5 (RSDP), §5.2.6 (system description table header), §5.2.7-8 (RSDT, XSDT)
+ * SPEC: ACPI Specification 6.5, §5.2.9 (FADT), §5.2.10 (FACS)
+ * SPEC: Devicetree Specification 0.4, §5.2 (the header)
+ */
 
 /** The most firmware tables copied; any past them are left out, with a warning. */
 MAX_FIRMWARE_TABLES :: 64
@@ -68,8 +70,12 @@ FoundTables :: struct {
  * @param direct_map_offset What's added to a physical address to reach it through the direct map, where the device
  *     tree is read.
  */
-copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.FirmwareTables], framebuffers: boot_info.Framebuffer[],
-    direct_map_offset: u64) {
+copy_firmware_tables :: fn(
+    kernel : ptr[mut Kernel],
+    tables : ptr[boot_info.FirmwareTables],
+    framebuffers : boot_info.Framebuffer[],
+    direct_map_offset : u64
+) {
     found : FoundTables
     #if TARGET_ARCH == .x86_64 {
         match tables.acpi_rsdp {
@@ -90,7 +96,8 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     ram_bytes :: cast[u64](kernel.ram.count) * cast[u64](size_of(slop_os.PhysicalRange))
     // The kernel's own tables after the firmware's: RAM, and the framebuffer if there is one
     own :: if framebuffers.count > 0 { cast[usize](2) } else { cast[usize](1) }
-    header_bytes :: cast[u64](size_of(slop_os.FirmwareTables)) + cast[u64](found.count + own) * cast[u64](size_of(slop_os.FirmwareTable))
+    header_bytes :: cast[u64](size_of(slop_os.FirmwareTables))
+        + cast[u64](found.count + own) * cast[u64](size_of(slop_os.FirmwareTable))
     total := header_bytes
     for table, i in found.tables {
         if i < found.count {
@@ -106,7 +113,14 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
         return void
     }
     memory := cast[ptr[mut Memory]](0)
-    match create_contiguous_memory(kernel, 0, 0, frames.round_up(total, frames.FRAME_SIZE), 0, cast[u32](slop_os.PROTECTION_READ)) {
+    match create_contiguous_memory(
+        kernel,
+        0,
+        0,
+        frames.round_up(total, frames.FRAME_SIZE),
+        0,
+        cast[u32](slop_os.PROTECTION_READ)
+    ) {
         case Ok(made) => memory = made
         case Error(error) => {
             runtime.log_error("no memory for the firmware tables' copy")
@@ -118,19 +132,31 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     header.magic = slop_os.FIRMWARE_MAGIC
     header.kind = found.kind
     header.count = cast[u32](found.count + own)
-    entries :: view_of(cast[ptr[mut slop_os.FirmwareTable]](base + cast[u64](size_of(slop_os.FirmwareTables))), found.count + own)
+    entries :: view_of(
+        cast[ptr[mut slop_os.FirmwareTable]](base + cast[u64](size_of(slop_os.FirmwareTables))),
+        found.count + own
+    )
     offset := header_bytes
     for &table, i in found.tables {
         if i >= found.count || i >= entries.count {
             break
         }
         offset = frames.round_up(offset, 8)
-        entries[i] = slop_os.FirmwareTable.{signature = table.signature, size = cast[u32](table.size), offset = offset, physical = table.physical}
+        entries[i] = slop_os.FirmwareTable.{
+            signature = table.signature,
+            size = cast[u32](table.size),
+            offset = offset,
+            physical = table.physical,
+        }
         #if TARGET_ARCH == .x86_64 {
             read_physical(kernel, table.physical, table.size, base + offset)
         }
         #else {
-            intrinsics.mem_copy_non_overlapping(cast[mut rawptr](base + offset), cast[rawptr](direct_map_offset + table.physical), cast[usize](table.size))
+            intrinsics.mem_copy_non_overlapping(
+                cast[mut rawptr](base + offset),
+                cast[rawptr](direct_map_offset + table.physical),
+                cast[usize](table.size)
+            )
         }
         offset += table.size
     }
@@ -138,7 +164,12 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     offset = frames.round_up(offset, 8)
     last :: found.count
     if last < entries.count {
-        entries[last] = slop_os.FirmwareTable.{signature = signature_of("RAM "), size = cast[u32](ram_bytes), offset = offset, physical = 0}
+        entries[last] = slop_os.FirmwareTable.{
+            signature = signature_of("RAM "),
+            size = cast[u32](ram_bytes),
+            offset = offset,
+            physical = 0,
+        }
     }
     ranges :: view_of(cast[ptr[mut slop_os.PhysicalRange]](base + offset), kernel.ram.count)
     for range, i in kernel.ram {
@@ -151,14 +182,33 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
     if own == 2 && next < entries.count && framebuffers.count > 0 {
         offset = frames.round_up(offset + ram_bytes, 8)
         shown :: &framebuffers[0]
-        entries[next] = slop_os.FirmwareTable.{signature = signature_of("FB  "), size = cast[u32](size_of(slop_os.FramebufferLayout)),
-            offset = offset, physical = cast[u64](shown.memory.base)}
-        cast[ptr[mut slop_os.FramebufferLayout]](base + offset)^ = slop_os.FramebufferLayout.{width = shown.width, height = shown.height,
-            pitch = shown.pitch, bits_per_pixel = shown.bits_per_pixel, red_size = shown.red.size, red_shift = shown.red.shift,
-            green_size = shown.green.size, green_shift = shown.green.shift, blue_size = shown.blue.size, blue_shift = shown.blue.shift}
+        entries[next] = slop_os.FirmwareTable.{
+            signature = signature_of("FB  "),
+            size = cast[u32](size_of(slop_os.FramebufferLayout)),
+            offset = offset,
+            physical = cast[u64](shown.memory.base),
+        }
+        cast[ptr[mut slop_os.FramebufferLayout]](base
+            + offset)^ = slop_os.FramebufferLayout.{
+            width = shown.width,
+            height = shown.height,
+            pitch = shown.pitch,
+            bits_per_pixel = shown.bits_per_pixel,
+            red_size = shown.red.size,
+            red_shift = shown.red.shift,
+            green_size = shown.green.size,
+            green_shift = shown.green.shift,
+            blue_size = shown.blue.size,
+            blue_shift = shown.blue.shift,
+        }
     }
     kernel.firmware = cast[u64](memory)
-    runtime.log_info("firmware tables: % copied for the root task, and % RAM ranges, % bytes", found.count, kernel.ram.count, total)
+    runtime.log_info(
+        "firmware tables: % copied for the root task, and % RAM ranges, % bytes",
+        found.count,
+        kernel.ram.count,
+        total
+    )
 }
 
 /**
@@ -169,7 +219,7 @@ copy_firmware_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[boot_info.Firmwa
  * @param rsdp The RSDP's physical address; one with the wrong signature is logged, and nothing is found.
  * @param found Where they're added; its kind is set to Acpi.
  */
-find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundTables]) {
+find_acpi_tables :: fn(kernel : ptr[mut Kernel], rsdp : u64, found : ptr[mut FoundTables]) {
     found.kind = .Acpi
     bytes : u8[36]
     read_physical(kernel, rsdp, 36, cast[u64](&bytes))
@@ -199,8 +249,18 @@ find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundT
         if bytes_are(cast[u64](&signature), "FACP") && size >= 44 {
             fadt : u8[148]
             read_physical(kernel, entry, if size >= 148 { cast[u64](148) } else { size }, cast[u64](&fadt))
-            dsdt :: if size >= 148 && u64_at(cast[u64](&fadt), 140) != 0 { u64_at(cast[u64](&fadt), 140) } else { cast[u64](u32_at(cast[u64](&fadt), 40)) }
-            facs :: if size >= 140 && u64_at(cast[u64](&fadt), 132) != 0 { u64_at(cast[u64](&fadt), 132) } else { cast[u64](u32_at(cast[u64](&fadt), 36)) }
+            dsdt :: if size >= 148 && u64_at(cast[u64](&fadt), 140) != 0 {
+                u64_at(cast[u64](&fadt), 140)
+            }
+            else {
+                cast[u64](u32_at(cast[u64](&fadt), 40))
+            }
+            facs :: if size >= 140 && u64_at(cast[u64](&fadt), 132) != 0 {
+                u64_at(cast[u64](&fadt), 132)
+            }
+            else {
+                cast[u64](u32_at(cast[u64](&fadt), 36))
+            }
             if dsdt != 0 {
                 _ = add_sdt(kernel, found, dsdt)
             }
@@ -220,7 +280,7 @@ find_acpi_tables :: fn(kernel: ptr[mut Kernel], rsdp: u64, found: ptr[mut FoundT
  * @return Its length in bytes, even when it was found already or there's no room for it; 0 if the length is under 8
  *     or over MAX_TABLE_BYTES, which is logged and not added.
  */
-add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u64) -> u64 {
+add_sdt :: fn(kernel : ptr[mut Kernel], found : ptr[mut FoundTables], physical : u64) -> u64 {
     header : u8[8]
     read_physical(kernel, physical, 8, cast[u64](&header))
     size :: cast[u64](u32_at(cast[u64](&header), 4))
@@ -244,7 +304,7 @@ add_sdt :: fn(kernel: ptr[mut Kernel], found: ptr[mut FoundTables], physical: u6
  * @param physical Its physical address.
  * @param size Its size in bytes.
  */
-add_table :: fn(found: ptr[mut FoundTables], signature: u8[4], physical: u64, size: u64) {
+add_table :: fn(found : ptr[mut FoundTables], signature : u8[4], physical : u64, size : u64) {
     for table, i in found.tables {
         if i < found.count && table.physical == physical {
             return void
@@ -265,7 +325,7 @@ add_table :: fn(found: ptr[mut FoundTables], signature: u8[4], physical: u64, si
  * @param text Its four characters, ASCII; any past four are left out, and fewer leave zeros.
  * @return Its four bytes, in the text's order, as the copy's entries hold them.
  */
-signature_of :: fn(text: string) -> u8[4] {
+signature_of :: fn(text : string) -> u8[4] {
     signature : u8[4]
     for byte, i in text {
         if i < signature.count {
@@ -283,7 +343,7 @@ signature_of :: fn(text: string) -> u8[4] {
  * @param found Where it's added as "DTB "; its kind is set to DeviceTree. A wrong magic or a size over
  *     MAX_FIRMWARE_BYTES is logged, and nothing is added.
  */
-find_device_tree :: fn(address: u64, physical: u64, found: ptr[mut FoundTables]) {
+find_device_tree :: fn(address : u64, physical : u64, found : ptr[mut FoundTables]) {
     found.kind = .DeviceTree
     if big_endian_u32(address) != DEVICE_TREE_MAGIC {
         runtime.log_warn("the device tree's magic is wrong")
@@ -306,7 +366,7 @@ find_device_tree :: fn(address: u64, physical: u64, found: ptr[mut FoundTables])
  * @param size How many bytes.
  * @param into The kernel virtual address they go to, writable for size bytes; zeroed if they can't be mapped.
  */
-read_physical :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, into: u64) {
+read_physical :: fn(kernel : ptr[mut Kernel], physical : u64, size : u64, into : u64) {
     match map_device(kernel, cast[boot_info.PhysicalAddress](physical), size) {
         case Ok(address) => {
             intrinsics.mem_copy_non_overlapping(cast[mut rawptr](into), cast[rawptr](address), cast[usize](size))
@@ -323,7 +383,7 @@ read_physical :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64, into: u64
  * @param offset The value's offset from base, in bytes.
  * @return The four bytes at base + offset, read as a little-endian u32.
  */
-u32_at :: fn(base: u64, offset: u64) -> u32 {
+u32_at :: fn(base : u64, offset : u64) -> u32 {
     value : u32 = 0
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](&value), cast[rawptr](base + offset), 4)
     return value
@@ -336,7 +396,7 @@ u32_at :: fn(base: u64, offset: u64) -> u32 {
  * @param offset The value's offset from base, in bytes.
  * @return The eight bytes at base + offset, read as a little-endian u64.
  */
-u64_at :: fn(base: u64, offset: u64) -> u64 {
+u64_at :: fn(base : u64, offset : u64) -> u64 {
     value : u64 = 0
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](&value), cast[rawptr](base + offset), 8)
     return value
@@ -349,7 +409,7 @@ u64_at :: fn(base: u64, offset: u64) -> u64 {
  * @param text The text, as ASCII.
  * @return True if the bytes there match it, each one.
  */
-bytes_are :: fn(address: u64, text: string) -> bool {
+bytes_are :: fn(address : u64, text : string) -> bool {
     bytes :: view_of(cast[ptr[u8]](address), text.count)
     for byte, i in text {
         if i < bytes.count && bytes[i] != cast[u8](byte) {
@@ -365,7 +425,7 @@ bytes_are :: fn(address: u64, text: string) -> bool {
  * @param address A kernel virtual address, readable for 4 bytes.
  * @return The four bytes at address, most significant first.
  */
-big_endian_u32 :: fn(address: u64) -> u32 {
+big_endian_u32 :: fn(address : u64) -> u32 {
     bytes :: view_of(cast[ptr[u8]](address), 4)
     if bytes.count < 4 {
         return 0

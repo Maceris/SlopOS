@@ -38,7 +38,7 @@ Stream :: struct {
  * @return The stream, which makes its first block when it's first drawn from. Two streams of one seed give the same
  *     bytes.
  */
-make :: fn(seed: u8[32]) -> Stream {
+make :: fn(seed : u8[32]) -> Stream {
     stream := Stream.{used = BLOCK_OUTPUT}
     for byte, i in seed {
         stream.key[i] = byte
@@ -52,7 +52,7 @@ make :: fn(seed: u8[32]) -> Stream {
  * @param stream The stream, which makes a new block, and a new key, each time its last one is used up.
  * @param bytes Where the random bytes go, every one overwritten; empty draws nothing.
  */
-fill :: fn(stream: ptr[mut Stream], bytes: mut u8[]) {
+fill :: fn(stream : ptr[mut Stream], bytes : mut u8[]) {
     for &byte in bytes {
         if stream.used >= BLOCK_OUTPUT {
             refill(stream)
@@ -71,7 +71,7 @@ fill :: fn(stream: ptr[mut Stream], bytes: mut u8[]) {
  * @param stream The stream, moved on by 8 bytes.
  * @return Any u64, each as likely as the others: the stream's next 8 bytes, little-endian.
  */
-next_u64 :: fn(stream: ptr[mut Stream]) -> u64 {
+next_u64 :: fn(stream : ptr[mut Stream]) -> u64 {
     bytes : u8[8]
     fill(stream, bytes)
     return bit_cast[u64](bytes)
@@ -87,7 +87,7 @@ next_u64 :: fn(stream: ptr[mut Stream]) -> u64 {
  * @param limit One past the largest number wanted; 0 draws nothing.
  * @return A number from 0 below limit, each as likely as the others; 0 for a limit of 0 or 1.
  */
-below :: fn(stream: ptr[mut Stream], limit: u64) -> u64 {
+below :: fn(stream : ptr[mut Stream], limit : u64) -> u64 {
     if limit == 0 {
         return 0
     }
@@ -107,7 +107,7 @@ below :: fn(stream: ptr[mut Stream], limit: u64) -> u64 {
  *
  * @param stream The stream, its key replaced, its output refilled and used set to 0.
  */
-refill :: fn(stream: ptr[mut Stream]) {
+refill :: fn(stream : ptr[mut Stream]) {
     nonce : crypto.Nonce96
     block :: crypto.chacha20_block(&stream.key, 0, &nonce)
     for i in 0..<BLOCK_OUTPUT {

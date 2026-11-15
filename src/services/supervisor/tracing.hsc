@@ -35,7 +35,7 @@ FirstRun :: struct {
  *
  * @param supervisor The supervisor, whose first_runs grow.
  */
-drain_trace :: fn(supervisor: ptr[mut Supervisor]) {
+drain_trace :: fn(supervisor : ptr[mut Supervisor]) {
     if !supervisor.tracing {
         return void
     }
@@ -63,7 +63,7 @@ drain_trace :: fn(supervisor: ptr[mut Supervisor]) {
  * @param thread The thread's ID.
  * @return True if it is.
  */
-has_run :: fn(supervisor: ptr[Supervisor], thread: u64) -> bool {
+has_run :: fn(supervisor : ptr[Supervisor], thread : u64) -> bool {
     for run in supervisor.first_runs {
         if run.thread == thread {
             return true
@@ -78,7 +78,7 @@ has_run :: fn(supervisor: ptr[Supervisor], thread: u64) -> bool {
  *
  * @param supervisor The supervisor.
  */
-check_trace :: fn(supervisor: ptr[mut Supervisor]) {
+check_trace :: fn(supervisor : ptr[mut Supervisor]) {
     drain_trace(supervisor)
     // Each running service's first run: its threads' earliest
     services : u32 = 0
@@ -103,14 +103,24 @@ check_trace :: fn(supervisor: ptr[mut Supervisor]) {
         }
         if earliest != 0 {
             found += 1
-            log_line.write(supervisor.log, "supervisor: boot timeline: % first ran at % ms", entry.name, earliest / 1_000_000)
+            log_line.write(
+                supervisor.log,
+                "supervisor: boot timeline: % first ran at % ms",
+                entry.name,
+                earliest / 1_000_000
+            )
         }
     }
     if found == services {
         log_line.write(supervisor.log, "supervisor: test_trace: every running service is in the boot's timeline")
     }
     else {
-        log_line.write(supervisor.log, "supervisor: test_trace: % of % running services are in the boot's timeline", found, services)
+        log_line.write(
+            supervisor.log,
+            "supervisor: test_trace: % of % running services are in the boot's timeline",
+            found,
+            services
+        )
     }
     trace_ping(supervisor)
 }
@@ -121,7 +131,7 @@ check_trace :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor.
  */
-trace_ping :: fn(supervisor: ptr[mut Supervisor]) {
+trace_ping :: fn(supervisor : ptr[mut Supervisor]) {
     index := NOWHERE
     for entry, i in supervisor.started {
         if i < supervisor.started_count && entry.name == "clock" && entry.running && entry.lifecycle != NONE {
@@ -186,11 +196,19 @@ trace_ping :: fn(supervisor: ptr[mut Supervisor]) {
         }
     }
     if answered && stage == 2 {
-        log_line.write(supervisor.log, "supervisor: test_trace: a ping's exchange is in the trace: the clock service woken by it, and run to answer")
+        log_line.write(
+            supervisor.log,
+            "supervisor: test_trace: a ping's exchange is in the trace: the clock service woken by it, and run to answer"
+        )
     }
     else {
-        log_line.write(supervisor.log, "supervisor: test_trace: a ping's exchange isn't in the trace: answered %, got to step % in % events", answered,
-            stage, events.count)
+        log_line.write(
+            supervisor.log,
+            "supervisor: test_trace: a ping's exchange isn't in the trace: answered %, got to step % in % events",
+            answered,
+            stage,
+            events.count
+        )
     }
 }
 
@@ -199,7 +217,7 @@ trace_ping :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param events The events, sorted in place.
  */
-sort_by_time :: fn(events: mut slop_os.TraceEvent[]) {
+sort_by_time :: fn(events : mut slop_os.TraceEvent[]) {
     for i in cast[usize](1)..<events.count {
         j := i
         loop {
@@ -226,7 +244,7 @@ sort_by_time :: fn(events: mut slop_os.TraceEvent[]) {
  * @param thread The thread's ID.
  * @return True if it's among the first count.
  */
-listed :: fn(ids: u64[16], count: u32, thread: u64) -> bool {
+listed :: fn(ids : u64[16], count : u32, thread : u64) -> bool {
     for id, i in ids {
         if cast[u32](i) < count && id == thread {
             return true

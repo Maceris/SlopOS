@@ -134,7 +134,12 @@ IommuInfo :: struct {
  * @error NotFound The registers don't identify an IOMMU of that kind, or size is less than its registers take.
  * @error Unsupported It lacks the translation, page size or address width the kernel needs.
  */
-identify : fn(iommu: ptr[mut Iommu], kind: IommuKind, registers: VirtualAddress, size: u64) -> Result[IommuInfo, IommuError] : ---
+identify : fn(
+    iommu : ptr[mut Iommu],
+    kind : IommuKind,
+    registers : VirtualAddress,
+    size : u64
+) -> Result[IommuInfo, IommuError] : ---
 
 /**
  * Turn translation on. Every stream is blocked until it's attached to a domain; its faults are recorded, not yet
@@ -147,7 +152,7 @@ identify : fn(iommu: ptr[mut Iommu], kind: IommuKind, registers: VirtualAddress,
  *     the implementation reaches memory and the rest of what it uses, like domains' tables.
  * @error Timeout It didn't do what it was told in time, like turning translation on; how far it got isn't said.
  */
-enable : fn(iommu: ptr[mut Iommu], memory: PhysicalAddress, direct_map_offset: u64) -> Result[void, IommuError] : ---
+enable : fn(iommu : ptr[mut Iommu], memory : PhysicalAddress, direct_map_offset : u64) -> Result[void, IommuError] : ---
 
 /**
  * Signal the IOMMU's faults by writing a message, from now on, for one whose info.fault_messages is true.
@@ -155,7 +160,7 @@ enable : fn(iommu: ptr[mut Iommu], memory: PhysicalAddress, direct_map_offset: u
  * @param iommu The IOMMU, enabled.
  * @param message What it writes, and where, to raise the interrupt L2 handles its faults on.
  */
-route_faults : fn(iommu: ptr[mut Iommu], message: MsiMessage) : ---
+route_faults : fn(iommu : ptr[mut Iommu], message : MsiMessage) : ---
 
 /**
  * Make a domain an empty one on the IOMMU, which nothing is mapped in or attached to.
@@ -166,7 +171,7 @@ route_faults : fn(iommu: ptr[mut Iommu], message: MsiMessage) : ---
  * @param root The physical address of a zeroed frame for its top-level table, which the domain keeps until it's
  *     released.
  */
-init_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: PhysicalAddress) : ---
+init_domain : fn(iommu : ptr[Iommu], domain : ptr[mut Domain], id : u32, root : PhysicalAddress) : ---
 
 /**
  * Translate a stream's DMA through a domain from now on, instead of what it was before.
@@ -178,7 +183,12 @@ init_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: Phys
  * @error NeedFrames frames ran out; refill them and call again.
  * @error InvalidAddress The stream is outside what the IOMMU has.
  */
-attach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: ptr[mut TableFrames]) -> Result[void, MapError] : ---
+attach : fn(
+    iommu : ptr[mut Iommu],
+    domain : ptr[Domain],
+    stream : u32,
+    frames : ptr[mut TableFrames]
+) -> Result[void, MapError] : ---
 
 /**
  * Block a stream's DMA again, and leave nothing the IOMMU cached of the domain's for it, by the time this returns.
@@ -187,7 +197,7 @@ attach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: ptr
  * @param domain The domain the stream was attached to.
  * @param stream The stream, as attach was given it.
  */
-detach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) : ---
+detach : fn(iommu : ptr[mut Iommu], domain : ptr[Domain], stream : u32) : ---
 
 /**
  * Map a 4 KiB page in a domain. Until invalidate, the IOMMU may not see it.
@@ -205,8 +215,15 @@ detach : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) : ---
  * @error AlreadyMapped Something is mapped at address already, which is left as it was.
  * @error InvalidAddress address isn't page-aligned, or is outside the domain's addresses.
  */
-map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: PhysicalAddress, writable: bool, device: bool,
-    frames: ptr[mut TableFrames]) -> Result[void, MapError] : ---
+map : fn(
+    iommu : ptr[Iommu],
+    domain : ptr[mut Domain],
+    address : u64,
+    physical : PhysicalAddress,
+    writable : bool,
+    device : bool,
+    frames : ptr[mut TableFrames]
+) -> Result[void, MapError] : ---
 
 /**
  * Unmap a 4 KiB page in a domain, if it's mapped; until invalidate, the IOMMU may still reach it.
@@ -216,7 +233,7 @@ map : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: Phy
  *     stay until the domain is released.
  * @param address The page's I/O virtual address; an address not mapped is left as it is.
  */
-unmap : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) : ---
+unmap : fn(iommu : ptr[Iommu], domain : ptr[mut Domain], address : u64) : ---
 
 /**
  * Leave nothing the IOMMU cached of a domain's tables, by the time this returns: after unmapping, so it no longer
@@ -228,7 +245,7 @@ unmap : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) : ---
  * @param mapped Whether the batch of changes since the last invalidate mapped pages, rather than only unmapping
  *     them; an IOMMU that doesn't cache what isn't mapped may then do nothing.
  */
-invalidate : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) : ---
+invalidate : fn(iommu : ptr[mut Iommu], domain : ptr[Domain], mapped : bool) : ---
 
 /**
  * Let go of a domain's tables, all but its root, as many as freed has room for each call. Nothing is attached to it
@@ -239,7 +256,7 @@ invalidate : fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) : ---
  * @param freed Where the frames let go of are put, which L2 frees once the IOMMU can no longer reach them.
  * @return True once only the root is left, false if there are more to let go of, so L2 calls again.
  */
-release_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut FreedFrames]) -> bool : ---
+release_domain : fn(iommu : ptr[Iommu], domain : ptr[mut Domain], freed : ptr[mut FreedFrames]) -> bool : ---
 
 /**
  * Take the oldest fault the IOMMU recorded and hasn't given yet from its records.
@@ -247,7 +264,7 @@ release_domain : fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut F
  * @param iommu The IOMMU, enabled.
  * @return The fault, or null if there are none left.
  */
-next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
+next_fault : fn(iommu : ptr[mut Iommu]) -> DmaFault? : ---
 
 /**
  * Make a remapped interrupt deliver a vector to a CPU, raised from one stream only. The IOMMU uses it once this
@@ -261,7 +278,14 @@ next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
  * @param level Whether it's level-triggered, as a wired line remapped may be; a message is edge-triggered.
  * @return The message the stream's device writes to raise it; a wired line's controller is programmed from it.
  */
-remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool) -> MsiMessage : ---
+remap_interrupt : fn(
+    iommu : ptr[mut Iommu],
+    index : u32,
+    stream : u32,
+    cpu_hardware_id : u64,
+    vector : u32,
+    level : bool
+) -> MsiMessage : ---
 
 /**
  * Make a remapped interrupt raise nothing, leaving nothing the IOMMU cached of it, by the time this returns.
@@ -269,4 +293,4 @@ remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardwar
  * @param iommu The IOMMU, enabled.
  * @param index Which remapped interrupt, from 0 below info.interrupts.
  */
-unmap_interrupt : fn(iommu: ptr[mut Iommu], index: u32) : ---
+unmap_interrupt : fn(iommu : ptr[mut Iommu], index : u32) : ---

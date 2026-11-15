@@ -1,8 +1,8 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import text_buffer from "std:text_buffer"
+import shell_language as language from "../../shell_language"
 
 /*
  * Evaluating the shell language: each statement's tree to a value, or an error that stops what follows
@@ -34,7 +34,7 @@ EvalError :: struct {
  * @param error The error met; only its fatal and returning flags are looked at, so a passed one is handled too.
  * @return False for a fatal one and for a return, which go on out; true otherwise.
  */
-handles :: fn(error: EvalError) -> bool {
+handles :: fn(error : EvalError) -> bool {
     return !error.fatal && !error.returning
 }
 
@@ -45,7 +45,7 @@ handles :: fn(error: EvalError) -> bool {
  * @param message What went wrong, kept by the error, so a literal or a message's.
  * @return The error, as a result.
  */
-error_at :: fn(at: usize, message: string) -> Result[Value, EvalError] {
+error_at :: fn(at : usize, message : string) -> Result[Value, EvalError] {
     return .Error(EvalError.{message = message, at = at})
 }
 
@@ -62,7 +62,7 @@ error_at :: fn(at: usize, message: string) -> Result[Value, EvalError] {
  * @param tree The node, kept by functions it defines, so it has to live as long as the shell.
  * @return The node's value: the last statement's for Statements, Null for a statement without one.
  */
-evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+evaluate :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     match tree.kind {
         case .Statements => {
             last := Value.Null
@@ -120,7 +120,10 @@ evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
         case .Background => return start_job(shell, tree)
         case .Parameter => return error_at(tree.at, "a parameter is a function's")
         // A script's first statement, which running it binds (scripts.hsc); anywhere else, it's out of place
-        case .Param => return error_at(tree.at, "param is a script's first line: name.shell, run as a command, takes what it says")
+        case .Param => return error_at(
+            tree.at,
+            "param is a script's first line: name.shell, run as a command, takes what it says"
+        )
         case .Return => {
             shell.returned = .Null
             match first_child(tree) {
@@ -135,7 +138,8 @@ evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
         case .Literal => return .Ok(tree.value)
         case .Interpolated => return .Ok(.Text(interpolate(shell.scope, tree.text)))
         case .Variable => {
-            found :: lookup(shell.scope, tree.text) or_return error_at(tree.at, message("there's no variable named %", tree.text))
+            found :: lookup(shell.scope, tree.text)
+                or_return error_at(tree.at, message("there's no variable named %", tree.text))
             return .Ok(found)
         }
         case .List => {
@@ -161,7 +165,8 @@ evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
             base :: evaluate(shell, first_child(tree) or_return error_at(tree.at, "a field needs a record"))?
             match base {
                 case Record(record) => {
-                    found :: field(record, tree.text) or_return error_at(tree.at, message("this record has no field %", tree.text))
+                    found :: field(record, tree.text)
+                        or_return error_at(tree.at, message("this record has no field %", tree.text))
                     return .Ok(found)
                 }
                 case _ => return error_at(tree.at, message("% has no fields: it's %", tree.text, type_name(base)))
@@ -188,7 +193,7 @@ evaluate :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
  *     record. Any other kind fails.
  * @return The item or field, sharing any list or record in it with base.
  */
-indexed :: fn(at: usize, base: Value, index: Value) -> Result[Value, EvalError] {
+indexed :: fn(at : usize, base : Value, index : Value) -> Result[Value, EvalError] {
     match base {
         case List(list) => match index {
             case Int(position) => {
@@ -220,7 +225,7 @@ indexed :: fn(at: usize, base: Value, index: Value) -> Result[Value, EvalError] 
  * @return A Bool for not; the operand negated, an Int or a Duration, for -. The smallest i64, which has no positive
  *     counterpart, fails as too big.
  */
-unary_value :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+unary_value :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     operand :: evaluate(shell, first_child(tree) or_return error_at(tree.at, "an operator needs a value"))?
     if tree.text == "not" {
         match operand {
@@ -242,7 +247,7 @@ unary_value :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalE
  * @param at Where the operator is in the line, for the error.
  * @return The error, as a result.
  */
-too_big :: fn(at: usize) -> Result[Value, EvalError] {
+too_big :: fn(at : usize) -> Result[Value, EvalError] {
     return error_at(at, language.TOO_BIG)
 }
 
@@ -257,7 +262,7 @@ too_big :: fn(at: usize) -> Result[Value, EvalError] {
  * @param tree The Binary node, its operator in its text, its operands its children.
  * @return The result: a Bool for and, or and comparisons.
  */
-binary_value :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+binary_value :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     left_tree :: child(tree, 0) or_return error_at(tree.at, "an operator needs two values")
     right_tree :: child(tree, 1) or_return error_at(tree.at, "an operator needs two values")
     operator :: tree.text
@@ -278,10 +283,24 @@ binary_value :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Eval
         }
     }
     right :: evaluate(shell, right_tree)?
-    if operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">=" {
-        order :: compare(left, right) or_return error_at(tree.at, message("% and % can't be compared", type_name(left), type_name(right)))
-        result :: if operator == "==" { order == 0 } else if operator == "!=" { order != 0 } else if operator == "<" { order < 0 }
-            else if operator == "<=" { order <= 0 } else if operator == ">" { order > 0 } else { order >= 0 }
+    if operator == "=="
+        || operator == "!="
+        || operator == "<"
+        || operator == "<="
+        || operator == ">"
+        || operator == ">=" {
+        order :: compare(left, right)
+            or_return error_at(tree.at, message("% and % can't be compared", type_name(left), type_name(right)))
+        result :: if operator == "==" {
+            order == 0
+        }
+        else if operator == "!=" {
+            order != 0
+        }
+        else if operator == "<" {
+            order < 0
+        }
+        else if operator == "<=" { order <= 0 } else if operator == ">" { order > 0 } else { order >= 0 }
         return .Ok(.Bool(result))
     }
     return arithmetic(tree.at, operator, left, right)
@@ -296,7 +315,7 @@ binary_value :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, Eval
  * @param right Its right operand.
  * @return The result, as language.calculate gives it; its error as the evaluation's, at at.
  */
-arithmetic :: fn(at: usize, operator: string, left: Value, right: Value) -> Result[Value, EvalError] {
+arithmetic :: fn(at : usize, operator : string, left : Value, right : Value) -> Result[Value, EvalError] {
     return match language.calculate(operator, left, right) {
         case Ok(value) => .Ok(value)
         case Error(problem) => error_at(at, problem)
@@ -320,7 +339,7 @@ arithmetic :: fn(at: usize, operator: string, left: Value, right: Value) -> Resu
  * @return The call's value: the variable's, the function's, the program's, or for wait the job's; Null for print, exit,
  *     cd, help, jobs and stop.
  */
-call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+call :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     match lookup(shell.scope, tree.text) {
         case Some(value) => {
             if tree.children.count > 0 {

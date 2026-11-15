@@ -7,7 +7,7 @@ package psf2
 
 import runtime from "base:runtime"
 
-//SPEC: PSF1 and PSF2 font formats, as documented with the Linux kbd package (psffontformat)
+// SPEC: PSF1 and PSF2 font formats, as documented with the Linux kbd package (psffontformat)
 
 /** The first four bytes of a PSF2 file. */
 PSF2_MAGIC :: u8.[0x72, 0xb5, 0x4a, 0x86]
@@ -94,7 +94,7 @@ NO_GLYPH : u16 : 0xffff
  * @param offset Where the u32 starts, in bytes; all four have to be in bytes, or this asserts.
  * @return The four bytes at offset as one value, the first byte its lowest.
  */
-read_u32 :: fn(bytes: u8[], offset: usize) -> u32 {
+read_u32 :: fn(bytes : u8[], offset : usize) -> u32 {
     runtime.assert(offset < bytes.count && offset + 4 <= bytes.count, "read_u32 reads four bytes that are there")
     return cast[u32](bytes[offset])
         | (cast[u32](bytes[offset + 1]) << 8)
@@ -215,7 +215,7 @@ parse_psf1 :: fn(bytes #escaping : u8[]) -> Result[Font, FontError] {
  * @return Its code point if it's a Point, else 0. Malformed UTF-8 is U+FFFD.
  * @return How many bytes it takes, at least 1, so reading always moves on: 2 for PSF1, 1 to 4 for PSF2.
  */
-table_entry :: fn(font: ptr[Font], at: usize) -> (TableEntry, u32, usize) {
+table_entry :: fn(font : ptr[Font], at : usize) -> (TableEntry, u32, usize) {
     table :: font.unicode_table
     if font.psf1 {
         next :: at + 1
@@ -248,7 +248,7 @@ table_entry :: fn(font: ptr[Font], at: usize) -> (TableEntry, u32, usize) {
  *
  * @param font The font, whose quick field is written; its glyphs and Unicode table have to be set already.
  */
-fill_quick_table :: fn(font: ptr[mut Font]) {
+fill_quick_table :: fn(font : ptr[mut Font]) {
     for &entry, code_point in font.quick {
         entry^ = NO_GLYPH
         if font.unicode_table.count == 0 && code_point < cast[usize](font.glyph_count) {
@@ -293,7 +293,7 @@ fill_quick_table :: fn(font: ptr[mut Font]) {
  * @param code_point The code point; a sequence's code points aren't found, only single ones.
  * @return The glyph's index, below the font's glyph_count; NO_GLYPH if the font doesn't have it.
  */
-glyph_index :: fn(font: ptr[Font], code_point: u32) -> u16 {
+glyph_index :: fn(font : ptr[Font], code_point : u32) -> u16 {
     if code_point < QUICK_CODE_POINTS {
         return font.quick[code_point]
     }
@@ -333,7 +333,7 @@ glyph_index :: fn(font: ptr[Font], code_point: u32) -> u16 {
  * @return Its rows, top first, each bytes_per_row bytes, the leftmost pixel in the highest bit: a view of the font's
  *     bytes, good as long as they are. Empty for a glyph the font doesn't have, like NO_GLYPH.
  */
-glyph_rows :: fn(font: ptr[Font], glyph: u16) -> u8[] {
+glyph_rows :: fn(font : ptr[Font], glyph : u16) -> u8[] {
     glyphs :: font.glyphs
     size :: cast[usize](font.bytes_per_glyph)
     start :: cast[usize](glyph) * size
@@ -360,7 +360,7 @@ glyph_rows :: fn(font: ptr[Font], glyph: u16) -> u8[] {
  * @return How many bytes it takes: 1 to 4, and 1 for U+FFFD put in a malformed sequence's place, so decoding always
  *     moves on.
  */
-decode_utf8 :: fn(bytes: u8[], at: usize) -> (u32, usize) {
+decode_utf8 :: fn(bytes : u8[], at : usize) -> (u32, usize) {
     if at >= bytes.count {
         return REPLACEMENT_CHARACTER, 1
     }

@@ -9,13 +9,13 @@
  */
 package bootloader
 
-import runtime from "base:runtime"
 import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import uefi from "std:os/uefi"
-import bundle from "../../bundle"
-import generations from "../../generations"
 import boot_info from "../../boot_info"
 import boot_protocol from "../../boot_protocol"
+import bundle from "../../bundle"
+import generations from "../../generations"
 
 #if TARGET_ARCH == .x86_64 {
     import x86_64 from "base:intrinsics/x86_64"
@@ -102,7 +102,8 @@ main :: fn() -> int {
         edit_command_line(&generation)
     }
     runtime.log_info("bootloader: booting generation %", generation.number)
-    handoff_address :: allocate_pages(LOADER_DATA, cast[u64](size_of(boot_protocol.Handoff))) or_return fail("no memory for the handoff")
+    handoff_address :: allocate_pages(LOADER_DATA, cast[u64](size_of(boot_protocol.Handoff)))
+        or_return fail("no memory for the handoff")
     handoff :: cast[ptr[mut boot_protocol.Handoff]](cast[rawptr](handoff_address))
     handoff.magic = boot_protocol.MAGIC
     handoff.size = cast[u64](size_of(boot_protocol.Handoff))
@@ -113,7 +114,8 @@ main :: fn() -> int {
             break
         }
         file :: &generation.files[i]
-        pages :: read_object(root, file.hash, MODULE_MEMORY) or_return fail("a boot-set file is missing, or isn't what its hash says")
+        pages :: read_object(root, file.hash, MODULE_MEMORY)
+            or_return fail("a boot-set file is missing, or isn't what its hash says")
         if handoff.module_count >= cast[u64](handoff.modules.count) {
             return fail("more boot-set files than the handoff holds")
         }
@@ -123,7 +125,8 @@ main :: fn() -> int {
         handoff.module_count += 1
     }
     keep_panic_record(root, handoff)
-    kernel_file :: read_object(root, generation.kernel, LOADER_DATA) or_return fail("the kernel is missing, or isn't what its hash says")
+    kernel_file :: read_object(root, generation.kernel, LOADER_DATA)
+        or_return fail("the kernel is missing, or isn't what its hash says")
     random :: Random.{kaslr = generation.kaslr == 1}
     image := load_kernel(kernel_file, &random) or_return fail("the kernel isn't an ELF kernel this bootloader loads")
     handoff.kernel_physical = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](image.physical), image.size}
@@ -139,12 +142,15 @@ main :: fn() -> int {
     framebuffer(handoff)
     entropy(handoff, root)
     _ = root.close(root)
-    stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE) or_return fail("no memory for the kernel's stack")
+    stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE)
+        or_return fail("no memory for the kernel's stack")
     handoff.direct_map_offset = direct_map_offset(&random)
     tables := new_tables() or_return fail("no memory for page tables")
-    starting :: prepare_cpus(handoff, &tables, handoff.direct_map_offset) or_return fail("no room for the other CPUs' trampoline")
+    starting :: prepare_cpus(handoff, &tables, handoff.direct_map_offset)
+        or_return fail("no room for the other CPUs' trampoline")
     // The memory map now, for the page tables, and again after them, just before the boot services are left
-    if !map_memory(&tables, handoff.direct_map_offset) || !map(&tables, image.virtual_base, image.physical, image.size) {
+    if !map_memory(&tables, handoff.direct_map_offset)
+        || !map(&tables, image.virtual_base, image.physical, image.size) {
         return fail("no memory for page tables")
     }
     leave_boot_services(handoff) or_return fail("the boot services couldn't be left")
@@ -152,8 +158,12 @@ main :: fn() -> int {
     #if TARGET_ARCH == .x86_64 {
         x86_64.cli()
         start_cpus(handoff, starting)
-        x86_64.enter(tables.root, handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
-            image.virtual_base + image.entry, handoff.direct_map_offset + handoff_address)
+        x86_64.enter(
+            tables.root,
+            handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+            image.virtual_base + image.entry,
+            handoff.direct_map_offset + handoff_address
+        )
     }
     #else {
         // The kernel's code, written through the data cache, where instruction fetches see it
@@ -171,8 +181,15 @@ main :: fn() -> int {
         aarch64.isb()
         aarch64.daif_set(aarch64.DAIF_IRQ | aarch64.DAIF_FIQ | aarch64.DAIF_SERROR)
         start_cpus(handoff, starting)
-        aarch64.enter(MAIR_VALUE, tcr_value(), tables.low_root, tables.root, handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
-            image.virtual_base + image.entry, handoff.direct_map_offset + handoff_address)
+        aarch64.enter(
+            MAIR_VALUE,
+            tcr_value(),
+            tables.low_root,
+            tables.root,
+            handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+            image.virtual_base + image.entry,
+            handoff.direct_map_offset + handoff_address
+        )
     }
 }
 
@@ -182,7 +199,7 @@ main :: fn() -> int {
  * @param why What went wrong, a phrase that follows "bootloader: ".
  * @return 1, main's result for a failure, so the firmware tries the next boot option.
  */
-fail :: fn(why: string) -> int {
+fail :: fn(why : string) -> int {
     runtime.log_error("bootloader: %", why)
     return 1
 }
@@ -201,7 +218,7 @@ fail :: fn(why: string) -> int {
  *     the records folder can't be listed and no key asked for recovery, or the recovery generation is needed but
  *     missing or doesn't check out.
  */
-choose_generation :: fn(root: ptr[uefi.File], recovery: bool) -> generations.Generation? {
+choose_generation :: fn(root : ptr[uefi.File], recovery : bool) -> generations.Generation? {
     if recovery {
         runtime.log_info("bootloader: the recovery generation, as a key asks")
         return read_generation(root, generations.RECOVERY_NUMBER)
@@ -227,7 +244,10 @@ choose_generation :: fn(root: ptr[uefi.File], recovery: bool) -> generations.Gen
             return found
         }
         if found.tries_left == 0 {
-            runtime.log_info("bootloader: generation % never came up healthy in its tries, so the one before it boots", found.number)
+            runtime.log_info(
+                "bootloader: generation % never came up healthy in its tries, so the one before it boots",
+                found.number
+            )
             continue
         }
         found.tries_left -= 1
@@ -236,7 +256,11 @@ choose_generation :: fn(root: ptr[uefi.File], recovery: bool) -> generations.Gen
             runtime.log_error("bootloader: generation %'s try can't be counted, so it isn't booted", found.number)
             continue
         }
-        runtime.log_info("bootloader: generation % is tentative, % tries left after this one", found.number, found.tries_left)
+        runtime.log_info(
+            "bootloader: generation % is tentative, % tries left after this one",
+            found.number,
+            found.tries_left
+        )
         return found
     }
     runtime.log_info("bootloader: no generation is left to boot but the recovery generation")
@@ -253,7 +277,7 @@ choose_generation :: fn(root: ptr[uefi.File], recovery: bool) -> generations.Gen
  *     generations.RECOVERY_NUMBER for the recovery generation.
  * @return The generation; null if its record isn't there, can't be read, or generations.generation_of rejects it.
  */
-read_generation :: fn(root: ptr[uefi.File], number: u64) -> generations.Generation? {
+read_generation :: fn(root : ptr[uefi.File], number : u64) -> generations.Generation? {
     path_storage : u8[128]
     pages :: read_file(root, generations.record_path(number, &path_storage), LOADER_DATA) or_return null
     return generations.generation_of(view_of(cast[ptr[u8]](cast[rawptr](pages.address)), cast[usize](pages.size)))
@@ -291,7 +315,8 @@ key_asked :: fn() -> KeyAsked {
                     if key.unicode == cast[u16](RECOVERY_KEY) || key.unicode == cast[u16](RECOVERY_KEY) - 32 {
                         asked = .Recovery
                     }
-                    else if asked == .None && (key.unicode == cast[u16](EDIT_KEY) || key.unicode == cast[u16](EDIT_KEY) - 32) {
+                    else if asked == .None
+                        && (key.unicode == cast[u16](EDIT_KEY) || key.unicode == cast[u16](EDIT_KEY) - 32) {
                         asked = .Edit
                     }
                 }
@@ -317,9 +342,12 @@ key_asked :: fn() -> KeyAsked {
  * @param generation The generation, its command_line changed in place when Enter's pressed; its record on the ESP
  *     isn't.
  */
-edit_command_line :: fn(generation: ptr[mut generations.Generation]) {
+edit_command_line :: fn(generation : ptr[mut generations.Generation]) {
     if generation.development != 1 {
-        runtime.log_info("bootloader: generation % isn't built for development, so its command line can't be edited", generation.number)
+        runtime.log_info(
+            "bootloader: generation % isn't built for development, so its command line can't be edited",
+            generation.number
+        )
         return void
     }
     services :: uefi.boot_services() or_return void
@@ -384,7 +412,7 @@ ESCAPE_SCAN_CODE : u16 : 0x17
  *
  * @param text The text, UTF-8.
  */
-show :: fn(text: string) {
+show :: fn(text : string) {
     if text.count == 0 {
         return void
     }
@@ -404,7 +432,7 @@ show :: fn(text: string) {
  * @param handoff The handoff, whose panic_record gets the page's physical address, or 0 without one, and which may get
  *     a module.
  */
-keep_panic_record :: fn(root: ptr[uefi.File], handoff: ptr[mut boot_protocol.Handoff]) {
+keep_panic_record :: fn(root : ptr[uefi.File], handoff : ptr[mut boot_protocol.Handoff]) {
     services :: uefi.boot_services() or_return void
     address := PANIC_RECORD_AT
     if services.allocate_pages(cast[u32](uefi.AllocateKind.Address), PANIC_MEMORY, 1, &address) != uefi.SUCCESS {
@@ -432,14 +460,20 @@ keep_panic_record :: fn(root: ptr[uefi.File], handoff: ptr[mut boot_protocol.Han
                                     module.name[i] = cast[u8](character)
                                 }
                             }
-                            module.contents = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](pages), cast[u64](text.count)}
+                            module.contents = boot_info.PhysicalRange.{
+                                cast[boot_info.PhysicalAddress](pages),
+                                cast[u64](text.count)
+                            }
                             handoff.module_count += 1
                         }
                     }
                     case None => {}
                 }
             }
-            runtime.log_info("bootloader: the boot before stopped for a fault, its panic record kept as %", LAST_PANIC_PATH)
+            runtime.log_info(
+                "bootloader: the boot before stopped for a fault, its panic record kept as %",
+                LAST_PANIC_PATH
+            )
         }
         case None => {}
     }
@@ -456,10 +490,13 @@ keep_panic_record :: fn(root: ptr[uefi.File], handoff: ptr[mut boot_protocol.Han
  * @return The object's pages and size; null if it's missing, can't be read, or its bytes don't have its hash, in which
  *     case pages already read aren't freed.
  */
-read_object :: fn(root: ptr[uefi.File], hash: bundle.Hash, memory_kind: u32) -> Pages? {
+read_object :: fn(root : ptr[uefi.File], hash : bundle.Hash, memory_kind : u32) -> Pages? {
     path_storage : u8[128]
     pages :: read_file(root, generations.object_path(hash, &path_storage), memory_kind) or_return null
-    if !bundle.same(bundle.hash_of(view_of(cast[ptr[u8]](cast[rawptr](pages.address)), cast[usize](pages.size))), hash) {
+    if !bundle.same(
+        bundle.hash_of(view_of(cast[ptr[u8]](cast[rawptr](pages.address)), cast[usize](pages.size))),
+        hash
+    ) {
         return null
     }
     return pages
@@ -476,7 +513,7 @@ read_object :: fn(root: ptr[uefi.File], hash: bundle.Hash, memory_kind: u32) -> 
  * @param handoff The handoff, its command_line zeroed beforehand; the bytes after the line are left zero.
  * @param generation The generation being booted.
  */
-write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: ptr[generations.Generation]) {
+write_command_line :: fn(handoff : ptr[mut boot_protocol.Handoff], generation : ptr[generations.Generation]) {
     line : u8[..]
     defer runtime.array_free(&line)
     append(&line, generations.line_of(&generation.command_line))
@@ -513,7 +550,7 @@ write_command_line :: fn(handoff: ptr[mut boot_protocol.Handoff], generation: pt
  * @param line The line, grown with context's allocator.
  * @param text The text, its bytes appended as they are.
  */
-append :: fn(line: ptr[mut u8[..]], text: string) {
+append :: fn(line : ptr[mut u8[..]], text : string) {
     for byte in string_bytes(text) {
         runtime.array_add(line, byte)
     }
@@ -526,7 +563,7 @@ append :: fn(line: ptr[mut u8[..]], text: string) {
  * @return Its value, which wraps past the largest u64 without being checked; null if text is empty or has anything but
  *     digits.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     if text.count == 0 {
         return null
     }
@@ -548,7 +585,7 @@ number_of :: fn(text: string) -> u64? {
  *
  * @param handoff The handoff, whose acpi_rsdp, devicetree, smbios and efi_system_table are written.
  */
-firmware_tables :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
+firmware_tables :: fn(handoff : ptr[mut boot_protocol.Handoff]) {
     acpi := uefi.configuration_table(uefi.ACPI_20_GUID)
     if acpi is_none {
         acpi = uefi.configuration_table(uefi.ACPI_10_GUID)
@@ -574,7 +611,7 @@ firmware_tables :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
  *
  * @param handoff The handoff, whose framebuffer, its base a physical address, and has_framebuffer are written.
  */
-framebuffer :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
+framebuffer :: fn(handoff : ptr[mut boot_protocol.Handoff]) {
     output :: uefi.locate[uefi.GraphicsOutput](uefi.GRAPHICS_OUTPUT_GUID) or_return void
     mode :: output.mode
     info :: mode.info
@@ -584,9 +621,20 @@ framebuffer :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
     }
     red_shift :: if info.pixel_format == 0 { cast[u8](0) } else { cast[u8](16) }
     blue_shift :: if info.pixel_format == 0 { cast[u8](16) } else { cast[u8](0) }
-    handoff.framebuffer = boot_protocol.Framebuffer.{base = mode.frame_buffer_base, size = cast[u64](mode.frame_buffer_size),
-        width = info.width, height = info.height, pitch = info.pixels_per_scan_line * 4, bits_per_pixel = 32,
-        red_size = 8, red_shift = red_shift, green_size = 8, green_shift = 8, blue_size = 8, blue_shift = blue_shift}
+    handoff.framebuffer = boot_protocol.Framebuffer.{
+        base = mode.frame_buffer_base,
+        size = cast[u64](mode.frame_buffer_size),
+        width = info.width,
+        height = info.height,
+        pitch = info.pixels_per_scan_line * 4,
+        bits_per_pixel = 32,
+        red_size = 8,
+        red_shift = red_shift,
+        green_size = 8,
+        green_shift = 8,
+        blue_size = 8,
+        blue_shift = blue_shift,
+    }
     handoff.has_framebuffer = 1
 }
 
@@ -602,7 +650,7 @@ framebuffer :: fn(handoff: ptr[mut boot_protocol.Handoff]) {
  *     contributed, 0 if only the counter did.
  * @param root The ESP's root folder, open, which SEED_PATH is read from and written to.
  */
-entropy :: fn(handoff: ptr[mut boot_protocol.Handoff], root: ptr[uefi.File]) {
+entropy :: fn(handoff : ptr[mut boot_protocol.Handoff], root : ptr[uefi.File]) {
     // The firmware's bytes, the seed's and the counter, then a byte saying which of the two hashes
     mixed : u8[73]
     sources := 0
@@ -696,7 +744,7 @@ Random :: struct {
  * @param random Whether KASLR is on.
  * @return Any u64 when KASLR is on; 0 when it's off.
  */
-random_u64 :: fn(random: ptr[Random]) -> u64 {
+random_u64 :: fn(random : ptr[Random]) -> u64 {
     if !random.kaslr {
         return 0
     }
@@ -714,8 +762,10 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
         case None => {}
     }
     #if TARGET_ARCH == .x86_64 {
-        // RDRAND only where CPUID says there is one (leaf 1, ECX bit 30): the bootloader runs on any x86-64, so the
-        // kernel can be the one to refuse a CPU below its baseline
+        /*
+         * RDRAND only where CPUID says there is one (leaf 1, ECX bit 30): the bootloader runs on any x86-64, so the
+         * kernel can be the one to refuse a CPU below its baseline
+         */
         if x86_64.cpuid(1).ecx & (1 << 30) != 0 {
             return x86_64.rdrand() or_else x86_64.rdtsc()
         }
@@ -731,8 +781,10 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
 }
 
 /**
- * Choose the direct map's offset: the bottom of the higher half, a random number of GiB up, within its first 32 TiB, and
- * never within 4 GiB below a 512 GiB boundary. So the first 4 GiB of physical addresses are under one top-level entry of
+ * Choose the direct map's offset: the bottom of the higher half, a random number of GiB up, within its first 32 TiB,
+ * and
+ * never within 4 GiB below a 512 GiB boundary. So the first 4 GiB of physical addresses are under one top-level entry
+ * of
  * the page tables, and devices below RAM, as QEMU's virt machine has its UART and GIC, are under the entry the RAM
  * above them fills, which the kernel maps them through before its own tables exist (map_early_device). Once in 512
  * boots, a direct map in the last GiB left them under an empty entry, and the kernel without a console or interrupts.
@@ -741,7 +793,7 @@ random_u64 :: fn(random: ptr[Random]) -> u64 {
  * @return The virtual address physical address 0 is mapped at, 1 GiB-aligned, from HIGHER_HALF up to HIGHER_HALF plus
  *     32 TiB less 4 GiB, with HIGHER_HALF plus the first 4 GiB above it under one 512 GiB entry.
  */
-direct_map_offset :: fn(random: ptr[Random]) -> u64 {
+direct_map_offset :: fn(random : ptr[Random]) -> u64 {
     index := random_u64(random) % 32768
     // Moved down out of the last 3 GiB of its 512 GiB, a little more often in the 4 GiB below them
     if index % 512 > 508 {

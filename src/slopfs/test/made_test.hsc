@@ -13,7 +13,7 @@ import slopfs from ".."
 /** What each volume made at run time is given to hold, in its file "made.txt". */
 MADE_TEXT :: "made at run time"
 
-a_volume_made_at_run_time_is_registered_once_by_its_name #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_volume_made_at_run_time_is_registered_once_by_its_name #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     device :: formatted(t, SEALED_BLOCKS, 0x6a)?
     defer free_device(device)
     mounting :: slopfs.mount(device)
@@ -26,7 +26,7 @@ a_volume_made_at_run_time_is_registered_once_by_its_name #test :: fn(t: ptr[mut 
     return .Ok
 }
 
-volumes_made_at_run_time_are_filled_and_read_back_after_a_mount #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+volumes_made_at_run_time_are_filled_and_read_back_after_a_mount #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     device :: formatted(t, SEALED_BLOCKS, 0x6a)?
     defer free_device(device)
     mounting :: slopfs.mount(device)
@@ -41,7 +41,14 @@ volumes_made_at_run_time_are_filled_and_read_back_after_a_mount #test :: fn(t: p
     // The volume server's part: its keys made from the passphrase, only the wrapped records handed over
     making_keys :: slopfs.new_keys(.Aes256Gcm)
     keys :: testing.require_ok(t, making_keys, "keys for AES-256-GCM are made")?
-    making_first :: slopfs.first_keys(keys, passphrase(), TEST_ARGON2, container.id, sealed, container.nodes.transaction)
+    making_first :: slopfs.first_keys(
+        keys,
+        passphrase(),
+        TEST_ARGON2,
+        container.id,
+        sealed,
+        container.nodes.transaction
+    )
     slopfs.free_keys(keys)
     made :: testing.require_ok(t, making_first, "a volume's first keys are made from its passphrase")?
     wrapping :: slopfs.put_wrap(container, sealed, 0, &made.wrap)
@@ -52,7 +59,12 @@ volumes_made_at_run_time_are_filled_and_read_back_after_a_mount #test :: fn(t: p
 
     // Each filled with its root directory, and written
     for which in u64.[plain, sealed] {
-        opening :: if which == sealed { slopfs.open_sealed_volume(container, which, passphrase()) } else { slopfs.open_volume(container, which) }
+        opening :: if which == sealed {
+            slopfs.open_sealed_volume(container, which, passphrase())
+        }
+        else {
+            slopfs.open_volume(container, which)
+        }
         volume :: testing.require_ok(t, opening, "a registered volume opens, the encrypted one with its passphrase")?
         filling :: slopfs.fill_volume(volume, 5)
         require_done(t, filling, "a registered volume is filled with its root directory")?
@@ -74,8 +86,17 @@ volumes_made_at_run_time_are_filled_and_read_back_after_a_mount #test :: fn(t: p
         reading_filled :: slopfs.volume_record(container, which)
         filled := testing.require_ok(t, reading_filled, "a filled volume's record reads")?
         testing.expect(t, !slopfs.is_unfilled(&filled), "a filled volume's record has its root, after a mount")
-        opening :: if which == sealed { slopfs.open_sealed_volume(container, which, passphrase()) } else { slopfs.open_volume(container, which) }
-        volume :: testing.require_ok(t, opening, "a filled volume opens after a mount, the encrypted one with its passphrase")?
+        opening :: if which == sealed {
+            slopfs.open_sealed_volume(container, which, passphrase())
+        }
+        else {
+            slopfs.open_volume(container, which)
+        }
+        volume :: testing.require_ok(
+            t,
+            opening,
+            "a filled volume opens after a mount, the encrypted one with its passphrase"
+        )?
         looking :: slopfs.lookup(volume, slopfs.ROOT_OBJECT, "made.txt")
         found :: testing.require_ok(t, looking, "a filled volume looks up a name")?
         file :: testing.require_some(t, found, "the file written is kept across a mount")?

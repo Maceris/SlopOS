@@ -6,8 +6,8 @@
  */
 package shootdowns_test
 
-import runtime from "base:runtime"
 import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import testing from "std:testing"
 import shootdowns from ".."
 
@@ -38,7 +38,7 @@ Machine :: struct {
  *     state outlives check_model, and so every thread.
  * @return The test's state.
  */
-test_at :: fn(address: u64) -> ptr[mut testing.T] {
+test_at :: fn(address : u64) -> ptr[mut testing.T] {
     return cast[ptr[mut testing.T]](cast[rawptr](cast[uintptr](address)))
 }
 
@@ -48,11 +48,11 @@ test_at :: fn(address: u64) -> ptr[mut testing.T] {
  * @param t The test's state.
  * @return Its address.
  */
-address_of_test :: fn(t: ptr[mut testing.T]) -> u64 {
+address_of_test :: fn(t : ptr[mut testing.T]) -> u64 {
     return cast[u64](cast[uintptr](cast[rawptr](t)))
 }
 
-machine_of :: fn(data: any) -> ptr[mut Machine] {
+machine_of :: fn(data : any) -> ptr[mut Machine] {
     return cast[ptr[ptr[mut Machine]]](data.data)^
 }
 
@@ -62,7 +62,7 @@ machine_of :: fn(data: any) -> ptr[mut Machine] {
  * @param machine The machine.
  * @param cpu The calling CPU's index.
  */
-flush_if_requested :: fn(machine: ptr[mut Machine], cpu: usize) {
+flush_if_requested :: fn(machine : ptr[mut Machine], cpu : usize) {
     if cpu >= CPUS || !shootdowns.is_requested(&machine.requested[cpu]) {
         return void
     }
@@ -78,7 +78,7 @@ flush_if_requested :: fn(machine: ptr[mut Machine], cpu: usize) {
  * @param cpu The calling CPU's index.
  * @param batch The batch's number, not 0.
  */
-shoot_down :: fn(machine: ptr[mut Machine], cpu: usize, batch: u64) {
+shoot_down :: fn(machine : ptr[mut Machine], cpu : usize, batch : u64) {
     if cpu >= CPUS {
         return void
     }
@@ -100,8 +100,12 @@ shoot_down :: fn(machine: ptr[mut Machine], cpu: usize, batch: u64) {
     }
     while !shootdowns.all_flushed(&machine.handshake)
     for i in cast[usize](0)..<CPUS {
-        testing.expect_eq(test_at(machine.t), intrinsics.atomic_load_u64_no_fence(&machine.flushed[i]), batch,
-            "a shootdown goes on once every CPU flushed its batch")
+        testing.expect_eq(
+            test_at(machine.t),
+            intrinsics.atomic_load_u64_no_fence(&machine.flushed[i]),
+            batch,
+            "a shootdown goes on once every CPU flushed its batch"
+        )
     }
     shootdowns.finish(&machine.handshake)
 }
@@ -112,7 +116,7 @@ shoot_down :: fn(machine: ptr[mut Machine], cpu: usize, batch: u64) {
  * @param machine The machine.
  * @param cpu The CPU's index.
  */
-run_cpu :: fn(machine: ptr[mut Machine], cpu: usize) {
+run_cpu :: fn(machine : ptr[mut Machine], cpu : usize) {
     if cpu < CPUS && machine.shootdowns[cpu] != 0 {
         shoot_down(machine, cpu, cast[u64](cpu) + 1)
         intrinsics.interlocked_increment_u32(&machine.finished)
@@ -144,7 +148,7 @@ machine_body : runtime.ThreadFunction : fn(data #escaping : any) {
     testing.join(second)
 }
 
-a_shootdown_waits_for_every_flush #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_shootdown_waits_for_every_flush #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     machine :: runtime.new(Machine)
     defer runtime.free(machine)
     machine.shootdowns[0] = 1
@@ -154,13 +158,17 @@ a_shootdown_waits_for_every_flush #test :: fn(t: ptr[mut testing.T]) -> testing.
     return .Ok
 }
 
-two_shootdowns_at_once_take_turns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+two_shootdowns_at_once_take_turns #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     machine :: runtime.new(Machine)
     defer runtime.free(machine)
     machine.shootdowns[0] = 1
     machine.shootdowns[1] = 1
     machine.t = address_of_test(t)
     outcome :: testing.check_model(t, machine_body, machine)
-    testing.expect(t, outcome is_ok, "in every schedule, each shootdown goes on once every CPU flushed its batch, neither waiting on the other forever")
+    testing.expect(
+        t,
+        outcome is_ok,
+        "in every schedule, each shootdown goes on once every CPU flushed its batch, neither waiting on the other forever"
+    )
     return .Ok
 }

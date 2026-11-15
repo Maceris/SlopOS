@@ -19,10 +19,10 @@ import runtime from "base:runtime"
 import canvas from "std:canvas"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import service_kit from "../../libraries/service_kit"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
 import input from "../../protocols/input"
-import service_kit from "../../libraries/service_kit"
 
 /** Where the white square's top left is, in pixels across and down. */
 SQUARE_AT : f32 : 100
@@ -85,8 +85,14 @@ Client :: struct {
  * @return 2 without a display, or when it can't be dialed or described; 3 when its buffers can't be had or mapped; 4
  *     when a frame isn't presented. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Connector]?, input0: os.Channel[connector.Connector]?,
-    input1: os.Channel[connector.Connector]?, input2: os.Channel[connector.Connector]?, input3: os.Channel[connector.Connector]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    display_connector : os.Channel[connector.Connector]?,
+    input0 : os.Channel[connector.Connector]?,
+    input1 : os.Channel[connector.Connector]?,
+    input2 : os.Channel[connector.Connector]?,
+    input3 : os.Channel[connector.Connector]?
+) -> int {
     startup :: slop_os.startup_block()
     dialing :: display_connector or_return 2
     client := runtime.new(Client)
@@ -103,7 +109,8 @@ main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Conne
 
     for i in cast[u32](0)..<2 {
         if i < client.info.buffers {
-            client.buffers[i].image = map_buffer(client, i, client.info.width, client.info.height, client.info.stride) or_return 3
+            client.buffers[i].image = map_buffer(client, i, client.info.width, client.info.height, client.info.stride)
+                or_return 3
         }
     }
     // The first frame, in the buffer that isn't shown, the driver showing buffer 0 black as it starts
@@ -118,7 +125,13 @@ main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Conne
     client.x = cast[i32](client.info.width / 2)
     client.y = cast[i32](client.info.height / 2)
     if client.info.cursor_size > 0 {
-        client.cursor = map_buffer(client, display.CURSOR_BUFFER, client.info.cursor_size, client.info.cursor_size, 4 * client.info.cursor_size)
+        client.cursor = map_buffer(
+            client,
+            display.CURSOR_BUFFER,
+            client.info.cursor_size,
+            client.info.cursor_size,
+            4 * client.info.cursor_size
+        )
             or_return 3
         draw_arrow(client)
         tell(client, .SetCursor(display.Cursor.{hot_x = 1, hot_y = 1, visible = true}))
@@ -154,7 +167,7 @@ main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Conne
  * @param request The request.
  * @return The answer; Unsupported if it couldn't be sent, or the channel failed.
  */
-ask :: fn(client: ptr[mut Client], request: display.Request) -> display.Response {
+ask :: fn(client : ptr[mut Client], request : display.Request) -> display.Response {
     out := os.Outgoing.{}
     begun :: os.begin[display.Request](&out)
     begun^ = request
@@ -170,7 +183,7 @@ ask :: fn(client: ptr[mut Client], request: display.Request) -> display.Response
 }
 
 /** Send the display a request that isn't answered. */
-tell :: fn(client: ptr[mut Client], request: display.Request) {
+tell :: fn(client : ptr[mut Client], request : display.Request) {
     out := os.Outgoing.{}
     begun :: os.begin[display.Request](&out)
     begun^ = request
@@ -187,7 +200,7 @@ tell :: fn(client: ptr[mut Client], request: display.Request) {
  * @param stride The bytes from one of its rows to the next.
  * @return The buffer as an image; null if it couldn't be had or mapped.
  */
-map_buffer :: fn(client: ptr[mut Client], buffer: u32, width: u32, height: u32, stride: u32) -> canvas.Image? {
+map_buffer :: fn(client : ptr[mut Client], buffer : u32, width : u32, height : u32, stride : u32) -> canvas.Image? {
     window :: match ask(client, .GetBuffer(buffer)) {
         case Buffer(memory) => memory
         case _ => return null
@@ -200,7 +213,12 @@ map_buffer :: fn(client: ptr[mut Client], buffer: u32, width: u32, height: u32, 
         return null
     }
     pixels :: view_of(cast[ptr[mut u8]](address), cast[usize](bytes))
-    return canvas.Image.{pixels = pixels, width = cast[usize](width), height = cast[usize](height), stride = cast[usize](stride)}
+    return canvas.Image.{
+        pixels = pixels,
+        width = cast[usize](width),
+        height = cast[usize](height),
+        stride = cast[usize](stride),
+    }
 }
 
 /**
@@ -210,7 +228,7 @@ map_buffer :: fn(client: ptr[mut Client], buffer: u32, width: u32, height: u32, 
  * @param client The client, whose canvas draws on the buffer.
  * @param buffer The buffer, below Info's buffers.
  */
-draw_scene :: fn(client: ptr[mut Client], buffer: u32) {
+draw_scene :: fn(client : ptr[mut Client], buffer : u32) {
     target :: if cast[usize](buffer) < client.buffers.count { client.buffers[buffer].image } else { canvas.Image.{} }
     canvas.free_canvas(&client.canvas)
     client.canvas = canvas.make(target)
@@ -222,8 +240,14 @@ draw_scene :: fn(client: ptr[mut Client], buffer: u32) {
     canvas.circle(&disc, SQUARE_AT + SQUARE / 2, SQUARE_AT + SQUARE / 2, SQUARE / 4)
     canvas.fill(painter, &disc, canvas.Paint.Solid(canvas.rgb(255, 128, 0)))
     if client.marked_x >= 0 {
-        canvas.fill_rect(painter, cast[f32](client.marked_x) - MARK / 2, cast[f32](client.marked_y) - MARK / 2, MARK, MARK,
-            canvas.Paint.Solid(canvas.rgb(0, 255, 0)))
+        canvas.fill_rect(
+            painter,
+            cast[f32](client.marked_x) - MARK / 2,
+            cast[f32](client.marked_y) - MARK / 2,
+            MARK,
+            MARK,
+            canvas.Paint.Solid(canvas.rgb(0, 255, 0))
+        )
     }
 }
 
@@ -234,7 +258,7 @@ draw_scene :: fn(client: ptr[mut Client], buffer: u32) {
  * @param buffer The buffer.
  * @return Whether it was presented.
  */
-present :: fn(client: ptr[mut Client], buffer: u32) -> bool {
+present :: fn(client : ptr[mut Client], buffer : u32) -> bool {
     whole :: display.Rect.{width = client.info.width, height = client.info.height}
     match ask(client, .Present(display.Frame.{buffer = buffer, damage = whole})) {
         case Presented(_) => {
@@ -251,7 +275,7 @@ present :: fn(client: ptr[mut Client], buffer: u32) -> bool {
  *
  * @param client The client, whose canvas draws on its cursor's buffer.
  */
-draw_arrow :: fn(client: ptr[mut Client]) {
+draw_arrow :: fn(client : ptr[mut Client]) {
     canvas.free_canvas(&client.canvas)
     client.canvas = canvas.make(client.cursor)
     painter :: &client.canvas
@@ -267,7 +291,12 @@ draw_arrow :: fn(client: ptr[mut Client]) {
     canvas.line_to(&arrow, 17, 16)
     canvas.close(&arrow)
     canvas.fill(painter, &arrow, canvas.Paint.Solid(canvas.rgb(255, 255, 255)))
-    canvas.stroke(painter, &arrow, canvas.Paint.Solid(canvas.rgb(0, 0, 0)), canvas.Stroke.{width = 1.2, join = .Miter, miter_limit = 4})
+    canvas.stroke(
+        painter,
+        &arrow,
+        canvas.Paint.Solid(canvas.rgb(0, 0, 0)),
+        canvas.Stroke.{width = 1.2, join = .Miter, miter_limit = 4}
+    )
     // Premultiplied as the canvas draws, divided back out
     pixels :: client.cursor.pixels
     for at in cast[usize](0)..<pixels.count / 4 {
@@ -292,7 +321,7 @@ draw_arrow :: fn(client: ptr[mut Client]) {
  * @param client The client, whose inputs gain it; one that can't be dialed or added is passed over.
  * @param given The connector to its driver; none, nothing's done.
  */
-connect_input :: fn(client: ptr[mut Client], given: os.Channel[connector.Connector]?) {
+connect_input :: fn(client : ptr[mut Client], given : os.Channel[connector.Connector]?) {
     dialer :: given or_return void
     port :: os.port_for(slop_os.startup_block().budget, dialer.end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -321,7 +350,7 @@ connect_input :: fn(client: ptr[mut Client], given: os.Channel[connector.Connect
 }
 
 /** Hold a Read on an input device. */
-read_more :: fn(client: ptr[mut Client], end: slop_os.Channel) {
+read_more :: fn(client : ptr[mut Client], end : slop_os.Channel) {
     out := os.Outgoing.{}
     request :: os.begin[input.Request](&out)
     request^ = .Read(input.MAX_EVENTS)
@@ -335,7 +364,7 @@ read_more :: fn(client: ptr[mut Client], end: slop_os.Channel) {
  * @param index The device's index among inputs; a freed place is passed over, and a device whose channel fails dropped.
  * @param into Where each answer is received.
  */
-take_input :: fn(client: ptr[mut Client], index: usize, into: ptr[mut os.Incoming]) {
+take_input :: fn(client : ptr[mut Client], index : usize, into : ptr[mut os.Incoming]) {
     if index >= client.inputs.ends.count {
         return void
     }
@@ -383,7 +412,7 @@ take_input :: fn(client: ptr[mut Client], index: usize, into: ptr[mut os.Incomin
 }
 
 /** An absolute axis's value as a pixel across a screen size, its range spread over it. */
-scaled :: fn(value: i32, low: i32, high: i32, size: u32) -> i32 {
+scaled :: fn(value : i32, low : i32, high : i32, size : u32) -> i32 {
     if high <= low {
         return clamped(value, size)
     }
@@ -392,7 +421,7 @@ scaled :: fn(value: i32, low: i32, high: i32, size: u32) -> i32 {
 }
 
 /** A pixel kept on a screen of a size. */
-clamped :: fn(value: i32, size: u32) -> i32 {
+clamped :: fn(value : i32, size : u32) -> i32 {
     top :: cast[i32](size) - 1
     return if value < 0 { 0 } else if value > top { top } else { value }
 }
@@ -402,7 +431,7 @@ clamped :: fn(value: i32, size: u32) -> i32 {
  *
  * @param client The client, whose mark moves to the pointer.
  */
-click :: fn(client: ptr[mut Client]) {
+click :: fn(client : ptr[mut Client]) {
     client.marked_x = client.x
     client.marked_y = client.y
     next :: if client.info.buffers > 1 { 1 - client.shown } else { client.shown }
@@ -413,7 +442,7 @@ click :: fn(client: ptr[mut Client]) {
 }
 
 /** A pixel's four bytes, at an offset; none past the end. */
-four :: fn(pixels: mut u8[], at: usize) -> mut u8[] {
+four :: fn(pixels : mut u8[], at : usize) -> mut u8[] {
     if at > pixels.count || pixels.count - at < 4 {
         return pixels[0..<0]
     }

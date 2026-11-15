@@ -19,14 +19,14 @@ package bundle_store_service
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import os from "std:os"
 import crypto from "std:crypto"
+import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import read_only_file from "std:os/slop_os/read_only_file"
 import files from "std:os/slop_os/files"
-import service_kit from "../../libraries/service_kit"
+import read_only_file from "std:os/slop_os/read_only_file"
 import bundle from "../../bundle"
+import service_kit from "../../libraries/service_kit"
 import bundle_store from "../../protocols/bundle_store"
 
 /**
@@ -131,7 +131,11 @@ Unread :: struct {
  *     a port for store couldn't be made, 3 if a second connection to store couldn't be made, 4 if that couldn't be
  *     opened as a directory, and 5 if clients couldn't be added as a client. It doesn't return otherwise.
  */
-main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleStore], command_line: slop_os.Memory?) -> int {
+main :: fn(
+    store : os.Channel[dir.Dir],
+    clients : os.Listener[bundle_store.BundleStore],
+    command_line : slop_os.Memory?
+) -> int {
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     service_made, service_error :: runtime.new_aligned(Store, align_of(Store))
     if service_error != null {
@@ -153,7 +157,14 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
     service.port = slop_os.port_create(service.block.budget) or_return 1
     _ = service_kit.watch_stop(service.port)
     // Pressure on its budget, which its pages bring it to, wakes it to give some back
-    slop_os.port_bind(service.port, cast[slop_os.Handle](service.block.budget), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Persistent) or_return 1
+    slop_os.port_bind(
+        service.port,
+        cast[slop_os.Handle](service.block.budget),
+        slop_os.SIGNAL_PRESSURE,
+        PRESSURE_KEY,
+        .Persistent
+    )
+        or_return 1
     set_cache_limit(service, 0)
     service.raw = store.end
     service.raw_port = os.port_for(service.block.budget, store.end) or_return 2
@@ -210,7 +221,7 @@ main :: fn(store: os.Channel[dir.Dir], clients: os.Listener[bundle_store.BundleS
  * @param index The client's index in service.connected; one past them, or one already dropped, is left alone.
  * @param into Where each request is read into, reused from one to the next.
  */
-serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(service : ptr[mut Store], index : usize, into : ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count {
         return void
     }
@@ -249,16 +260,31 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
             case Put(put) => response^ = if store_object(service, put) { .Done } else { .Refused }
             case Pin(pin) => {
                 name :: as_text(os.items(into, pin.name))
-                response^ = if valid_name(name) && write_hash(service, "pins", name, pin.hash) { .Done } else { .Refused }
+                response^ = if valid_name(name) && write_hash(service, "pins", name, pin.hash) {
+                    .Done
+                }
+                else {
+                    .Refused
+                }
             }
             case Unpin(name_bytes) => {
                 name :: as_text(os.items(into, name_bytes))
                 path_storage : u8[80]
                 path :: path_in("pins/", name, &path_storage)
-                response^ = if valid_name(name) && os.delete_file_in(service.directory, path) == null { .Done } else { .Missing }
+                response^ = if valid_name(name) && os.delete_file_in(service.directory, path) == null {
+                    .Done
+                }
+                else {
+                    .Missing
+                }
             }
             case SetRoot(hash) => {
-                response^ = if has_object(service, hash) && write_hash(service, "", "root", hash) { .Done } else { .Refused }
+                response^ = if has_object(service, hash) && write_hash(service, "", "root", hash) {
+                    .Done
+                }
+                else {
+                    .Refused
+                }
             }
             case Root => {
                 match read_hash(service, "root") {
@@ -267,7 +293,9 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
                 }
             }
             case Collect => response^ = .Collected(collect(service))
-            case UseDirectory(directory) => response^ = if use_directory(service, directory.end) { .Done } else { .Refused }
+            case UseDirectory(
+                directory
+            ) => response^ = if use_directory(service, directory.end) { .Done } else { .Refused }
             case CacheLimit(bytes) => {
                 set_cache_limit(service, bytes)
                 relieve(service)
@@ -295,10 +323,13 @@ serve :: fn(service: ptr[mut Store], index: usize, into: ptr[mut os.Incoming]) {
  *     and the object's size in bytes. Null if there's no such object, it's empty or past bundle_store.MAX_READ bytes,
  *     or there wasn't the memory for it.
  */
-read_copy :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
+read_copy :: fn(service : ptr[mut Store], hash : bundle.Hash) -> bundle_store.Object? {
     hex_storage : u8[64]
     path_storage : u8[80]
-    read :: match os.read_entire_file_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) {
+    read :: match os.read_entire_file_in(
+        service.directory,
+        path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)
+    ) {
         case Ok(contents) => contents
         case Error(error) => return null
     }
@@ -331,7 +362,7 @@ read_copy :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Obje
  *     size in bytes. Null if there's no such object, its file couldn't be opened or set up, MAX_OBJECTS are open
  *     already and every one is held (unheld_slot), or the handle couldn't be duplicated.
  */
-get :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
+get :: fn(service : ptr[mut Store], hash : bundle.Hash) -> bundle_store.Object? {
     slot := NOWHERE
     for open, i in service.objects {
         if i >= service.limit {
@@ -383,7 +414,7 @@ get :: fn(service: ptr[mut Store], hash: bundle.Hash) -> bundle_store.Object? {
  * @return Whether all of it was made; false if file_port is NO_HANDLE, the file didn't answer Info or UseBuffer, or
  *     memory, addresses or the binding couldn't be had.
  */
-set_up :: fn(service: ptr[mut Store], open: ptr[mut Open], slot: usize) -> bool {
+set_up :: fn(service : ptr[mut Store], open : ptr[mut Open], slot : usize) -> bool {
     if cast[slop_os.Handle](open.file_port) == slop_os.NO_HANDLE {
         return false
     }
@@ -399,11 +430,14 @@ set_up :: fn(service: ptr[mut Store], open: ptr[mut Open], slot: usize) -> bool 
     open.buffer = slop_os.memory_create(block.budget, PAGE) or_return false
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     open.buffer_at = runtime.reserve_addresses(cast[usize](PAGE)) or_else 0
-    if open.buffer_at == 0 || (slop_os.memory_map(open.buffer, block.space, open.buffer_at, 0, PAGE, read_write) is_error) {
+    if open.buffer_at == 0
+        || (slop_os.memory_map(open.buffer, block.space, open.buffer_at, 0, PAGE, read_write) is_error) {
         open.buffer_at = 0
         return false
     }
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     given :: slop_os.handle_duplicate(cast[slop_os.Handle](open.buffer), rights) or_return false
     buffering := os.Outgoing.{}
     buffer_request :: os.begin[read_only_file.Request](&buffering)
@@ -434,9 +468,11 @@ set_up :: fn(service: ptr[mut Store], open: ptr[mut Open], slot: usize) -> bool 
  * @return The object: a handle to its memory with the rights to read, execute, duplicate and transfer it, which the
  *     caller owns, and its size in bytes; null if the handle couldn't be duplicated.
  */
-hand_out :: fn(service: ptr[mut Store], slot: usize) -> bundle_store.Object? {
+hand_out :: fn(service : ptr[mut Store], slot : usize) -> bundle_store.Object? {
     open :: &service.objects[slot % MAX_OBJECTS]
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE) | cast[u32](slop_os.RIGHT_DUPLICATE)
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
     copy :: slop_os.handle_duplicate(cast[slop_os.Handle](open.memory), rights) or_return null
     service.given += 1
@@ -454,7 +490,7 @@ hand_out :: fn(service: ptr[mut Store], slot: usize) -> bundle_store.Object? {
  * @param service The store's state, whose open objects are asked about; the one closed is taken out (close_slot).
  * @return The slot, empty now; null if every open object is held, or none could be asked about.
  */
-unheld_slot :: fn(service: ptr[mut Store]) -> usize? {
+unheld_slot :: fn(service : ptr[mut Store]) -> usize? {
     chosen := NOWHERE
     oldest := ~cast[u64](0)
     for open, i in service.objects {
@@ -482,7 +518,7 @@ unheld_slot :: fn(service: ptr[mut Store]) -> usize? {
  *     the next object in the slot isn't given them.
  * @param slot The slot, used; one past MAX_OBJECTS, or not used, is left alone.
  */
-close_slot :: fn(service: ptr[mut Store], slot: usize) {
+close_slot :: fn(service : ptr[mut Store], slot : usize) {
     if slot >= MAX_OBJECTS || !service.objects[slot].used {
         return void
     }
@@ -521,11 +557,15 @@ close_slot :: fn(service: ptr[mut Store], slot: usize) {
  * @param service The store's state, only read: open's page is unmapped from its address space.
  * @param open The object, not yet in a slot; its fields aren't cleared.
  */
-close_open :: fn(service: ptr[Store], open: ptr[mut Open]) {
+close_open :: fn(service : ptr[Store], open : ptr[mut Open]) {
     if open.buffer_at != 0 {
         _ = slop_os.memory_unmap(service.block.space, open.buffer_at)
     }
-    for each in slop_os.Handle.[cast[slop_os.Handle](open.buffer), cast[slop_os.Handle](open.file), cast[slop_os.Handle](open.file_port)] {
+    for each in slop_os.Handle.[
+        cast[slop_os.Handle](open.buffer),
+        cast[slop_os.Handle](open.file),
+        cast[slop_os.Handle](open.file_port)
+    ] {
         if each != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(each)
         }
@@ -546,7 +586,7 @@ close_open :: fn(service: ptr[Store], open: ptr[mut Open]) {
  * @return Whether it's used; false if a port for it or a second connection to it couldn't be made, the connections
  *     before kept.
  */
-use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
+use_directory :: fn(service : ptr[mut Store], end : slop_os.Channel) -> bool {
     port :: os.port_for(service.block.budget, end) or_return false
     second :: dir.connect(end, port, service.block.budget) or_return false
     directory, error :: os.directory_on(second.end)
@@ -588,7 +628,7 @@ use_directory :: fn(service: ptr[mut Store], end: slop_os.Channel) -> bool {
  * @return Whether it was opened and given its page; false if the directory didn't open it, as while it's gone, or a
  *     port or the page's handle couldn't be had.
  */
-reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
+reopen :: fn(service : ptr[mut Store], open : ptr[mut Open]) -> bool {
     for each in slop_os.Handle.[cast[slop_os.Handle](open.file), cast[slop_os.Handle](open.file_port)] {
         if each != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(each)
@@ -606,7 +646,9 @@ reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
         case _ => return false
     }
     open.file_port = os.port_for(service.block.budget, open.file) or_return false
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     given :: slop_os.handle_duplicate(cast[slop_os.Handle](open.buffer), rights) or_return false
     buffering := os.Outgoing.{}
     buffer_request :: os.begin[read_only_file.Request](&buffering)
@@ -627,14 +669,15 @@ reopen :: fn(service: ptr[mut Store], open: ptr[mut Open]) -> bool {
  *     those that can't be read to unread.
  * @param slot The object's slot; one past them, or one not open, is left alone.
  */
-supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
+supply_wanted :: fn(service : ptr[mut Store], slot : usize) {
     if slot >= MAX_OBJECTS || !service.objects[slot].used {
         return void
     }
     loop {
         offset :: slop_os.memory_page_wanted(service.objects[slot].memory) or_break
         // Nothing to read it from until the store's given its directory again: kept for then, never supplied wrong
-        if !supply_page(service, slot, offset) && runtime.array_try_add(&service.unread, Unread.{slot = slot, offset = offset}) != null {
+        if !supply_page(service, slot, offset)
+            && runtime.array_try_add(&service.unread, Unread.{slot = slot, offset = offset}) != null {
             // Kept nowhere, it's asked for again by the next fault on it
             runtime.log_warn("a wanted page can't be kept until the directory's back")
             break
@@ -658,7 +701,7 @@ supply_wanted :: fn(service: ptr[mut Store], slot: usize) {
  * @return False, with nothing supplied, if it couldn't be read; true otherwise, and for a slot that isn't open,
  *     where there's nothing to supply.
  */
-supply_page :: fn(service: ptr[mut Store], slot: usize, offset: u64) -> bool {
+supply_page :: fn(service : ptr[mut Store], slot : usize, offset : u64) -> bool {
     if slot >= MAX_OBJECTS || !service.objects[slot].used {
         return true
     }
@@ -715,7 +758,7 @@ supply_page :: fn(service: ptr[mut Store], slot: usize, offset: u64) -> bool {
  * @param limit The most bytes of pages to keep, past what its budget has charged for everything else now; 0 for a
  *     threshold of three quarters of its budget's limit. Nothing's set if the budget's info can't be read.
  */
-set_cache_limit :: fn(service: ptr[mut Store], limit: u64) {
+set_cache_limit :: fn(service : ptr[mut Store], limit : u64) {
     info :: slop_os.memory_budget_info(service.block.budget) or_return void
     pages :: cast[u64](service.resident.count) * PAGE
     service.cache_limit = limit
@@ -731,7 +774,7 @@ set_cache_limit :: fn(service: ptr[mut Store], limit: u64) {
  * @param service The store's state: its budget's info, cache_limit and cache_base set the low water, and pages are
  *     evicted from resident, counted in evicted.
  */
-relieve :: fn(service: ptr[mut Store]) {
+relieve :: fn(service : ptr[mut Store]) {
     info :: slop_os.memory_budget_info(service.block.budget) or_return void
     threshold :: if service.cache_limit == 0 { info.limit / 4 * 3 } else { service.cache_base + service.cache_limit }
     base :: if service.cache_limit == 0 { cast[u64](0) } else { service.cache_base }
@@ -753,7 +796,7 @@ relieve :: fn(service: ptr[mut Store]) {
  * @param service The store's state, whose evicted counts the pages given back.
  * @param count The most pages to give back; fewer when there aren't that many it can.
  */
-evict :: fn(service: ptr[mut Store], count: u64) {
+evict :: fn(service : ptr[mut Store], count : u64) {
     given := cast[u64](0)
     steps := cast[usize](0)
     limit :: service.resident.count * 2
@@ -801,7 +844,7 @@ evict :: fn(service: ptr[mut Store], count: u64) {
  * @param service The store's state, whose resident loses the page; hand isn't moved, so it's left on the page after.
  * @param index The page's index in resident; one past them is ignored.
  */
-forget :: fn(service: ptr[mut Store], index: usize) {
+forget :: fn(service : ptr[mut Store], index : usize) {
     if index < service.resident.count {
         runtime.array_remove(&service.resident, index)
     }
@@ -825,7 +868,7 @@ PUT_CHUNK : u64 : 64 * 1024
  * @return Whether it's kept, or was already; false if size is past the memory's, the bytes don't have the hash, the
  *     memory couldn't be read (its owner gone) or a chunk's room had, or the file couldn't be written or renamed.
  */
-store_object :: fn(service: ptr[mut Store], put: bundle_store.PutOf) -> bool {
+store_object :: fn(service : ptr[mut Store], put : bundle_store.PutOf) -> bool {
     defer slop_os.handle_close(cast[slop_os.Handle](put.data))
     available :: slop_os.memory_size(put.data) or_return false
     if put.size > available {
@@ -884,10 +927,11 @@ store_object :: fn(service: ptr[mut Store], put: bundle_store.PutOf) -> bool {
  * @param hash The hash looked for, as the file objects/<hex>; the file's bytes aren't read or checked against it.
  * @return Whether objects/<hex> is a file.
  */
-has_object :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
+has_object :: fn(service : ptr[Store], hash : bundle.Hash) -> bool {
     hex_storage : u8[64]
     path_storage : u8[80]
-    return os.path_kind_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) == .FILE
+    return os.path_kind_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage))
+        == .FILE
 }
 
 /**
@@ -901,7 +945,7 @@ has_object :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
  *     that's kept.
  * @return Whether it's written and renamed.
  */
-write_hash :: fn(service: ptr[mut Store], folder: string, name: string, hash: bundle.Hash) -> bool {
+write_hash :: fn(service : ptr[mut Store], folder : string, name : string, hash : bundle.Hash) -> bool {
     hex_storage : u8[64]
     hex :: bundle.hex(hash, &hex_storage)
     part_storage : u8[80]
@@ -923,7 +967,7 @@ write_hash :: fn(service: ptr[mut Store], folder: string, name: string, hash: bu
  * @param path The file's path in the store's directory.
  * @return The hash; null if the file isn't there, can't be read, or doesn't hold a hash in hex.
  */
-read_hash :: fn(service: ptr[Store], path: string) -> bundle.Hash? {
+read_hash :: fn(service : ptr[Store], path : string) -> bundle.Hash? {
     text :: os.read_entire_file_in(service.directory, path) or_return null
     defer runtime.free_array(bit_cast[u8[]](text))
     return bundle.from_hex(text)
@@ -938,7 +982,7 @@ read_hash :: fn(service: ptr[Store], path: string) -> bundle.Hash? {
  * @return The hash; Ok(null) if there's no such file; an error if it couldn't be read, or Unsupported if it doesn't
  *     hold a hash in hex, which a collection can't mark from, and so has to stop for.
  */
-marked_from :: fn(service: ptr[Store], path: string) -> Result[bundle.Hash?, os.OsError] {
+marked_from :: fn(service : ptr[Store], path : string) -> Result[bundle.Hash?, os.OsError] {
     text :: match os.read_entire_file_in(service.directory, path) {
         case Ok(read) => read
         case Error(error) => {
@@ -969,7 +1013,7 @@ marked_from :: fn(service: ptr[Store], path: string) -> Result[bundle.Hash?, os.
  *     directory; its objects' used slots are kept.
  * @return How many files were removed from objects/; 0 when the collection stopped.
  */
-collect :: fn(service: ptr[mut Store]) -> u64 {
+collect :: fn(service : ptr[mut Store]) -> u64 {
     marked : bundle.Hash[..]
     defer runtime.array_free(&marked)
     // Anything not marked through is collected, so a root or a pin that can't be read through stops the collection
@@ -1053,7 +1097,7 @@ collect :: fn(service: ptr[mut Store]) -> u64 {
  * @return False if it couldn't be read through, for want of memory or a failed read: then what it refers to isn't
  *     known, and nothing may be collected (decisions/0104). True otherwise.
  */
-mark :: fn(service: ptr[Store], hash: bundle.Hash, marked: ptr[mut bundle.Hash[..]], depth: int) -> bool {
+mark :: fn(service : ptr[Store], hash : bundle.Hash, marked : ptr[mut bundle.Hash[..]], depth : int) -> bool {
     if is_marked(marked, hash) || depth > 2 {
         return true
     }
@@ -1062,7 +1106,10 @@ mark :: fn(service: ptr[Store], hash: bundle.Hash, marked: ptr[mut bundle.Hash[.
     }
     hex_storage : u8[64]
     path_storage : u8[80]
-    record :: match os.read_entire_file_in(service.directory, path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)) {
+    record :: match os.read_entire_file_in(
+        service.directory,
+        path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)
+    ) {
         case Ok(read) => read
         case Error(error) => return error == .NotFound
     }
@@ -1107,7 +1154,7 @@ mark :: fn(service: ptr[Store], hash: bundle.Hash, marked: ptr[mut bundle.Hash[.
  * @param hash The hash looked for, compared whole.
  * @return Whether it's among them.
  */
-is_marked :: fn(marked: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {
+is_marked :: fn(marked : ptr[bundle.Hash[..]], hash : bundle.Hash) -> bool {
     for each in marked^ {
         if bundle.same(each, hash) {
             return true
@@ -1123,7 +1170,7 @@ is_marked :: fn(marked: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {
  * @param hash The hash looked for, compared whole with each used slot's.
  * @return Whether a used slot holds it.
  */
-is_open :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
+is_open :: fn(service : ptr[Store], hash : bundle.Hash) -> bool {
     for open in service.objects {
         if open.used && bundle.same(open.hash, hash) {
             return true
@@ -1138,7 +1185,7 @@ is_open :: fn(service: ptr[Store], hash: bundle.Hash) -> bool {
  * @param name The name to check, from a client's request, as given; it's only read.
  * @return Whether it's 1 to 32 bytes, each a lowercase ASCII letter, a digit or an underscore.
  */
-valid_name :: fn(name: string) -> bool {
+valid_name :: fn(name : string) -> bool {
     if name.count == 0 || name.count > 32 {
         return false
     }
@@ -1160,7 +1207,7 @@ valid_name :: fn(name: string) -> bool {
  * @return The answer, a view into into; Unsupported if it couldn't be sent or the connection failed, as when the
  *     volume's server has gone.
  */
-ask_dir :: fn(service: ptr[Store], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
+ask_dir :: fn(service : ptr[Store], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> dir.Response {
     if dir.send_request(service.raw, service.raw_port, out) is_some {
         return .Unsupported
     }
@@ -1184,7 +1231,7 @@ ask_dir :: fn(service: ptr[Store], out: ptr[mut os.Outgoing], into: ptr[mut os.I
  * @return The answer, a view into into; Unsupported if it couldn't be sent or the connection failed, as when the
  *     server it was on has gone.
  */
-ask_file :: fn(open: ptr[Open], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_file.Response {
+ask_file :: fn(open : ptr[Open], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> read_only_file.Response {
     if read_only_file.send_request(open.file, open.file_port, out) is_some {
         return .Unsupported
     }
@@ -1206,7 +1253,7 @@ ask_file :: fn(open: ptr[Open], out: ptr[mut os.Outgoing], into: ptr[mut os.Inco
  * @param storage Where it's made.
  * @return A view of storage's bytes, good while storage is unchanged; "" for nothing.
  */
-path_in :: fn(prefix: string, name: string, storage: ptr[mut u8[80]]) -> string {
+path_in :: fn(prefix : string, name : string, storage : ptr[mut u8[80]]) -> string {
     count : usize = 0
     for text in string.[prefix, name] {
         for character in text {
@@ -1228,7 +1275,7 @@ path_in :: fn(prefix: string, name: string, storage: ptr[mut u8[80]]) -> string 
  * @param storage Where they're joined.
  * @return A view of storage's bytes, good while storage is unchanged; "" for nothing.
  */
-joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[80]]) -> string {
+joined :: fn(a : string, b : string, c : string, storage : ptr[mut u8[80]]) -> string {
     count : usize = 0
     for text in string.[a, b, c] {
         for character in text {
@@ -1248,7 +1295,7 @@ joined :: fn(a: string, b: string, c: string, storage: ptr[mut u8[80]]) -> strin
  * @param end What it may end with.
  * @return Whether its last bytes are end's; true for an empty end.
  */
-ends_with :: fn(text: string, end: string) -> bool {
+ends_with :: fn(text : string, end : string) -> bool {
     if end.count > text.count {
         return false
     }
@@ -1268,6 +1315,6 @@ ends_with :: fn(text: string, end: string) -> bool {
  * @param bytes The bytes, kept by the caller; the view points into them, so they must outlive it.
  * @return A view of them, good while they are; "" for none.
  */
-as_text :: fn(bytes: u8[]) -> string {
+as_text :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }

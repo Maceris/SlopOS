@@ -3,13 +3,13 @@ package hello
 import compiler from "base:compiler"
 import runtime from "base:runtime"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
+import terminal from "std:os/slop_os/terminal"
 import random from "std:random"
 import text_buffer from "std:text_buffer"
 import time from "std:time"
-import slop_os from "std:os/slop_os"
 import service_kit from "../../libraries/service_kit"
-import terminal from "std:os/slop_os/terminal"
-import process_manager from "std:os/slop_os/process_manager"
 import config from "../../protocols/config"
 import connector from "../../protocols/connector"
 import entropy from "../../protocols/entropy"
@@ -40,18 +40,27 @@ NEXT :: #run compiler.target_setting("hello_build", default = "") == "next"
  * @return 0 if its heap worked; 1 if the heap couldn't give it memory, 2 if the memory didn't hold what was written;
  *     3, 4 or 5 if it couldn't wait for the process manager to be gone; 6 if it couldn't reach the terminal.
  */
-main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Channel[connector.Connector]?,
-    entropy_service: os.Channel[entropy.Entropy]?, settings: config.Config[HelloSettings]?) -> int {
+main :: fn(
+    manager : os.Channel[process_manager.ProcessManager]?,
+    console : os.Channel[connector.Connector]?,
+    entropy_service : os.Channel[entropy.Entropy]?,
+    settings : config.Config[HelloSettings]?
+) -> int {
     #if NEXT {
         runtime.log_info("the next build")
     }
     code :: fill_heap()
     // Two draws of 64 bits alike would be one chance in 2^64
     random_works :: random.next_u64() != random.next_u64()
-    runtime.log_info("heap %, random numbers %", if code == 0 { "working" } else { "broken" },
-        if random_works { "working" } else { "broken" })
+    runtime.log_info(
+        "heap %, random numbers %",
+        if code == 0 { "working" } else { "broken" },
+        if random_works { "working" } else { "broken" }
+    )
     match entropy_service {
-        case Some(connection) => runtime.log_info("the entropy service gave % random bytes", entropy_bytes(connection.end))
+        case Some(
+            connection
+        ) => runtime.log_info("the entropy service gave % random bytes", entropy_bytes(connection.end))
         case None => {}
     }
     match settings {
@@ -76,15 +85,24 @@ main :: fn(manager: os.Channel[process_manager.ProcessManager]?, console: os.Cha
             dial_port :: os.port_for(slop_os.startup_block().budget, dialing.end) or_return 6
             connection :: connector.dial[terminal.Terminal](dialing.end, dial_port) or_return 6
             port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return 6
-            _ = terminal.write_line(connection.end, port, if code == 0 && random_works { "hello: heap and random numbers working" }
-                else { "hello: something's broken" })
+            _ = terminal.write_line(
+                connection.end,
+                port,
+                if code == 0 && random_works {
+                    "hello: heap and random numbers working"
+                }
+                else {
+                    "hello: something's broken"
+                }
+            )
         }
         case None => {}
     }
     match manager {
         case Some(connection) => {
             port :: slop_os.port_create(slop_os.startup_block().budget) or_return 3
-            slop_os.port_bind(port, cast[slop_os.Handle](connection.end), slop_os.SIGNAL_PEER_CLOSED, 0, .Once) or_return 4
+            slop_os.port_bind(port, cast[slop_os.Handle](connection.end), slop_os.SIGNAL_PEER_CLOSED, 0, .Once)
+                or_return 4
             // Or until it's asked to stop, as the system shuts down (decisions/0182)
             _ = service_kit.watch_stop(port)
             packets : slop_os.Packet[1]
@@ -120,7 +138,7 @@ HelloSettings :: struct {
  * @param settings The connection to the config store for hello's settings, which stays the caller's; a port for it is
  *     made from the process's budget and not closed.
  */
-check_settings :: fn(settings: config.Config[HelloSettings]) {
+check_settings :: fn(settings : config.Config[HelloSettings]) {
     port :: os.port_for(slop_os.startup_block().budget, settings.end) or_return void
     declared :: match config.declare(settings, port) {
         case Ok(version) => version
@@ -130,7 +148,12 @@ check_settings :: fn(settings: config.Config[HelloSettings]) {
         }
     }
     value := os.Outgoing.{}
-    first :: if config.read(settings, port, &value) is_ok { os.typed_value[HelloSettings](os.value_bytes(&value)).repeats } else { 0 }
+    first :: if config.read(settings, port, &value) is_ok {
+        os.typed_value[HelloSettings](os.value_bytes(&value)).repeats
+    }
+    else {
+        0
+    }
     override := os.Outgoing.{}
     written :: os.begin[HelloSettings](&override)
     written.repeats = 3
@@ -144,18 +167,40 @@ check_settings :: fn(settings: config.Config[HelloSettings]) {
         bytes :: os.value_bytes(&value)
         read :: os.typed_value[HelloSettings](bytes)
         greeting :: os.items_of(bytes, read.greeting)
-        merged = if read.repeats == 3 && !read.loud && greeting.count == 2 && string_of(&greeting[0], 2) == "hi" { "merged" } else { "not merged" }
+        merged = if read.repeats == 3 && !read.loud && greeting.count == 2 && string_of(&greeting[0], 2) == "hi" {
+            "merged"
+        }
+        else {
+            "not merged"
+        }
     }
     author_storage : u8[..]
     defer runtime.array_free(&author_storage)
     author :: match config.history(settings, port, 0, &author_storage) {
-        case Some(kept) => if author_storage.count > 0 { string_of(&author_storage[0], author_storage.count) } else { "nobody" }
+        case Some(kept) => if author_storage.count > 0 {
+            string_of(&author_storage[0], author_storage.count)
+        }
+        else {
+            "nobody"
+        }
         case None => "nobody"
     }
     rolled :: config.roll_back(settings, port, declared) is_ok
-    after :: if config.read(settings, port, &value) is_ok { os.typed_value[HelloSettings](os.value_bytes(&value)).repeats } else { 0 }
-    runtime.log_info("config: declared repeats %, wrote an override %, read it back %, by %; rolled back %, repeats %", first,
-        if wrote { "kept" } else { "refused" }, merged, author, if rolled { "kept" } else { "refused" }, after)
+    after :: if config.read(settings, port, &value) is_ok {
+        os.typed_value[HelloSettings](os.value_bytes(&value)).repeats
+    }
+    else {
+        0
+    }
+    runtime.log_info(
+        "config: declared repeats %, wrote an override %, read it back %, by %; rolled back %, repeats %",
+        first,
+        if wrote { "kept" } else { "refused" },
+        merged,
+        author,
+        if rolled { "kept" } else { "refused" },
+        after
+    )
 }
 
 /**
@@ -168,7 +213,7 @@ check_settings :: fn(settings: config.Config[HelloSettings]) {
  * @return How many bytes the service gave, at most 32; 0 if the port couldn't be made, the request couldn't be sent,
  *     the answer failed, or it wasn't Filled.
  */
-entropy_bytes :: fn(end: slop_os.Channel) -> usize {
+entropy_bytes :: fn(end : slop_os.Channel) -> usize {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return 0
     out := os.Outgoing.{}
     request :: os.begin[entropy.Request](&out)
@@ -196,7 +241,7 @@ entropy_bytes :: fn(end: slop_os.Channel) -> usize {
  * @param line The text to append to; what doesn't fit its storage is dropped, as text_buffer drops it.
  * @param value The field: a month (1 to 12) or a day (1 to 31). A negative value isn't padded right.
  */
-append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
+append_two_digits :: fn(line : ptr[mut text_buffer.TextBuffer], value : int) {
     if value < 10 {
         text_buffer.append_format(line, "0")
     }

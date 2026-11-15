@@ -16,9 +16,9 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
+import service_kit from "../../libraries/service_kit"
 import pci from "../../pci"
 import net from "../../protocols/net"
-import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
 /** The bytes of a page: 4096. */
@@ -56,7 +56,10 @@ STATUS_LINK_UP : u16 : 1
 
 // ---- The header each frame has (virtio 1.2 §5.1.6)
 
-/** The bytes of a frame's header with VERSION_1: flags, gso_type, hdr_len, gso_size, csum_start, csum_offset, num_buffers. */
+/**
+ * The bytes of a frame's header with VERSION_1: flags, gso_type, hdr_len, gso_size, csum_start, csum_offset,
+ * num_buffers.
+ */
 HEADER_BYTES : u64 : 12
 /** Each header's place in the headers' page: 16 bytes, receive slots' first, then send slots'. */
 HEADER_SPACING : u64 : 16
@@ -78,13 +81,13 @@ NOBODY : usize : 0xffffffffffffffff
 
 /** A frame's virtio header, as the device reads and writes it. */
 Header :: struct #packed {
-    flags : u8,
-    gso_type : u8,
-    header_length : u16le,
-    gso_size : u16le,
-    checksum_start : u16le,
+    flags           : u8,
+    gso_type        : u8,
+    header_length   : u16le,
+    gso_size        : u16le,
+    checksum_start  : u16le,
     checksum_offset : u16le,
-    buffer_count : u16le,
+    buffer_count    : u16le,
 }
 
 #assert size_of(Header) == 12
@@ -153,9 +156,19 @@ Driver :: struct {
  *     refused its features, 5 if no port could be made, 6 if its MSIs couldn't be set up, 7 if its DMA memory couldn't
  *     be made or mapped, 8 if its queues couldn't be set up, 9 if the listener couldn't be bound.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    clients: os.Listener[net.Net]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[net.Net]
+) -> int {
     block :: slop_os.startup_block()
     driver_made, driver_error :: runtime.new_aligned(Driver, align_of(Driver))
     if driver_error != null {
@@ -170,7 +183,10 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     config_at :: driver_kit.map_device(config) or_return 2
     bars := driver_kit.map_bars(bar0, bar1, bar2, bar3, bar4, bar5)
     driver.transport = virtio.open(config_at, bars) or_return 3
-    driver.features = virtio.start(&driver.transport, FEATURE_CSUM | FEATURE_GUEST_CSUM | FEATURE_MTU | FEATURE_MAC | FEATURE_STATUS)
+    driver.features = virtio.start(
+        &driver.transport,
+        FEATURE_CSUM | FEATURE_GUEST_CSUM | FEATURE_MTU | FEATURE_MAC | FEATURE_STATUS
+    )
         or_return 4
 
     driver.port = slop_os.port_create(block.budget) or_return 5
@@ -185,7 +201,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
             return 6
         }
         key :: if cast[usize](entry) < keys.count { keys[entry] } else { RECEIVE_KEY }
-        slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), key, .Persistent) or_return 6
+        slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), key, .Persistent)
+            or_return 6
     }
     send_vector :: if vectors >= 3 { cast[u16](1) } else { cast[u16](0) }
     config_vector :: if vectors >= 3 { cast[u16](2) } else { cast[u16](0) }
@@ -197,9 +214,17 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, block.space, pages, 0, bytes, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.receive = virtio.setup_queue(&driver.transport, RECEIVE_QUEUE, pages, device_address, QUEUE_BYTES, 0) or_return 8
-    driver.transmit = virtio.setup_queue(&driver.transport, TRANSMIT_QUEUE, pages + QUEUE_BYTES, device_address + QUEUE_BYTES,
-        QUEUE_BYTES, send_vector) or_return 8
+    driver.receive = virtio.setup_queue(&driver.transport, RECEIVE_QUEUE, pages, device_address, QUEUE_BYTES, 0)
+        or_return 8
+    driver.transmit = virtio.setup_queue(
+        &driver.transport,
+        TRANSMIT_QUEUE,
+        pages + QUEUE_BYTES,
+        device_address + QUEUE_BYTES,
+        QUEUE_BYTES,
+        send_vector
+    )
+        or_return 8
     driver.headers = pages + 2 * QUEUE_BYTES
     driver.headers_device = device_address + 2 * QUEUE_BYTES
     if driver.features & FEATURE_STATUS != 0 {
@@ -213,8 +238,16 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     }
     info :: describe(driver)
     mac :: info.mac
-    runtime.log_info("serving %{02x}:%{02x}:%{02x}:%{02x}:%{02x}:%{02x}, its link %", mac[0], mac[1], mac[2], mac[3], mac[4],
-        mac[5], if info.link_up { "up" } else { "down" })
+    runtime.log_info(
+        "serving %{02x}:%{02x}:%{02x}:%{02x}:%{02x}:%{02x}, its link %",
+        mac[0],
+        mac[1],
+        mac[2],
+        mac[3],
+        mac[4],
+        mac[5],
+        if info.link_up { "up" } else { "down" }
+    )
     into := os.Incoming.{}
     loop {
         with {
@@ -244,7 +277,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  *     failed is dropped; if it was the current one, there's none until the next Connect.
  * @param into Where each request is received, reused for each.
  */
-serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
     }
@@ -280,7 +313,9 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
             }
             case Send(frame) => {
                 match send(driver, frame) {
-                    case Some(refusal) => answer(driver, end, .Refused(net.Refused.{slot = frame.slot, reason = refusal}))
+                    case Some(
+                        refusal
+                    ) => answer(driver, end, .Refused(net.Refused.{slot = frame.slot, reason = refusal}))
                     case None => {}
                 }
             }
@@ -291,7 +326,8 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
                     service_kit.drop_client(&driver.clients, driver.current)
                     driver.watching = -1
                 }
-                driver.current = service_kit.add_client_index(&driver.clients, driver.port, connection.end) or_else NOBODY
+                driver.current = service_kit.add_client_index(&driver.clients, driver.port, connection.end)
+                    or_else NOBODY
                 if driver.current == NOBODY {
                     _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
@@ -307,7 +343,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  * @param end The client's channel end, one the driver's clients keep; not checked or closed here.
  * @param response The response, which has no variable-size data.
  */
-answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: net.Response) {
+answer :: fn(driver : ptr[mut Driver], end : slop_os.Channel, response : net.Response) {
     out := os.Outgoing.{}
     made :: os.begin[net.Response](&out)
     made^ = response
@@ -320,7 +356,7 @@ answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: net.Respon
  * @param driver The driver.
  * @param response The response, which has no variable-size data.
  */
-answer_current :: fn(driver: ptr[mut Driver], response: net.Response) {
+answer_current :: fn(driver : ptr[mut Driver], response : net.Response) {
     if driver.current >= driver.clients.ends.count {
         return void
     }
@@ -337,7 +373,7 @@ answer_current :: fn(driver: ptr[mut Driver], response: net.Response) {
  * @return Its MAC address, all zeroes without FEATURE_MAC; its MTU, 1500 unless FEATURE_MTU says less; its link's
  *     state, up without FEATURE_STATUS; and the offloads its features give.
  */
-describe :: fn(driver: ptr[Driver]) -> net.Info {
+describe :: fn(driver : ptr[Driver]) -> net.Info {
     info := net.Info.{mtu = 1500, link_up = true, slots = net.SLOTS, slot_bytes = net.SLOT_BYTES}
     device :: driver.transport.device
     if device == 0 {
@@ -373,10 +409,11 @@ describe :: fn(driver: ptr[Driver]) -> net.Info {
  * @return Buffer with a new window onto all of it, read-write, which moves to the client; Unsupported if the buffer,
  *     its mapping or the window couldn't be made.
  */
-buffer_for :: fn(driver: ptr[mut Driver]) -> net.Response {
+buffer_for :: fn(driver : ptr[mut Driver]) -> net.Response {
     startup :: slop_os.startup_block()
     if cast[slop_os.Handle](driver.buffer) == slop_os.NO_HANDLE {
-        memory :: slop_os.dma_memory_create(driver.domain, startup.budget, net.BUFFER_BYTES, 0) or_return net.Response.Unsupported
+        memory :: slop_os.dma_memory_create(driver.domain, startup.budget, net.BUFFER_BYTES, 0)
+            or_return net.Response.Unsupported
         address :: slop_os.memory_device_address(memory) or_return net.Response.Unsupported
         at :: runtime.reserve_addresses(cast[usize](net.BUFFER_BYTES)) or_return net.Response.Unsupported
         read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
@@ -388,7 +425,8 @@ buffer_for :: fn(driver: ptr[mut Driver]) -> net.Response {
         driver.buffer_at = at
         driver.buffer_device = address
     }
-    window :: slop_os.memory_create_window(driver.buffer, startup.budget, 0, net.BUFFER_BYTES) or_return net.Response.Unsupported
+    window :: slop_os.memory_create_window(driver.buffer, startup.budget, 0, net.BUFFER_BYTES)
+        or_return net.Response.Unsupported
     return net.Response.Buffer(window)
 }
 
@@ -399,7 +437,7 @@ buffer_for :: fn(driver: ptr[mut Driver]) -> net.Response {
  * @param slot The slot, 0 to net.SLOTS - 1.
  * @return Null once it's offered, or if it was already; why not otherwise.
  */
-offer_slot :: fn(driver: ptr[mut Driver], slot: u32) -> net.Refusal? {
+offer_slot :: fn(driver : ptr[mut Driver], slot : u32) -> net.Refusal? {
     if slot >= net.SLOTS {
         return net.Refusal.WrongSlot
     }
@@ -411,9 +449,13 @@ offer_slot :: fn(driver: ptr[mut Driver], slot: u32) -> net.Refusal? {
     }
     header :: driver.headers_device + cast[u64](slot) * HEADER_SPACING
     frame :: driver.buffer_device + cast[u64](slot) * cast[u64](net.SLOT_BYTES)
-    id :: virtio.offer_chain(&driver.receive, virtio.Part.[
-        virtio.Part.{address = header, length = cast[u32](HEADER_BYTES), device_writes = true},
-        virtio.Part.{address = frame, length = net.SLOT_BYTES, device_writes = true}])
+    id :: virtio.offer_chain(
+        &driver.receive,
+        virtio.Part.[
+            virtio.Part.{address = header, length = cast[u32](HEADER_BYTES), device_writes = true},
+            virtio.Part.{address = frame, length = net.SLOT_BYTES, device_writes = true}
+        ]
+    )
     if id == virtio.NO_DESCRIPTOR || cast[usize](id) >= driver.receive_slot_of.count {
         return net.Refusal.Busy
     }
@@ -430,7 +472,7 @@ offer_slot :: fn(driver: ptr[mut Driver], slot: u32) -> net.Refusal? {
  *     with checksum_start, its checksum's two bytes within it.
  * @return Null once it's offered; why not otherwise.
  */
-send :: fn(driver: ptr[mut Driver], frame: net.Frame) -> net.Refusal? {
+send :: fn(driver : ptr[mut Driver], frame : net.Frame) -> net.Refusal? {
     if frame.slot < net.SLOTS || frame.slot >= 2 * net.SLOTS {
         return net.Refusal.WrongSlot
     }
@@ -441,8 +483,9 @@ send :: fn(driver: ptr[mut Driver], frame: net.Frame) -> net.Refusal? {
         return net.Refusal.BadFrame
     }
     checksummed :: frame.checksum_start != 0
-    if checksummed && (driver.features & FEATURE_CSUM == 0
-        || cast[u32](frame.checksum_start) + cast[u32](frame.checksum_at) + 2 > frame.length) {
+    if checksummed
+        && (driver.features & FEATURE_CSUM == 0
+            || cast[u32](frame.checksum_start) + cast[u32](frame.checksum_at) + 2 > frame.length) {
         return net.Refusal.BadFrame
     }
     index :: frame.slot - net.SLOTS
@@ -457,9 +500,19 @@ send :: fn(driver: ptr[mut Driver], frame: net.Frame) -> net.Refusal? {
         header.checksum_start = cast[u16le](frame.checksum_start)
         header.checksum_offset = cast[u16le](frame.checksum_at)
     }
-    id :: virtio.offer_chain(&driver.transmit, virtio.Part.[
-        virtio.Part.{address = driver.headers_device + cast[u64](net.SLOTS + index) * HEADER_SPACING, length = cast[u32](HEADER_BYTES)},
-        virtio.Part.{address = driver.buffer_device + cast[u64](frame.slot) * cast[u64](net.SLOT_BYTES), length = frame.length}])
+    id :: virtio.offer_chain(
+        &driver.transmit,
+        virtio.Part.[
+            virtio.Part.{
+                address = driver.headers_device + cast[u64](net.SLOTS + index) * HEADER_SPACING,
+                length = cast[u32](HEADER_BYTES),
+            },
+            virtio.Part.{
+                address = driver.buffer_device + cast[u64](frame.slot) * cast[u64](net.SLOT_BYTES),
+                length = frame.length,
+            }
+        ]
+    )
     if id == virtio.NO_DESCRIPTOR || cast[usize](id) >= driver.send_slot_of.count {
         return net.Refusal.Busy
     }
@@ -475,7 +528,7 @@ send :: fn(driver: ptr[mut Driver], frame: net.Frame) -> net.Refusal? {
  *
  * @param driver The driver, whose given slots are cleared as their frames arrive.
  */
-take_received :: fn(driver: ptr[mut Driver]) {
+take_received :: fn(driver : ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.receive) or_break
         if cast[usize](used.id) >= driver.receive_slot_of.count {
@@ -486,8 +539,10 @@ take_received :: fn(driver: ptr[mut Driver]) {
             driver.given[slot] = false
         }
         written :: cast[u64](used.length)
-        // A length the device shouldn't give is answered as an empty frame, so the client gives the slot again: left
-        // unanswered, each such slot would be lost, and receiving with them (13h)
+        /*
+         * A length the device shouldn't give is answered as an empty frame, so the client gives the slot again: left
+         * unanswered, each such slot would be lost, and receiving with them (13h)
+         */
         if written <= HEADER_BYTES || written - HEADER_BYTES > cast[u64](net.SLOT_BYTES) {
             answer_current(driver, .Received(net.Frame.{slot = slot, length = 0, flags = 0}))
             continue
@@ -501,7 +556,12 @@ take_received :: fn(driver: ptr[mut Driver]) {
         else if header.flags & HEADER_NEEDS_CSUM != 0 {
             start : u16 = header.checksum_start
             offset : u16 = header.checksum_offset
-            if complete_checksum(driver.buffer_at + cast[u64](slot) * cast[u64](net.SLOT_BYTES), length, cast[u64](start), cast[u64](offset)) {
+            if complete_checksum(
+                driver.buffer_at + cast[u64](slot) * cast[u64](net.SLOT_BYTES),
+                length,
+                cast[u64](start),
+                cast[u64](offset)
+            ) {
                 flags |= net.CHECKSUM_VALID
             }
         }
@@ -519,7 +579,7 @@ take_received :: fn(driver: ptr[mut Driver]) {
  * @param offset Where the checksum goes, in bytes past start.
  * @return True once it's written; false, nothing written, if its place isn't within the frame.
  */
-complete_checksum :: fn(frame: u64, length: u64, start: u64, offset: u64) -> bool {
+complete_checksum :: fn(frame : u64, length : u64, start : u64, offset : u64) -> bool {
     if start + offset + 2 > length {
         return false
     }
@@ -554,7 +614,7 @@ complete_checksum :: fn(frame: u64, length: u64, start: u64, offset: u64) -> boo
  *
  * @param driver The driver, whose sending slots are cleared.
  */
-take_sent :: fn(driver: ptr[mut Driver]) {
+take_sent :: fn(driver : ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.transmit) or_break
         if cast[usize](used.id) >= driver.send_slot_of.count {
@@ -573,7 +633,7 @@ take_sent :: fn(driver: ptr[mut Driver]) {
  *
  * @param driver The driver, whose watching is cleared once it's answered.
  */
-answer_link :: fn(driver: ptr[mut Driver]) {
+answer_link :: fn(driver : ptr[mut Driver]) {
     if driver.watching < 0 {
         return void
     }

@@ -14,7 +14,12 @@ package aml
  * @param opcode The opcode.
  * @return Its result.
  */
-evaluate_operation :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor], opcode: u8) -> Result[Value, Error] #unrestricted {
+evaluate_operation :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor],
+    opcode : u8
+) -> Result[Value, Error] #unrestricted {
     if opcode == 0x70 || opcode == 0x9d {
         // Store, CopyObject
         value :: evaluate_term(interpreter, frame, cursor)?
@@ -70,7 +75,10 @@ evaluate_operation :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame
         // Not, FindSetLeftBit, FindSetRightBit
         value :: evaluate_integer(interpreter, frame, cursor)?
         target :: read_target(interpreter, frame, cursor)?
-        result :: masked(interpreter, if opcode == 0x80 { ~value } else if opcode == 0x81 { left_bit(value) } else { right_bit(value) })
+        result :: masked(
+            interpreter,
+            if opcode == 0x80 { ~value } else if opcode == 0x81 { left_bit(value) } else { right_bit(value) }
+        )
         store(interpreter, frame, .Integer(result), target)?
         return .Ok(.Integer(result))
     }
@@ -95,7 +103,9 @@ evaluate_operation :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame
     if opcode == 0x93 || opcode == 0x94 || opcode == 0x95 {
         // LEqual, LGreater, LLess
         order :: compare(interpreter, frame, cursor)?
-        return .Ok(truth(interpreter, if opcode == 0x93 { order == 0 } else if opcode == 0x94 { order > 0 } else { order < 0 }))
+        return .Ok(
+            truth(interpreter, if opcode == 0x93 { order == 0 } else if opcode == 0x94 { order > 0 } else { order < 0 })
+        )
     }
     if opcode == 0x83 {
         // DerefOf
@@ -140,7 +150,12 @@ evaluate_operation :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame
         a :: evaluate_term(interpreter, frame, cursor)?
         b :: evaluate_term(interpreter, frame, cursor)?
         target :: read_target(interpreter, frame, cursor)?
-        result :: if opcode == 0x73 { concatenate(interpreter, a, b)? } else { concatenate_resources(interpreter, a, b)? }
+        result :: if opcode == 0x73 {
+            concatenate(interpreter, a, b)?
+        }
+        else {
+            concatenate_resources(interpreter, a, b)?
+        }
         store(interpreter, frame, result, target)?
         return .Ok(result)
     }
@@ -192,7 +207,7 @@ evaluate_operation :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame
  * @param opcode The opcode.
  * @return True for Add, Subtract, Multiply, ShiftLeft, ShiftRight, And, Nand, Or, Nor, Xor and Mod.
  */
-is_binary :: fn(opcode: u8) -> bool {
+is_binary :: fn(opcode : u8) -> bool {
     return opcode == 0x72 || opcode == 0x74 || opcode == 0x77 || (opcode >= 0x79 && opcode <= 0x7f) || opcode == 0x85
 }
 
@@ -206,7 +221,7 @@ is_binary :: fn(opcode: u8) -> bool {
  * @return The result, unmasked; a shift by the width or more gives 0.
  * @error DivideByZero Mod by 0.
  */
-binary :: fn(interpreter: ptr[Interpreter], opcode: u8, a: u64, b: u64) -> Result[u64, Error] {
+binary :: fn(interpreter : ptr[Interpreter], opcode : u8, a : u64, b : u64) -> Result[u64, Error] {
     width :: if interpreter.wide { cast[u64](64) } else { cast[u64](32) }
     match opcode {
         case 0x72 => return .Ok(a + b)
@@ -234,7 +249,7 @@ binary :: fn(interpreter: ptr[Interpreter], opcode: u8, a: u64, b: u64) -> Resul
  * @param value The integer.
  * @return 1 to 64; 0 if no bit is set.
  */
-left_bit :: fn(value: u64) -> u64 {
+left_bit :: fn(value : u64) -> u64 {
     for i in 0..<64 {
         bit :: 63 - cast[u64](i)
         if (value >> bit) & 1 != 0 {
@@ -250,7 +265,7 @@ left_bit :: fn(value: u64) -> u64 {
  * @param value The integer.
  * @return 1 to 64; 0 if no bit is set.
  */
-right_bit :: fn(value: u64) -> u64 {
+right_bit :: fn(value : u64) -> u64 {
     for i in 0..<64 {
         if (value >> cast[u64](i)) & 1 != 0 {
             return cast[u64](i) + 1
@@ -266,7 +281,7 @@ right_bit :: fn(value: u64) -> u64 {
  * @param holds Whether it's true.
  * @return Ones for true, 0 for false.
  */
-truth :: fn(interpreter: ptr[Interpreter], holds: bool) -> Value {
+truth :: fn(interpreter : ptr[Interpreter], holds : bool) -> Value {
     return .Integer(if holds { ones(interpreter) } else { 0 })
 }
 
@@ -279,12 +294,16 @@ truth :: fn(interpreter: ptr[Interpreter], holds: bool) -> Value {
  * @param cursor At the first operand; moved past both.
  * @return Less than 0, 0, or more than 0, as the first is less than, equal to or more than the second.
  */
-compare :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[i32, Error] {
+compare :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[i32, Error] {
     a :: evaluate_term(interpreter, frame, cursor)?
     b :: evaluate_term(interpreter, frame, cursor)?
     match a {
-        case String(text) => return .Ok(compare_bytes(text.data, string_of_value(interpreter, b)?.data))
-        case Buffer(bytes) => return .Ok(compare_bytes(bytes.data, buffer_of(interpreter, b)?.data))
+        case String(text) => return .Ok(compare_bytes(text.data, (string_of_value(interpreter, b)?).data))
+        case Buffer(bytes) => return .Ok(compare_bytes(bytes.data, (buffer_of(interpreter, b)?).data))
         case _ => {
             x :: integer_of(interpreter, a)?
             y :: integer_of(interpreter, b)?
@@ -300,7 +319,7 @@ compare :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: 
  * @param b The second.
  * @return Less than 0, 0, or more than 0.
  */
-compare_bytes :: fn(a: u8[], b: u8[]) -> i32 {
+compare_bytes :: fn(a : u8[], b : u8[]) -> i32 {
     for byte, i in a {
         if i >= b.count {
             return 1
@@ -323,7 +342,11 @@ compare_bytes :: fn(a: u8[], b: u8[]) -> i32 {
  * @error NotFound A name that isn't there.
  * @error WrongType A value that isn't a reference nor a name.
  */
-dereference :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], value #escaping : Value) -> Result[Value, Error] #unrestricted {
+dereference :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    value #escaping : Value
+) -> Result[Value, Error] #unrestricted {
     match value {
         case Reference(_) => return dereferenced(interpreter, frame, value)
         case Element(_) => return dereferenced(interpreter, frame, value)
@@ -349,7 +372,7 @@ dereference :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], valu
  * @param text The path's text.
  * @return The node; null if there's none.
  */
-find_from :: fn(interpreter: ptr[mut Interpreter], scope: ptr[mut Node], text: u8[]) -> ptr[mut Node]? {
+find_from :: fn(interpreter : ptr[mut Interpreter], scope : ptr[mut Node], text : u8[]) -> ptr[mut Node]? {
     if text.count > 0 && text[0] == cast[u8]('\\') {
         return find(interpreter, text_of(text))
     }
@@ -381,7 +404,7 @@ find_from :: fn(interpreter: ptr[mut Interpreter], scope: ptr[mut Node], text: u
  * @error OutOfRange An index past its end.
  * @error WrongType Something that can't be indexed.
  */
-index_of :: fn(source #escaping : Value, index: u64) -> Result[Value, Error] #unrestricted {
+index_of :: fn(source #escaping : Value, index : u64) -> Result[Value, Error] #unrestricted {
     match source {
         case Package(package) => {
             elements :: package.elements
@@ -418,7 +441,11 @@ index_of :: fn(source #escaping : Value, index: u64) -> Result[Value, Error] #un
  * @error WrongType A first operand that isn't an integer, a string or a buffer, or a second that won't convert.
  * @error Memory The evaluation's budget can't hold it.
  */
-concatenate :: fn(interpreter: ptr[mut Interpreter], a #escaping : Value, b #escaping : Value) -> Result[Value, Error] #unrestricted {
+concatenate :: fn(
+    interpreter : ptr[mut Interpreter],
+    a #escaping : Value,
+    b #escaping : Value
+) -> Result[Value, Error] #unrestricted {
     match a {
         case Integer(_) => {
             first :: buffer_of(interpreter, a)?
@@ -446,7 +473,7 @@ concatenate :: fn(interpreter: ptr[mut Interpreter], a #escaping : Value, b #esc
  * @return The joined bytes.
  * @error Memory The evaluation's budget can't hold them.
  */
-joined :: fn(interpreter: ptr[mut Interpreter], a: u8[], b: u8[]) -> Result[ptr[mut Bytes], Error] #unrestricted {
+joined :: fn(interpreter : ptr[mut Interpreter], a : u8[], b : u8[]) -> Result[ptr[mut Bytes], Error] #unrestricted {
     made :: temporary_bytes(interpreter, cast[u64](a.count) + cast[u64](b.count))?
     data :: made.data
     copy_into(data, a)
@@ -470,7 +497,11 @@ joined :: fn(interpreter: ptr[mut Interpreter], a: u8[], b: u8[]) -> Result[ptr[
  * @error WrongType An operand that isn't a buffer.
  * @error Memory The evaluation's budget can't hold it.
  */
-concatenate_resources :: fn(interpreter: ptr[mut Interpreter], a #escaping : Value, b #escaping : Value) -> Result[Value, Error] #unrestricted {
+concatenate_resources :: fn(
+    interpreter : ptr[mut Interpreter],
+    a #escaping : Value,
+    b #escaping : Value
+) -> Result[Value, Error] #unrestricted {
     first :: buffer_of(interpreter, a)?
     second :: buffer_of(interpreter, b)?
     head :: first.data
@@ -496,7 +527,11 @@ concatenate_resources :: fn(interpreter: ptr[mut Interpreter], a #escaping : Val
  * @error WrongType A value that won't convert.
  * @error Memory The evaluation's budget can't hold it.
  */
-converted :: fn(interpreter: ptr[mut Interpreter], opcode: u8, value #escaping : Value) -> Result[Value, Error] #unrestricted {
+converted :: fn(
+    interpreter : ptr[mut Interpreter],
+    opcode : u8,
+    value #escaping : Value
+) -> Result[Value, Error] #unrestricted {
     if opcode == 0x96 {
         return .Ok(.Buffer(buffer_of(interpreter, value)?))
     }
@@ -540,7 +575,7 @@ converted :: fn(interpreter: ptr[mut Interpreter], opcode: u8, value #escaping :
  * @param number The number.
  * @return Where its digits end; what doesn't fit is cut.
  */
-decimal_into :: fn(into: mut u8[], at: usize, number: u64) -> usize {
+decimal_into :: fn(into : mut u8[], at : usize, number : u64) -> usize {
     digits : u8[20]
     count : usize = 0
     rest := number
@@ -574,7 +609,12 @@ decimal_into :: fn(into: mut u8[], at: usize, number: u64) -> usize {
  * @error WrongType A value that isn't a string or a buffer.
  * @error Memory The evaluation's budget can't hold it.
  */
-middle :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value, index: u64, length: u64) -> Result[Value, Error] #unrestricted {
+middle :: fn(
+    interpreter : ptr[mut Interpreter],
+    value #escaping : Value,
+    index : u64,
+    length : u64
+) -> Result[Value, Error] #unrestricted {
     data : u8[]
     is_string := false
     match value {
@@ -605,7 +645,11 @@ middle :: fn(interpreter: ptr[mut Interpreter], value #escaping : Value, index: 
  * @return The element's index; Ones if none holds.
  * @error WrongType A first operand that isn't a package.
  */
-evaluate_match :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Value, Error] #unrestricted {
+evaluate_match :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Value, Error] #unrestricted {
     source :: evaluate_term(interpreter, frame, cursor)?
     first_operation :: read_byte(cursor)?
     first :: evaluate_integer(interpreter, frame, cursor)?
@@ -641,7 +685,7 @@ evaluate_match :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], c
  * @param operand What it's compared with.
  * @return Whether it holds.
  */
-matches :: fn(operation: u8, element: u64, operand: u64) -> bool {
+matches :: fn(operation : u8, element : u64, operand : u64) -> bool {
     match operation {
         case 0 => return true
         case 1 => return element == operand
@@ -663,7 +707,12 @@ matches :: fn(operation: u8, element: u64, operand: u64) -> bool {
  * @error WrongType A target that can't hold it: a field takes it as store does.
  * @error Memory What it's copied into can't hold it.
  */
-copy_object :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], value #escaping : Value, target: Target) -> Result[void, Error] {
+copy_object :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    value #escaping : Value,
+    target : Target
+) -> Result[void, Error] {
     match target {
         case Named(node) => {
             if node.kind != .Name {

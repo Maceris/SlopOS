@@ -1,8 +1,8 @@
 package iommu_smmuv3
 
 import intrinsics from "base:intrinsics"
-import runtime from "base:runtime"
 import aarch64 from "base:intrinsics/aarch64"
+import runtime from "base:runtime"
 import iommu_interface from "../../iommu_interface"
 
 /*
@@ -212,8 +212,12 @@ OUTPUT_BITS :: u32.[32, 36, 40, 42, 44, 48, 52]
  * @error NotFound Fewer than REGISTER_BYTES are mapped, or the registers don't read as an SMMUv3's.
  * @error Unsupported It lacks one of the things above.
  */
-identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers: iommu_interface.VirtualAddress, size: u64)
-    -> Result[iommu_interface.IommuInfo, iommu_interface.IommuError] {
+identify :: fn(
+    iommu : ptr[mut Iommu],
+    kind : iommu_interface.IommuKind,
+    registers : iommu_interface.VirtualAddress,
+    size : u64
+) -> Result[iommu_interface.IommuInfo, iommu_interface.IommuError] {
     if kind != .Smmuv3 {
         return .Error(.UnsupportedKind)
     }
@@ -230,9 +234,15 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
         return .Error(.NotFound)
     }
     output :: cast[usize](sizes & 7)
-    if features & IDR0_S2P == 0 || features & IDR0_TTF_AARCH64 == 0 || sizes & IDR5_GRAN4K == 0 || output >= OUTPUT_BITS.count
-        || OUTPUT_BITS[output] < 39 || features & IDR0_TWO_LEVEL == 0 || features & IDR0_COHERENT == 0
-        || cast[u64]((queues >> 21) & 0x1f) < QUEUE_LOG || cast[u64]((queues >> 16) & 0x1f) < QUEUE_LOG {
+    if features & IDR0_S2P == 0
+        || features & IDR0_TTF_AARCH64 == 0
+        || sizes & IDR5_GRAN4K == 0
+        || output >= OUTPUT_BITS.count
+        || OUTPUT_BITS[output] < 39
+        || features & IDR0_TWO_LEVEL == 0
+        || features & IDR0_COHERENT == 0
+        || cast[u64]((queues >> 21) & 0x1f) < QUEUE_LOG
+        || cast[u64]((queues >> 16) & 0x1f) < QUEUE_LOG {
         return .Error(.Unsupported)
     }
     iommu.registers = base
@@ -240,11 +250,25 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
     iommu.levels = if iommu.address_bits > 39 { 4 } else { 3 }
     iommu.output_size = cast[u64](output)
     stream_bits :: cast[u64](queues & 0x3f)
-    iommu.stream_bits = if stream_bits < SPLIT { SPLIT } else if stream_bits > MAX_STREAM_BITS { MAX_STREAM_BITS } else { stream_bits }
+    iommu.stream_bits = if stream_bits < SPLIT {
+        SPLIT
+    }
+    else if stream_bits > MAX_STREAM_BITS { MAX_STREAM_BITS } else { stream_bits }
     // Its first-level stream table, its command queue and its event queue, each in whole pages
-    memory :: first_level_bytes(iommu) + (cast[u64](1) << QUEUE_LOG) * COMMAND_BYTES + (cast[u64](1) << QUEUE_LOG) * EVENT_BYTES
-    return .Ok(iommu_interface.IommuInfo.{address_bits = iommu.address_bits, major = 3, minor = version & 0xf, memory = memory,
-        domain_ids = if features & IDR0_VMID16 != 0 { 0xffff } else { 0xff }, interrupts = 0, fault_messages = false})
+    memory :: first_level_bytes(iommu)
+        + (cast[u64](1) << QUEUE_LOG) * COMMAND_BYTES
+        + (cast[u64](1) << QUEUE_LOG) * EVENT_BYTES
+    return .Ok(
+        iommu_interface.IommuInfo.{
+            address_bits = iommu.address_bits,
+            major = 3,
+            minor = version & 0xf,
+            memory = memory,
+            domain_ids = if features & IDR0_VMID16 != 0 { 0xffff } else { 0xff },
+            interrupts = 0,
+            fault_messages = false,
+        }
+    )
 }
 
 /**
@@ -253,7 +277,7 @@ identify :: fn(iommu: ptr[mut Iommu], kind: iommu_interface.IommuKind, registers
  * @param iommu The SMMU, identified.
  * @return Its bytes, 8 for each second-level table of 64 streams, rounded up to whole 4 KiB pages.
  */
-first_level_bytes :: fn(iommu: ptr[Iommu]) -> u64 {
+first_level_bytes :: fn(iommu : ptr[Iommu]) -> u64 {
     bytes :: (cast[u64](1) << (iommu.stream_bits - SPLIT)) * 8
     return (bytes + PAGE - 1) & ~(PAGE - 1)
 }
@@ -272,7 +296,11 @@ first_level_bytes :: fn(iommu: ptr[Iommu]) -> u64 {
  * @error Timeout CR0ACK didn't follow CR0 within SPINS spins, or the first CMD_SYNC didn't complete or met an error;
  *     the SMMU may be left partly set up.
  */
-enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, direct_map_offset: u64) -> Result[void, iommu_interface.IommuError] {
+enable :: fn(
+    iommu : ptr[mut Iommu],
+    memory : iommu_interface.PhysicalAddress,
+    direct_map_offset : u64
+) -> Result[void, iommu_interface.IommuError] {
     iommu.direct_map_offset = direct_map_offset
     iommu.streams = cast[u64](memory)
     iommu.commands = iommu.streams + first_level_bytes(iommu)
@@ -298,7 +326,8 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
     }
     submit(iommu, CFGI_ALL, 31)
     submit(iommu, TLBI_NSNH_ALL, 0)
-    if !sync(iommu) || !set_enables(iommu, CR0_COMMAND_QUEUE | CR0_EVENT_QUEUE)
+    if !sync(iommu)
+        || !set_enables(iommu, CR0_COMMAND_QUEUE | CR0_EVENT_QUEUE)
         || !set_enables(iommu, CR0_COMMAND_QUEUE | CR0_EVENT_QUEUE | CR0_SMMU) {
         return .Error(.Timeout)
     }
@@ -312,8 +341,7 @@ enable :: fn(iommu: ptr[mut Iommu], memory: iommu_interface.PhysicalAddress, dir
  * @param iommu The SMMU, unused.
  * @param message The message, unused.
  */
-route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.MsiMessage) {
-}
+route_faults :: fn(iommu : ptr[mut Iommu], message : iommu_interface.MsiMessage) {}
 
 /**
  * Make an empty domain on the SMMU. Nothing is written to the SMMU or the table.
@@ -323,7 +351,7 @@ route_faults :: fn(iommu: ptr[mut Iommu], message: iommu_interface.MsiMessage) {
  * @param id Its domain ID, used as its VMID: from 1 to identify's domain_ids.
  * @param root The physical address of a zeroed 4 KiB frame for its top-level table.
  */
-init_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: iommu_interface.PhysicalAddress) {
+init_domain :: fn(iommu : ptr[Iommu], domain : ptr[mut Domain], id : u32, root : iommu_interface.PhysicalAddress) {
     domain.root = cast[u64](root)
     domain.id = id
 }
@@ -342,8 +370,12 @@ init_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], id: u32, root: iom
  * @error InvalidAddress The stream ID is outside the stream table.
  * @error NeedFrames Its second-level table had to be made and frames was empty; nothing was changed.
  */
-attach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: ptr[mut iommu_interface.TableFrames])
-    -> Result[void, iommu_interface.MapError] {
+attach :: fn(
+    iommu : ptr[mut Iommu],
+    domain : ptr[Domain],
+    stream : u32,
+    frames : ptr[mut iommu_interface.TableFrames]
+) -> Result[void, iommu_interface.MapError] {
     if cast[u64](stream) >> iommu.stream_bits != 0 {
         return .Error(.InvalidAddress)
     }
@@ -356,8 +388,17 @@ attach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: pt
     // SL0: 2 starts at level 0, for 4 levels; 1 at level 1, for 3
     start :: if iommu.levels == 4 { cast[u64](2) } else { cast[u64](1) }
     store(iommu, entry + 8, 0)
-    store(iommu, entry + 16, cast[u64](domain.id & 0xffff) | t0sz << 32 | start << 38 | STE_S2_WALKS | iommu.output_size << 48
-        | STE_S2_AARCH64 | STE_S2_RECORD)
+    store(
+        iommu,
+        entry + 16,
+        cast[u64](domain.id & 0xffff)
+            | t0sz << 32
+            | start << 38
+            | STE_S2_WALKS
+            | iommu.output_size << 48
+            | STE_S2_AARCH64
+            | STE_S2_RECORD
+    )
     store(iommu, entry + 24, domain.root & ADDRESS_MASK)
     for word in 4..<8 {
         store(iommu, entry + cast[u64](word) * 8, 0)
@@ -379,7 +420,7 @@ attach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32, frames: pt
  * @param stream The stream ID; one at or above 2 to the SMMU's stream_bits, or whose second-level table was never
  *     made, is left alone.
  */
-detach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) {
+detach :: fn(iommu : ptr[mut Iommu], domain : ptr[Domain], stream : u32) {
     if cast[u64](stream) >> iommu.stream_bits != 0 {
         return void
     }
@@ -402,7 +443,7 @@ detach :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], stream: u32) {
  * @param frames Where a zeroed frame for a new second-level table is taken from.
  * @return The entry's physical address, or null if a table had to be made and frames had none.
  */
-stream_entry :: fn(iommu: ptr[mut Iommu], stream: u32, frames: ptr[mut iommu_interface.TableFrames]) -> u64? {
+stream_entry :: fn(iommu : ptr[mut Iommu], stream : u32, frames : ptr[mut iommu_interface.TableFrames]) -> u64? {
     at :: iommu.streams + (cast[u64](stream) >> SPLIT) * 8
     if load(iommu, at) & LEVEL_2_MASK == 0 {
         table :: take_frame(frames) or_return null
@@ -433,9 +474,18 @@ stream_entry :: fn(iommu: ptr[mut Iommu], stream: u32, frames: ptr[mut iommu_int
  * @error NeedFrames frames has fewer than the tables the walk lacks.
  * @error AlreadyMapped A page is mapped there already.
  */
-map :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: iommu_interface.PhysicalAddress, writable: bool, device: bool,
-    frames: ptr[mut iommu_interface.TableFrames]) -> Result[void, iommu_interface.MapError] {
-    if address & (PAGE - 1) != 0 || address >> cast[u64](iommu.address_bits) != 0 || cast[u64](physical) & (PAGE - 1) != 0 {
+map :: fn(
+    iommu : ptr[Iommu],
+    domain : ptr[mut Domain],
+    address : u64,
+    physical : iommu_interface.PhysicalAddress,
+    writable : bool,
+    device : bool,
+    frames : ptr[mut iommu_interface.TableFrames]
+) -> Result[void, iommu_interface.MapError] {
+    if address & (PAGE - 1) != 0
+        || address >> cast[u64](iommu.address_bits) != 0
+        || cast[u64](physical) & (PAGE - 1) != 0 {
         return .Error(.InvalidAddress)
     }
     // The tables it needs, counted first, so nothing changes when there aren't frames enough
@@ -467,7 +517,11 @@ map :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: io
         return .Error(.AlreadyMapped)
     }
     kind :: if device { DEVICE_NGNRE } else { NORMAL_WRITE_BACK | INNER_SHAREABLE }
-    store(iommu, leaf, cast[u64](physical) | DESCRIPTOR | kind | READABLE | (if writable { WRITABLE } else { cast[u64](0) }) | ACCESSED)
+    store(
+        iommu,
+        leaf,
+        cast[u64](physical) | DESCRIPTOR | kind | READABLE | (if writable { WRITABLE } else { cast[u64](0) }) | ACCESSED
+    )
     return .Ok
 }
 
@@ -481,7 +535,7 @@ map :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64, physical: io
  * @param address The page's I/O virtual address; its bits below 12 are ignored, and an address with no page mapped
  *     changes nothing.
  */
-unmap :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) {
+unmap :: fn(iommu : ptr[Iommu], domain : ptr[mut Domain], address : u64) {
     table := domain.root
     for level in 0..<iommu.levels - 1 {
         entry :: load(iommu, table + index_of(address, iommu.levels - level) * 8)
@@ -504,7 +558,7 @@ unmap :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], address: u64) {
  * @param domain The domain whose tables changed; only its ID, as the VMID whose TLB entries go, is read.
  * @param mapped True after mapping, false after unmapping.
  */
-invalidate :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) {
+invalidate :: fn(iommu : ptr[mut Iommu], domain : ptr[Domain], mapped : bool) {
     aarch64.dsb(.SY)
     if mapped {
         return void
@@ -524,7 +578,11 @@ invalidate :: fn(iommu: ptr[mut Iommu], domain: ptr[Domain], mapped: bool) {
  * @param freed Where the tables' frames go; L2 frees them once the SMMU can no longer reach them.
  * @return True once only the root is left; false when freed is full, so L2 empties it and calls again.
  */
-release_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut iommu_interface.FreedFrames]) -> bool {
+release_domain :: fn(
+    iommu : ptr[Iommu],
+    domain : ptr[mut Domain],
+    freed : ptr[mut iommu_interface.FreedFrames]
+) -> bool {
     loop {
         if cast[usize](freed.count) >= freed.frames.count {
             return false
@@ -545,7 +603,7 @@ release_domain :: fn(iommu: ptr[Iommu], domain: ptr[mut Domain], freed: ptr[mut 
  * @param freed Where the table's frame goes, if there's room; the caller makes sure there is.
  * @return Whether a table was let go of; false when there's none below table.
  */
-free_one :: fn(iommu: ptr[Iommu], table: u64, level: u32, freed: ptr[mut iommu_interface.FreedFrames]) -> bool {
+free_one :: fn(iommu : ptr[Iommu], table : u64, level : u32, freed : ptr[mut iommu_interface.FreedFrames]) -> bool {
     if level <= 1 {
         return false
     }
@@ -578,13 +636,14 @@ free_one :: fn(iommu: ptr[Iommu], table: u64, level: u32, freed: ptr[mut iommu_i
  *     permission fault (types 0x10 to 0x13), the page the device addressed and whether it was a write; any other
  *     event has address 0 and isn't a write. Null when the queue is empty.
  */
-next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
+next_fault :: fn(iommu : ptr[mut Iommu]) -> iommu_interface.DmaFault? {
     mask :: (cast[u32](1) << cast[u32](QUEUE_LOG + 1)) - 1
     producer :: read_u32(iommu, EVENT_PRODUCER)
     if producer & mask == iommu.event_consumer & mask {
         return null
     }
-    record :: iommu.events + cast[u64](iommu.event_consumer & ((cast[u32](1) << cast[u32](QUEUE_LOG)) - 1)) * EVENT_BYTES
+    record :: iommu.events
+        + cast[u64](iommu.event_consumer & ((cast[u32](1) << cast[u32](QUEUE_LOG)) - 1)) * EVENT_BYTES
     first :: load(iommu, record)
     second :: load(iommu, record + 8)
     third :: load(iommu, record + 16)
@@ -593,8 +652,13 @@ next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
     reason :: cast[u32](first & 0xff)
     // F_TRANSLATION to F_PERMISSION, whose third word is the input address, and whose RnW bit is set for a read
     translation :: reason >= 0x10 && reason <= 0x13
-    return iommu_interface.DmaFault.{stream = cast[u32](first >> 32), address = if translation { third & ~(PAGE - 1) } else { cast[u64](0) },
-        write = translation && (second >> 35) & 1 == 0, interrupt = false, reason = reason}
+    return iommu_interface.DmaFault.{
+        stream = cast[u32](first >> 32),
+        address = if translation { third & ~(PAGE - 1) } else { cast[u64](0) },
+        write = translation && (second >> 35) & 1 == 0,
+        interrupt = false,
+        reason = reason,
+    }
 }
 
 /**
@@ -606,10 +670,16 @@ next_fault :: fn(iommu: ptr[mut Iommu]) -> iommu_interface.DmaFault? {
  * @param cpu_hardware_id The CPU's hardware ID, unused.
  * @param vector The interrupt ID, unused.
  *  * @param level Unused.
- @return An empty message.
+ * @return An empty message.
  */
-remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool)
-    -> iommu_interface.MsiMessage {
+remap_interrupt :: fn(
+    iommu : ptr[mut Iommu],
+    index : u32,
+    stream : u32,
+    cpu_hardware_id : u64,
+    vector : u32,
+    level : bool
+) -> iommu_interface.MsiMessage {
     return iommu_interface.MsiMessage.{}
 }
 
@@ -619,8 +689,7 @@ remap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardwa
  * @param iommu The SMMU, unused.
  * @param index The remapped interrupt's index, unused.
  */
-unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
-}
+unmap_interrupt :: fn(iommu : ptr[mut Iommu], index : u32) {}
 
 /**
  * Find which entry of a table an address is in.
@@ -629,7 +698,7 @@ unmap_interrupt :: fn(iommu: ptr[mut Iommu], index: u32) {
  * @param level The table's level, 1 for the tables of pages, up to 4 for a top-level table.
  * @return The entry's index, 0 to 511.
  */
-index_of :: fn(address: u64, level: u32) -> u64 {
+index_of :: fn(address : u64, level : u32) -> u64 {
     return (address >> (12 + 9 * cast[u64](level - 1))) & (ENTRIES - 1)
 }
 
@@ -639,7 +708,7 @@ index_of :: fn(address: u64, level: u32) -> u64 {
  * @param frames The frames; its count drops by one when one is taken.
  * @return The frame's physical address, or null when there's none, or count is out of range.
  */
-take_frame :: fn(frames: ptr[mut iommu_interface.TableFrames]) -> u64? {
+take_frame :: fn(frames : ptr[mut iommu_interface.TableFrames]) -> u64? {
     if frames.count == 0 || cast[usize](frames.count) > frames.frames.count {
         return null
     }
@@ -656,7 +725,7 @@ take_frame :: fn(frames: ptr[mut iommu_interface.TableFrames]) -> u64? {
  * @param stream The stream ID whose cached stream table entry goes, within the stream table.
  * @param vmid The VMID whose TLB entries go; only the low 16 bits are used.
  */
-invalidate_stream :: fn(iommu: ptr[mut Iommu], stream: u32, vmid: u32) {
+invalidate_stream :: fn(iommu : ptr[mut Iommu], stream : u32, vmid : u32) {
     submit(iommu, CFGI_STE | cast[u64](stream) << 32, 1)
     submit(iommu, TLBI_S12_VMALL | cast[u64](vmid & 0xffff) << 32, 0)
     _ = sync(iommu)
@@ -673,7 +742,7 @@ invalidate_stream :: fn(iommu: ptr[mut Iommu], stream: u32, vmid: u32) {
  * @param first The command's first word: its opcode and fields.
  * @param second The command's second word.
  */
-submit :: fn(iommu: ptr[mut Iommu], first: u64, second: u64) {
+submit :: fn(iommu : ptr[mut Iommu], first : u64, second : u64) {
     size :: cast[u32](1) << cast[u32](QUEUE_LOG)
     loop {
         consumer :: read_u32(iommu, COMMAND_CONSUMER)
@@ -698,7 +767,7 @@ submit :: fn(iommu: ptr[mut Iommu], first: u64, second: u64) {
  * @param iommu The SMMU, its command queue on.
  * @return True once they have; false if the queue stopped at an erroneous command, or SPINS spins passed first.
  */
-sync :: fn(iommu: ptr[mut Iommu]) -> bool {
+sync :: fn(iommu : ptr[mut Iommu]) -> bool {
     submit(iommu, SYNC, 0)
     mask :: (cast[u32](1) << cast[u32](QUEUE_LOG + 1)) - 1
     for spin in 0..<SPINS {
@@ -721,7 +790,7 @@ sync :: fn(iommu: ptr[mut Iommu]) -> bool {
  * @param enables The whole of CR0: CR0_SMMU, CR0_EVENT_QUEUE and CR0_COMMAND_QUEUE, or none.
  * @return True once CR0ACK equals enables; false if SPINS spins passed first.
  */
-set_enables :: fn(iommu: ptr[mut Iommu], enables: u32) -> bool {
+set_enables :: fn(iommu : ptr[mut Iommu], enables : u32) -> bool {
     write_u32(iommu, CR0, enables)
     for spin in 0..<SPINS {
         if read_u32(iommu, CR0_ACK) == enables {
@@ -739,7 +808,7 @@ set_enables :: fn(iommu: ptr[mut Iommu], enables: u32) -> bool {
  * @param at The word's physical address, 8-byte aligned.
  * @return The word's 64 bits as memory holds them now, read with a volatile load.
  */
-load :: fn(iommu: ptr[Iommu], at: u64) -> u64 {
+load :: fn(iommu : ptr[Iommu], at : u64) -> u64 {
     return intrinsics.volatile_load_u64(cast[ptr[u64]](at + iommu.direct_map_offset))
 }
 
@@ -750,7 +819,7 @@ load :: fn(iommu: ptr[Iommu], at: u64) -> u64 {
  * @param at The word's physical address, 8-byte aligned.
  * @param value The 64 bits to write, in full: a descriptor, a stream table entry word or a command word.
  */
-store :: fn(iommu: ptr[Iommu], at: u64, value: u64) {
+store :: fn(iommu : ptr[Iommu], at : u64, value : u64) {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](at + iommu.direct_map_offset), value)
 }
 
@@ -761,7 +830,7 @@ store :: fn(iommu: ptr[Iommu], at: u64, value: u64) {
  * @param offset The register's byte offset from the register base, 4-byte aligned and below REGISTER_BYTES.
  * @return The register's 32 bits, read with a volatile load; all ones if nothing answers there.
  */
-read_u32 :: fn(iommu: ptr[Iommu], offset: u64) -> u32 {
+read_u32 :: fn(iommu : ptr[Iommu], offset : u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](iommu.registers + offset))
 }
 
@@ -772,7 +841,7 @@ read_u32 :: fn(iommu: ptr[Iommu], offset: u64) -> u32 {
  * @param offset The register's byte offset from the register base, 4-byte aligned and below REGISTER_BYTES.
  * @param value The register's new 32 bits, written whole with a volatile store.
  */
-write_u32 :: fn(iommu: ptr[Iommu], offset: u64, value: u32) {
+write_u32 :: fn(iommu : ptr[Iommu], offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](iommu.registers + offset), value)
 }
 
@@ -783,6 +852,6 @@ write_u32 :: fn(iommu: ptr[Iommu], offset: u64, value: u32) {
  * @param offset The register's byte offset from the register base, 8-byte aligned.
  * @param value The register's new 64 bits, written whole with one volatile store.
  */
-write_u64 :: fn(iommu: ptr[Iommu], offset: u64, value: u64) {
+write_u64 :: fn(iommu : ptr[Iommu], offset : u64, value : u64) {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](iommu.registers + offset), value)
 }

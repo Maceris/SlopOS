@@ -14,7 +14,6 @@ package fat_server
 
 import runtime from "base:runtime"
 import os from "std:os"
-import time from "std:time"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
@@ -22,6 +21,7 @@ import file_set from "std:os/slop_os/file_set"
 import files from "std:os/slop_os/files"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
+import time from "std:time"
 import fat from "../../fat"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
@@ -118,7 +118,7 @@ Server :: struct {
  *     itself, 3 if it didn't give its buffer, 5 if there's no FAT32 volume on it,
  *     and 6 if clients couldn't be added. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: os.Listener[dir.Dir]) -> int {
+main :: fn(log : slop_os.DebugLog?, partition : os.Channel[block.Block], clients : os.Listener[dir.Dir]) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
@@ -141,27 +141,49 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
     server.disk_buffer_bytes = info.buffer_bytes
     server.read_only = info.read_only
-    device :: fat.Device.{context = cast[rawptr](server), sector_count = info.block_count, read = read_sectors, write = write_sectors,
-        read_only = info.read_only}
+    device :: fat.Device.{
+        context = cast[rawptr](server),
+        sector_count = info.block_count,
+        read = read_sectors,
+        write = write_sectors,
+        read_only = info.read_only,
+    }
     volume := fat.Volume.{}
     match fat.mount(device) {
         case Ok(mounted) => volume = mounted
         case Error(failure) => {
-            log_line.write(server.log, "fat_server: no FAT32 volume on a partition of % blocks: %", info.block_count, failure)
+            log_line.write(
+                server.log,
+                "fat_server: no FAT32 volume on a partition of % blocks: %",
+                info.block_count,
+                failure
+            )
             return 5
         }
     }
-    log_line.write(server.log, "fat_server: serving a FAT32 volume of % clusters of % bytes%", volume.cluster_count, volume.cluster_bytes,
-        if info.read_only { ", read-only" } else { "" })
-    // FSInfo's free count checked against the FAT's, and the FAT's kept if they differ, as after another system's writes
+    log_line.write(
+        server.log,
+        "fat_server: serving a FAT32 volume of % clusters of % bytes%",
+        volume.cluster_count,
+        volume.cluster_bytes,
+        if info.read_only { ", read-only" } else { "" }
+    )
+    /*
+     * FSInfo's free count checked against the FAT's, and the FAT's kept if they differ, as after another system's
+     * writes
+     */
     match fat.count_free(&volume) {
         case Ok(counted) => {
             if counted == volume.free_count {
                 log_line.write(server.log, "fat_server: FSInfo's free count is the FAT's")
             }
             else {
-                log_line.write(server.log, "fat_server: FSInfo's free count was %, and the FAT has %, which it is now",
-                    volume.free_count, counted)
+                log_line.write(
+                    server.log,
+                    "fat_server: FSInfo's free count was %, and the FAT has %, which it is now",
+                    volume.free_count,
+                    counted
+                )
                 volume.free_count = counted
                 volume.info_changed = true
             }
@@ -174,8 +196,10 @@ main :: fn(log: slop_os.DebugLog?, partition: os.Channel[block.Block], clients: 
     }
     into := os.Incoming.{}
     loop {
-        // Connections made meanwhile are read in another pass, as a channel wakes its reader only once it's found empty
-        // What's made or written to now has the wall clock's time, if there's a wall clock
+        /*
+         * Connections made meanwhile are read in another pass, as a channel wakes its reader only once it's found empty
+         * What's made or written to now has the wall clock's time, if there's a wall clock
+         */
         volume.stamp = stamp_now()
         loop #at_least_once {
             server.added = false
@@ -226,7 +250,7 @@ stamp_now :: fn() -> u32 {
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
+call :: fn(server : ptr[mut Server], request : block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
     made^ = request
@@ -249,7 +273,7 @@ call :: fn(server: ptr[mut Server], request: block.Request) -> block.Response {
  * @param response A block request's answer, as call gives it; only read.
  * @return Whether it's Finished with Done.
  */
-done :: fn(response: block.Response) -> bool {
+done :: fn(response : block.Response) -> bool {
     return match response {
         case Finished(completion) => completion.status == .Done
         case _ => false
@@ -267,7 +291,7 @@ done :: fn(response: block.Response) -> bool {
  * @return Whether they were all read; false if into is too short, the buffer holds no sector, a read failed, or the
  *     buffer couldn't be read, its driver gone.
  */
-read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+read_sectors :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per :: server.disk_buffer_bytes / block.BLOCK_BYTES
     if per == 0 || count * block.BLOCK_BYTES > cast[u64](into.count) {
@@ -279,7 +303,9 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
             return true
         }
         now :: if count - moved < per { count - moved } else { per }
-        if !done(call(server, .Read(block.Transfer.{tag = 1, first = first + moved, count = cast[u32](now), offset = 0}))) {
+        if !done(
+            call(server, .Read(block.Transfer.{tag = 1, first = first + moved, count = cast[u32](now), offset = 0}))
+        ) {
             return false
         }
         start :: cast[usize](moved * block.BLOCK_BYTES)
@@ -306,7 +332,7 @@ read_sectors :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> b
  * @return Whether they were all written; false if from is too short, the buffer holds no sector, a write failed, or
  *     the buffer couldn't be written, its driver gone; what was written before it written.
  */
-write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
+write_sectors :: fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per :: server.disk_buffer_bytes / block.BLOCK_BYTES
     if per == 0 || count * block.BLOCK_BYTES > cast[u64](from.count) {
@@ -326,7 +352,9 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
         if slop_os.memory_write(server.disk_window, 0, from[start..<end]) is_error {
             return false
         }
-        if !done(call(server, .Write(block.Transfer.{tag = 2, first = first + moved, count = cast[u32](now), offset = 0}))) {
+        if !done(
+            call(server, .Write(block.Transfer.{tag = 2, first = first + moved, count = cast[u32](now), offset = 0}))
+        ) {
             return false
         }
         moved += now
@@ -348,7 +376,15 @@ write_sectors :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool
  * @param name The path it was opened at, or a set's pattern; cut to files.PATH_BYTES.
  * @return Its slot; null, with end closed, if there are MAX_CONNECTIONS already or it couldn't be bound.
  */
-add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, directory: u32, place: fat.Place, read_only: bool, name: string) -> usize? {
+add :: fn(
+    server : ptr[mut Server],
+    kind : Kind,
+    end : slop_os.Channel,
+    directory : u32,
+    place : fat.Place,
+    read_only : bool,
+    name : string
+) -> usize? {
     slot := server.count
     for connection, i in server.connections {
         if i < server.count && connection.kind == .Free {
@@ -396,7 +432,14 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, directory: 
  * @param name The path it was opened at, or a set's pattern.
  * @return The other end, the client's, which the caller sends; null if a channel or a slot couldn't be had.
  */
-open_connection :: fn[P](server: ptr[mut Server], kind: Kind, directory: u32, place: fat.Place, read_only: bool, name: string) -> os.Channel[P]? {
+open_connection :: fn[P](
+    server : ptr[mut Server],
+    kind : Kind,
+    directory : u32,
+    place : fat.Place,
+    read_only : bool,
+    name : string
+) -> os.Channel[P]? {
     startup :: slop_os.startup_block()
     pair :: os.channel_for[P](startup.budget, 0) or_return null
     if add(server, kind, pair.a, directory, place, read_only, name) is_none {
@@ -413,7 +456,7 @@ open_connection :: fn[P](server: ptr[mut Server], kind: Kind, directory: u32, pl
  *     left Free for add to reuse; count isn't lowered.
  * @param index The connection's slot; one past them is ignored.
  */
-drop :: fn(server: ptr[mut Server], index: usize) {
+drop :: fn(server : ptr[mut Server], index : usize) {
     if index >= server.connections.count {
         return void
     }
@@ -430,7 +473,7 @@ drop :: fn(server: ptr[mut Server], index: usize) {
  * @param connection A connection's slot; its buffer's memory handle, if it has a buffer, is closed, and buffer_bytes
  *     set to 0. One without a buffer is left as it is.
  */
-release_buffer :: fn(connection: ptr[mut Connection]) {
+release_buffer :: fn(connection : ptr[mut Connection]) {
     if connection.buffer_bytes != 0 {
         _ = slop_os.handle_close(cast[slop_os.Handle](connection.buffer_memory))
         connection.buffer_bytes = 0
@@ -444,8 +487,16 @@ release_buffer :: fn(connection: ptr[mut Connection]) {
  *     it.
  * @return A view of its name's bytes, good while the connection is unchanged.
  */
-name_of :: fn(connection: ptr[Connection]) -> string {
-    return string_of(&connection.name[0], cast[usize](if connection.name_length > files.PATH_BYTES { cast[u32](files.PATH_BYTES) } else { connection.name_length }))
+name_of :: fn(connection : ptr[Connection]) -> string {
+    return string_of(
+        &connection.name[0],
+        cast[usize](if connection.name_length > files.PATH_BYTES {
+            cast[u32](files.PATH_BYTES)
+        }
+        else {
+            connection.name_length
+        })
+    )
 }
 
 /**
@@ -456,7 +507,7 @@ name_of :: fn(connection: ptr[Connection]) -> string {
  * @param index The connection's slot; a free one, or one past them, is left alone.
  * @param into Where each request is read into, reused.
  */
-serve :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(server : ptr[mut Server], volume : ptr[mut fat.Volume], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -487,7 +538,7 @@ serve :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, 
  * @param path Where the path's bytes are in it.
  * @return The path, a view into the message, good while it is; null if it's empty or longer than files.PATH_BYTES.
  */
-path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
+path_of :: fn(into : ptr[os.Incoming], path : slop_os.Relative[u8]) -> string? {
     bytes :: os.items(into, path)
     if bytes.count == 0 || bytes.count > files.PATH_BYTES {
         return null
@@ -516,7 +567,7 @@ Leaf :: struct {
  * @error DeviceError The disk refused a read.
  * @error Corrupt A directory on the way couldn't be read as one.
  */
-leaf_of :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string) -> Result[Leaf, fat.FatError] {
+leaf_of :: fn(volume : ptr[mut fat.Volume], directory : u32, path : string) -> Result[Leaf, fat.FatError] {
     last := path.count
     for character, i in path {
         if character == '/' {
@@ -530,7 +581,12 @@ leaf_of :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string) -> Resu
     if parent.attributes & fat.DIRECTORY == 0 {
         return .Error(.NotADirectory)
     }
-    return .Ok(Leaf.{directory = fat.directory_cluster(volume, &parent), name = string_of(cast[ptr[u8]](cast[u64](path.data) + cast[u64](last + 1)), path.count - last - 1)})
+    return .Ok(
+        Leaf.{
+            directory = fat.directory_cluster(volume, &parent),
+            name = string_of(cast[ptr[u8]](cast[u64](path.data) + cast[u64](last + 1)), path.count - last - 1),
+        }
+    )
 }
 
 /**
@@ -539,7 +595,7 @@ leaf_of :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string) -> Resu
  * @param error Any FAT error, as fat's functions return it.
  * @return The same error, but NotFat as Corrupt and InvalidName as InvalidPath.
  */
-file_error :: fn(error: fat.FatError) -> files.FileError {
+file_error :: fn(error : fat.FatError) -> files.FileError {
     return match error {
         case .NotFat => files.FileError.Corrupt
         case .NotFound => files.FileError.NotFound
@@ -575,7 +631,12 @@ file_error :: fn(error: fat.FatError) -> files.FileError {
  * @error DeviceError The disk refused a read or a write.
  * @error Corrupt The volume's structures couldn't be followed.
  */
-open_file_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string, creation: files.Creation) -> Result[fat.Entry, fat.FatError] {
+open_file_entry :: fn(
+    volume : ptr[mut fat.Volume],
+    directory : u32,
+    path : string,
+    creation : files.Creation
+) -> Result[fat.Entry, fat.FatError] {
     leaf :: leaf_of(volume, directory, path)?
     existing := fat.Entry.{}
     found := false
@@ -624,7 +685,12 @@ open_file_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string,
  * @error DeviceError The disk refused a read or a write.
  * @error Corrupt The volume's structures couldn't be followed.
  */
-open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: string, create: bool) -> Result[u32, fat.FatError] {
+open_directory_entry :: fn(
+    volume : ptr[mut fat.Volume],
+    directory : u32,
+    path : string,
+    create : bool
+) -> Result[u32, fat.FatError] {
     if !create {
         found :: fat.resolve(volume, directory, path)?
         if found.attributes & fat.DIRECTORY == 0 {
@@ -676,7 +742,13 @@ open_directory_entry :: fn(volume: ptr[mut fat.Volume], directory: u32, path: st
  * @error Corrupt The directory couldn't be read as one.
  * @error DeviceError The disk refused a read.
  */
-listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, fat.FatError] {
+listing_of :: fn(
+    volume : ptr[mut fat.Volume],
+    directory : u32,
+    cursor : u64,
+    pattern : string,
+    out : ptr[mut os.Outgoing]
+) -> Result[files.Listing?, fat.FatError] {
     slot := cast[u32](cursor)
     loop {
         listed :: fat.next_entry(volume, directory, slot)? or_return .Ok(null)
@@ -686,8 +758,14 @@ listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, patte
             continue
         }
         kind :: if listed.entry.attributes & fat.DIRECTORY != 0 { files.Kind.Directory } else { files.Kind.File }
-        return .Ok(files.Listing.{name = os.append(out, string_bytes(name)), kind = kind,
-            size = cast[u64](listed.entry.size), next = cast[u64](slot)})
+        return .Ok(
+            files.Listing.{
+                name = os.append(out, string_bytes(name)),
+                kind = kind,
+                size = cast[u64](listed.entry.size),
+                next = cast[u64](slot),
+            }
+        )
     }
 }
 
@@ -698,7 +776,7 @@ listing_of :: fn(volume: ptr[mut fat.Volume], directory: u32, cursor: u64, patte
  * @param b The byte it's compared with, from the other.
  * @return Whether they're the same in upper case.
  */
-same_byte :: fn(a: u8, b: u8) -> bool {
+same_byte :: fn(a : u8, b : u8) -> bool {
     return fat.upper(a) == fat.upper(b)
 }
 
@@ -708,7 +786,7 @@ same_byte :: fn(a: u8, b: u8) -> bool {
  * @param schema The schema hash an OpenFile asked for, 32 bytes.
  * @return Whether it's all zeros.
  */
-untyped :: fn(schema: u8[32]) -> bool {
+untyped :: fn(schema : u8[32]) -> bool {
     for byte in schema {
         if byte != 0 {
             return false
@@ -726,7 +804,7 @@ untyped :: fn(schema: u8[32]) -> bool {
  * @param name The name described, a connection's path or a set's pattern, appended to out as bytes.
  * @return The Info: kind and size as given, and name as the bytes appended to out, so it's good in out's answer only.
  */
-info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
+info_of :: fn(out : ptr[mut os.Outgoing], kind : files.Kind, size : u64, name : string) -> files.Info {
     return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
 }
 
@@ -758,7 +836,7 @@ features :: fn() -> files.Features {
  * @param index The connection's slot among server's connections; one past them is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
+serve_dir :: fn(server : ptr[mut Server], volume : ptr[mut fat.Volume], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -786,8 +864,8 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                 if path.count == 0 {
                     response^ = .Failed(.InvalidPath)
                 }
-                // FAT keeps no types (decisions/0108)
-                else if !untyped(open.schema) {
+                else // FAT keeps no types (decisions/0108)
+                if !untyped(open.schema) {
                     response^ = .Failed(.WrongType)
                 }
                 else if server.read_only && open.creation != .Existing {
@@ -805,7 +883,9 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                     }
                 }
             }
-            case OpenReadOnlyFile(at) => response^ = read_only_open(server, volume, directory, path_of(into, at) or_else "", &out)
+            case OpenReadOnlyFile(
+                at
+            ) => response^ = read_only_open(server, volume, directory, path_of(into, at) or_else "", &out)
             case OpenDirectory(open) => {
                 path :: path_of(into, open.path) or_else ""
                 match open_directory_entry(volume, directory, path, open.create && !server.read_only) {
@@ -854,7 +934,14 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                 }
             }
             case Narrow => {
-                match open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, directory, fat.Place.{}, true, name_of(&server.connections[index])) {
+                match open_connection[read_only_dir.ReadOnlyDir](
+                    server,
+                    .ReadOnlyDir,
+                    directory,
+                    fat.Place.{},
+                    true,
+                    name_of(&server.connections[index])
+                ) {
                     case Some(made) => response^ = .Narrowed(made)
                     case None => response^ = .Failed(.NoSpace)
                 }
@@ -867,17 +954,36 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
                 }
             }
             // After a failed write, every Sync fails, not only the first (decisions/0112)
-            case Sync => response^ = if !volume.failed && done(call(server, .Flush(3))) { dir.Response.Done } else { dir.Response.Failed(.DeviceError) }
+            case Sync => response^ = if !volume.failed && done(call(server, .Flush(3))) {
+                dir.Response.Done
+            }
+            else {
+                dir.Response.Failed(.DeviceError)
+            }
             case Features => response^ = .Supports(features())
             case Room => {
                 match fat.free_clusters(volume) {
-                    case Ok(free) => response^ = .Room(files.Room.{free = cast[u64](free) * volume.cluster_bytes,
-                        size = cast[u64](volume.cluster_count) * volume.cluster_bytes})
+                    case Ok(
+                        free
+                    ) => response^ = .Room(
+                        files.Room.{
+                            free = cast[u64](free) * volume.cluster_bytes,
+                            size = cast[u64](volume.cluster_count) * volume.cluster_bytes,
+                        }
+                    )
                     case Error(failure) => response^ = .Failed(file_error(failure))
                 }
             }
             case Connect(connection) => {
-                _ = add(server, .Dir, connection.end, directory, fat.Place.{}, false, name_of(&server.connections[index]))
+                _ = add(
+                    server,
+                    .Dir,
+                    connection.end,
+                    directory,
+                    fat.Place.{},
+                    false,
+                    name_of(&server.connections[index])
+                )
                 continue
             }
             // Transactions, Replace and change cursors are the native filesystem's (decisions/0089)
@@ -896,7 +1002,7 @@ serve_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usi
  * @param to Where it goes; the directory that holds it must exist.
  * @return Null once it's moved; why not, otherwise, as fat.rename and the paths' lookups say.
  */
-moved :: fn(volume: ptr[mut fat.Volume], directory: u32, from: string, to: string) -> fat.FatError? {
+moved :: fn(volume : ptr[mut fat.Volume], directory : u32, from : string, to : string) -> fat.FatError? {
     entry := fat.Entry.{}
     match fat.resolve(volume, directory, from) {
         case Ok(found) => entry = found
@@ -924,7 +1030,13 @@ moved :: fn(volume: ptr[mut fat.Volume], directory: u32, from: string, to: strin
  * @return OpenedReadOnlyFile with the connection's other end, which the caller sends; Failed with IsADirectory for a
  *     directory, NoSpace without a slot, or why it couldn't be found.
  */
-read_only_open :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], directory: u32, path: string, out: ptr[mut os.Outgoing]) -> dir.Response {
+read_only_open :: fn(
+    server : ptr[mut Server],
+    volume : ptr[mut fat.Volume],
+    directory : u32,
+    path : string,
+    out : ptr[mut os.Outgoing]
+) -> dir.Response {
     if path.count == 0 {
         return .Failed(.InvalidPath)
     }
@@ -953,7 +1065,12 @@ read_only_open :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], direc
  * @param index The connection's slot among server's connections; one past them is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
+serve_read_only_dir :: fn(
+    server : ptr[mut Server],
+    volume : ptr[mut fat.Volume],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= server.connections.count {
         return void
     }
@@ -987,7 +1104,14 @@ serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], 
                 path :: path_of(into, at) or_else ""
                 match open_directory_entry(volume, directory, path, false) {
                     case Ok(cluster) => {
-                        match open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, cluster, fat.Place.{}, true, path) {
+                        match open_connection[read_only_dir.ReadOnlyDir](
+                            server,
+                            .ReadOnlyDir,
+                            cluster,
+                            fat.Place.{},
+                            true,
+                            path
+                        ) {
                             case Some(made) => response^ = .OpenedDirectory(made)
                             case None => response^ = .Failed(.NoSpace)
                         }
@@ -1016,7 +1140,15 @@ serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], 
             }
             case Features => response^ = .Supports(features())
             case Connect(connection) => {
-                _ = add(server, .ReadOnlyDir, connection.end, directory, fat.Place.{}, true, name_of(&server.connections[index]))
+                _ = add(
+                    server,
+                    .ReadOnlyDir,
+                    connection.end,
+                    directory,
+                    fat.Place.{},
+                    true,
+                    name_of(&server.connections[index])
+                )
                 continue
             }
             case _ => {}
@@ -1037,7 +1169,12 @@ serve_read_only_dir :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], 
  * @param index The connection's slot among server's connections; one past them is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_file_set :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
+serve_file_set :: fn(
+    server : ptr[mut Server],
+    volume : ptr[mut fat.Volume],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= server.connections.count {
         return void
     }
@@ -1122,7 +1259,7 @@ serve_file_set :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index
  * @param name The name asked for, as the request gave it, not yet checked; "" or one with a "/" is never in a set.
  * @return Whether it's one component, not empty, matching the pattern, ignoring case.
  */
-in_set :: fn(pattern: string, name: string) -> bool {
+in_set :: fn(pattern : string, name : string) -> bool {
     for character in name {
         if character == '/' {
             return false
@@ -1142,7 +1279,7 @@ in_set :: fn(pattern: string, name: string) -> bool {
  * @param memory The memory, which the server takes over: kept, or closed when it's refused.
  * @return Null once it's taken; NoBuffer if it's empty or larger than MAX_BUFFER_BYTES.
  */
-use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> files.FileError? {
+use_buffer :: fn(connection : ptr[mut Connection], memory : slop_os.Memory) -> files.FileError? {
     release_buffer(connection)
     size :: slop_os.memory_size(memory) or_else 0
     if size == 0 || size > MAX_BUFFER_BYTES {
@@ -1162,8 +1299,9 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
  *     the file isn't.
  * @return Whether it has a buffer and the transfer's offset and count, in bytes, are inside it.
  */
-fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
-    return connection.buffer_bytes != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
+fits :: fn(connection : ptr[Connection], transfer : files.Transfer) -> bool {
+    return connection.buffer_bytes != 0
+        && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
 }
 
 /** The most bytes of a file a transfer moves at a time between the file and its client's buffer: 64 KiB. */
@@ -1175,7 +1313,7 @@ SCRATCH_BYTES : u64 : 64 * 1024
  * @param transfer The transfer, whose count bounds it.
  * @return Its count, at most SCRATCH_BYTES and at least 1, in bytes.
  */
-scratch_size :: fn(transfer: files.Transfer) -> usize {
+scratch_size :: fn(transfer : files.Transfer) -> usize {
     size :: if cast[u64](transfer.count) < SCRATCH_BYTES { cast[u64](transfer.count) } else { SCRATCH_BYTES }
     return cast[usize](if size == 0 { cast[u64](1) } else { size })
 }
@@ -1194,8 +1332,12 @@ scratch_size :: fn(transfer: files.Transfer) -> usize {
  * @error Corrupt The file's clusters couldn't be followed.
  * @error NoSpace The volume has no cluster left for what's written past the file's end.
  */
-write_from_buffer :: fn(volume: ptr[mut fat.Volume], connection: ptr[Connection], entry: ptr[mut fat.Entry], transfer: files.Transfer)
-    -> Result[u32, files.FileError] {
+write_from_buffer :: fn(
+    volume : ptr[mut fat.Volume],
+    connection : ptr[Connection],
+    entry : ptr[mut fat.Entry],
+    transfer : files.Transfer
+) -> Result[u32, files.FileError] {
     scratch, error :: runtime.new_array(u8, scratch_size(transfer))
     if error != null {
         return .Error(.NoBuffer)
@@ -1243,7 +1385,12 @@ write_from_buffer :: fn(volume: ptr[mut fat.Volume], connection: ptr[Connection]
  * @error DeviceError The disk refused a read.
  * @error Corrupt The file's clusters couldn't be followed.
  */
-read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection: ptr[Connection], transfer: files.Transfer) -> Result[u32, files.FileError] {
+read_file :: fn(
+    server : ptr[mut Server],
+    volume : ptr[mut fat.Volume],
+    connection : ptr[Connection],
+    transfer : files.Transfer
+) -> Result[u32, files.FileError] {
     if !fits(connection, transfer) {
         return .Error(.NoBuffer)
     }
@@ -1272,7 +1419,12 @@ read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection
         if count > piece {
             break
         }
-        if count > 0 && (slop_os.memory_write(connection.buffer_memory, cast[u64](transfer.buffer_offset) + done, part[0..<cast[usize](count)]) is_error) {
+        if count > 0
+            && (slop_os.memory_write(
+                connection.buffer_memory,
+                cast[u64](transfer.buffer_offset) + done,
+                part[0..<cast[usize](count)]
+            ) is_error) {
             return .Error(.NoBuffer)
         }
         done += count
@@ -1296,7 +1448,7 @@ read_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], connection
  * @param index The connection's slot among server's connections; one past them is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
+serve_file :: fn(server : ptr[mut Server], volume : ptr[mut fat.Volume], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1319,7 +1471,14 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
         response :: os.begin[file.Response](&out)
         response^ = .Unsupported
         match os.message_of[file.Request](into)^ {
-            case UseBuffer(memory) => response^ = if use_buffer(connection, memory) is_none { file.Response.Done } else { file.Response.Failed(.NoBuffer) }
+            case UseBuffer(
+                memory
+            ) => response^ = if use_buffer(connection, memory) is_none {
+                file.Response.Done
+            }
+            else {
+                file.Response.Failed(.NoBuffer)
+            }
             case Read(transfer) => {
                 match read_file(server, volume, connection, transfer) {
                     case Ok(count) => response^ = .Transferred(count)
@@ -1357,13 +1516,27 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
             }
             case Info => {
                 match fat.entry_at(volume, connection.place, name_of(connection)) {
-                    case Ok(entry) => response^ = .Described(info_of(&out, .File, cast[u64](entry.size), name_of(connection)))
+                    case Ok(
+                        entry
+                    ) => response^ = .Described(info_of(&out, .File, cast[u64](entry.size), name_of(connection)))
                     case Error(error) => response^ = .Failed(file_error(error))
                 }
             }
-            case Sync => response^ = if !volume.failed && done(call(server, .Flush(4))) { file.Response.Done } else { file.Response.Failed(.DeviceError) }
+            case Sync => response^ = if !volume.failed && done(call(server, .Flush(4))) {
+                file.Response.Done
+            }
+            else {
+                file.Response.Failed(.DeviceError)
+            }
             case Narrow => {
-                match open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, 0, connection.place, true, name_of(connection)) {
+                match open_connection[read_only_file.ReadOnlyFile](
+                    server,
+                    .ReadOnlyFile,
+                    0,
+                    connection.place,
+                    true,
+                    name_of(connection)
+                ) {
                     case Some(made) => response^ = .Narrowed(made)
                     case None => response^ = .Failed(.NoSpace)
                 }
@@ -1388,7 +1561,12 @@ serve_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: us
  * @param index The connection's slot among server's connections; one past them is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_read_only_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume], index: usize, into: ptr[mut os.Incoming]) {
+serve_read_only_file :: fn(
+    server : ptr[mut Server],
+    volume : ptr[mut fat.Volume],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= server.connections.count {
         return void
     }
@@ -1411,8 +1589,14 @@ serve_read_only_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume],
         response :: os.begin[read_only_file.Response](&out)
         response^ = .Unsupported
         match os.message_of[read_only_file.Request](into)^ {
-            case UseBuffer(memory) => response^ = if use_buffer(connection, memory) is_none { read_only_file.Response.Done }
-                else { read_only_file.Response.Failed(.NoBuffer) }
+            case UseBuffer(
+                memory
+            ) => response^ = if use_buffer(connection, memory) is_none {
+                read_only_file.Response.Done
+            }
+            else {
+                read_only_file.Response.Failed(.NoBuffer)
+            }
             case Read(transfer) => {
                 match read_file(server, volume, connection, transfer) {
                     case Ok(count) => response^ = .Transferred(count)
@@ -1421,7 +1605,9 @@ serve_read_only_file :: fn(server: ptr[mut Server], volume: ptr[mut fat.Volume],
             }
             case Info => {
                 match fat.entry_at(volume, connection.place, name_of(connection)) {
-                    case Ok(entry) => response^ = .Described(info_of(&out, .File, cast[u64](entry.size), name_of(connection)))
+                    case Ok(
+                        entry
+                    ) => response^ = .Described(info_of(&out, .File, cast[u64](entry.size), name_of(connection)))
                     case Error(error) => response^ = .Failed(file_error(error))
                 }
             }

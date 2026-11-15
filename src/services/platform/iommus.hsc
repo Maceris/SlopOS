@@ -15,8 +15,11 @@ import pci from "../../pci"
  * Scopes of I/O APICs and HPETs are for interrupt remapping (roadmap Dc). On AArch64 they're the SMMUv3s the host
  * bridge's iommu-map refers to: each entry a range of requester IDs, and the stream IDs they are to its SMMU.
  */
-//SPEC: Intel Virtualization Technology for Directed I/O, Architecture Specification 4.1, §8.1 (DMAR), §8.3 (DRHD), §8.3.1 (device scope)
-//SPEC: Linux's pci-iommu binding (iommu-map); its arm,smmu-v3 binding
+/*
+ * SPEC: Intel Virtualization Technology for Directed I/O, Architecture Specification 4.1, §8.1 (DMAR), §8.3 (DRHD),
+ * §8.3.1 (device scope)
+ * SPEC: Linux's pci-iommu binding (iommu-map); its arm,smmu-v3 binding
+ */
 
 /** The byte offset of the DMAR's first remapping structure, past its header. */
 DMAR_STRUCTURES : u64 : 48
@@ -42,7 +45,7 @@ IOMMU_MAP_CELLS : u64 : 4
  * @param unit Where the DRHD is, in the mapped DMAR.
  * @param length The DRHD's bytes.
  */
-keep_io_apic_sources :: fn(state: ptr[mut Platform], unit: u64, length: u64) {
+keep_io_apic_sources :: fn(state : ptr[mut Platform], unit : u64, length : u64) {
     segment :: pci.read_u16(unit, 6)
     at : u64 = 16
     loop {
@@ -59,8 +62,10 @@ keep_io_apic_sources :: fn(state: ptr[mut Platform], unit: u64, length: u64) {
             bus :: pci.read_u8(unit, at + 5)
             device :: pci.read_u8(unit, at + 6)
             function :: pci.read_u8(unit, at + 7)
-            state.io_apic_sources[at_source] = IoApicSource.{id = pci.read_u8(unit, at + 4),
-                source = slop_os.device_address(segment, bus, device, function)}
+            state.io_apic_sources[at_source] = IoApicSource.{
+                id = pci.read_u8(unit, at + 4),
+                source = slop_os.device_address(segment, bus, device, function),
+            }
             state.io_apic_source_count = at_source + 1
         }
         at += size
@@ -81,7 +86,13 @@ keep_io_apic_sources :: fn(state: ptr[mut Platform], unit: u64, length: u64) {
  * @param size The firmware tables' copy's size in bytes.
  * @return How many ranges the kernel took, 0 if there's no IOMMU or it took none.
  */
-register_iommus :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], tables: u64, size: u64) -> u32 {
+register_iommus :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    tables : u64,
+    size : u64
+) -> u32 {
     match pci.firmware_table(tables, size, "DMAR") {
         case Some(dmar) => return from_dmar(to, platform, state, dmar)
         case None => {}
@@ -104,7 +115,12 @@ register_iommus :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: p
  * @param dmar The DMAR, where it's mapped in the firmware tables' copy and its size in bytes.
  * @return How many ranges of requester IDs the kernel took.
  */
-from_dmar :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], dmar: devicetree.Region) -> u32 {
+from_dmar :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    dmar : devicetree.Region
+) -> u32 {
     registered := cast[u32](0)
     at := DMAR_STRUCTURES
     loop {
@@ -124,7 +140,16 @@ from_dmar :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut
             segment :: pci.read_u16(unit, 6)
             registers :: pci.read_u64(unit + 8)
             if flags & DRHD_INCLUDE_PCI_ALL != 0 {
-                registered += register(to, platform, .VtD, registers, pages * PAGE, slop_os.device_address(segment, 0, 0, 0), 0x10000, 0)
+                registered += register(
+                    to,
+                    platform,
+                    .VtD,
+                    registers,
+                    pages * PAGE,
+                    slop_os.device_address(segment, 0, 0, 0),
+                    0x10000,
+                    0
+                )
             }
             else {
                 registered += register_scopes(to, platform, state, registers, pages * PAGE, segment, unit, length)
@@ -153,8 +178,16 @@ from_dmar :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut
  * @param length The DRHD's length in bytes, scopes included, as its header says.
  * @return How many ranges of requester IDs the kernel took.
  */
-register_scopes :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], registers: u64, size: u64, segment: u16,
-    unit: u64, length: u64) -> u32 {
+register_scopes :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    registers : u64,
+    size : u64,
+    segment : u16,
+    unit : u64,
+    length : u64
+) -> u32 {
     registered := cast[u32](0)
     host :: &state.host
     at := cast[u64](16)
@@ -169,7 +202,12 @@ register_scopes :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: p
         }
         // An I/O APIC's scope is its own requester ID, which its remapped interrupts come from (decisions/0182)
         if kind == SCOPE_IO_APIC && scope_length == 8 {
-            address :: slop_os.device_address(segment, pci.read_u8(unit, at + 5), pci.read_u8(unit, at + 6), pci.read_u8(unit, at + 7))
+            address :: slop_os.device_address(
+                segment,
+                pci.read_u8(unit, at + 5),
+                pci.read_u8(unit, at + 6),
+                pci.read_u8(unit, at + 7)
+            )
             registered += register(to, platform, .VtD, registers, size, address, 1, address & 0xffff)
         }
         if (kind == SCOPE_ENDPOINT || kind == SCOPE_BRIDGE) && scope_length >= 8 && segment == host.segment {
@@ -213,7 +251,7 @@ register_scopes :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: p
  * @param bus A bus number, 0 to 255, such as a DMAR device scope's start bus or a bridge's secondary bus.
  * @return True if bus is from the host's first bus to its last, both included.
  */
-on_host :: fn(host: ptr[pci.Host], bus: u8) -> bool {
+on_host :: fn(host : ptr[pci.Host], bus : u8) -> bool {
     return bus >= host.first_bus && bus <= host.last_bus
 }
 
@@ -228,7 +266,7 @@ on_host :: fn(host: ptr[pci.Host], bus: u8) -> bool {
  * @return How many ranges of requester IDs the kernel took; 0 if the tree, a pci-host-ecam-generic bridge or its
  *     iommu-map can't be found.
  */
-from_iommu_map :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], blob: u64) -> u32 {
+from_iommu_map :: fn(to : slop_os.DebugLog, platform : slop_os.Platform, state : ptr[mut Platform], blob : u64) -> u32 {
     tree := devicetree.open(blob) or_return 0
     bridge := devicetree.find_compatible(&tree, "pci-host-ecam-generic") or_return 0
     map :: devicetree.property(&tree, &bridge, "iommu-map") or_return 0
@@ -266,10 +304,19 @@ from_iommu_map :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: pt
  * @param stream The stream ID first is to the IOMMU, the rest following it in order.
  * @return 1 if the kernel took the range, 0 if not.
  */
-register :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, kind: slop_os.IommuKind, registers: u64, size: u64, first: u32, count: u32,
-    stream: u32) -> u32 {
+register :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    kind : slop_os.IommuKind,
+    registers : u64,
+    size : u64,
+    first : u32,
+    count : u32,
+    stream : u32
+) -> u32 {
     block :: slop_os.startup_block()
-    memory :: slop_os.memory_create_physical(platform, block.budget, registers, size, .Device) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    memory :: slop_os.memory_create_physical(platform, block.budget, registers, size, .Device)
+        or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE {
         log_line.write(to, "platform: an IOMMU's registers at %{#018x} aren't device memory", registers)
         return 0

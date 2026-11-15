@@ -1,14 +1,14 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
 import schema from "std:schema"
 import strings from "std:strings"
 import text_buffer from "std:text_buffer"
-import slop_os from "std:os/slop_os"
 import bundle from "../../bundle"
 import programs from "../../protocols/programs"
+import shell_language as language from "../../shell_language"
 
 /*
  * Help (design/shell.md §6, decisions/0174): what the shell's built-ins do, a shell function's parameters, and a
@@ -32,29 +32,71 @@ BUILTINS :: Builtin.[
     Builtin.{name = "help", summary = "Say what a command does and takes: help name, or help alone for the built-ins."},
     Builtin.{name = "exit", summary = "End the shell, and the session with it."},
     Builtin.{name = "jobs", summary = "List the jobs in the background, started with & after a command."},
-    Builtin.{name = "wait", summary = "Wait for a job to end, and give what it gave: wait n, or wait alone for the newest."},
-    Builtin.{name = "profile", summary = "Run a program sampled, and say the functions it spent its time in: profile name arguments."},
+    Builtin.{
+        name = "wait",
+        summary = "Wait for a job to end, and give what it gave: wait n, or wait alone for the newest.",
+    },
+    Builtin.{
+        name = "profile",
+        summary = "Run a program sampled, and say the functions it spent its time in: profile name arguments.",
+    },
     Builtin.{name = "record", summary = "Run a program recorded, its calls kept for replay: record name arguments."},
-    Builtin.{name = "replay", summary = "Run the last recording's program again from it, and say if it went the same: replay name arguments."},
-    Builtin.{name = "debug", summary = "Run a program under the debugger, stopped before it begins: debug name arguments; help there lists its commands."},
-    Builtin.{name = "crashes", summary = "Show the crash reports of the programs the shell started: the fault, and the stack."},
-    Builtin.{name = "stop", summary = "Stop a job, killing it if it hasn't stopped in 2 seconds: stop n, or the newest."},
+    Builtin.{
+        name = "replay",
+        summary = "Run the last recording's program again from it, and say if it went the same: replay name arguments.",
+    },
+    Builtin.{
+        name = "debug",
+        summary = "Run a program under the debugger, stopped before it begins: debug name arguments; help there lists its commands.",
+    },
+    Builtin.{
+        name = "crashes",
+        summary = "Show the crash reports of the programs the shell started: the fault, and the stack.",
+    },
+    Builtin.{
+        name = "stop",
+        summary = "Stop a job, killing it if it hasn't stopped in 2 seconds: stop n, or the newest.",
+    },
     Builtin.{name = "where", summary = "Keep the items an expression is true for, in a pipeline: where size > 1MiB."},
     Builtin.{name = "map", summary = "Make each item an expression's value, in a pipeline: map name."},
-    Builtin.{name = "sort", summary = "Sort the items by a field, or by themselves, in a pipeline: sort size --descending."},
+    Builtin.{
+        name = "sort",
+        summary = "Sort the items by a field, or by themselves, in a pipeline: sort size --descending.",
+    },
     Builtin.{name = "take", summary = "Keep the first n items, in a pipeline: take 10."},
     Builtin.{name = "group", summary = "Group the items by a field, with their count, in a pipeline: group kind."},
-    Builtin.{name = "view", summary = "Give a file as a value: a typed file's, a text file's text, or other bytes in hex: view notes.txt."},
-    Builtin.{name = "page", summary = "Show what comes before it a screen at a time, in a pipeline: view notes.txt | page; q quits."},
-    Builtin.{name = "processes", summary = "List the session's programs and the shell's jobs, with their memory and state."},
-    Builtin.{name = "end", summary = "End an installation running in the session, until the session starts again: end tally."},
-    Builtin.{name = "install", summary = "Install a program for you, in each of your sessions: install counter --as tally."},
-    Builtin.{name = "uninstall", summary = "Remove an installation of yours and its data, after a snapshot recover can use: uninstall tally."},
+    Builtin.{
+        name = "view",
+        summary = "Give a file as a value: a typed file's, a text file's text, or other bytes in hex: view notes.txt.",
+    },
+    Builtin.{
+        name = "page",
+        summary = "Show what comes before it a screen at a time, in a pipeline: view notes.txt | page; q quits.",
+    },
+    Builtin.{
+        name = "processes",
+        summary = "List the session's programs and the shell's jobs, with their memory and state.",
+    },
+    Builtin.{
+        name = "end",
+        summary = "End an installation running in the session, until the session starts again: end tally.",
+    },
+    Builtin.{
+        name = "install",
+        summary = "Install a program for you, in each of your sessions: install counter --as tally.",
+    },
+    Builtin.{
+        name = "uninstall",
+        summary = "Remove an installation of yours and its data, after a snapshot recover can use: uninstall tally.",
+    },
     Builtin.{name = "installations", summary = "List the installations your sessions run: the system's and yours."},
     Builtin.{name = "grants", summary = "List the grants kept through the powerbox, or revoke one: grants --revoke 3."},
     Builtin.{name = "restart", summary = "Restart the system, once an administrator allows it on the trusted path."},
-    Builtin.{name = "trace", summary = "Trace the whole system for some seconds, once an administrator allows it: trace seconds."},
-    Builtin.{name = "shut-down", summary = "Shut the system down, once an administrator allows it on the trusted path."},
+    Builtin.{
+        name = "trace",
+        summary = "Trace the whole system for some seconds, once an administrator allows it: trace seconds.",
+    },
+    Builtin.{name = "shut-down", summary = "Shut the system down, once an administrator allows it on the trusted path."}
 ]
 
 /**
@@ -63,7 +105,7 @@ BUILTINS :: Builtin.[
  * @param name The name, compared exactly.
  * @return The built-in, a constant's; null if none has the name.
  */
-builtin_named :: fn(name: string) -> Builtin? {
+builtin_named :: fn(name : string) -> Builtin? {
     for each in BUILTINS {
         if each.name == name {
             return each
@@ -80,7 +122,7 @@ builtin_named :: fn(name: string) -> Builtin? {
  * @return The names, in the bundle store's boot root's order, the shell's own; empty without a programs connection,
  *     or if it couldn't be asked. One that couldn't be asked is asked again next time.
  */
-program_names :: fn(shell: ptr[mut Shell]) -> string[] {
+program_names :: fn(shell : ptr[mut Shell]) -> string[] {
     if shell.names_listed {
         return shell.names[0..<shell.names.count]
     }
@@ -117,7 +159,7 @@ program_names :: fn(shell: ptr[mut Shell]) -> string[] {
  * @param result What receive_response gave.
  * @return True for Received; false for anything else: the connection failed, or the answer broke its rules.
  */
-received :: fn(result: os.Arrival) -> bool {
+received :: fn(result : os.Arrival) -> bool {
     return match result {
         case Received => true
         case _ => false
@@ -133,7 +175,7 @@ received :: fn(result: os.Arrival) -> bool {
  * @return The documentation, its text the shell's, never freed; null without a programs connection, for a name too
  *     short or long, a program that's missing or has none, or a record that doesn't read as one.
  */
-program_documentation :: fn(shell: ptr[mut Shell], name: string) -> bundle.Documentation? {
+program_documentation :: fn(shell : ptr[mut Shell], name : string) -> bundle.Documentation? {
     connection :: shell.programs or_return null
     if name.count == 0 || name.count > programs.MAX_NAME {
         return null
@@ -159,7 +201,14 @@ program_documentation :: fn(shell: ptr[mut Shell], name: string) -> bundle.Docum
         return null
     }
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    if slop_os.memory_map(found.record, slop_os.startup_block().space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+    if slop_os.memory_map(
+        found.record,
+        slop_os.startup_block().space,
+        address,
+        0,
+        size,
+        slop_os.PROTECTION_READ
+    ) is_error {
         return null
     }
     defer {
@@ -175,7 +224,7 @@ program_documentation :: fn(shell: ptr[mut Shell], name: string) -> bundle.Docum
  * @param name The program's name.
  * @return The manifest, the caller's to free; null if there's no such program, or its manifest doesn't read.
  */
-program_manifest :: fn(shell: ptr[mut Shell], name: string) -> schema.Schema? {
+program_manifest :: fn(shell : ptr[mut Shell], name : string) -> schema.Schema? {
     found :: find_program(shell, name) or_return null
     _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
     manifest :: read_manifest(found)
@@ -193,7 +242,7 @@ program_manifest :: fn(shell: ptr[mut Shell], name: string) -> schema.Schema? {
  * @param tree The Call node of help, its one argument, if any, the name.
  * @return Null.
  */
-show_help :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+show_help :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 1 {
         return error_at(tree.at, "help takes one name")
     }
@@ -204,8 +253,14 @@ show_help :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
             for each in BUILTINS {
                 say_described(shell, each.name, each.summary, 8)
             }
-            say(shell, "Anything else is a program, or a function defined with fn. help name says what one does and takes;")
-            say(shell, "Tab completes commands, --parameters, $names and paths; & after a command runs it in the background,")
+            say(
+                shell,
+                "Anything else is a program, or a function defined with fn. help name says what one does and takes;"
+            )
+            say(
+                shell,
+                "Tab completes commands, --parameters, $names and paths; & after a command runs it in the background,"
+            )
             say(shell, "and Ctrl-C stops what runs in the foreground.")
             return .Ok(.Null)
         }
@@ -226,7 +281,8 @@ show_help :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
         case None => {}
     }
     if is_script(name) {
-        parameters :: script_parameters_at(shell, name) or_return error_at(named.at, message("% can't be read, or doesn't parse", name))
+        parameters :: script_parameters_at(shell, name)
+            or_return error_at(named.at, message("% can't be read, or doesn't parse", name))
         help_script(shell, name, parameters)
         return .Ok(.Null)
     }
@@ -243,12 +299,17 @@ show_help :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
  * @param name The script's path.
  * @param parameters Its Parameter nodes.
  */
-help_script :: fn(shell: ptr[mut Shell], name: string, parameters: ptr[Node][]) {
+help_script :: fn(shell : ptr[mut Shell], name : string, parameters : ptr[Node][]) {
     say(shell, message("% is a script, run in a shell of its own with only what it's given. It takes:", name))
     for parameter in parameters {
         type :: type_of_parameter(parameter)
-        default :: if parameter.children.count > 0 { ", with a default" } else if type == "bool" { ", false if not given" }
-            else if parameter.text == "here" && type == "Dir" { ", the shell's directory if not given" } else { "" }
+        default :: if parameter.children.count > 0 {
+            ", with a default"
+        }
+        else if type == "bool" {
+            ", false if not given"
+        }
+        else if parameter.text == "here" && type == "Dir" { ", the shell's directory if not given" } else { "" }
         say(shell, message("  --%1 (%2%3)", parameter.text, if type.count > 0 { type } else { "any type" }, default))
     }
     if parameters.count == 0 {
@@ -265,7 +326,7 @@ help_script :: fn(shell: ptr[mut Shell], name: string, parameters: ptr[Node][]) 
  * @param column How wide the name's column is, in bytes; 0 for the text two spaces after the name. The line's cut at
  *     1 KiB.
  */
-say_described :: fn(shell: ptr[mut Shell], name: string, text: string, column: usize) {
+say_described :: fn(shell : ptr[mut Shell], name : string, text : string, column : usize) {
     storage : u8[1024]
     out := text_buffer.make(storage)
     text_buffer.append(&out, name)
@@ -282,7 +343,7 @@ say_described :: fn(shell: ptr[mut Shell], name: string, text: string, column: u
  * @param shell The shell, whose terminal it's written on.
  * @param function The function's Function node, its parameters first.
  */
-help_function :: fn(shell: ptr[mut Shell], function: ptr[Node]) {
+help_function :: fn(shell : ptr[mut Shell], function : ptr[Node]) {
     say(shell, message("% is a shell function, defined with fn. It takes:", function.text))
     taken := false
     for parameter in function.children {
@@ -291,7 +352,10 @@ help_function :: fn(shell: ptr[mut Shell], function: ptr[Node]) {
         }
         taken = true
         type :: type_of_parameter(parameter)
-        default :: if parameter.children.count > 0 { ", with a default" } else if type == "bool" { ", false if not given" } else { "" }
+        default :: if parameter.children.count > 0 {
+            ", with a default"
+        }
+        else if type == "bool" { ", false if not given" } else { "" }
         say(shell, message("  --%1 (%2%3)", parameter.text, if type.count > 0 { type } else { "any type" }, default))
     }
     if !taken {
@@ -308,9 +372,19 @@ help_function :: fn(shell: ptr[mut Shell], function: ptr[Node]) {
  * @param manifest Its manifest, whose entry's inputs are its parameters; only read.
  * @param documentation Its documentation; null for a program without, when only its parameters are written.
  */
-help_program :: fn(shell: ptr[mut Shell], name: string, manifest: ptr[schema.Schema], documentation: bundle.Documentation?) {
+help_program :: fn(
+    shell : ptr[mut Shell],
+    name : string,
+    manifest : ptr[schema.Schema],
+    documentation : bundle.Documentation?
+) {
     described := documentation or_else bundle.Documentation.{}
-    say_described(shell, message("%:", name), if described.summary.count > 0 { described.summary } else { "a program, without documentation" }, 0)
+    say_described(
+        shell,
+        message("%:", name),
+        if described.summary.count > 0 { described.summary } else { "a program, without documentation" },
+        0
+    )
     if described.details.count > 0 {
         say(shell, described.details)
     }
@@ -347,7 +421,7 @@ help_program :: fn(shell: ptr[mut Shell], name: string, manifest: ptr[schema.Sch
  * @return Its type's name, and ", optional" when it is; or for a grant, how the shell gives it. A message on the heap,
  *     never freed.
  */
-given_text :: fn(manifest: ptr[schema.Schema], parameter: Parameter) -> string {
+given_text :: fn(manifest : ptr[schema.Schema], parameter : Parameter) -> string {
     optional :: if parameter.optional { ", optional" } else { "" }
     return match parameter.giving {
         case .Value => message("%1%2", type_text(manifest, parameter.held), optional)

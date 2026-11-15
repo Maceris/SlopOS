@@ -20,7 +20,7 @@ Scope :: struct {
  * @param name The name, compared exactly.
  * @return Its value; null if no scope binds it.
  */
-lookup :: fn(scope: ptr[Scope], name: string) -> Value? {
+lookup :: fn(scope : ptr[Scope], name : string) -> Value? {
     for each, i in scope.names {
         if each == name && i < scope.values.count {
             return scope.values[i]
@@ -39,7 +39,7 @@ lookup :: fn(scope: ptr[Scope], name: string) -> Value? {
  * @param name The name, kept by the scope as given when it's new, so it has to live as long.
  * @param value The value, kept by the scope.
  */
-bind :: fn(scope: ptr[mut Scope], name #escaping : string, value #escaping : Value) {
+bind :: fn(scope : ptr[mut Scope], name #escaping : string, value #escaping : Value) {
     for each, i in scope.names {
         if each == name && i < scope.values.count {
             scope.values[i] = value
@@ -60,7 +60,7 @@ bind :: fn(scope: ptr[mut Scope], name #escaping : string, value #escaping : Val
  * @param text The string, as parse_quoted made it.
  * @return The string filled in, on the heap, never freed; a value is cut at 1024 bytes.
  */
-interpolate :: fn(scope: ptr[Scope], text: string) -> string {
+interpolate :: fn(scope : ptr[Scope], text : string) -> string {
     bytes :: string_bytes(text)
     made : u8[..]
     at : usize = 0
@@ -79,12 +79,18 @@ interpolate :: fn(scope: ptr[Scope], text: string) -> string {
             start :: at + 1
             end := start
             loop {
-                if end >= bytes.count || (!is_letter(bytes[end]) && !is_digit(bytes[end]) && bytes[end] != cast[u8]('-')) {
+                if end >= bytes.count
+                    || (!is_letter(bytes[end]) && !is_digit(bytes[end]) && bytes[end] != cast[u8]('-')) {
                     break
                 }
                 end += 1
             }
-            name :: if start <= end && end <= bytes.count { string_of(&bytes[start % bytes.count], end - start) } else { "" }
+            name :: if start <= end && end <= bytes.count {
+                string_of(&bytes[start % bytes.count], end - start)
+            }
+            else {
+                ""
+            }
             match lookup(scope, name) {
                 case Some(value) => {
                     storage : u8[1024]

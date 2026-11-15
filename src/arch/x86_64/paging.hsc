@@ -1,8 +1,8 @@
 package arch_x86_64
 
 import intrinsics from "base:intrinsics"
-import runtime from "base:runtime"
 import x86_64 from "base:intrinsics/x86_64"
+import runtime from "base:runtime"
 import arch_interface from "../../arch_interface"
 
 /*
@@ -18,7 +18,7 @@ import arch_interface from "../../arch_interface"
  * init_kernel_page_table, and every other address space copies those root entries. So the kernel
  * half is shared, and a kernel mapping made after an address space was created shows up in it too.
  */
-//SPEC: Intel SDM Vol. 3A §4.5 (4-level paging), Tables 4-14 to 4-20 (entry formats), §4.10 (TLBs, PCIDs), §13.12 (PAT)
+// SPEC: Intel SDM Vol. 3A §4.5 (4-level paging), Tables 4-14 to 4-20 (entry formats), §4.10 (TLBs, PCIDs), §13.12 (PAT)
 
 /** How many 8-byte entries a table has at every level. */
 ENTRIES :: 512
@@ -123,7 +123,7 @@ PageTable :: struct {
  * @return low USER_LOW, 64 KiB, the lowest user address.
  * @return high USER_HIGH, one past the highest, a page below the canonical boundary.
  */
-user_address_range :: fn() -> (low, high: arch_interface.VirtualAddress) {
+user_address_range :: fn() -> (low, high : arch_interface.VirtualAddress) {
     return cast[arch_interface.VirtualAddress](USER_LOW), cast[arch_interface.VirtualAddress](USER_HIGH)
 }
 
@@ -142,7 +142,7 @@ address_space_tag_count :: fn() -> u32 {
  * @param size Any of the three sizes; only 1 GiB asks the CPU, through CPUID on the calling CPU.
  * @return True for 4 KiB and 2 MiB pages, which every x86-64 CPU maps; for 1 GiB pages, whether CPUID says so.
  */
-supports_page_size :: fn(size: arch_interface.PageSize) -> bool {
+supports_page_size :: fn(size : arch_interface.PageSize) -> bool {
     if size != .Size1G {
         return true
     }
@@ -172,11 +172,11 @@ kernel_half_frames :: fn() -> u32 {
  * @param direct_map_offset Where physical address 0 is in the direct map, through which every table is reached.
  */
 init_kernel_page_table :: fn(
-    table: ptr[mut PageTable],
-    root: arch_interface.PhysicalAddress,
-    half: arch_interface.PhysicalAddress,
-    tag: arch_interface.AddressSpaceTag,
-    direct_map_offset: u64,
+    table : ptr[mut PageTable],
+    root : arch_interface.PhysicalAddress,
+    half : arch_interface.PhysicalAddress,
+    tag : arch_interface.AddressSpaceTag,
+    direct_map_offset : u64
 ) {
     table.root = root
     table.tag = tag
@@ -202,10 +202,10 @@ init_kernel_page_table :: fn(
  * @param kernel The kernel's own table, from init_kernel_page_table, whose direct map and page sizes this takes too.
  */
 init_page_table :: fn(
-    table: ptr[mut PageTable],
-    root: arch_interface.PhysicalAddress,
-    tag: arch_interface.AddressSpaceTag,
-    kernel: ptr[PageTable],
+    table : ptr[mut PageTable],
+    root : arch_interface.PhysicalAddress,
+    tag : arch_interface.AddressSpaceTag,
+    kernel : ptr[PageTable]
 ) {
     table.root = root
     table.tag = tag
@@ -242,12 +242,12 @@ init_page_table :: fn(
  * @error UnsupportedPageSize A 1 GiB page, which the CPU doesn't map.
  */
 map :: fn(
-    table: ptr[mut PageTable],
-    virtual_address: arch_interface.VirtualAddress,
-    physical_address: arch_interface.PhysicalAddress,
-    size: arch_interface.PageSize,
-    mapping: arch_interface.Mapping,
-    tables: ptr[mut arch_interface.TableFrames],
+    table : ptr[mut PageTable],
+    virtual_address : arch_interface.VirtualAddress,
+    physical_address : arch_interface.PhysicalAddress,
+    size : arch_interface.PageSize,
+    mapping : arch_interface.Mapping,
+    tables : ptr[mut arch_interface.TableFrames]
 ) -> Result[void, arch_interface.MapError] {
     address :: cast[u64](virtual_address)
     physical :: cast[u64](physical_address)
@@ -256,7 +256,10 @@ map :: fn(
     if size == .Size1G && !table.pages_1g {
         return .Error(.UnsupportedPageSize)
     }
-    if address % bytes != 0 || physical % bytes != 0 || physical >= PHYSICAL_LIMIT || !may_map(table, address, bytes, mapping.user) {
+    if address % bytes != 0
+        || physical % bytes != 0
+        || physical >= PHYSICAL_LIMIT
+        || !may_map(table, address, bytes, mapping.user) {
         return .Error(.InvalidAddress)
     }
 
@@ -320,11 +323,11 @@ map :: fn(
  *     changed.
  */
 unmap :: fn(
-    table: ptr[mut PageTable],
-    virtual_address: arch_interface.VirtualAddress,
-    size: arch_interface.PageSize,
-    freed: ptr[mut arch_interface.FreedTables],
-    flush: ptr[mut arch_interface.TlbBatch],
+    table : ptr[mut PageTable],
+    virtual_address : arch_interface.VirtualAddress,
+    size : arch_interface.PageSize,
+    freed : ptr[mut arch_interface.FreedTables],
+    flush : ptr[mut arch_interface.TlbBatch]
 ) -> Result[arch_interface.PhysicalAddress, arch_interface.UnmapError] {
     address :: cast[u64](virtual_address)
     // Only the table's own half, as map allows: a user table can't reach the kernel's shared tables through it
@@ -335,8 +338,10 @@ unmap :: fn(
     path :: walk(table, address, leaf)?
     physical :: page_address(load_entry(path.leaf_slot), leaf)
 
-    // Each table that empties, from the leaf's up, until one keeps an entry. The root, and the
-    // kernel half's tables below it, stay.
+    /*
+     * Each table that empties, from the leaf's up, until one keeps an entry. The root, and the
+     * kernel half's tables below it, stay.
+     */
     emptied : u64 = 0
     for level in leaf..<TOP_LEVEL {
         if level + 1 == TOP_LEVEL && table.kernel {
@@ -383,11 +388,11 @@ unmap :: fn(
  * @error PartOfLargerPage The address is in a larger page; nothing was changed.
  */
 protect :: fn(
-    table: ptr[mut PageTable],
-    virtual_address: arch_interface.VirtualAddress,
-    size: arch_interface.PageSize,
-    mapping: arch_interface.Mapping,
-    flush: ptr[mut arch_interface.TlbBatch],
+    table : ptr[mut PageTable],
+    virtual_address : arch_interface.VirtualAddress,
+    size : arch_interface.PageSize,
+    mapping : arch_interface.Mapping,
+    flush : ptr[mut arch_interface.TlbBatch]
 ) -> Result[void, arch_interface.UnmapError] {
     address :: cast[u64](virtual_address)
     leaf :: leaf_level(size)
@@ -409,7 +414,10 @@ protect :: fn(
  * @return The physical address it maps to, its offset in its page included, and the mapping, or null if nothing is
  *     mapped there.
  */
-translate :: fn(table: ptr[PageTable], virtual_address: arch_interface.VirtualAddress) -> arch_interface.Translation? {
+translate :: fn(
+    table : ptr[PageTable],
+    virtual_address : arch_interface.VirtualAddress
+) -> arch_interface.Translation? {
     address :: cast[u64](virtual_address)
     current := table_at(table, cast[u64](table.root))
     for level in 0..=TOP_LEVEL #reverse {
@@ -441,7 +449,7 @@ translate :: fn(table: ptr[PageTable], virtual_address: arch_interface.VirtualAd
  * @return True once only the root is left; false when freed filled first, so it has to be emptied and this called
  *     again.
  */
-release_user_tables :: fn(table: ptr[mut PageTable], freed: ptr[mut arch_interface.FreedTables]) -> bool {
+release_user_tables :: fn(table : ptr[mut PageTable], freed : ptr[mut arch_interface.FreedTables]) -> bool {
     runtime.assert(!table.kernel, "the kernel's own tables stay")
     top :: table_at(table, cast[u64](table.root))
     loop {
@@ -473,7 +481,7 @@ release_user_tables :: fn(table: ptr[mut PageTable], freed: ptr[mut arch_interfa
  * @return The virtual address of the entry that points at such a table, the first one found, or 0 if current points
  *     at no tables.
  */
-lowest_table_slot :: fn(table: ptr[PageTable], current: ptr[mut Table], level: u64) -> u64 {
+lowest_table_slot :: fn(table : ptr[PageTable], current : ptr[mut Table], level : u64) -> u64 {
     if level == 0 {
         return 0
     }
@@ -495,7 +503,7 @@ lowest_table_slot :: fn(table: ptr[PageTable], current: ptr[mut Table], level: u
  *
  * @param table The address space, which has to stay until the CPU switches away from it and its tag is flushed.
  */
-activate :: fn(table: ptr[PageTable]) {
+activate :: fn(table : ptr[PageTable]) {
     cpu :: current_cpu()
     value := cast[u64](table.root)
     if cpu.pcid {
@@ -520,7 +528,7 @@ activate :: fn(table: ptr[PageTable]) {
  *
  * @param batch The addresses, at most 16 (asserted), and their tag.
  */
-flush_tlb :: fn(batch: ptr[arch_interface.TlbBatch]) {
+flush_tlb :: fn(batch : ptr[arch_interface.TlbBatch]) {
     if batch.all {
         flush_everything()
         return void
@@ -545,7 +553,7 @@ flush_tlb :: fn(batch: ptr[arch_interface.TlbBatch]) {
  *
  * @param tag The tag, of which the low 12 bits are used.
  */
-flush_tlb_tag :: fn(tag: arch_interface.AddressSpaceTag) {
+flush_tlb_tag :: fn(tag : arch_interface.AddressSpaceTag) {
     cpu :: current_cpu()
     if !cpu.pcid {
         // Without PCIDs every switch flushes, so nothing of another address space is left
@@ -577,7 +585,7 @@ flush_everything :: fn() {
  * @param cpu The CPU, the calling one.
  * @param tag The PCID, below 4096.
  */
-mark_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) {
+mark_stale :: fn(cpu : ptr[mut ArchCpu], tag : u64) {
     word :: (tag >> 6) % 64
     cpu.stale_tags[word] |= cast[u64](1) << (tag % 64)
 }
@@ -589,7 +597,7 @@ mark_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) {
  * @param tag The PCID, below 4096.
  * @return Whether the tag was marked stale; the mark is cleared either way.
  */
-take_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) -> bool {
+take_stale :: fn(cpu : ptr[mut ArchCpu], tag : u64) -> bool {
     word :: (tag >> 6) % 64
     bit :: cast[u64](1) << (tag % 64)
     stale :: cpu.stale_tags[word] & bit != 0
@@ -603,7 +611,7 @@ take_stale :: fn(cpu: ptr[mut ArchCpu], tag: u64) -> bool {
  *
  * @param cpu The calling CPU's state.
  */
-init_paging :: fn(cpu: ptr[mut ArchCpu]) {
+init_paging :: fn(cpu : ptr[mut ArchCpu]) {
     x86_64.wrmsr(IA32_PAT, PAT_VALUE)
     x86_64.write_cr4(x86_64.read_cr4() | CR4_PAGE_GLOBAL)
     cpu.pcid = (x86_64.read_cr4() & CR4_PCID) != 0
@@ -625,7 +633,7 @@ init_paging :: fn(cpu: ptr[mut ArchCpu]) {
  *     no 4 KiB page is mapped gives false.
  * @return Whether the bit was set; false where no 4 KiB page is mapped there, a larger page included.
  */
-take_accessed :: fn(table: ptr[mut PageTable], virtual_address: arch_interface.VirtualAddress) -> bool {
+take_accessed :: fn(table : ptr[mut PageTable], virtual_address : arch_interface.VirtualAddress) -> bool {
     path :: match walk(table, cast[u64](virtual_address), 0) {
         case Ok(found) => found
         case Error(error) => return false
@@ -652,7 +660,7 @@ Path :: struct {
  * @error NotMapped An entry on the way isn't present, or there's a table where a large page should be.
  * @error PartOfLargerPage A larger page maps the address.
  */
-walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_interface.UnmapError] {
+walk :: fn(table : ptr[PageTable], address : u64, leaf : u64) -> Result[Path, arch_interface.UnmapError] {
     path : Path
     current := table_at(table, cast[u64](table.root))
     for level in leaf..=TOP_LEVEL #reverse {
@@ -689,7 +697,7 @@ walk :: fn(table: ptr[PageTable], address: u64, leaf: u64) -> Result[Path, arch_
  * @return For a user mapping, whether table is a user one and the bytes are within USER_LOW to USER_HIGH; for a
  *     kernel one, whether table is the kernel's own and address is at KERNEL_HALF_START or above.
  */
-may_map :: fn(table: ptr[PageTable], address: u64, bytes: u64, user: bool) -> bool {
+may_map :: fn(table : ptr[PageTable], address : u64, bytes : u64, user : bool) -> bool {
     if user {
         return !table.kernel && address >= USER_LOW && address < USER_HIGH && bytes <= USER_HIGH - address
     }
@@ -704,7 +712,7 @@ may_map :: fn(table: ptr[PageTable], address: u64, bytes: u64, user: bool) -> bo
  * @param large Whether it's a 2 MiB or 1 GiB page, which sets PS and moves the PAT bit.
  * @return The entry, present.
  */
-leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, large: bool) -> u64 {
+leaf_entry :: fn(physical : u64, mapping : arch_interface.Mapping, large : bool) -> u64 {
     entry := physical | ENTRY_PRESENT | protection_bits(mapping.protection) | cache_bits(mapping.cache, large)
     // A shadow stack's page: read-only and dirty, which only its own accesses write (decisions/0186)
     if mapping.shadow_stack {
@@ -728,7 +736,7 @@ leaf_entry :: fn(physical: u64, mapping: arch_interface.Mapping, large: bool) ->
  * @param protection The protection, never both writable and executable.
  * @return R/W and XD as it needs: Read is XD, ReadWrite R/W and XD, ReadExecute neither.
  */
-protection_bits :: fn(protection: arch_interface.Protection) -> u64 {
+protection_bits :: fn(protection : arch_interface.Protection) -> u64 {
     return match protection {
         case .Read => ENTRY_NO_EXECUTE
         case .ReadWrite => ENTRY_WRITABLE | ENTRY_NO_EXECUTE
@@ -744,7 +752,7 @@ protection_bits :: fn(protection: arch_interface.Protection) -> u64 {
  * @return The bits to OR into the entry: none for WriteBack, PAT and PWT for WriteCombining, PCD and PWT for
  *     Device.
  */
-cache_bits :: fn(cache: arch_interface.CacheMode, large: bool) -> u64 {
+cache_bits :: fn(cache : arch_interface.CacheMode, large : bool) -> u64 {
     pat :: if large { ENTRY_PAT_LARGE } else { ENTRY_PAT_SMALL }
     return match cache {
         case .WriteBack => cast[u64](0)
@@ -761,9 +769,12 @@ cache_bits :: fn(cache: arch_interface.CacheMode, large: bool) -> u64 {
  * @return Its protection, cache mode (Device for any combination leaf_entry doesn't make, other than WriteBack's and
  *     WriteCombining's), user access and global bit.
  */
-mapping_of :: fn(entry: u64, large: bool) -> arch_interface.Mapping {
+mapping_of :: fn(entry : u64, large : bool) -> arch_interface.Mapping {
     mapping : arch_interface.Mapping
-    mapping.protection = if entry & ENTRY_WRITABLE != 0 { .ReadWrite } else if entry & ENTRY_NO_EXECUTE != 0 { .Read } else { .ReadExecute }
+    mapping.protection = if entry & ENTRY_WRITABLE != 0 {
+        .ReadWrite
+    }
+    else if entry & ENTRY_NO_EXECUTE != 0 { .Read } else { .ReadExecute }
     pat :: if large { ENTRY_PAT_LARGE } else { ENTRY_PAT_SMALL }
     mapping.cache = if entry & (pat | ENTRY_CACHE_DISABLE | ENTRY_WRITE_THROUGH) == 0 {
         .WriteBack
@@ -787,7 +798,7 @@ mapping_of :: fn(entry: u64, large: bool) -> arch_interface.Mapping {
  * @param level Its level, 0 to 2, which says how far the address is aligned and so which low bits aren't part of it.
  * @return The page's physical address, aligned to its size.
  */
-page_address :: fn(entry: u64, level: u64) -> u64 {
+page_address :: fn(entry : u64, level : u64) -> u64 {
     return entry & ENTRY_ADDRESS & ~((cast[u64](1) << (12 + 9 * level)) - 1)
 }
 
@@ -797,7 +808,7 @@ page_address :: fn(entry: u64, level: u64) -> u64 {
  * @param size Any of the three sizes, supported by the CPU or not.
  * @return 4096, 2 MiB or 1 GiB.
  */
-page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
+page_bytes :: fn(size : arch_interface.PageSize) -> u64 {
     return cast[u64](1) << (12 + 9 * leaf_level(size))
 }
 
@@ -807,7 +818,7 @@ page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
  * @param size Any of the three sizes, supported by the CPU or not.
  * @return 0 for 4 KiB, 1 for 2 MiB, 2 for 1 GiB.
  */
-leaf_level :: fn(size: arch_interface.PageSize) -> u64 {
+leaf_level :: fn(size : arch_interface.PageSize) -> u64 {
     return match size {
         case .Size4K => cast[u64](0)
         case .Size2M => cast[u64](1)
@@ -823,7 +834,7 @@ leaf_level :: fn(size: arch_interface.PageSize) -> u64 {
  * @param level current's level, which picks the 9 bits of address that index it.
  * @return The entry, in current.
  */
-slot_at :: fn(current: ptr[mut Table], address: u64, level: u64) -> ptr[mut u64] {
+slot_at :: fn(current : ptr[mut Table], address : u64, level : u64) -> ptr[mut u64] {
     return &current.entries[(address >> (12 + 9 * level)) % ENTRIES]
 }
 
@@ -834,7 +845,7 @@ slot_at :: fn(current: ptr[mut Table], address: u64, level: u64) -> ptr[mut u64]
  * @param physical The table's physical address.
  * @return The table's virtual address in the direct map.
  */
-table_at :: fn(table: ptr[PageTable], physical: u64) -> ptr[mut Table] {
+table_at :: fn(table : ptr[PageTable], physical : u64) -> ptr[mut Table] {
     return cast[ptr[mut Table]](table.direct_map_offset + physical)
 }
 
@@ -845,7 +856,7 @@ table_at :: fn(table: ptr[PageTable], physical: u64) -> ptr[mut Table] {
  *     its own and the result means nothing.
  * @return The count, 0 to 512; 0 for a root entry copied into a user address space, which keeps none.
  */
-count_of :: fn(entry: u64) -> u64 {
+count_of :: fn(entry : u64) -> u64 {
     return (entry & COUNT_MASK) >> COUNT_SHIFT
 }
 
@@ -855,7 +866,7 @@ count_of :: fn(entry: u64) -> u64 {
  * @param slot The entry's virtual address, or 0 for none.
  * @param change What to add, wrapping: 1 to count up, 0 - 1 to count down.
  */
-add_to_count :: fn(slot: u64, change: u64) {
+add_to_count :: fn(slot : u64, change : u64) {
     if slot == 0 {
         return void
     }
@@ -871,7 +882,7 @@ add_to_count :: fn(slot: u64, change: u64) {
  * @return The entry as it is now, with a plain load: 0 if it was never set or was cleared, otherwise its address,
  *     flags and, for a non-leaf entry, count bits.
  */
-load_entry :: fn(slot: u64) -> u64 {
+load_entry :: fn(slot : u64) -> u64 {
     return cast[ptr[u64]](slot)^
 }
 
@@ -884,7 +895,7 @@ load_entry :: fn(slot: u64) -> u64 {
  * @param slot The entry, in the direct map.
  * @param entry Its new value.
  */
-store_entry :: fn(slot: ptr[mut u64], entry: u64) {
+store_entry :: fn(slot : ptr[mut u64], entry : u64) {
     intrinsics.atomic_store_u64_release(slot, entry)
 }
 
@@ -894,7 +905,7 @@ store_entry :: fn(slot: ptr[mut u64], entry: u64) {
  * @param tables The frames, at least one of them (asserted).
  * @return The frame's physical address, zeroed, as the caller provided it.
  */
-take_table :: fn(tables: ptr[mut arch_interface.TableFrames]) -> u64 {
+take_table :: fn(tables : ptr[mut arch_interface.TableFrames]) -> u64 {
     count :: cast[usize](tables.count)
     runtime.assert(count >= 1 && count <= 4, "map takes a frame only when one is left")
     tables.count = cast[u32](count - 1)
@@ -907,7 +918,7 @@ take_table :: fn(tables: ptr[mut arch_interface.TableFrames]) -> u64 {
  * @param freed The frames, with room for one more (asserted).
  * @param frame The table's physical address.
  */
-add_freed :: fn(freed: ptr[mut arch_interface.FreedTables], frame: u64) {
+add_freed :: fn(freed : ptr[mut arch_interface.FreedTables], frame : u64) {
     count :: cast[usize](freed.count)
     runtime.assert(count < 4, "unmap checks there's room before freeing a table")
     freed.frames[count] = cast[arch_interface.PhysicalAddress](frame)
@@ -921,7 +932,7 @@ add_freed :: fn(freed: ptr[mut arch_interface.FreedTables], frame: u64) {
  * @param tag The address space's tag.
  * @param address The page's virtual address.
  */
-add_flush :: fn(flush: ptr[mut arch_interface.TlbBatch], tag: arch_interface.AddressSpaceTag, address: u64) {
+add_flush :: fn(flush : ptr[mut arch_interface.TlbBatch], tag : arch_interface.AddressSpaceTag, address : u64) {
     flush.tag = tag
     count :: cast[usize](flush.count)
     if flush.all || count >= 16 {

@@ -1,7 +1,7 @@
 package arch_x86_64
 
-import x86_64 from "base:intrinsics/x86_64"
 import intrinsics from "base:intrinsics"
+import x86_64 from "base:intrinsics/x86_64"
 import arch_interface from "../../arch_interface"
 
 /*
@@ -12,7 +12,7 @@ import arch_interface from "../../arch_interface"
  *
  * The legacy 8259 PICs are masked by init_system and never used.
  */
-//SPEC: Intel 82093AA I/O APIC datasheet, §3.1 (IOREGSEL, IOWIN), §3.2 (IOAPICVER, IOREDTBL)
+// SPEC: Intel 82093AA I/O APIC datasheet, §3.1 (IOREGSEL, IOWIN), §3.2 (IOAPICVER, IOREDTBL)
 
 /** The byte offset of IOREGSEL, the register select, in an I/O APIC's memory-mapped registers. */
 IO_APIC_SELECT : u64 : 0x00
@@ -33,8 +33,10 @@ REDIRECTION_MASKED : u32 : 1 << 16
 /** An I/O APIC has at most 240 lines: its maximum redirection entry is 8 bits, and vectors stop at 255. */
 MAX_IO_APIC_LINES : u32 : 240
 
-// The 8259 PICs' data ports, where writing a mask masks their lines.
-//SPEC: Intel 8259A datasheet (operation command word 1, the interrupt mask)
+/*
+ * The 8259 PICs' data ports, where writing a mask masks their lines.
+ * SPEC: Intel 8259A datasheet (operation command word 1, the interrupt mask)
+ */
 /** The master 8259 PIC's data port, which takes its interrupt mask. */
 PIC_MASTER_DATA : u16 : 0x21
 /** The slave 8259 PIC's data port, which takes its interrupt mask. */
@@ -61,9 +63,9 @@ InterruptController :: struct {
  * @error NotFound The version register doesn't read as an I/O APIC's; no line was changed.
  */
 init_interrupt_controller :: fn(
-    controller: ptr[mut InterruptController],
-    kind: arch_interface.ControllerKind,
-    registers: arch_interface.VirtualAddress,
+    controller : ptr[mut InterruptController],
+    kind : arch_interface.ControllerKind,
+    registers : arch_interface.VirtualAddress
 ) -> Result[u32, arch_interface.ControllerError] {
     if kind != .IoApic {
         return .Error(.UnsupportedKind)
@@ -82,7 +84,7 @@ init_interrupt_controller :: fn(
     return .Ok(lines)
 }
 
-//TODO(claude): destinations above 255 need interrupt remapping through the IOMMU (M7)
+// TODO(claude): destinations above 255 need interrupt remapping through the IOMMU (M7)
 /**
  * Deliver a line as id to the local APIC with this ID, fixed delivery in physical destination mode, still masked.
  *
@@ -97,12 +99,12 @@ init_interrupt_controller :: fn(
  * @param polarity Whether the line is active high or active low.
  */
 route_wired :: fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    cpu_hardware_id: u64,
-    id: arch_interface.InterruptId,
-    trigger: arch_interface.Trigger,
-    polarity: arch_interface.Polarity,
+    controller : ptr[mut InterruptController],
+    line : u32,
+    cpu_hardware_id : u64,
+    id : arch_interface.InterruptId,
+    trigger : arch_interface.Trigger,
+    polarity : arch_interface.Polarity
 ) {
     low := (cast[u32](id) & 0xff) | REDIRECTION_MASKED
     if trigger == .Level {
@@ -129,14 +131,14 @@ route_wired :: fn(
  * @param trigger Whether the line is edge or level triggered.
  * @param polarity Whether the line is active high or active low.
  */
-//SPEC: Intel Virtualization Technology for Directed I/O, §5.1.5.1 (I/O xAPIC programming in remappable format)
+// SPEC: Intel Virtualization Technology for Directed I/O, §5.1.5.1 (I/O xAPIC programming in remappable format)
 route_wired_remapped :: fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    message: arch_interface.MsiMessage,
-    id: arch_interface.InterruptId,
-    trigger: arch_interface.Trigger,
-    polarity: arch_interface.Polarity,
+    controller : ptr[mut InterruptController],
+    line : u32,
+    message : arch_interface.MsiMessage,
+    id : arch_interface.InterruptId,
+    trigger : arch_interface.Trigger,
+    polarity : arch_interface.Polarity
 ) {
     handle :: cast[u32]((message.address >> 5) & 0x7fff) | (cast[u32]((message.address >> 2) & 1) << 15)
     low := (cast[u32](id) & 0xff) | REDIRECTION_MASKED | (((handle >> 15) & 1) << 11)
@@ -159,7 +161,7 @@ route_wired_remapped :: fn(
  * @param controller The I/O APIC.
  * @param line The line, below the controller's lines; not checked.
  */
-mask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
+mask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
     low :: read_io_apic(controller, redirection_low(line))
     write_io_apic(controller, redirection_low(line), low | REDIRECTION_MASKED)
 }
@@ -170,7 +172,7 @@ mask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
  * @param controller The I/O APIC.
  * @param line The line, below the controller's lines; not checked.
  */
-unmask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
+unmask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
     low :: read_io_apic(controller, redirection_low(line))
     write_io_apic(controller, redirection_low(line), low & ~REDIRECTION_MASKED)
 }
@@ -181,7 +183,7 @@ unmask_wired :: fn(controller: ptr[mut InterruptController], line: u32) {
  * @param line The line, from 0.
  * @return The index to select through IOREGSEL.
  */
-redirection_low :: fn(line: u32) -> u32 {
+redirection_low :: fn(line : u32) -> u32 {
     return IO_APIC_REDIRECTION_REGISTER + line * 2
 }
 
@@ -191,7 +193,7 @@ redirection_low :: fn(line: u32) -> u32 {
  * @param line The line, from 0.
  * @return The index to select through IOREGSEL.
  */
-redirection_high :: fn(line: u32) -> u32 {
+redirection_high :: fn(line : u32) -> u32 {
     return IO_APIC_REDIRECTION_REGISTER + line * 2 + 1
 }
 
@@ -204,7 +206,7 @@ redirection_high :: fn(line: u32) -> u32 {
  * @param register The register's index, like IO_APIC_VERSION_REGISTER.
  * @return The register's 32 bits.
  */
-read_io_apic :: fn(controller: ptr[InterruptController], register: u32) -> u32 {
+read_io_apic :: fn(controller : ptr[InterruptController], register : u32) -> u32 {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](controller.registers + IO_APIC_SELECT), register)
     return intrinsics.volatile_load_u32(cast[ptr[u32]](controller.registers + IO_APIC_WINDOW))
 }
@@ -218,7 +220,7 @@ read_io_apic :: fn(controller: ptr[InterruptController], register: u32) -> u32 {
  * @param register The register's index, like a line's redirection_low.
  * @param value The register's new 32 bits.
  */
-write_io_apic :: fn(controller: ptr[InterruptController], register: u32, value: u32) {
+write_io_apic :: fn(controller : ptr[InterruptController], register : u32, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](controller.registers + IO_APIC_SELECT), register)
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](controller.registers + IO_APIC_WINDOW), value)
 }

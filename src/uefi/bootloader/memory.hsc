@@ -23,7 +23,7 @@ FOUR_GIGABYTES : u64 : 1 << 32
  *     memory; KernelImage and BootModule for the bootloader's kinds; Reserved for anything else, memory-mapped I/O
  *     and kinds it doesn't know included.
  */
-memory_kind :: fn(kind: u32) -> boot_info.MemoryKind {
+memory_kind :: fn(kind : u32) -> boot_info.MemoryKind {
     if kind == KERNEL_MEMORY {
         return .KernelImage
     }
@@ -34,7 +34,8 @@ memory_kind :: fn(kind: u32) -> boot_info.MemoryKind {
     if kind == PANIC_MEMORY {
         return .FirmwareReserved
     }
-    conventional :: kind == cast[u32](uefi.MemoryKind.Conventional) || kind == cast[u32](uefi.MemoryKind.BootServicesCode)
+    conventional :: kind == cast[u32](uefi.MemoryKind.Conventional)
+        || kind == cast[u32](uefi.MemoryKind.BootServicesCode)
         || kind == cast[u32](uefi.MemoryKind.BootServicesData)
     if conventional {
         return .Usable
@@ -45,8 +46,10 @@ memory_kind :: fn(kind: u32) -> boot_info.MemoryKind {
     if kind == cast[u32](uefi.MemoryKind.AcpiReclaim) {
         return .FirmwareTables
     }
-    firmware :: kind == cast[u32](uefi.MemoryKind.AcpiNvs) || kind == cast[u32](uefi.MemoryKind.RuntimeServicesCode)
-        || kind == cast[u32](uefi.MemoryKind.RuntimeServicesData) || kind == cast[u32](uefi.MemoryKind.PalCode)
+    firmware :: kind == cast[u32](uefi.MemoryKind.AcpiNvs)
+        || kind == cast[u32](uefi.MemoryKind.RuntimeServicesCode)
+        || kind == cast[u32](uefi.MemoryKind.RuntimeServicesData)
+        || kind == cast[u32](uefi.MemoryKind.PalCode)
     if firmware {
         return .FirmwareReserved
     }
@@ -100,11 +103,12 @@ memory_map_buffer :: fn() -> MemoryMap? {
  * @return True if the map was read and its descriptors are at least as big as uefi.MemoryDescriptor; false if boot
  *     services are gone, the buffer was too small, or the firmware failed.
  */
-read_memory_map :: fn(map: ptr[mut MemoryMap]) -> bool {
+read_memory_map :: fn(map : ptr[mut MemoryMap]) -> bool {
     services :: uefi.boot_services() or_return false
     map.size = map.capacity
     version := cast[u32](0)
-    return services.get_memory_map(&map.size, cast[rawptr](map.buffer), &map.key, &map.descriptor_size, &version) == uefi.SUCCESS
+    return services.get_memory_map(&map.size, cast[rawptr](map.buffer), &map.key, &map.descriptor_size, &version)
+        == uefi.SUCCESS
         && map.descriptor_size >= size_of(uefi.MemoryDescriptor)
 }
 
@@ -115,7 +119,7 @@ read_memory_map :: fn(map: ptr[mut MemoryMap]) -> bool {
  * @param index The descriptor's index, below size / descriptor_size; it isn't checked.
  * @return A pointer into the map's buffer, good while the buffer isn't read into again.
  */
-descriptor_at :: fn(map: ptr[MemoryMap], index: usize) -> ptr[uefi.MemoryDescriptor] {
+descriptor_at :: fn(map : ptr[MemoryMap], index : usize) -> ptr[uefi.MemoryDescriptor] {
     return cast[ptr[uefi.MemoryDescriptor]](cast[rawptr](map.buffer + cast[u64](index * map.descriptor_size)))
 }
 
@@ -132,7 +136,7 @@ descriptor_at :: fn(map: ptr[MemoryMap], index: usize) -> ptr[uefi.MemoryDescrip
  * @return True if everything was mapped; false if the memory map couldn't be read or page tables couldn't be had,
  *     leaving the tables partly filled.
  */
-map_memory :: fn(tables: ptr[PageTables], offset: u64) -> bool {
+map_memory :: fn(tables : ptr[PageTables], offset : u64) -> bool {
     // On AArch64 only memory, as normal memory: the kernel maps devices' registers itself
     whole_low :: TARGET_ARCH == .x86_64
     if whole_low && (!map(tables, offset, 0, FOUR_GIGABYTES) || !map(tables, 0, 0, FOUR_GIGABYTES)) {
@@ -172,7 +176,7 @@ map_memory :: fn(tables: ptr[PageTables], offset: u64) -> bool {
  * @return True once the boot services are left; null if boot services were gone already, the map's buffer couldn't
  *     be had or read, or 4 tries failed, leaving the boot services running.
  */
-leave_boot_services :: fn(handoff: ptr[mut boot_protocol.Handoff]) -> bool? {
+leave_boot_services :: fn(handoff : ptr[mut boot_protocol.Handoff]) -> bool? {
     services :: uefi.boot_services() or_return null
     memory := memory_map_buffer() or_return null
     for attempt in 0..<4 {
@@ -195,13 +199,15 @@ leave_boot_services :: fn(handoff: ptr[mut boot_protocol.Handoff]) -> bool? {
  * @param region The region to insert; among regions of the same base it goes after them.
  * @return The new count, count + 1; or count unchanged, the region dropped, when handoff.regions is full.
  */
-insert_region :: fn(handoff: ptr[mut boot_protocol.Handoff], count: usize, region: boot_info.MemoryRegion) -> usize {
+insert_region :: fn(handoff : ptr[mut boot_protocol.Handoff], count : usize, region : boot_info.MemoryRegion) -> usize {
     if count >= handoff.regions.count {
         return count
     }
     at := count
     loop {
-        if at == 0 || at > handoff.regions.count || cast[u64](handoff.regions[at - 1].range.base) <= cast[u64](region.range.base) {
+        if at == 0
+            || at > handoff.regions.count
+            || cast[u64](handoff.regions[at - 1].range.base) <= cast[u64](region.range.base) {
             break
         }
         if at < handoff.regions.count {
@@ -225,25 +231,45 @@ insert_region :: fn(handoff: ptr[mut boot_protocol.Handoff], count: usize, regio
  * @param map The firmware's map, read.
  * @param handoff The handoff, whose regions and region_count are written over; its framebuffer is read.
  */
-convert_memory_map :: fn(map: ptr[MemoryMap], handoff: ptr[mut boot_protocol.Handoff]) {
+convert_memory_map :: fn(map : ptr[MemoryMap], handoff : ptr[mut boot_protocol.Handoff]) {
     count := cast[usize](0)
     for i in cast[usize](0)..<map.size / map.descriptor_size {
         descriptor :: descriptor_at(map, i)
         if count >= handoff.regions.count || descriptor.pages == 0 {
             continue
         }
-        count = insert_region(handoff, count, boot_info.MemoryRegion.{range = boot_info.PhysicalRange.{
-            cast[boot_info.PhysicalAddress](descriptor.physical_start), descriptor.pages * 4096}, kind = memory_kind(descriptor.kind)})
+        count = insert_region(
+            handoff,
+            count,
+            boot_info.MemoryRegion.{
+                range = boot_info.PhysicalRange.{
+                    cast[boot_info.PhysicalAddress](descriptor.physical_start),
+                    descriptor.pages * 4096
+                },
+                kind = memory_kind(descriptor.kind),
+            }
+        )
     }
     // The framebuffer's memory, which the firmware's map leaves out, as a device's, for the kernel's direct map
     if handoff.has_framebuffer != 0 {
         frame :: handoff.framebuffer
-        count = insert_region(handoff, count, boot_info.MemoryRegion.{range = boot_info.PhysicalRange.{
-            cast[boot_info.PhysicalAddress](frame.base & ~cast[u64](4095)), (frame.size + (frame.base & 4095) + 4095) & ~cast[u64](4095)},
-            kind = .Framebuffer})
+        count = insert_region(
+            handoff,
+            count,
+            boot_info.MemoryRegion.{
+                range = boot_info.PhysicalRange.{
+                    cast[boot_info.PhysicalAddress](frame.base & ~cast[u64](4095)),
+                    (frame.size + (frame.base & 4095) + 4095) & ~cast[u64](4095)
+                },
+                kind = .Framebuffer,
+            }
+        )
     }
     // Page 0 never usable
-    if count > 0 && count < handoff.regions.count && cast[u64](handoff.regions[0].range.base) == 0 && handoff.regions[0].kind == .Usable {
+    if count > 0
+        && count < handoff.regions.count
+        && cast[u64](handoff.regions[0].range.base) == 0
+        && handoff.regions[0].kind == .Usable {
         first :: if handoff.regions.count > 0 { handoff.regions[0] } else { boot_info.MemoryRegion.{} }
         for j in 0..<count {
             back :: count - j
@@ -251,11 +277,15 @@ convert_memory_map :: fn(map: ptr[MemoryMap], handoff: ptr[mut boot_protocol.Han
                 handoff.regions[back] = handoff.regions[back - 1]
             }
         }
-        handoff.regions[0] = boot_info.MemoryRegion.{range = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](0), 4096},
-            kind = .Reserved}
+        handoff.regions[0] = boot_info.MemoryRegion.{
+            range = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](0), 4096},
+            kind = .Reserved,
+        }
         if 1 < handoff.regions.count {
-            handoff.regions[1] = boot_info.MemoryRegion.{range = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](4096),
-                first.range.size - 4096}, kind = .Usable}
+            handoff.regions[1] = boot_info.MemoryRegion.{
+                range = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](4096), first.range.size - 4096},
+                kind = .Usable,
+            }
         }
         count += 1
     }
@@ -268,7 +298,8 @@ convert_memory_map :: fn(map: ptr[MemoryMap], handoff: ptr[mut boot_protocol.Han
         region :: handoff.regions[i]
         if merged > 0 && merged <= handoff.regions.count {
             last :: &handoff.regions[merged - 1]
-            if last.kind == region.kind && cast[u64](last.range.base) + last.range.size == cast[u64](region.range.base) {
+            if last.kind == region.kind
+                && cast[u64](last.range.base) + last.range.size == cast[u64](region.range.base) {
                 last.range.size += region.range.size
                 continue
             }

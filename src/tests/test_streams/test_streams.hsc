@@ -9,12 +9,12 @@
 package test_streams
 
 import compiler from "base:compiler"
+import memory from "std:memory"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
 import stream from "std:os/slop_os/stream"
-import memory from "std:memory"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -56,7 +56,9 @@ CopyGrants :: struct {
     bytes : os.Sink[u8]?,
 }
 
-/** What main was given that the tests use: the program's grants, the streams' writing ends among them only in the copy. */
+/**
+ * What main was given that the tests use: the program's grants, the streams' writing ends among them only in the copy.
+ */
 Given :: struct {
     /** The debug log. */
     log : slop_os.DebugLog,
@@ -84,7 +86,7 @@ Given :: struct {
  *     port, a stream, the log's copy, the launch, the arena or a reader couldn't be made; or, as the copy, if a
  *     writer couldn't be made or written.
  */
-records_and_bytes_stream_between_programs #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+records_and_bytes_stream_between_programs #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     match given.output {
         case Some(end) => return write_copy(t, os.Sink[Item].{end = end}, given.bytes)
@@ -93,15 +95,30 @@ records_and_bytes_stream_between_programs #test :: fn(t: ptr[mut testing.T]) -> 
     block :: slop_os.startup_block()
     executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
-    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(block.budget, loader.end),
+        "a port for the process manager's replies"
+    )?
     port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for the copy's watch")?
     items :: testing.require_ok(t, stream.pair[Item](block.budget), "a stream of records is made")?
     chunks :: testing.require_ok(t, stream.pair[u8](block.budget), "a stream of bytes is made")?
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
-    copy_log :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](given.log), rights), "the debug log can be copied for the copy")?
-    launch :: os.launch(loader, manager_port, "test_streams copy", executable, COPY_BUDGET, main,
+    copy_log :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](given.log), rights),
+        "the debug log can be copied for the copy"
+    )?
+    launch :: os.launch(
+        loader,
+        manager_port,
+        "test_streams copy",
+        executable,
+        COPY_BUDGET,
+        main,
         CopyGrants.{log = cast[slop_os.DebugLog](copy_log), output = items.sink, bytes = chunks.sink},
-        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}})
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}
+    )
     launched :: testing.require_ok(t, launch, "the process manager launches the copy with the streams' writing ends")?
     // The records, each checked, read through an arena reset as it goes
     arena :: testing.require_some(t, memory.make_arena(), "an arena for the records read")?
@@ -111,7 +128,12 @@ records_and_bytes_stream_between_programs #test :: fn(t: ptr[mut testing.T]) -> 
     push_context reading (allocator = memory.arena_allocator(arena)) {
         loop {
             item :: stream.next(&reader) or_break
-            testing.expect_eq(t, item.index, read, "records arrive in the order written, none lost, even as the ring wraps")
+            testing.expect_eq(
+                t,
+                item.index,
+                read,
+                "records arrive in the order written, none lost, even as the ring wraps"
+            )
             testing.expect_eq(t, item.name, "record", "a record's string is copied with it")
             testing.expect_eq(t, item.even, read % 2 == 0, "a record's other fields are copied with it")
             read += 1
@@ -134,7 +156,11 @@ records_and_bytes_stream_between_programs #test :: fn(t: ptr[mut testing.T]) -> 
     stream.close_reader(&byte_reader)
     testing.expect_eq(t, ended_with(port), 0, "the copy wrote both streams and ended them, so its test passed")
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
-    testing.expect(t, test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000), "the copy's budget is back to nothing once it has ended")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000),
+        "the copy's budget is back to nothing once it has ended"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
     return .Ok
@@ -148,11 +174,15 @@ records_and_bytes_stream_between_programs #test :: fn(t: ptr[mut testing.T]) -> 
  * @param bytes The bytes' stream's writing end; null fails the test once the records are written.
  * @return Ok once both are written and ended; Error, recorded, if a writer couldn't be made or written.
  */
-write_copy :: fn(t: ptr[mut testing.T], sink: os.Sink[Item], bytes: os.Sink[u8]?) -> testing.Outcome {
+write_copy :: fn(t : ptr[mut testing.T], sink : os.Sink[Item], bytes : os.Sink[u8]?) -> testing.Outcome {
     writer := testing.require_ok(t, stream.writer_on(sink), "the records' stream is opened to write")?
     for i in cast[u64](0)..<COUNT {
         written :: stream.write(&writer, Item.{index = i, name = "record", even = i % 2 == 0})
-        testing.require_none(t, written, "each record is written, the writer waiting for the reader when the ring is full")?
+        testing.require_none(
+            t,
+            written,
+            "each record is written, the writer waiting for the reader when the ring is full"
+        )?
     }
     finished :: stream.finish(&writer, 0)
     testing.expect_none(t, finished, "the records' stream is ended with status 0")
@@ -178,8 +208,13 @@ write_copy :: fn(t: ptr[mut testing.T], sink: os.Sink[Item], bytes: os.Sink[u8]?
  * @param bytes Given only to the copy: where its bytes go. The copy without it fails.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, output: os.Sink[Item]?,
-    bytes: os.Sink[u8]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    output : os.Sink[Item]?,
+    bytes : os.Sink[u8]?
+) -> int {
     given := Given.{log = log, manager = manager, program = program, bytes = bytes}
     match output {
         case Some(sink) => given.output = sink.end
@@ -195,7 +230,7 @@ main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMan
  * @param port The port its watch, for SIGNAL_TERMINATED, queues on; nothing else may be bound to it.
  * @return The process's exit code, or 0xffff if the wait failed.
  */
-ended_with :: fn(port: slop_os.Port) -> u64 {
+ended_with :: fn(port : slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0
     return if taken == 1 { packets[0].data[1] } else { cast[u64](0xffff) }

@@ -21,11 +21,14 @@ import frames from "frames"
  * @param thread The thread.
  * @return The page; null if it has none, or its memory object has been destroyed since thread_set_page.
  */
-thread_page_of :: fn(kernel: ptr[mut Kernel], thread: ptr[Thread]) -> ptr[slop_os.ThreadPage]? {
+thread_page_of :: fn(kernel : ptr[mut Kernel], thread : ptr[Thread]) -> ptr[slop_os.ThreadPage]? {
     if thread.page_frame == 0 || !is_live(thread.page_memory, thread.page_generation) {
         return null
     }
-    return cast[ptr[slop_os.ThreadPage]](cast[rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](thread.page_frame))))
+    return cast[ptr[slop_os.ThreadPage]](cast[rawptr](frames.virtual_of(
+        &kernel.frames,
+        cast[boot_info.PhysicalAddress](thread.page_frame)
+    )))
 }
 
 /**
@@ -35,7 +38,7 @@ thread_page_of :: fn(kernel: ptr[mut Kernel], thread: ptr[Thread]) -> ptr[slop_o
  * @param thread The thread.
  * @return The fiber, as the thread's fiber scheduler names it; 0 for none, or with no page.
  */
-running_fiber_of :: fn(kernel: ptr[mut Kernel], thread: ptr[Thread]) -> u64 {
+running_fiber_of :: fn(kernel : ptr[mut Kernel], thread : ptr[Thread]) -> u64 {
     page :: thread_page_of(kernel, thread) or_return 0
     return intrinsics.volatile_load_u64(&page.fiber)
 }
@@ -43,14 +46,15 @@ running_fiber_of :: fn(kernel: ptr[mut Kernel], thread: ptr[Thread]) -> u64 {
 /**
  * Put a thread on the CPU budget its per-thread page binds it to, if the binding changed since it was last resolved:
  * the budget the handle names, if it's a CPU budget's with RIGHT_CPU_BUDGET_BIND in the thread's process's table, and
- * otherwise, or for 0, its process's own. A binding that's the same as last time changes nothing, so thread_use_cpu_budget
+ * otherwise, or for 0, its process's own. A binding that's the same as last time changes nothing, so
+ * thread_use_cpu_budget
  * holds until the page's changes.
  *
  * @param kernel The kernel, whose cpu_budgets_lock set_thread_budget takes. Called from schedule, on the thread's
  *     CPU, with no lock held.
  * @param thread The CPU's current thread, charged for its time already.
  */
-bind_from_page :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+bind_from_page :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     page :: thread_page_of(kernel, thread) or_return void
     // A binding that isn't a handle, wider than one, is its process's own, as 0 is
     read :: intrinsics.volatile_load_u64(&page.budget)
@@ -62,8 +66,12 @@ bind_from_page :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
     process :: process_of(thread)
     target := process.cpu_budget
     if binding != 0 && binding <= 0xffffffff {
-        match object_of[slop_os.HandleError](process, cast[slop_os.Handle](cast[u32](binding)), slop_os.ObjectKind.CpuBudget,
-            slop_os.RIGHT_CPU_BUDGET_BIND) {
+        match object_of[slop_os.HandleError](
+            process,
+            cast[slop_os.Handle](cast[u32](binding)),
+            slop_os.ObjectKind.CpuBudget,
+            slop_os.RIGHT_CPU_BUDGET_BIND
+        ) {
             case Ok(object) => target = cast[u64](object)
             case Error(error) => {}
         }
@@ -85,7 +93,11 @@ bind_from_page :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @error WrongKind Memory that isn't anonymous: device, a boot module's, contiguous, paged, or a window.
  * @error OutOfMemory Its page had no frame yet, and there were none.
  */
-sys_thread_set_page :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64) -> Result[void, slop_os.MemoryError] {
+sys_thread_set_page :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    offset : u64
+) -> Result[void, slop_os.MemoryError] {
     kernel :: per_cpu().kernel
     if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE {
         // Back on its process's budget, if the page had it on another
@@ -97,7 +109,12 @@ sys_thread_set_page :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offse
         thread.page_seen = 0
         return .Ok
     }
-    object :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
+    object :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_READ
+    )?
     found :: cast[ptr[Memory]](object)
     if offset % frames.FRAME_SIZE != 0 || offset >= found.size || found.size - offset < frames.FRAME_SIZE {
         return .Error(.InvalidSize)

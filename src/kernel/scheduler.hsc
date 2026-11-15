@@ -1,9 +1,9 @@
 package kernel
 
 import intrinsics from "base:intrinsics"
-import slop_os from "std:os/slop_os"
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
+import slop_os from "std:os/slop_os"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -37,7 +37,7 @@ import concurrency from "std:concurrency"
  * being destroyed, and only then says it's quiescent. So a thread destroyed in an earlier epoch is never
  * resumed, and nothing is freed while a CPU still uses it.
  */
-//SPEC: knowledge/design/scheduling.md §2 (dispatch, Demote, replenishment)
+// SPEC: knowledge/design/scheduling.md §2 (dispatch, Demote, replenishment)
 
 /** How many run-queue levels there are: the background band, then one for each of 256 priorities. */
 LEVELS :: 257
@@ -71,7 +71,7 @@ RunQueue :: struct {
  * @return Its budget's priority plus 1, from 1 to 256, if its budget has time at now; BACKGROUND_LEVEL if it doesn't,
  *     or the thread has no budget.
  */
-level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
+level_of :: fn(thread : ptr[Thread], now : u64) -> u32 {
     if thread.budget == 0 {
         return BACKGROUND_LEVEL
     }
@@ -93,7 +93,7 @@ level_of :: fn(thread: ptr[Thread], now: u64) -> u32 {
  * @param asked The index of the CPU it's wanted on, an online one; if its budget's CPUs don't include it, the next
  *     online CPU after it that they do is used (cpu_for).
  */
-make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
+make_ready :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], asked : u32) {
     per_cpus :: kernel.per_cpus
     cpu_index :: cpu_for(kernel, thread, asked)
     runtime.assert(cast[usize](cpu_index) < per_cpus.count, "make_ready takes an online CPU")
@@ -128,7 +128,7 @@ make_ready :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], asked: u32) {
  * @param cpu_index The CPU's index; one past 63 is always allowed, as a budget's set has 64 bits (decisions/0099).
  * @return True if it may run there.
  */
-may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
+may_run_on :: fn(thread : ptr[Thread], cpu_index : u32) -> bool {
     if thread.budget == 0 || cpu_index >= 64 {
         return true
     }
@@ -145,7 +145,7 @@ may_run_on :: fn(thread: ptr[Thread], cpu_index: u32) -> bool {
  * @return cpu_index if the thread may run there; otherwise the next online CPU after it, wrapping round, that it may;
  *     or cpu_index if it may run on none.
  */
-cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
+cpu_for :: fn(kernel : ptr[Kernel], thread : ptr[Thread], cpu_index : u32) -> u32 {
     if may_run_on(thread, cpu_index) {
         return cpu_index
     }
@@ -172,7 +172,7 @@ cpu_for :: fn(kernel: ptr[Kernel], thread: ptr[Thread], cpu_index: u32) -> u32 {
  * @param tick Whether this entry is a timer tick: threads of the current one's level get their turn, and threads in
  *     the background band whose budget has time again move up (relevel).
  */
-schedule :: fn(tick: bool) #never_returns {
+schedule :: fn(tick : bool) #never_returns {
     cpu :: per_cpu()
     kernel :: cpu.kernel
     loop {
@@ -246,7 +246,7 @@ schedule :: fn(tick: bool) #never_returns {
  * @param thread The CPU's current thread.
  * @param now The counter's value now, in ticks, no earlier than run_start.
  */
-account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
+account :: fn(cpu : ptr[mut PerCpu], thread : ptr[mut Thread], now : u64) {
     used :: now - cpu.run_start
     thread.run_time += used
     if thread.budget != 0 {
@@ -289,7 +289,7 @@ account :: fn(cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
  * @param thread The thread, off every run queue.
  * @param now The counter's value now, in ticks, from which its running is charged.
  */
-run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread], now: u64) {
+run :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], thread : ptr[mut Thread], now : u64) {
     if cpu.space != cast[u64](thread.space) {
         arch.activate(&thread.space.table)
         cpu.space = cast[u64](thread.space)
@@ -334,7 +334,7 @@ run :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread]
  * @param thread The CPU's current thread.
  * @param level The level it runs at now, which current_level becomes.
  */
-go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Thread], level: u32) {
+go_on :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], thread : ptr[mut Thread], level : u32) {
     epoch :: intrinsics.atomic_load_u64(&kernel.epoch)
     if is_dying(cast[u64](thread)) {
         return void
@@ -355,7 +355,7 @@ go_on :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu], thread: ptr[mut Threa
  * @param kernel The kernel: its page tables are activated, and its epoch read for the quiescent point.
  * @param cpu The calling CPU's PerCpu, whose current thread is cleared.
  */
-go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
+go_idle :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu]) #never_returns {
     cpu.current = 0
     intrinsics.atomic_store_u32_release(&cpu.current_level, IDLE_LEVEL)
     if cpu.space != 0 {
@@ -368,8 +368,10 @@ go_idle :: fn(kernel: ptr[mut Kernel], cpu: ptr[mut PerCpu]) #never_returns {
      * only for its own timers, and it counts as quiescent until an interrupt wakes it. Not the boot CPU, whose ticks
      * keep the kernel's own time for stopping and its tests. A thread made ready here wakes it (make_ready).
      */
-    if cpu.index != 0 && !kernel.options.test_lockup && intrinsics.atomic_load_u32_acquire(&cpu.run_queue.count) == 0 &&
-        cpu.limbo == 0 {
+    if cpu.index != 0
+        && !kernel.options.test_lockup
+        && intrinsics.atomic_load_u32_acquire(&cpu.run_queue.count) == 0
+        && cpu.limbo == 0 {
         intrinsics.atomic_store_u32_release(&cpu.tickless, 1)
         intrinsics.atomic_store_u64(&cpu.quiescent_epoch, IDLE_EPOCH)
         program_deadline(cpu)
@@ -406,7 +408,7 @@ leave_idle :: fn() {
  * @param skip The index of a CPU not to choose, the busy one.
  * @return The lowest such CPU's index, or NO_CPU if there's none.
  */
-tickless_cpu :: fn(kernel: ptr[Kernel], skip: u32) -> u32 {
+tickless_cpu :: fn(kernel : ptr[Kernel], skip : u32) -> u32 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
     for index in 0..<online {
@@ -434,7 +436,7 @@ NO_CPU : u32 : 0xffffffff
  * @return The thread, as an address, taken off its queue: the first at the highest level of the first queue that has
  *     one that may run on cpu. 0 if there's none.
  */
-steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
+steal :: fn(kernel : ptr[Kernel], cpu : ptr[PerCpu]) -> u64 {
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))
     for offset in 1..<online {
@@ -462,7 +464,7 @@ steal :: fn(kernel: ptr[Kernel], cpu: ptr[PerCpu]) -> u64 {
  * @param queue The run queue, whose lock the caller holds.
  * @return The level, 0 to LEVELS - 1, or IDLE_LEVEL if the queue is empty.
  */
-highest_level :: fn(queue: ptr[RunQueue]) -> u32 {
+highest_level :: fn(queue : ptr[RunQueue]) -> u32 {
     for word in 0..<5 #reverse {
         bits :: queue.nonempty[word]
         if bits != 0 {
@@ -478,7 +480,7 @@ highest_level :: fn(queue: ptr[RunQueue]) -> u32 {
  * @param value The value, which has a bit set.
  * @return The bit's index, 0 to 63; 0 for a value of 0 too.
  */
-highest_bit :: fn(value: u64) -> u32 {
+highest_bit :: fn(value : u64) -> u32 {
     bits := value
     result : u32 = 0
     for shift in u32.[32, 16, 8, 4, 2, 1] {
@@ -497,7 +499,7 @@ highest_bit :: fn(value: u64) -> u32 {
  * @param thread The thread, on no run queue; its level becomes level.
  * @param level The level, below LEVELS; a larger one is taken modulo LEVELS.
  */
-enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
+enqueue :: fn(queue : ptr[mut RunQueue], thread : ptr[mut Thread], level : u32) {
     index :: cast[usize](level) % LEVELS
     thread.level = cast[u32](index)
     thread.next = 0
@@ -521,7 +523,7 @@ enqueue :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread], level: u32) {
  * @param queue The run queue, whose lock the caller holds, at rank RunQueue, so each budget's lock can be taken.
  * @param now The counter's value now, in ticks.
  */
-relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
+relevel :: fn(queue : ptr[mut RunQueue], now : u64) {
     at := queue.first[BACKGROUND_LEVEL]
     loop {
         if at == 0 {
@@ -552,10 +554,12 @@ relevel :: fn(queue: ptr[mut RunQueue], now: u64) {
  * @return The thread, as an address, taken off the queue: the first at the highest level, if that's above current's,
  *     or the same at a tick; any at all with no current thread. 0 to go on with current, or with nothing queued.
  */
-pick :: fn(queue: ptr[mut RunQueue], now: u64, current: u64, current_level: u32, tick: bool) -> u64 {
+pick :: fn(queue : ptr[mut RunQueue], now : u64, current : u64, current_level : u32, tick : bool) -> u64 {
     loop {
         best :: highest_level(queue)
-        if best == IDLE_LEVEL || (current != 0 && best < current_level) || (current != 0 && best == current_level && !tick) {
+        if best == IDLE_LEVEL
+            || (current != 0 && best < current_level)
+            || (current != 0 && best == current_level && !tick) {
             return 0
         }
         candidate :: dequeue(queue, best)
@@ -574,7 +578,7 @@ pick :: fn(queue: ptr[mut RunQueue], now: u64, current: u64, current_level: u32,
  * @param cpu_index The index of the CPU it's for.
  * @return The first thread at the highest level that may run on cpu_index, as an address, or 0 if there's none.
  */
-take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
+take_for :: fn(queue : ptr[mut RunQueue], cpu_index : u32) -> u64 {
     for level in 0..<LEVELS #reverse {
         index :: cast[usize](level)
         if queue.nonempty[index / 64 % 5] & (cast[u64](1) << cast[u64](index % 64)) != 0 {
@@ -602,7 +606,7 @@ take_for :: fn(queue: ptr[mut RunQueue], cpu_index: u32) -> u64 {
  * @param level The level, one with threads; an empty one fails an assertion, which stops the kernel.
  * @return The thread, as an address.
  */
-dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
+dequeue :: fn(queue : ptr[mut RunQueue], level : u32) -> u64 {
     index :: cast[usize](level) % LEVELS
     first :: queue.first[index]
     runtime.assert(first != 0, "dequeue takes a level with threads")
@@ -616,7 +620,7 @@ dequeue :: fn(queue: ptr[mut RunQueue], level: u32) -> u64 {
  * @param queue The run queue it's on.
  * @param thread The thread, queued there at its level.
  */
-unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
+unlink :: fn(queue : ptr[mut RunQueue], thread : ptr[mut Thread]) {
     index :: cast[usize](thread.level) % LEVELS
     if thread.previous != 0 {
         cast[ptr[mut Thread]](thread.previous).next = thread.next
@@ -645,7 +649,7 @@ unlink :: fn(queue: ptr[mut RunQueue], thread: ptr[mut Thread]) {
  *
  * @param thread The thread.
  */
-prepare_return :: fn(thread: ptr[mut Thread]) {
+prepare_return :: fn(thread : ptr[mut Thread]) {
     owner :: thread.header.owner
     // Its process's breakpoints and watchpoints, unless it's stepping, when its own are
     process :: cast[ptr[mut Process]](owner)
@@ -660,10 +664,17 @@ prepare_return :: fn(thread: ptr[mut Thread]) {
     }
     traps :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) } else { 0 }
     arch.set_counter_trap(traps & slop_os.TRAP_COUNTER != 0)
-    // Its process's pointer authentication key, which return_to_user loads, its landing pads and its shadow stack (decisions/0186)
+    /*
+     * Its process's pointer authentication key, which return_to_user loads, its landing pads and its shadow stack
+     * (decisions/0186)
+     */
     if owner != 0 {
         arch.set_user_pointer_key(process.pointer_key)
-        landing_pads :: intrinsics.atomic_load_u32_acquire(&process.control_flow) & slop_os.CONTROL_FLOW_LANDING_PADS != 0
-        arch.load_user_control_flow(landing_pads, if thread.shadow_slot != 0 { thread.shadow_pointer } else { cast[u64](0) })
+        landing_pads :: intrinsics.atomic_load_u32_acquire(&process.control_flow) & slop_os.CONTROL_FLOW_LANDING_PADS
+            != 0
+        arch.load_user_control_flow(
+            landing_pads,
+            if thread.shadow_slot != 0 { thread.shadow_pointer } else { cast[u64](0) }
+        )
     }
 }

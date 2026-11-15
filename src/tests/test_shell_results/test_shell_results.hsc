@@ -50,7 +50,7 @@ Asked :: enum {
  * @error Plain Something went wrong that says nothing more.
  * @error Refused The label isn't one it takes.
  */
-main :: fn(count: u64, label: string, asked: Asked?) -> Result[Summary, ResultsError] {
+main :: fn(count : u64, label : string, asked : Asked?) -> Result[Summary, ResultsError] {
     chosen :: asked or_else Asked.Fine
     match chosen {
         case .Plain => return .Error(.Plain)

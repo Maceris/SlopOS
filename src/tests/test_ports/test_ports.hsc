@@ -18,9 +18,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -57,7 +57,7 @@ Given :: struct {
  *
  * @param shared What A and B share, by the SHARED_* slots.
  */
-helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never_returns {
+helper #calling_convention(.c) #no_context :: fn(shared : ptr[mut u64[8]]) #never_returns {
     port :: test_kit.handle_at[slop_os.Port](intrinsics.volatile_load_u64(&shared^[SHARED_PORT]))
     _ = slop_os.port_wake(port, PORT_KEY, 0x100)
     loop {
@@ -79,7 +79,7 @@ helper #calling_convention(.c) #no_context :: fn(shared: ptr[mut u64[8]]) #never
  * @param t The test's state.
  * @return Ok once it's run; Error if the budget or the port couldn't be made.
  */
-wakes_of_a_bound_key_merge_into_one_packet #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+wakes_of_a_bound_key_merge_into_one_packet #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port")?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
@@ -100,7 +100,11 @@ wakes_of_a_bound_key_merge_into_one_packet #test :: fn(t: ptr[mut testing.T]) ->
     testing.expect_eq(t, packets[0].data[0], 3, "the merged packet's bits are both wakes' bits, or'd")
     closed :: slop_os.handle_close(cast[slop_os.Handle](port))
     testing.expect_ok(t, closed, "the port closes")
-    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its binding are gone")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(budget, 0, 1_000_000_000),
+        "the budget is back to nothing once the port and its binding are gone"
+    )
     return .Ok
 }
 
@@ -112,7 +116,7 @@ wakes_of_a_bound_key_merge_into_one_packet #test :: fn(t: ptr[mut testing.T]) ->
  * @param t The test's state.
  * @return Ok once it's run; Error if the budget or the port couldn't be made.
  */
-timers_and_deadlines_end_waits_no_sooner #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+timers_and_deadlines_end_waits_no_sooner #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port")?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
@@ -133,10 +137,19 @@ timers_and_deadlines_end_waits_no_sooner #test :: fn(t: ptr[mut testing.T]) -> t
     testing.expect_ge(t, after_deadline - started, DEADLINE_NANOSECONDS, "a wait ends at its deadline, no sooner")
     // Memory it can't write
     unwritable :: slop_os.port_wait(port, test_kit.packets_at(0x10, 4), slop_os.NO_DEADLINE)
-    testing.expect_error(t, unwritable, slop_os.PortError.BadBuffer, "packets can't be put in memory the process can't write")
+    testing.expect_error(
+        t,
+        unwritable,
+        slop_os.PortError.BadBuffer,
+        "packets can't be put in memory the process can't write"
+    )
     closed :: slop_os.handle_close(cast[slop_os.Handle](port))
     testing.expect_ok(t, closed, "the port closes")
-    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its timer are gone")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(budget, 0, 1_000_000_000),
+        "the budget is back to nothing once the port and its timer are gone"
+    )
     return .Ok
 }
 
@@ -147,7 +160,7 @@ timers_and_deadlines_end_waits_no_sooner #test :: fn(t: ptr[mut testing.T]) -> t
  * @param t The test's state.
  * @return Ok once it's run; Error if the budget or the port couldn't be made.
  */
-an_empty_wait_is_refused_at_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_empty_wait_is_refused_at_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the port")?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port is made under the budget")?
@@ -162,13 +175,22 @@ an_empty_wait_is_refused_at_once #test :: fn(t: ptr[mut testing.T]) -> testing.O
     _ = slop_os.port_bind_wake(port, PORT_KEY)
     _ = slop_os.port_wake(port, PORT_KEY, 1)
     queued :: slop_os.port_wait(port, packets[0..<0], slop_os.NO_DEADLINE)
-    testing.expect_error(t, queued, slop_os.PortError.BufferTooSmall, "a wait with no room is refused with a packet queued too")
+    testing.expect_error(
+        t,
+        queued,
+        slop_os.PortError.BufferTooSmall,
+        "a wait with no room is refused with a packet queued too"
+    )
     taken :: slop_os.port_wait(port, packets, 0)
     testing.expect_eq(t, taken or_else 0, 1, "the packet stays queued for a wait with room for it")
     testing.expect_eq(t, packets[0].key, PORT_KEY, "it's the woken key's packet")
     closed :: slop_os.handle_close(cast[slop_os.Handle](port))
     testing.expect_ok(t, closed, "the port closes")
-    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the port and its binding are gone")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(budget, 0, 1_000_000_000),
+        "the budget is back to nothing once the port and its binding are gone"
+    )
     return .Ok
 }
 
@@ -180,7 +202,7 @@ an_empty_wait_is_refused_at_once #test :: fn(t: ptr[mut testing.T]) -> testing.O
  * @param t The test's state.
  * @return Ok once it's run; Error if the shared slots, the budget, the port or B couldn't be made.
  */
-another_thread_wakes_it_and_closing_wakes_waiters #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+another_thread_wakes_it_and_closing_wakes_waiters #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     pages, error :: runtime.new_array(u64[8], 1)
     if error != null || pages.count == 0 {
@@ -211,12 +233,27 @@ another_thread_wakes_it_and_closing_wakes_waiters #test :: fn(t: ptr[mut testing
     closed :: slop_os.handle_close(cast[slop_os.Handle](port))
     testing.expect_ok(t, closed, "the port closes while B waits on it")
     _ = test_kit.wait_for(&shared^[SHARED_B_DONE], 1_000_000_000)
-    testing.expect_eq(t, intrinsics.volatile_load_u64(&shared^[SHARED_B_GOT]), test_kit.tag(slop_os.PortError.ObjectGone), "closing a port wakes its waiters with ObjectGone")
-    testing.expect_eq(t, intrinsics.volatile_load_u64(&shared^[SHARED_B_DONE]), 1, "B's wait returned once the port was closed")
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u64(&shared^[SHARED_B_GOT]),
+        test_kit.tag(slop_os.PortError.ObjectGone),
+        "closing a port wakes its waiters with ObjectGone"
+    )
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u64(&shared^[SHARED_B_DONE]),
+        1,
+        "B's wait returned once the port was closed"
+    )
     // B, which has ended, and the port, closed: their charges come back
     _ = slop_os.handle_close(cast[slop_os.Handle](thread))
     _ = test_kit.wait_for_budget(budget, 0, 1_000_000_000)
-    testing.expect_eq(t, test_kit.used(budget), 0, "the budget is back to nothing once B has ended and the port is closed")
+    testing.expect_eq(
+        t,
+        test_kit.used(budget),
+        0,
+        "the budget is back to nothing once B has ended and the port is closed"
+    )
     return .Ok
 }
 
@@ -233,9 +270,16 @@ another_thread_wakes_it_and_closing_wakes_waiters #test :: fn(t: ptr[mut testing
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
-

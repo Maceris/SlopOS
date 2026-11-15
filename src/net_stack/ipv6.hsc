@@ -57,9 +57,13 @@ LINK_LOCAL_PREFIX :: Ipv6.{bytes = u8.[0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
  *
  * @param stack The stack.
  */
-start_ipv6 :: fn(stack: ptr[mut Stack]) {
-    stack.link_local = Address6.{state = .Tentative, address = stable_address(stack, LINK_LOCAL_PREFIX, 0), prefix_length = 64,
-        deadline = stack.now + DAD_WAIT}
+start_ipv6 :: fn(stack : ptr[mut Stack]) {
+    stack.link_local = Address6.{
+        state = .Tentative,
+        address = stable_address(stack, LINK_LOCAL_PREFIX, 0),
+        prefix_length = 64,
+        deadline = stack.now + DAD_WAIT,
+    }
     send_solicitation(stack, stack.link_local.address, true)
 }
 
@@ -72,7 +76,7 @@ start_ipv6 :: fn(stack: ptr[mut Stack]) {
  * @param counter How many times this prefix's address was found a duplicate, so each try differs.
  * @return The address.
  */
-stable_address :: fn(stack: ptr[Stack], prefix: Ipv6, counter: u8) -> Ipv6 {
+stable_address :: fn(stack : ptr[Stack], prefix : Ipv6, counter : u8) -> Ipv6 {
     input : u8[8 + 6 + 1 + 32]
     for i in cast[usize](0)..<8 {
         if i < input.count && i < prefix.bytes.count {
@@ -107,12 +111,15 @@ stable_address :: fn(stack: ptr[Stack], prefix: Ipv6, counter: u8) -> Ipv6 {
  *
  * @param stack The stack.
  */
-tick_ipv6 :: fn(stack: ptr[mut Stack]) {
+tick_ipv6 :: fn(stack : ptr[mut Stack]) {
     now :: stack.now
     if stack.link_local.state == .Tentative && now >= stack.link_local.deadline {
         stack.link_local.state = .Assigned
         stack.link_local.deadline = 0
-        event(stack, .AddressReady(Assigned.{address = stack.link_local.address, prefix_length = 64, link_local = true}))
+        event(
+            stack,
+            .AddressReady(Assigned.{address = stack.link_local.address, prefix_length = 64, link_local = true})
+        )
         stack.solicitations = 0
         solicit_routers(stack)
     }
@@ -122,8 +129,10 @@ tick_ipv6 :: fn(stack: ptr[mut Stack]) {
             each.deadline = each.valid_until
             event(stack, .AddressReady(Assigned.{address = each.address, prefix_length = each.prefix_length}))
         }
-        // Its valid lifetime over, perhaps while it was checked: let go, or its deadline, past, would be the stack's
-        // next for ever
+        /*
+         * Its valid lifetime over, perhaps while it was checked: let go, or its deadline, past, would be the stack's
+         * next for ever
+         */
         if each.state == .Assigned && each.deadline != 0 && now >= each.deadline {
             event(stack, .AddressExpired(each.address))
             each^ = Address6.{}
@@ -144,7 +153,7 @@ tick_ipv6 :: fn(stack: ptr[mut Stack]) {
  *
  * @param stack The stack, whose next_solicitation is set, or cleared once they're done.
  */
-solicit_routers :: fn(stack: ptr[mut Stack]) {
+solicit_routers :: fn(stack : ptr[mut Stack]) {
     if stack.solicitations >= SOLICITATIONS || has_router(stack) {
         stack.next_solicitation = 0
         return void
@@ -166,7 +175,7 @@ solicit_routers :: fn(stack: ptr[mut Stack]) {
  * @param stack The stack.
  * @return True if one is.
  */
-has_router :: fn(stack: ptr[Stack]) -> bool {
+has_router :: fn(stack : ptr[Stack]) -> bool {
     for router in stack.routers {
         if !is_zero_ipv6(router.address) {
             return true
@@ -181,7 +190,7 @@ has_router :: fn(stack: ptr[Stack]) -> bool {
  * @param address The address.
  * @return The group.
  */
-solicited_node :: fn(address: Ipv6) -> Ipv6 {
+solicited_node :: fn(address : Ipv6) -> Ipv6 {
     group := Ipv6.{bytes = u8.[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0, 0, 0]}
     for i in cast[usize](13)..<16 {
         if i < group.bytes.count && i < address.bytes.count {
@@ -197,7 +206,7 @@ solicited_node :: fn(address: Ipv6) -> Ipv6 {
  * @param group The group.
  * @return The MAC address.
  */
-multicast_mac :: fn(group: Ipv6) -> Mac {
+multicast_mac :: fn(group : Ipv6) -> Mac {
     mac := Mac.{bytes = u8.[0x33, 0x33, 0, 0, 0, 0]}
     for i in cast[usize](2)..<6 {
         if i < mac.bytes.count && 10 + i < group.bytes.count {
@@ -215,7 +224,7 @@ multicast_mac :: fn(group: Ipv6) -> Mac {
  * @param tentative Whether a tentative address counts.
  * @return True if it's one of the interface's.
  */
-is_ours_v6 :: fn(stack: ptr[Stack], address: Ipv6, tentative: bool) -> bool {
+is_ours_v6 :: fn(stack : ptr[Stack], address : Ipv6, tentative : bool) -> bool {
     if counts(stack.link_local, tentative) && same_ipv6(stack.link_local.address, address) {
         return true
     }
@@ -234,7 +243,7 @@ is_ours_v6 :: fn(stack: ptr[Stack], address: Ipv6, tentative: bool) -> bool {
  * @param tentative Whether a tentative address counts.
  * @return True if it does.
  */
-counts :: fn(each: Address6, tentative: bool) -> bool {
+counts :: fn(each : Address6, tentative : bool) -> bool {
     return each.state == .Assigned || (tentative && each.state == .Tentative)
 }
 
@@ -246,7 +255,7 @@ counts :: fn(each: Address6, tentative: bool) -> bool {
  * @param destination The destination.
  * @return True if it is.
  */
-is_for_us_v6 :: fn(stack: ptr[Stack], destination: Ipv6) -> bool {
+is_for_us_v6 :: fn(stack : ptr[Stack], destination : Ipv6) -> bool {
     if is_ours_v6(stack, destination, false) || same_ipv6(destination, ALL_NODES) {
         return true
     }
@@ -268,7 +277,7 @@ is_for_us_v6 :: fn(stack: ptr[Stack], destination: Ipv6) -> bool {
  * @param from_mac Its Ethernet source.
  * @param packet The packet, after the Ethernet header, maybe padded past its payload's length.
  */
-receive_ipv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
+receive_ipv6 :: fn(stack : ptr[mut Stack], from_mac : Mac, packet : u8[]) {
     if packet.count < IPV6_HEADER || byte_at(packet, 0) >> 4 != 6 {
         return void
     }
@@ -281,8 +290,10 @@ receive_ipv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
     if !is_for_us_v6(stack, destination) {
         return void
     }
-    // A multicast, loopback or own source is dropped, as an answer would go to a group or back to this host (RFC 4443
-    // §4.2, RFC 4861 §7.1.1); ::, from duplicate detection's solicitations, is taken
+    /*
+     * A multicast, loopback or own source is dropped, as an answer would go to a group or back to this host (RFC 4443
+     * §4.2, RFC 4861 §7.1.1); ::, from duplicate detection's solicitations, is taken
+     */
     loopback := Ipv6.{}
     loopback.bytes[15] = 1
     if source.bytes[0] == 0xff || same_ipv6(source, loopback) || is_ours_v6(stack, source, false) {
@@ -315,7 +326,11 @@ receive_ipv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
         return void
     }
     message :: part(packet, at, total)
-    if message.count < 4 || checksum_finish(pseudo_sum_v6(source, destination, PROTOCOL_ICMPV6, message.count) + checksum_add(0, message)) != 0 {
+    if message.count < 4
+        || checksum_finish(
+            pseudo_sum_v6(source, destination, PROTOCOL_ICMPV6, message.count) + checksum_add(0, message)
+        )
+            != 0 {
         return void
     }
     receive_icmpv6(stack, from_mac, source, destination, byte_at(packet, 7), message)
@@ -332,7 +347,14 @@ receive_ipv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
  *     link.
  * @param message The message, its checksum checked.
  */
-receive_icmpv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, source: Ipv6, destination: Ipv6, hop_limit: u8, message: u8[]) {
+receive_icmpv6 :: fn(
+    stack : ptr[mut Stack],
+    from_mac : Mac,
+    source : Ipv6,
+    destination : Ipv6,
+    hop_limit : u8,
+    message : u8[]
+) {
     kind :: byte_at(message, 0)
     if kind == ICMPV6_ECHO_REQUEST && is_ours_v6(stack, destination, false) {
         reply : u8[MAX_FRAME]
@@ -368,7 +390,7 @@ receive_icmpv6 :: fn(stack: ptr[mut Stack], from_mac: Mac, source: Ipv6, destina
  * @param kind OPTION_SOURCE_LINK or OPTION_TARGET_LINK.
  * @return The address; null if there's no such option, or the options are malformed.
  */
-link_option :: fn(options: u8[], kind: u8) -> Mac? {
+link_option :: fn(options : u8[], kind : u8) -> Mac? {
     at := cast[usize](0)
     loop {
         if at + 2 > options.count {
@@ -395,8 +417,13 @@ link_option :: fn(options: u8[], kind: u8) -> Mac? {
  * @param source The router's address, which has to be link-local.
  * @param message The advertisement.
  */
-receive_advertisement :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) {
-    if message.count < 16 || !prefix_matches(view_of(&source.bytes[0], source.bytes.count), view_of(&LINK_LOCAL_PREFIX.bytes[0], 16), 10) {
+receive_advertisement :: fn(stack : ptr[mut Stack], source : Ipv6, message : u8[]) {
+    if message.count < 16
+        || !prefix_matches(
+            view_of(&source.bytes[0], source.bytes.count),
+            view_of(&LINK_LOCAL_PREFIX.bytes[0], 16),
+            10
+        ) {
         return void
     }
     if byte_at(message, 4) != 0 {
@@ -411,8 +438,8 @@ receive_advertisement :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) 
     if lifetime > 0 {
         add_router(stack, source, lifetime)
     }
-    // A lifetime of 0 says it's no longer a default router (RFC 4861 §6.3.4)
-    else {
+    else // A lifetime of 0 says it's no longer a default router (RFC 4861 §6.3.4)
+    {
         for &router in stack.routers {
             if same_ipv6(router.address, source) {
                 router^ = Router6.{}
@@ -454,7 +481,7 @@ receive_advertisement :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) 
  * @param address Its link-local address.
  * @param lifetime How long it's a default router, in nanoseconds.
  */
-add_router :: fn(stack: ptr[mut Stack], address: Ipv6, lifetime: u64) {
+add_router :: fn(stack : ptr[mut Stack], address : Ipv6, lifetime : u64) {
     for &router in stack.routers {
         if same_ipv6(router.address, address) {
             router.expires = stack.now + lifetime
@@ -478,19 +505,23 @@ add_router :: fn(stack: ptr[mut Stack], address: Ipv6, lifetime: u64) {
  * @param stack The stack.
  * @param option The option, 32 bytes.
  */
-take_prefix :: fn(stack: ptr[mut Stack], option: u8[]) {
+take_prefix :: fn(stack : ptr[mut Stack], option : u8[]) {
     prefix_length :: byte_at(option, 2)
     autonomous :: byte_at(option, 3) & 0x40 != 0
     valid :: u32_at(option, 4)
     preferred :: u32_at(option, 8)
     prefix :: ipv6_at(option, 16)
-    if !autonomous || prefix_length != 64 || preferred > valid || valid == 0
+    if !autonomous
+        || prefix_length != 64
+        || preferred > valid
+        || valid == 0
         || prefix_matches(view_of(&prefix.bytes[0], 16), view_of(&LINK_LOCAL_PREFIX.bytes[0], 16), 10) {
         return void
     }
     ends :: if valid == 0xffffffff { cast[u64](0) } else { stack.now + cast[u64](valid) * SECOND }
     for &each in stack.globals {
-        if each.state != .Free && prefix_matches(view_of(&each.address.bytes[0], 16), view_of(&prefix.bytes[0], 16), 64) {
+        if each.state != .Free
+            && prefix_matches(view_of(&each.address.bytes[0], 16), view_of(&prefix.bytes[0], 16), 64) {
             if each.state == .Assigned {
                 // The two-hour rule: a short lifetime advertised only shortens one longer than two hours to two hours
                 two_hours :: stack.now + 7200 * SECOND
@@ -506,8 +537,13 @@ take_prefix :: fn(stack: ptr[mut Stack], option: u8[]) {
     }
     for &each in stack.globals {
         if each.state == .Free {
-            each^ = Address6.{state = .Tentative, address = stable_address(stack, prefix, 0), prefix_length = 64,
-                deadline = stack.now + DAD_WAIT, valid_until = ends}
+            each^ = Address6.{
+                state = .Tentative,
+                address = stable_address(stack, prefix, 0),
+                prefix_length = 64,
+                deadline = stack.now + DAD_WAIT,
+                valid_until = ends,
+            }
             send_solicitation(stack, each.address, true)
             return void
         }
@@ -522,7 +558,7 @@ take_prefix :: fn(stack: ptr[mut Stack], option: u8[]) {
  * @param source Who sent it: :: for duplicate address detection.
  * @param message The solicitation.
  */
-receive_solicitation :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) {
+receive_solicitation :: fn(stack : ptr[mut Stack], source : Ipv6, message : u8[]) {
     if message.count < 24 {
         return void
     }
@@ -562,7 +598,7 @@ receive_solicitation :: fn(stack: ptr[mut Stack], source: Ipv6, message: u8[]) {
  * @param from_mac Its Ethernet source, the target's MAC address without a target link-layer option.
  * @param message The advertisement.
  */
-receive_neighbour_advertisement :: fn(stack: ptr[mut Stack], from_mac: Mac, message: u8[]) {
+receive_neighbour_advertisement :: fn(stack : ptr[mut Stack], from_mac : Mac, message : u8[]) {
     if message.count < 24 {
         return void
     }
@@ -584,7 +620,7 @@ receive_neighbour_advertisement :: fn(stack: ptr[mut Stack], from_mac: Mac, mess
  * @param stack The stack.
  * @param address The address.
  */
-conflict_v6 :: fn(stack: ptr[mut Stack], address: Ipv6) {
+conflict_v6 :: fn(stack : ptr[mut Stack], address : Ipv6) {
     if stack.link_local.state == .Tentative && same_ipv6(stack.link_local.address, address) {
         stack.link_local = Address6.{}
     }
@@ -604,7 +640,7 @@ conflict_v6 :: fn(stack: ptr[mut Stack], address: Ipv6) {
  * @param target The address asked for.
  * @param dad Whether it checks for a duplicate of the interface's own.
  */
-send_solicitation :: fn(stack: ptr[mut Stack], target: Ipv6, dad: bool) {
+send_solicitation :: fn(stack : ptr[mut Stack], target : Ipv6, dad : bool) {
     message : u8[32]
     bytes :: view_of(&message[0], if dad { cast[usize](24) } else { cast[usize](32) })
     put_u8(bytes, 0, NEIGHBOUR_SOLICITATION)
@@ -626,12 +662,13 @@ send_solicitation :: fn(stack: ptr[mut Stack], target: Ipv6, dad: bool) {
  * @param to The destination.
  * @return The address; :: if the interface has none assigned.
  */
-source_for :: fn(stack: ptr[Stack], to: Ipv6) -> Ipv6 {
+source_for :: fn(stack : ptr[Stack], to : Ipv6) -> Ipv6 {
     link_scoped :: byte_at(view_of(&to.bytes[0], 16), 0) == 0xff
         || prefix_matches(view_of(&to.bytes[0], 16), view_of(&LINK_LOCAL_PREFIX.bytes[0], 16), 10)
     if !link_scoped {
         for each in stack.globals {
-            if each.state == .Assigned && prefix_matches(view_of(&each.address.bytes[0], 16), view_of(&to.bytes[0], 16), 64) {
+            if each.state == .Assigned
+                && prefix_matches(view_of(&each.address.bytes[0], 16), view_of(&to.bytes[0], 16), 64) {
                 return each.address
             }
         }
@@ -652,7 +689,7 @@ source_for :: fn(stack: ptr[Stack], to: Ipv6) -> Ipv6 {
  * @param sequence Its sequence number.
  * @return True once it's queued or waiting for its hop; false without an address or a route.
  */
-send_echo_v6 :: fn(stack: ptr[mut Stack], to: Ipv6, sequence: u16) -> bool {
+send_echo_v6 :: fn(stack : ptr[mut Stack], to : Ipv6, sequence : u16) -> bool {
     from :: source_for(stack, to)
     if is_zero_ipv6(from) {
         return false
@@ -675,7 +712,7 @@ send_echo_v6 :: fn(stack: ptr[mut Stack], to: Ipv6, sequence: u16) -> bool {
  * @param length The payload's length.
  * @return The sum, not folded.
  */
-pseudo_sum_v6 :: fn(source: Ipv6, destination: Ipv6, next: u8, length: usize) -> u64 {
+pseudo_sum_v6 :: fn(source : Ipv6, destination : Ipv6, next : u8, length : usize) -> u64 {
     sum := checksum_add(0, view_of(&source.bytes[0], source.bytes.count))
     sum = checksum_add(sum, view_of(&destination.bytes[0], destination.bytes.count))
     return sum + cast[u64](length >> 16) + cast[u64](length & 0xffff) + cast[u64](next)
@@ -691,9 +728,13 @@ pseudo_sum_v6 :: fn(source: Ipv6, destination: Ipv6, next: u8, length: usize) ->
  * @param hop_limit The hop limit.
  * @return True once it's queued or waiting for its hop; false if there's no route.
  */
-send_icmpv6 :: fn(stack: ptr[mut Stack], from: Ipv6, to: Ipv6, message: mut u8[], hop_limit: u8) -> bool {
+send_icmpv6 :: fn(stack : ptr[mut Stack], from : Ipv6, to : Ipv6, message : mut u8[], hop_limit : u8) -> bool {
     put_u16(message, 2, 0)
-    put_u16(message, 2, checksum_finish(pseudo_sum_v6(from, to, PROTOCOL_ICMPV6, message.count) + checksum_add(0, message)))
+    put_u16(
+        message,
+        2,
+        checksum_finish(pseudo_sum_v6(from, to, PROTOCOL_ICMPV6, message.count) + checksum_add(0, message))
+    )
     return send_ipv6(stack, from, to, PROTOCOL_ICMPV6, message, hop_limit)
 }
 
@@ -709,9 +750,14 @@ send_icmpv6 :: fn(stack: ptr[mut Stack], from: Ipv6, to: Ipv6, message: mut u8[]
  * @param hop_limit The hop limit.
  * @return True once it's queued or waiting for its hop; false if it's off the link without a router.
  */
-send_ipv6 :: fn(stack: ptr[mut Stack], from: Ipv6, to: Ipv6, next: u8, payload: u8[], hop_limit: u8) -> bool {
+send_ipv6 :: fn(stack : ptr[mut Stack], from : Ipv6, to : Ipv6, next : u8, payload : u8[], hop_limit : u8) -> bool {
     packet : u8[MAX_FRAME]
-    most :: if cast[usize](stack.mtu) < packet.count - ETHERNET_HEADER { cast[usize](stack.mtu) } else { packet.count - ETHERNET_HEADER }
+    most :: if cast[usize](stack.mtu) < packet.count - ETHERNET_HEADER {
+        cast[usize](stack.mtu)
+    }
+    else {
+        packet.count - ETHERNET_HEADER
+    }
     total :: if IPV6_HEADER + payload.count < most { IPV6_HEADER + payload.count } else { most }
     bytes :: view_of(&packet[0], total)
     put_u8(bytes, 0, 0x60)
@@ -725,7 +771,8 @@ send_ipv6 :: fn(stack: ptr[mut Stack], from: Ipv6, to: Ipv6, next: u8, payload: 
         queue_frame(stack, multicast_mac(to), ETHER_IPV6, bytes)
         return true
     }
-    if prefix_matches(view_of(&to.bytes[0], 16), view_of(&LINK_LOCAL_PREFIX.bytes[0], 16), 10) || on_link_v6(stack, to) {
+    if prefix_matches(view_of(&to.bytes[0], 16), view_of(&LINK_LOCAL_PREFIX.bytes[0], 16), 10)
+        || on_link_v6(stack, to) {
         return send_to_hop(stack, false, to, bytes)
     }
     for router in stack.routers {
@@ -743,9 +790,10 @@ send_ipv6 :: fn(stack: ptr[mut Stack], from: Ipv6, to: Ipv6, next: u8, payload: 
  * @param address The address.
  * @return True if it is.
  */
-on_link_v6 :: fn(stack: ptr[Stack], address: Ipv6) -> bool {
+on_link_v6 :: fn(stack : ptr[Stack], address : Ipv6) -> bool {
     for each in stack.globals {
-        if each.state != .Free && prefix_matches(view_of(&each.address.bytes[0], 16), view_of(&address.bytes[0], 16), 64) {
+        if each.state != .Free
+            && prefix_matches(view_of(&each.address.bytes[0], 16), view_of(&address.bytes[0], 16), 64) {
             return true
         }
     }
@@ -760,7 +808,7 @@ on_link_v6 :: fn(stack: ptr[Stack], address: Ipv6) -> bool {
  * @param into Where it's written: 39 bytes is room for any address.
  * @return How many bytes were written; what doesn't fit is left out.
  */
-format_ipv6 :: fn(address: Ipv6, into: mut u8[]) -> usize {
+format_ipv6 :: fn(address : Ipv6, into : mut u8[]) -> usize {
     bytes :: view_of(&address.bytes[0], address.bytes.count)
     // The longest run of zero groups
     best_start := cast[usize](8)

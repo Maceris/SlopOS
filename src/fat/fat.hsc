@@ -114,12 +114,12 @@ Device :: struct #scoped {
      * Read count sectors, from sector first, into into, which holds at least count * SECTOR_BYTES bytes; true if they
      * were read, false if the device couldn't read them.
      */
-    read : fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool,
+    read : fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool,
     /**
      * Write count sectors, from sector first, from from's first count * SECTOR_BYTES bytes; true if they were
      * written, false if the device couldn't write them, which leaves what's in them unknown.
      */
-    write : fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool,
+    write : fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool,
     /**
      * Whether the device may only be read: every operation that would write fails with ReadOnly, and write_info
      * writes nothing. format doesn't look at it.
@@ -201,7 +201,7 @@ MAX_FAILED_SECTORS :: 32
  * @return True if they were read; false if the device couldn't read them, or one is a sector a failed write was for
  *     (or more than MAX_FAILED_SECTORS were), since what's there isn't what was written.
  */
-read_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, into: mut u8[]) -> bool {
+read_sectors :: fn(volume : ptr[mut Volume], first : u64, count : u64, into : mut u8[]) -> bool {
     if volume.failed_count > MAX_FAILED_SECTORS {
         return false
     }
@@ -225,7 +225,7 @@ read_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, into: mut u8
  * @param from Their bytes, at least count * SECTOR_BYTES.
  * @return True if they were written; false if the device couldn't write them.
  */
-write_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, from: u8[]) -> bool {
+write_sectors :: fn(volume : ptr[mut Volume], first : u64, count : u64, from : u8[]) -> bool {
     wrote :: volume.device.write(volume.device.context, first, count, from)
     for sector in first..<first + count {
         note_sector(volume, sector, !wrote)
@@ -243,7 +243,7 @@ write_sectors :: fn(volume: ptr[mut Volume], first: u64, count: u64, from: u8[])
  * @param sector The sector the write was for, from the volume's start.
  * @param failed True if the write failed, so the sector is remembered; false if it succeeded, so it's forgotten.
  */
-note_sector :: fn(volume: ptr[mut Volume], sector: u64, failed: bool) {
+note_sector :: fn(volume : ptr[mut Volume], sector : u64, failed : bool) {
     if volume.failed_count > MAX_FAILED_SECTORS {
         return void
     }
@@ -377,9 +377,19 @@ EPOCH_STAMP : u32 : cast[u32](EPOCH_DATE) << 16
  * @return The date in the high 16 bits (day, month, years since 1980) and the time in the low (seconds / 2, minutes,
  *     hours); EPOCH_STAMP if any part is out of its range.
  */
-stamp_of :: fn(year: i64, month: int, day: int, hour: int, minute: int, second: int) -> u32 {
-    if year < 1980 || year > 2107 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0
-        || minute > 59 || second < 0 || second > 59 {
+stamp_of :: fn(year : i64, month : int, day : int, hour : int, minute : int, second : int) -> u32 {
+    if year < 1980
+        || year > 2107
+        || month < 1
+        || month > 12
+        || day < 1
+        || day > 31
+        || hour < 0
+        || hour > 23
+        || minute < 0
+        || minute > 59
+        || second < 0
+        || second > 59 {
         return EPOCH_STAMP
     }
     date :: cast[u32](year - 1980) << 9 | cast[u32](month) << 5 | cast[u32](day)
@@ -408,7 +418,7 @@ LAST_LONG_ENTRY : u8 : 0x40
  *     isn't a power of two of sectors, a fixed root directory or 16-bit counts, too few clusters for FAT32 or too
  *     many for its FAT, a root cluster outside the volume, or a layout bigger than the device.
  */
-mount :: fn(device: Device) -> Result[Volume, FatError] {
+mount :: fn(device : Device) -> Result[Volume, FatError] {
     sector : u8[512]
     if !device.read(device.context, 0, 1, sector) {
         return .Error(.DeviceError)
@@ -426,8 +436,15 @@ mount :: fn(device: Device) -> Result[Volume, FatError] {
     fat_sectors :: cast[u64](get_u32(sector, 36))
     root :: get_u32(sector, 44)
     info :: cast[u64](get_u16(sector, 48))
-    if per_cluster == 0 || per_cluster & (per_cluster - 1) != 0 || reserved == 0 || fats == 0 || root_entries != 0 || small_total != 0
-        || small_fat != 0 || fat_sectors == 0 || total > device.sector_count {
+    if per_cluster == 0
+        || per_cluster & (per_cluster - 1) != 0
+        || reserved == 0
+        || fats == 0
+        || root_entries != 0
+        || small_total != 0
+        || small_fat != 0
+        || fat_sectors == 0
+        || total > device.sector_count {
         return .Error(.NotFat)
     }
     first_data :: reserved + fats * fat_sectors
@@ -436,13 +453,28 @@ mount :: fn(device: Device) -> Result[Volume, FatError] {
     }
     clusters :: (total - first_data) / per_cluster
     // Each FAT has an entry for every cluster, from 2
-    if clusters < cast[u64](MIN_CLUSTERS) || clusters > cast[u64](CLUSTER_MASK) - 16 || (clusters + 2) * 4 > fat_sectors * SECTOR_BYTES
-        || root < 2 || cast[u64](root) >= clusters + 2 {
+    if clusters < cast[u64](MIN_CLUSTERS)
+        || clusters > cast[u64](CLUSTER_MASK) - 16
+        || (clusters + 2) * 4 > fat_sectors * SECTOR_BYTES
+        || root < 2
+        || cast[u64](root) >= clusters + 2 {
         return .Error(.NotFat)
     }
-    volume := Volume.{device = device, sectors_per_cluster = per_cluster, cluster_bytes = per_cluster * SECTOR_BYTES, reserved_sectors = reserved,
-        fat_count = fats, fat_sectors = fat_sectors, first_data_sector = first_data, cluster_count = cast[u32](clusters), root_cluster = root,
-        info_sector = info, next_free = 2, free_count = UNKNOWN_FREE, stamp = EPOCH_STAMP}
+    volume := Volume.{
+        device = device,
+        sectors_per_cluster = per_cluster,
+        cluster_bytes = per_cluster * SECTOR_BYTES,
+        reserved_sectors = reserved,
+        fat_count = fats,
+        fat_sectors = fat_sectors,
+        first_data_sector = first_data,
+        cluster_count = cast[u32](clusters),
+        root_cluster = root,
+        info_sector = info,
+        next_free = 2,
+        free_count = UNKNOWN_FREE,
+        stamp = EPOCH_STAMP,
+    }
     for i in 0..<cast[usize](11) {
         volume.label[i] = get_u8(sector, 71 + i)
     }
@@ -458,13 +490,15 @@ mount :: fn(device: Device) -> Result[Volume, FatError] {
  *
  * @param volume The volume, just mounted.
  */
-read_info :: fn(volume: ptr[mut Volume]) {
+read_info :: fn(volume : ptr[mut Volume]) {
     if volume.info_sector == 0 || volume.info_sector >= volume.reserved_sectors {
         return void
     }
     info : u8[512]
-    if !read_sectors(volume, volume.info_sector, 1, info) || get_u32(info, 0) != 0x41615252
-        || get_u32(info, 484) != 0x61417272 || get_u32(info, 508) != 0xaa550000 {
+    if !read_sectors(volume, volume.info_sector, 1, info)
+        || get_u32(info, 0) != 0x41615252
+        || get_u32(info, 484) != 0x61417272
+        || get_u32(info, 508) != 0xaa550000 {
         return void
     }
     free :: get_u32(info, 488)
@@ -489,8 +523,11 @@ read_info :: fn(volume: ptr[mut Volume]) {
  * @return Null if they were written, or there was nothing to write; DeviceError if FSInfo couldn't be read or
  *     written, info_changed left set so a later call tries again.
  */
-write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
-    if !volume.info_changed || volume.device.read_only || volume.info_sector == 0 || volume.info_sector >= volume.reserved_sectors {
+write_info :: fn(volume : ptr[mut Volume]) -> FatError? {
+    if !volume.info_changed
+        || volume.device.read_only
+        || volume.info_sector == 0
+        || volume.info_sector >= volume.reserved_sectors {
         return null
     }
     info : u8[512]
@@ -523,7 +560,7 @@ write_info :: fn(volume: ptr[mut Volume]) -> FatError? {
  * @return The free clusters, 0 to cluster_count; each is cluster_bytes bytes.
  * @error DeviceError The FAT couldn't be read to count them.
  */
-free_clusters :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
+free_clusters :: fn(volume : ptr[mut Volume]) -> Result[u32, FatError] {
     if volume.free_count == UNKNOWN_FREE {
         volume.free_count = count_free(volume)?
         volume.info_changed = true
@@ -538,7 +575,7 @@ free_clusters :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
  * @return The free clusters among 2 to cluster_count + 1, so 0 to cluster_count.
  * @error DeviceError A sector of the FAT couldn't be read.
  */
-count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
+count_free :: fn(volume : ptr[mut Volume]) -> Result[u32, FatError] {
     free : u32 = 0
     sector : u8[512]
     entries_per_sector :: SECTOR_BYTES / 4
@@ -553,7 +590,9 @@ count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
         }
         for index in 0..<entries_per_sector {
             cluster :: at + index
-            if cluster >= 2 && cluster < last && get_u32(sector, cast[usize](index * 4)) & CLUSTER_MASK == FREE_CLUSTER {
+            if cluster >= 2
+                && cluster < last
+                && get_u32(sector, cast[usize](index * 4)) & CLUSTER_MASK == FREE_CLUSTER {
                 free += 1
             }
         }
@@ -568,7 +607,7 @@ count_free :: fn(volume: ptr[mut Volume]) -> Result[u32, FatError] {
  * @param volume The volume, as mount made it; only its layout is used, nothing is read.
  * @return The root's first cluster, from the BPB.
  */
-root_of :: fn(volume: ptr[mut Volume]) -> u32 {
+root_of :: fn(volume : ptr[mut Volume]) -> u32 {
     return volume.root_cluster
 }
 
@@ -581,7 +620,7 @@ root_of :: fn(volume: ptr[mut Volume]) -> u32 {
  * @param cluster The cluster, 2 or more; not checked, so the caller checks it with is_cluster.
  * @return The cluster's first sector, from the volume's start.
  */
-sector_of :: fn(volume: ptr[mut Volume], cluster: u32) -> u64 {
+sector_of :: fn(volume : ptr[mut Volume], cluster : u32) -> u64 {
     return volume.first_data_sector + cast[u64](cluster - 2) * volume.sectors_per_cluster
 }
 
@@ -592,7 +631,7 @@ sector_of :: fn(volume: ptr[mut Volume], cluster: u32) -> u64 {
  * @param cluster The number, as a FAT entry or a directory entry has it.
  * @return True if it's from 2 to cluster_count + 1.
  */
-is_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> bool {
+is_cluster :: fn(volume : ptr[mut Volume], cluster : u32) -> bool {
     return cluster >= 2 && cluster < volume.cluster_count + 2
 }
 
@@ -604,7 +643,7 @@ is_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> bool {
  * @return The entry's 28 bits: FREE_CLUSTER, the next cluster, or END_OF_CHAIN or more for a chain's end.
  * @error DeviceError The FAT's sector couldn't be read.
  */
-fat_entry :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32, FatError] {
+fat_entry :: fn(volume : ptr[mut Volume], cluster : u32) -> Result[u32, FatError] {
     offset :: cast[u64](cluster) * 4
     sector : u8[512]
     if !read_sectors(volume, volume.reserved_sectors + offset / SECTOR_BYTES, 1, sector) {
@@ -625,7 +664,7 @@ fat_entry :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32, FatError] 
  * @return Null if every FAT was written; ReadOnly for a read-only device, nothing written; DeviceError if a FAT's
  *     sector couldn't be read or written.
  */
-set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatError? {
+set_fat_entry :: fn(volume : ptr[mut Volume], cluster : u32, value : u32) -> FatError? {
     if volume.device.read_only {
         return FatError.ReadOnly
     }
@@ -656,7 +695,7 @@ set_fat_entry :: fn(volume: ptr[mut Volume], cluster: u32, value: u32) -> FatErr
  * @error DeviceError The FAT couldn't be read.
  * @error Corrupt The FAT entry is neither a chain's end nor one of the volume's clusters, as a free cluster's is.
  */
-next_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32?, FatError] {
+next_cluster :: fn(volume : ptr[mut Volume], cluster : u32) -> Result[u32?, FatError] {
     entry :: fat_entry(volume, cluster)?
     if entry >= END_OF_CHAIN {
         return .Ok(null)
@@ -680,7 +719,7 @@ next_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[u32?, FatErr
  * @error NoSpace No cluster is free.
  * @error DeviceError The FAT couldn't be read or written, or the cluster couldn't be zeroed.
  */
-allocate_cluster :: fn(volume: ptr[mut Volume], previous: u32) -> Result[u32, FatError] {
+allocate_cluster :: fn(volume : ptr[mut Volume], previous : u32) -> Result[u32, FatError] {
     if volume.device.read_only {
         return .Error(.ReadOnly)
     }
@@ -720,7 +759,7 @@ allocate_cluster :: fn(volume: ptr[mut Volume], previous: u32) -> Result[u32, Fa
  * @param cluster The cluster, one of the volume's.
  * @error DeviceError A sector couldn't be written; the sectors before it are zero.
  */
-zero_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[void, FatError] {
+zero_cluster :: fn(volume : ptr[mut Volume], cluster : u32) -> Result[void, FatError] {
     zeros : u8[512]
     first :: sector_of(volume, cluster)
     for i in 0..<volume.sectors_per_cluster {
@@ -742,7 +781,7 @@ zero_cluster :: fn(volume: ptr[mut Volume], cluster: u32) -> Result[void, FatErr
  * @return Null once the chain's end is freed; DeviceError if the FAT couldn't be read or written; Corrupt if a link
  *     leads outside the volume or the chain is longer than the volume (a loop), or for a read-only device.
  */
-free_chain :: fn(volume: ptr[mut Volume], first: u32) -> FatError? {
+free_chain :: fn(volume : ptr[mut Volume], first : u32) -> FatError? {
     cluster := first
     for step in 0..<volume.cluster_count {
         if !is_cluster(volume, cluster) {
@@ -781,7 +820,7 @@ free_chain :: fn(volume: ptr[mut Volume], first: u32) -> FatError? {
  * @error DeviceError The FAT couldn't be read.
  * @error Corrupt A link leads outside the volume.
  */
-cluster_at :: fn(volume: ptr[mut Volume], first: u32, index: u64) -> Result[u32?, FatError] {
+cluster_at :: fn(volume : ptr[mut Volume], first : u32, index : u64) -> Result[u32?, FatError] {
     cluster := first
     for step in 0..<index {
         step_result :: next_cluster(volume, cluster)?
@@ -816,7 +855,7 @@ SlotAt :: struct {
  * @error DeviceError The FAT couldn't be read.
  * @error Corrupt A link in the chain leads outside the volume.
  */
-slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[SlotAt?, FatError] {
+slot_at :: fn(volume : ptr[mut Volume], directory : u32, slot : u32) -> Result[SlotAt?, FatError] {
     per_cluster :: volume.cluster_bytes / ENTRY_BYTES
     // A directory ends at FAT's most slots, wherever its chain does, so one that loops ends too
     if slot >= MAX_DIRECTORY_SLOTS || per_cluster == 0 {
@@ -843,7 +882,12 @@ slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Slot
         return .Ok(null)
     }
     within :: (cast[u64](slot) % per_cluster) * ENTRY_BYTES
-    return .Ok(SlotAt.{sector = sector_of(volume, cluster) + within / SECTOR_BYTES, offset = cast[usize](within % SECTOR_BYTES)})
+    return .Ok(
+        SlotAt.{
+            sector = sector_of(volume, cluster) + within / SECTOR_BYTES,
+            offset = cast[usize](within % SECTOR_BYTES),
+        }
+    )
 }
 
 /**
@@ -854,7 +898,7 @@ slot_at :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Slot
  * @param into Where its 32 bytes go.
  * @return Null if it was read; DeviceError if its sector couldn't be.
  */
-read_slot :: fn(volume: ptr[mut Volume], at: SlotAt, into: ptr[mut u8[32]]) -> FatError? {
+read_slot :: fn(volume : ptr[mut Volume], at : SlotAt, into : ptr[mut u8[32]]) -> FatError? {
     sector : u8[512]
     if !read_sectors(volume, at.sector, 1, sector) {
         return FatError.DeviceError
@@ -874,7 +918,7 @@ read_slot :: fn(volume: ptr[mut Volume], at: SlotAt, into: ptr[mut u8[32]]) -> F
  * @return Null if it was written; ReadOnly for a read-only device; DeviceError if its sector couldn't be read or
  *     written.
  */
-write_slot :: fn(volume: ptr[mut Volume], at: SlotAt, from: ptr[u8[32]]) -> FatError? {
+write_slot :: fn(volume : ptr[mut Volume], at : SlotAt, from : ptr[u8[32]]) -> FatError? {
     if volume.device.read_only {
         return FatError.ReadOnly
     }
@@ -915,7 +959,7 @@ Listed :: struct {
  * @error DeviceError The directory or the FAT couldn't be read.
  * @error Corrupt The directory's chain leads outside the volume.
  */
-next_entry :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[Listed?, FatError] {
+next_entry :: fn(volume : ptr[mut Volume], directory : u32, slot : u32) -> Result[Listed?, FatError] {
     units : u16[MAX_NAME_UNITS + 13]
     long_count := cast[u32](0)
     expected := cast[u8](0)
@@ -1015,7 +1059,7 @@ next_entry :: fn(volume: ptr[mut Volume], directory: u32, slot: u32) -> Result[L
  * @error DeviceError The directory or the FAT couldn't be read.
  * @error Corrupt The directory's chain leads outside the volume.
  */
-entry_at :: fn(volume: ptr[mut Volume], place: Place, name: string) -> Result[Entry, FatError] {
+entry_at :: fn(volume : ptr[mut Volume], place : Place, name : string) -> Result[Entry, FatError] {
     at :: slot_at(volume, place.directory, place.slot)? or_return .Error(.NotFound)
     bytes : u8[32]
     match read_slot(volume, at, &bytes) {
@@ -1049,7 +1093,7 @@ entry_at :: fn(volume: ptr[mut Volume], place: Place, name: string) -> Result[En
  * @error DeviceError The directory or the FAT couldn't be read.
  * @error Corrupt The directory doesn't hold together (see next_entry).
  */
-lookup :: fn(volume: ptr[mut Volume], directory: u32, name: string) -> Result[Entry, FatError] {
+lookup :: fn(volume : ptr[mut Volume], directory : u32, name : string) -> Result[Entry, FatError] {
     slot := cast[u32](0)
     loop {
         found :: next_entry(volume, directory, slot)? or_return .Error(.NotFound)
@@ -1075,7 +1119,7 @@ lookup :: fn(volume: ptr[mut Volume], directory: u32, name: string) -> Result[En
  * @error DeviceError A directory or the FAT couldn't be read.
  * @error Corrupt A directory doesn't hold together.
  */
-resolve :: fn(volume: ptr[mut Volume], directory: u32, path: string) -> Result[Entry, FatError] {
+resolve :: fn(volume : ptr[mut Volume], directory : u32, path : string) -> Result[Entry, FatError] {
     if path.count == 0 {
         return .Error(.InvalidName)
     }
@@ -1110,7 +1154,7 @@ resolve :: fn(volume: ptr[mut Volume], directory: u32, path: string) -> Result[E
  *     empty file's entry, cluster 0, would give the root's.
  * @return Its first cluster; the root's for an entry whose cluster is 0 ("..", to the root).
  */
-directory_cluster :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> u32 {
+directory_cluster :: fn(volume : ptr[mut Volume], entry : ptr[Entry]) -> u32 {
     return if entry.first_cluster == 0 { volume.root_cluster } else { entry.first_cluster }
 }
 
@@ -1131,7 +1175,7 @@ directory_cluster :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> u32 {
  * @error DeviceError The file's sectors or the FAT couldn't be read, or a sector is one a failed write was for.
  * @error Corrupt The file's chain is shorter than its size, or leads outside the volume.
  */
-read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8[]) -> Result[u64, FatError] {
+read :: fn(volume : ptr[mut Volume], entry : ptr[Entry], offset : u64, into : mut u8[]) -> Result[u64, FatError] {
     if entry.attributes & DIRECTORY != 0 {
         return .Error(.IsADirectory)
     }
@@ -1191,7 +1235,7 @@ read :: fn(volume: ptr[mut Volume], entry: ptr[Entry], offset: u64, into: mut u8
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The file's chain doesn't hold together, or its entry's slot is past its directory's end.
  */
-write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u8[]) -> Result[u64, FatError] {
+write :: fn(volume : ptr[mut Volume], entry : ptr[mut Entry], offset : u64, from : u8[]) -> Result[u64, FatError] {
     if entry.attributes & DIRECTORY != 0 {
         return .Error(.IsADirectory)
     }
@@ -1225,7 +1269,12 @@ write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u
         }
         at :: sector_of(volume, cluster) + within / SECTOR_BYTES
         start :: within % SECTOR_BYTES
-        count :: if SECTOR_BYTES - start < cast[u64](from.count) - done { SECTOR_BYTES - start } else { cast[u64](from.count) - done }
+        count :: if SECTOR_BYTES - start < cast[u64](from.count) - done {
+            SECTOR_BYTES - start
+        }
+        else {
+            cast[u64](from.count) - done
+        }
         if start != 0 || count != SECTOR_BYTES {
             if !read_sectors(volume, at, 1, sector) {
                 return .Error(.DeviceError)
@@ -1267,7 +1316,7 @@ write :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], offset: u64, from: u
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The chain doesn't hold together, or the entry's slot is past its directory's end.
  */
-grow :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Result[void, FatError] {
+grow :: fn(volume : ptr[mut Volume], entry : ptr[mut Entry], size : u64) -> Result[void, FatError] {
     needed :: (size + volume.cluster_bytes - 1) / volume.cluster_bytes
     if needed == 0 {
         return .Ok
@@ -1315,7 +1364,7 @@ grow :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Result[
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The chain is shorter than the clusters to keep, or doesn't hold together.
  */
-set_size :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Result[void, FatError] {
+set_size :: fn(volume : ptr[mut Volume], entry : ptr[mut Entry], size : u64) -> Result[void, FatError] {
     if entry.attributes & DIRECTORY != 0 {
         return .Error(.IsADirectory)
     }
@@ -1372,7 +1421,7 @@ set_size :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], size: u64) -> Res
  * @error DeviceError A sector couldn't be read or written.
  * @error Corrupt The chain is shorter than the range.
  */
-zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end: u64) -> Result[void, FatError] {
+zero_range :: fn(volume : ptr[mut Volume], entry : ptr[mut Entry], start : u64, end : u64) -> Result[void, FatError] {
     if end <= start {
         return .Ok
     }
@@ -1409,7 +1458,7 @@ zero_range :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry], start: u64, end
  * @error DeviceError The slot couldn't be read or written.
  * @error Corrupt The entry's slot is past its directory's end.
  */
-update_entry :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry]) -> Result[void, FatError] {
+update_entry :: fn(volume : ptr[mut Volume], entry : ptr[mut Entry]) -> Result[void, FatError] {
     at :: slot_at(volume, entry.place.directory, entry.place.slot)? or_return .Error(.Corrupt)
     bytes : u8[32]
     match read_slot(volume, at, &bytes) {
@@ -1454,7 +1503,7 @@ update_entry :: fn(volume: ptr[mut Volume], entry: ptr[mut Entry]) -> Result[voi
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The directory doesn't hold together.
  */
-create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory: bool) -> Result[Entry, FatError] {
+create :: fn(volume : ptr[mut Volume], directory : u32, name : string, is_directory : bool) -> Result[Entry, FatError] {
     if volume.device.read_only {
         return .Error(.ReadOnly)
     }
@@ -1484,7 +1533,12 @@ create :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The directory's chain doesn't hold together.
  */
-make_entry :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_directory: bool) -> Result[Entry, FatError] {
+make_entry :: fn(
+    volume : ptr[mut Volume],
+    directory : u32,
+    name : string,
+    is_directory : bool
+) -> Result[Entry, FatError] {
     units : u16[MAX_NAME_UNITS]
     unit_count :: units_of_name(name, &units) or_return .Error(.InvalidName)
     entry := Entry.{attributes = if is_directory { DIRECTORY } else { ARCHIVE }, written = volume.stamp}
@@ -1508,7 +1562,10 @@ make_entry :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_direc
         positions :: usize.[1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30]
         for position, j in positions {
             index :: (cast[usize](order) - 1) * 13 + j
-            unit : u16 = if index < unit_count { units[index % units.count] } else if index == unit_count { cast[u16](0) } else { cast[u16](0xffff) }
+            unit : u16 = if index < unit_count {
+                units[index % units.count]
+            }
+            else if index == unit_count { cast[u16](0) } else { cast[u16](0xffff) }
             put_u16(bytes, position, unit)
         }
         at :: slot_at(volume, directory, first_slot + k)? or_return .Error(.Corrupt)
@@ -1541,9 +1598,16 @@ make_entry :: fn(volume: ptr[mut Volume], directory: u32, name: string, is_direc
  * @error DeviceError A slot couldn't be read or written.
  * @error Corrupt The cluster isn't one of the volume's.
  */
-make_dots :: fn(volume: ptr[mut Volume], cluster: u32, parent: u32) -> Result[void, FatError] {
+make_dots :: fn(volume : ptr[mut Volume], cluster : u32, parent : u32) -> Result[void, FatError] {
     for which in 0..<cast[u32](2) {
-        dots := Entry.{attributes = DIRECTORY, written = volume.stamp, first_cluster = if which == 0 { cluster } else if parent == volume.root_cluster { cast[u32](0) } else { parent }}
+        dots := Entry.{
+            attributes = DIRECTORY,
+            written = volume.stamp,
+            first_cluster = if which == 0 {
+                cluster
+            }
+            else if parent == volume.root_cluster { cast[u32](0) } else { parent },
+        }
         for i in 0..<cast[usize](11) {
             dots.short_name[i] = if i == 0 || (i == 1 && which == 1) { cast[u8]('.') } else { cast[u8](' ') }
         }
@@ -1565,7 +1629,7 @@ make_dots :: fn(volume: ptr[mut Volume], cluster: u32, parent: u32) -> Result[vo
  * @param case_flags LOWER_BASE and LOWER_EXTENSION for an 8.3 name kept in lower case; 0 otherwise.
  * @return The short entry's bytes.
  */
-short_entry_of :: fn(entry: ptr[Entry], case_flags: u8) -> u8[32] {
+short_entry_of :: fn(entry : ptr[Entry], case_flags : u8) -> u8[32] {
     bytes : u8[32]
     for byte, i in entry.short_name {
         bytes[i] = byte
@@ -1600,7 +1664,7 @@ short_entry_of :: fn(entry: ptr[Entry], case_flags: u8) -> u8[32] {
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The directory's chain doesn't hold together.
  */
-free_slots :: fn(volume: ptr[mut Volume], directory: u32, count: u32) -> Result[u32, FatError] {
+free_slots :: fn(volume : ptr[mut Volume], directory : u32, count : u32) -> Result[u32, FatError] {
     run_start := cast[u32](0)
     run := cast[u32](0)
     slot := cast[u32](0)
@@ -1647,7 +1711,7 @@ free_slots :: fn(volume: ptr[mut Volume], directory: u32, count: u32) -> Result[
  * @error DeviceError The FAT couldn't be read.
  * @error Corrupt A link leads outside the volume, or the chain is longer than the volume (a loop).
  */
-last_cluster :: fn(volume: ptr[mut Volume], first: u32) -> Result[u32, FatError] {
+last_cluster :: fn(volume : ptr[mut Volume], first : u32) -> Result[u32, FatError] {
     cluster := first
     for step in 0..<volume.cluster_count {
         step_result :: next_cluster(volume, cluster)?
@@ -1670,7 +1734,7 @@ last_cluster :: fn(volume: ptr[mut Volume], first: u32) -> Result[u32, FatError]
  * @error DeviceError A slot couldn't be read or written; the slots before it are free.
  * @error Corrupt A slot is past its directory's end.
  */
-free_entry_slots :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
+free_entry_slots :: fn(volume : ptr[mut Volume], entry : ptr[Entry]) -> Result[void, FatError] {
     first :: entry.place.slot - entry.place.long_entries
     for slot in first..<entry.place.slot + 1 {
         at :: slot_at(volume, entry.place.directory, slot)? or_return .Error(.Corrupt)
@@ -1701,7 +1765,7 @@ free_entry_slots :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[voi
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt The entry's directory or its chain doesn't hold together.
  */
-remove :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatError] {
+remove :: fn(volume : ptr[mut Volume], entry : ptr[Entry]) -> Result[void, FatError] {
     if volume.device.read_only {
         return .Error(.ReadOnly)
     }
@@ -1744,7 +1808,7 @@ remove :: fn(volume: ptr[mut Volume], entry: ptr[Entry]) -> Result[void, FatErro
  * @error DeviceError The device couldn't be read or written.
  * @error Corrupt A directory or chain doesn't hold together, or ".." of the parents doesn't lead to the root.
  */
-rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: string) -> Result[Entry, FatError] {
+rename :: fn(volume : ptr[mut Volume], entry : ptr[Entry], directory : u32, name : string) -> Result[Entry, FatError] {
     if volume.device.read_only {
         return .Error(.ReadOnly)
     }
@@ -1812,7 +1876,11 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
     }
     if old.attributes & DIRECTORY != 0 && old.first_cluster != 0 && old.place.directory != directory {
         // Its ".." is its second slot
-        dots := Entry.{attributes = DIRECTORY, written = volume.stamp, first_cluster = if directory == volume.root_cluster { cast[u32](0) } else { directory }}
+        dots := Entry.{
+            attributes = DIRECTORY,
+            written = volume.stamp,
+            first_cluster = if directory == volume.root_cluster { cast[u32](0) } else { directory },
+        }
         for i in 0..<cast[usize](11) {
             dots.short_name[i] = if i < 2 { cast[u8]('.') } else { cast[u8](' ') }
         }
@@ -1838,7 +1906,7 @@ rename :: fn(volume: ptr[mut Volume], entry: ptr[Entry], directory: u32, name: s
  * @error Corrupt The ".." links go 4096 deep without reaching the root, as a loop does, or a chain leads outside the
  *     volume.
  */
-is_beneath :: fn(volume: ptr[mut Volume], directory: u32, ancestor: u32) -> Result[bool, FatError] {
+is_beneath :: fn(volume : ptr[mut Volume], directory : u32, ancestor : u32) -> Result[bool, FatError] {
     current := directory
     for step in 0..<cast[u32](4096) {
         if current == ancestor {
@@ -1867,8 +1935,11 @@ is_beneath :: fn(volume: ptr[mut Volume], directory: u32, ancestor: u32) -> Resu
  * @param entry The entry, as next_entry, lookup, entry_at or create gave it.
  * @return Its name, UTF-8: a view into the entry's name, good as long as the entry is.
  */
-name_of :: fn(entry: ptr[Entry]) -> string {
-    return string_of(&entry.name[0], cast[usize](if entry.name_length > NAME_BYTES { cast[u32](NAME_BYTES) } else { entry.name_length }))
+name_of :: fn(entry : ptr[Entry]) -> string {
+    return string_of(
+        &entry.name[0],
+        cast[usize](if entry.name_length > NAME_BYTES { cast[u32](NAME_BYTES) } else { entry.name_length })
+    )
 }
 
 /**
@@ -1878,7 +1949,7 @@ name_of :: fn(entry: ptr[Entry]) -> string {
  * @param b The other, UTF-8.
  * @return True if they're the same length and differ only in ASCII letters' case; other letters' case counts.
  */
-same_name :: fn(a: string, b: string) -> bool {
+same_name :: fn(a : string, b : string) -> bool {
     if a.count != b.count {
         return false
     }
@@ -1896,7 +1967,7 @@ same_name :: fn(a: string, b: string) -> bool {
  * @param byte A byte.
  * @return The upper-case letter for 'a' to 'z'; any other byte as it is.
  */
-upper :: fn(byte: u8) -> u8 {
+upper :: fn(byte : u8) -> u8 {
     return if byte >= cast[u8]('a') && byte <= cast[u8]('z') { byte - 32 } else { byte }
 }
 
@@ -1906,7 +1977,7 @@ upper :: fn(byte: u8) -> u8 {
  * @param byte A byte.
  * @return The lower-case letter for 'A' to 'Z'; any other byte as it is.
  */
-lower :: fn(byte: u8) -> u8 {
+lower :: fn(byte : u8) -> u8 {
     return if byte >= cast[u8]('A') && byte <= cast[u8]('Z') { byte + 32 } else { byte }
 }
 
@@ -1920,7 +1991,7 @@ lower :: fn(byte: u8) -> u8 {
  * @param into Where the text goes, from its start.
  * @return The text's length in bytes, at most 12; 0 for a name of spaces.
  */
-name_of_short :: fn(short: ptr[u8[11]], case_flags: u8, into: ptr[mut u8[NAME_BYTES]]) -> u32 {
+name_of_short :: fn(short : ptr[u8[11]], case_flags : u8, into : ptr[mut u8[NAME_BYTES]]) -> u32 {
     length : usize = 0
     for i in 0..<cast[usize](8) {
         byte := short^[i]
@@ -1954,7 +2025,7 @@ name_of_short :: fn(short: ptr[u8[11]], case_flags: u8, into: ptr[mut u8[NAME_BY
  * @param byte The byte, any value; it isn't checked as UTF-8.
  * @return Where the next byte goes: at + 1, or at if it didn't fit.
  */
-put_name_byte :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, byte: u8) -> usize {
+put_name_byte :: fn(into : ptr[mut u8[NAME_BYTES]], at : usize, byte : u8) -> usize {
     if at < into^.count {
         into^[at] = byte
         return at + 1
@@ -1968,7 +2039,7 @@ put_name_byte :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, byte: u8) -> usize
  * @param short The short name as on the volume.
  * @return The checksum: each byte added to the sum rotated right by one bit, over all 11 bytes.
  */
-short_checksum :: fn(short: ptr[u8[11]]) -> u8 {
+short_checksum :: fn(short : ptr[u8[11]]) -> u8 {
     sum := cast[u8](0)
     for byte in short^ {
         sum = ((sum & 1) << 7) + (sum >> 1) + byte
@@ -1988,7 +2059,7 @@ short_checksum :: fn(short: ptr[u8[11]]) -> u8 {
  * @param units Where the units go, from the start.
  * @return How many units, 1 to MAX_NAME_UNITS; null if FAT can't hold the name, or a byte isn't UTF-8's.
  */
-units_of_name :: fn(name: string, units: ptr[mut u16[MAX_NAME_UNITS]]) -> usize? {
+units_of_name :: fn(name : string, units : ptr[mut u16[MAX_NAME_UNITS]]) -> usize? {
     if name.count == 0 {
         return null
     }
@@ -2006,12 +2077,16 @@ units_of_name :: fn(name: string, units: ptr[mut u16[MAX_NAME_UNITS]]) -> usize?
         code := byte
         width : usize = 1
         if byte >= 0xf0 && i + 3 < name.count {
-            code = ((byte & 7) << 18) | ((cast[u32](cast[u8](name[i + 1])) & 0x3f) << 12) | ((cast[u32](cast[u8](name[i + 2])) & 0x3f) << 6)
+            code = ((byte & 7) << 18)
+                | ((cast[u32](cast[u8](name[i + 1])) & 0x3f) << 12)
+                | ((cast[u32](cast[u8](name[i + 2])) & 0x3f) << 6)
                 | (cast[u32](cast[u8](name[i + 3])) & 0x3f)
             width = 4
         }
         else if byte >= 0xe0 && i + 2 < name.count {
-            code = ((byte & 0xf) << 12) | ((cast[u32](cast[u8](name[i + 1])) & 0x3f) << 6) | (cast[u32](cast[u8](name[i + 2])) & 0x3f)
+            code = ((byte & 0xf) << 12)
+                | ((cast[u32](cast[u8](name[i + 1])) & 0x3f) << 6)
+                | (cast[u32](cast[u8](name[i + 2])) & 0x3f)
             width = 3
         }
         else if byte >= 0xc0 && i + 1 < name.count {
@@ -2021,8 +2096,16 @@ units_of_name :: fn(name: string, units: ptr[mut u16[MAX_NAME_UNITS]]) -> usize?
         else if byte >= 0x80 {
             return null
         }
-        if code < 0x20 || code == 0x22 || code == 0x2a || code == 0x2f || code == 0x3a || code == 0x3c || code == 0x3e || code == 0x3f
-            || code == cast[u32]('\\') || code == cast[u32]('|') {
+        if code < 0x20
+            || code == 0x22
+            || code == 0x2a
+            || code == 0x2f
+            || code == 0x3a
+            || code == 0x3c
+            || code == 0x3e
+            || code == 0x3f
+            || code == cast[u32]('\\')
+            || code == cast[u32]('|') {
             return null
         }
         if code >= 0x10000 {
@@ -2057,7 +2140,7 @@ units_of_name :: fn(name: string, units: ptr[mut u16[MAX_NAME_UNITS]]) -> usize?
  * @param into Where the UTF-8 goes, from its start; a code point that wouldn't fit is left out.
  * @return The UTF-8 length in bytes, 0 to NAME_BYTES. An unpaired surrogate becomes '?'.
  */
-utf8_of_units :: fn(units: u16[], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
+utf8_of_units :: fn(units : u16[], into : ptr[mut u8[NAME_BYTES]]) -> u32 {
     length : usize = 0
     i : usize = 0
     loop {
@@ -2067,7 +2150,11 @@ utf8_of_units :: fn(units: u16[], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
         unit :: cast[u32](units[i])
         i += 1
         code := unit
-        if unit >= 0xd800 && unit < 0xdc00 && i < units.count && cast[u32](units[i]) >= 0xdc00 && cast[u32](units[i]) < 0xe000 {
+        if unit >= 0xd800
+            && unit < 0xdc00
+            && i < units.count
+            && cast[u32](units[i]) >= 0xdc00
+            && cast[u32](units[i]) < 0xe000 {
             code = 0x10000 + ((unit - 0xd800) << 10) + (cast[u32](units[i]) - 0xdc00)
             i += 1
         }
@@ -2087,7 +2174,7 @@ utf8_of_units :: fn(units: u16[], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
  * @param code The code point, at most 0x10ffff.
  * @return Where the next code point goes: at plus its 1 to 4 bytes, or at if they didn't fit, so nothing was written.
  */
-put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
+put_utf8 :: fn(into : ptr[mut u8[NAME_BYTES]], at : usize, code : u32) -> usize {
     bytes : u8[4]
     count : usize = 0
     if code < 0x80 {
@@ -2131,7 +2218,7 @@ put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
  * @param into Where it goes, from the start.
  * @return How many bytes were copied: the name's length, or NAME_BYTES if it's longer, cut there.
  */
-copy_name :: fn(name: string, into: ptr[mut u8[NAME_BYTES]]) -> u32 {
+copy_name :: fn(name : string, into : ptr[mut u8[NAME_BYTES]]) -> u32 {
     count : usize = 0
     for character, i in name {
         if i < into^.count {
@@ -2152,7 +2239,7 @@ copy_name :: fn(name: string, into: ptr[mut u8[NAME_BYTES]]) -> u32 {
  * @param short Where the short name goes, upper-case and space-padded; filled in part when it isn't one.
  * @return True if it's an 8.3 name; false if it needs a long name and an alias.
  */
-short_name_exactly :: fn(name: string, short: ptr[mut u8[11]]) -> bool {
+short_name_exactly :: fn(name : string, short : ptr[mut u8[11]]) -> bool {
     for &byte in short^ {
         byte^ = cast[u8](' ')
     }
@@ -2209,7 +2296,7 @@ short_name_exactly :: fn(name: string, short: ptr[mut u8[11]]) -> bool {
  * @param name The name, one short_name_exactly took.
  * @return LOWER_BASE if its base has a lower-case letter, LOWER_EXTENSION if its extension does, or both, or 0.
  */
-case_flags_of :: fn(name: string) -> u8 {
+case_flags_of :: fn(name : string) -> u8 {
     flags := cast[u8](0)
     in_extension := false
     for character in name {
@@ -2231,8 +2318,11 @@ case_flags_of :: fn(name: string) -> u8 {
  * @param byte A byte of a name's UTF-8, any value.
  * @return True if it may; false for anything else, every non-ASCII byte included.
  */
-is_short_character :: fn(byte: u8) -> bool {
-    if (byte >= cast[u8]('A') && byte <= cast[u8]('Z')) || (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('0') && byte <= cast[u8]('9')) || byte >= 0x80 {
+is_short_character :: fn(byte : u8) -> bool {
+    if (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+        || (byte >= cast[u8]('a') && byte <= cast[u8]('z'))
+        || (byte >= cast[u8]('0') && byte <= cast[u8]('9'))
+        || byte >= 0x80 {
         return byte < 0x80
     }
     for allowed in "$%'-_@~`!(){}^#&" {
@@ -2258,7 +2348,12 @@ is_short_character :: fn(byte: u8) -> bool {
  * @error DeviceError The directory or the FAT couldn't be read.
  * @error Corrupt The directory doesn't hold together.
  */
-make_alias :: fn(volume: ptr[mut Volume], directory: u32, name: string, short: ptr[mut u8[11]]) -> Result[void, FatError] {
+make_alias :: fn(
+    volume : ptr[mut Volume],
+    directory : u32,
+    name : string,
+    short : ptr[mut u8[11]]
+) -> Result[void, FatError] {
     for &byte in short^ {
         byte^ = cast[u8](' ')
     }
@@ -2335,7 +2430,7 @@ MAX_TAILS : u32 : 65537
  * @param base_count How many bytes of base are used, 1 to 8.
  * @param tail The tail, 1 to MAX_TAILS.
  */
-put_alias :: fn(short: ptr[mut u8[11]], base: ptr[u8[8]], base_count: usize, tail: u32) {
+put_alias :: fn(short : ptr[mut u8[11]], base : ptr[u8[8]], base_count : usize, tail : u32) {
     digits : u8[7]
     digit_count : usize = 0
     value := tail
@@ -2373,7 +2468,7 @@ put_alias :: fn(short: ptr[mut u8[11]], base: ptr[u8[8]], base_count: usize, tai
  * @param digit_count How many digits the tail has, 1 to 6.
  * @return The bytes of the base kept: all of them, or 7 - digit_count.
  */
-alias_keep :: fn(base_count: usize, digit_count: usize) -> usize {
+alias_keep :: fn(base_count : usize, digit_count : usize) -> usize {
     return if base_count + digit_count + 1 > 8 { 8 - digit_count - 1 } else { base_count }
 }
 
@@ -2388,7 +2483,7 @@ alias_keep :: fn(base_count: usize, digit_count: usize) -> usize {
  * @param base_count How many bytes of base are used.
  * @return The tail, the number after "~"; 0 if the name isn't such an alias.
  */
-tail_of :: fn(name: ptr[u8[11]], extension: ptr[u8[11]], base: ptr[u8[8]], base_count: usize) -> u32 {
+tail_of :: fn(name : ptr[u8[11]], extension : ptr[u8[11]], base : ptr[u8[8]], base_count : usize) -> u32 {
     for i in 8..<cast[usize](11) {
         if name^[i] != extension^[i] {
             return 0
@@ -2446,8 +2541,11 @@ tail_of :: fn(name: ptr[u8[11]], extension: ptr[u8[11]], base: ptr[u8[8]], base_
  *     sector_count is more than the device has; NoSpace if the volume would have fewer than MIN_CLUSTERS clusters to
  *     be FAT32; DeviceError if the device couldn't be written.
  */
-format :: fn(device: Device, sector_count: u64, sectors_per_cluster: u64, label: string) -> FatError? {
-    if sectors_per_cluster == 0 || sectors_per_cluster & (sectors_per_cluster - 1) != 0 || sectors_per_cluster > 128 || sector_count > device.sector_count {
+format :: fn(device : Device, sector_count : u64, sectors_per_cluster : u64, label : string) -> FatError? {
+    if sectors_per_cluster == 0
+        || sectors_per_cluster & (sectors_per_cluster - 1) != 0
+        || sectors_per_cluster > 128
+        || sector_count > device.sector_count {
         return FatError.InvalidName
     }
     reserved :: cast[u64](32)
@@ -2533,7 +2631,7 @@ format :: fn(device: Device, sector_count: u64, sectors_per_cluster: u64, label:
  * @param at The byte's offset from the buffer's start; any value, as one past the end reads 0.
  * @return The byte; 0 if at is past the buffer's end.
  */
-get_u8 :: fn(bytes: u8[], at: usize) -> u8 {
+get_u8 :: fn(bytes : u8[], at : usize) -> u8 {
     return if at < bytes.count { bytes[at] } else { cast[u8](0) }
 }
 
@@ -2544,7 +2642,7 @@ get_u8 :: fn(bytes: u8[], at: usize) -> u8 {
  * @param at Its first byte's offset.
  * @return The value, any byte past the buffer's end taken as 0.
  */
-get_u16 :: fn(bytes: u8[], at: usize) -> u16 {
+get_u16 :: fn(bytes : u8[], at : usize) -> u16 {
     return cast[u16](get_u8(bytes, at)) | cast[u16](get_u8(bytes, at + 1)) << 8
 }
 
@@ -2555,7 +2653,7 @@ get_u16 :: fn(bytes: u8[], at: usize) -> u16 {
  * @param at Its first byte's offset.
  * @return The value, any byte past the buffer's end taken as 0.
  */
-get_u32 :: fn(bytes: u8[], at: usize) -> u32 {
+get_u32 :: fn(bytes : u8[], at : usize) -> u32 {
     return cast[u32](get_u16(bytes, at)) | cast[u32](get_u16(bytes, at + 2)) << 16
 }
 
@@ -2566,7 +2664,7 @@ get_u32 :: fn(bytes: u8[], at: usize) -> u32 {
  * @param at The byte's offset; past the buffer's end, nothing is written.
  * @param value The byte, any value.
  */
-put_u8 :: fn(bytes: mut u8[], at: usize, value: u8) {
+put_u8 :: fn(bytes : mut u8[], at : usize, value : u8) {
     if at < bytes.count {
         bytes[at] = value
     }
@@ -2579,7 +2677,7 @@ put_u8 :: fn(bytes: mut u8[], at: usize, value: u8) {
  * @param at Its first byte's offset.
  * @param value The value, any u16, written low byte first.
  */
-put_u16 :: fn(bytes: mut u8[], at: usize, value: u16) {
+put_u16 :: fn(bytes : mut u8[], at : usize, value : u16) {
     put_u8(bytes, at, cast[u8](value & 0xff))
     put_u8(bytes, at + 1, cast[u8](value >> 8))
 }
@@ -2591,7 +2689,7 @@ put_u16 :: fn(bytes: mut u8[], at: usize, value: u16) {
  * @param at Its first byte's offset.
  * @param value The value, any u32, written low byte first.
  */
-put_u32 :: fn(bytes: mut u8[], at: usize, value: u32) {
+put_u32 :: fn(bytes : mut u8[], at : usize, value : u32) {
     put_u16(bytes, at, cast[u16](value & 0xffff))
     put_u16(bytes, at + 2, cast[u16](value >> 16))
 }

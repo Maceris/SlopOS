@@ -27,12 +27,12 @@ package events_service
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import random from "std:random"
-import schema from "std:schema"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import log_line from "../../log_line"
+import random from "std:random"
+import schema from "std:schema"
 import service_kit from "../../libraries/service_kit"
+import log_line from "../../log_line"
 import events from "../../protocols/events"
 
 /** The most sources the service keeps records of; Open and Adopt for a new name past it are refused. */
@@ -231,7 +231,7 @@ Scan :: struct {
  * @return Only on failing to start: 99 without memory for its state, 1 without a port, and 2 if its first client can't
  *     be added. Serving, it doesn't return.
  */
-main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
+main :: fn(log : slop_os.DebugLog?, clients : os.Listener[events.Events]) -> int {
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     service_made, service_error :: runtime.new_aligned(Service, align_of(Service))
     if service_error != null {
@@ -269,8 +269,11 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
             ring :: &service.rings[i]
             if ring.source != NOWHERE {
                 waiting : u32 = 1
-                _ = slop_os.memory_write(ring.memory, cast[u64](offset_of(runtime.SlopOsEventsRing, waiting)),
-                    view_of(cast[ptr[u8]](&waiting), size_of(u32)))
+                _ = slop_os.memory_write(
+                    ring.memory,
+                    cast[u64](offset_of(runtime.SlopOsEventsRing, waiting)),
+                    view_of(cast[ptr[u8]](&waiting), size_of(u32))
+                )
                 match read_header(ring.memory) {
                     case Some(header) => written = written || header.written != header.read
                     case None => release(service, i)
@@ -286,7 +289,9 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
         }
         deadline := slop_os.NO_DEADLINE
         for i in cast[usize](0)..<MAX_RINGS {
-            if short || (service.rings[i].source != NOWHERE && cast[slop_os.Handle](service.rings[i].doorbell) == slop_os.NO_HANDLE) {
+            if short
+                || (service.rings[i].source != NOWHERE
+                    && cast[slop_os.Handle](service.rings[i].doorbell) == slop_os.NO_HANDLE) {
                 deadline = (slop_os.clock_monotonic() or_else 0) + ADOPTED_POLL
             }
         }
@@ -319,7 +324,7 @@ main :: fn(log: slop_os.DebugLog?, clients: os.Listener[events.Events]) -> int {
  * @param index The client to serve, by its index in connected; one past them, or a dropped one, does nothing.
  * @param into Where each request is received; overwritten by each, so names read from it are good only until the next.
  */
-serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count {
         return void
     }
@@ -398,7 +403,12 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
             case Budget(budget) => {
                 out := os.Outgoing.{}
                 response :: os.begin[events.Response](&out)
-                index :: if budget.bytes >= events.MIN_BUDGET { source_named(service, os.items(into, budget.source)) } else { NOWHERE }
+                index :: if budget.bytes >= events.MIN_BUDGET {
+                    source_named(service, os.items(into, budget.source))
+                }
+                else {
+                    NOWHERE
+                }
                 if index != NOWHERE {
                     service.sources[index % MAX_SOURCES].budget = budget.bytes
                 }
@@ -422,7 +432,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
  *     who launches the program, and on to it. Null, with nothing made kept, if the name isn't one, there's no room for
  *     a source or a ring, or the ring, its handle or the doorbell can't be made.
  */
-open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
+open :: fn(service : ptr[mut Service], name : u8[]) -> events.Source? {
     index :: source_named(service, name)
     if index == NOWHERE {
         return null
@@ -440,8 +450,11 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
     block :: service.block
     // Made here, and its owning handle given away with the doorbell, to whoever launches the program, and on to it
     memory :: slop_os.memory_create(block.budget, RING_BYTES) or_return null
-    header := runtime.SlopOsEventsRing.{magic = runtime.SLOP_OS_EVENTS_MAGIC, version = runtime.SLOP_OS_EVENTS_VERSION,
-        size = RING_BYTES - cast[u64](size_of(runtime.SlopOsEventsRing))}
+    header := runtime.SlopOsEventsRing.{
+        magic = runtime.SLOP_OS_EVENTS_MAGIC,
+        version = runtime.SLOP_OS_EVENTS_VERSION,
+        size = RING_BYTES - cast[u64](size_of(runtime.SlopOsEventsRing)),
+    }
     if slop_os.memory_write(memory, 0, view_of(cast[ptr[u8]](&header), size_of(runtime.SlopOsEventsRing))) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
@@ -464,8 +477,15 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
         case Error(error) => {}
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if kept == slop_os.NO_HANDLE || !pair_made
-        || (slop_os.port_bind(service.port, cast[slop_os.Handle](pair.a), signals, DOORBELL_KEY + cast[u64](slot), .Persistent) is_error) {
+    if kept == slop_os.NO_HANDLE
+        || !pair_made
+        || (slop_os.port_bind(
+            service.port,
+            cast[slop_os.Handle](pair.a),
+            signals,
+            DOORBELL_KEY + cast[u64](slot),
+            .Persistent
+        ) is_error) {
         if kept != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(kept)
         }
@@ -478,7 +498,13 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
     }
     source :: &service.sources[index % MAX_SOURCES]
     source.instances += 1
-    service.rings[slot % MAX_RINGS] = Ring.{source = index, instance = source.instances, memory = cast[slop_os.Memory](kept), doorbell = pair.a}
+    service.rings[slot
+        % MAX_RINGS] = Ring.{
+        source = index,
+        instance = source.instances,
+        memory = cast[slop_os.Memory](kept),
+        doorbell = pair.a,
+    }
     // A read that finds nothing, so the doorbell's next message wakes the port
     ring_doorbell(service, slot)
     return events.Source.{ring = cast[slop_os.Memory](given), doorbell = pair.b}
@@ -497,7 +523,7 @@ open :: fn(service: ptr[mut Service], name: u8[]) -> events.Source? {
  * @return True if it's taken; false, the handle closed, if the name isn't one, there's no room for a source or a ring,
  *     or the ring can't be read.
  */
-adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bool {
+adopt :: fn(service : ptr[mut Service], name : u8[], memory : slop_os.Memory) -> bool {
     index :: source_named(service, name)
     slot := NOWHERE
     for i in cast[usize](0)..<MAX_RINGS {
@@ -513,12 +539,20 @@ adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bo
     }
     // Its writer gives everything again, for a reader that knows nothing of it
     reader :: (header or_else runtime.SlopOsEventsRing.{}).reader + 1
-    _ = slop_os.memory_write(memory, cast[u64](offset_of(runtime.SlopOsEventsRing, reader)),
-        view_of(cast[ptr[u8]](&reader), size_of(u32)))
+    _ = slop_os.memory_write(
+        memory,
+        cast[u64](offset_of(runtime.SlopOsEventsRing, reader)),
+        view_of(cast[ptr[u8]](&reader), size_of(u32))
+    )
     source :: &service.sources[index % MAX_SOURCES]
     source.instances += 1
-    service.rings[slot % MAX_RINGS] = Ring.{source = index, instance = source.instances, memory = memory,
-        doorbell = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    service.rings[slot
+        % MAX_RINGS] = Ring.{
+        source = index,
+        instance = source.instances,
+        memory = memory,
+        doorbell = cast[slop_os.Channel](slop_os.NO_HANDLE),
+    }
     return true
 }
 
@@ -529,12 +563,14 @@ adopt :: fn(service: ptr[mut Service], name: u8[], memory: slop_os.Memory) -> bo
  * @param name The name: 1 to NAME_BYTES lowercase letters, digits and underscores.
  * @return The source's index in sources, or NOWHERE if the name isn't one, or there's no room for another source.
  */
-source_named :: fn(service: ptr[mut Service], name: u8[]) -> usize {
+source_named :: fn(service : ptr[mut Service], name : u8[]) -> usize {
     if name.count == 0 || name.count > NAME_BYTES {
         return NOWHERE
     }
     for byte in name {
-        if !((byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('0') && byte <= cast[u8]('9')) || byte == cast[u8]('_')) {
+        if !((byte >= cast[u8]('a') && byte <= cast[u8]('z'))
+            || (byte >= cast[u8]('0') && byte <= cast[u8]('9'))
+            || byte == cast[u8]('_')) {
             return NOWHERE
         }
     }
@@ -562,7 +598,7 @@ source_named :: fn(service: ptr[mut Service], name: u8[]) -> usize {
  * @param name The name, compared byte for byte.
  * @return The source's index in sources, or NOWHERE if there's none of that name.
  */
-find_source :: fn(service: ptr[Service], name: u8[]) -> usize {
+find_source :: fn(service : ptr[Service], name : u8[]) -> usize {
     for i in cast[usize](0)..<service.source_count {
         if i < MAX_SOURCES && same_name(&service.sources[i], name) {
             return i
@@ -578,7 +614,7 @@ find_source :: fn(service: ptr[Service], name: u8[]) -> usize {
  * @param name The name, compared byte for byte.
  * @return True if they're the same bytes.
  */
-same_name :: fn(source: ptr[Source], name: u8[]) -> bool {
+same_name :: fn(source : ptr[Source], name : u8[]) -> bool {
     if source.name_count != name.count {
         return false
     }
@@ -596,7 +632,7 @@ same_name :: fn(source: ptr[Source], name: u8[]) -> bool {
  * @param source The source whose name is wanted; it has to outlive the view returned, which is of its own bytes.
  * @return Its name, a view of the source's own bytes, good while the source is.
  */
-name_of :: fn(source: ptr[Source]) -> string {
+name_of :: fn(source : ptr[Source]) -> string {
     count :: if source.name_count < NAME_BYTES { source.name_count } else { NAME_BYTES }
     return string_of(&source.name[0], count)
 }
@@ -608,7 +644,7 @@ name_of :: fn(source: ptr[Source]) -> string {
  * @param source The source, whose pending entries are thrown away first.
  * @param first The number of the first record that will follow.
  */
-start_pending :: fn(service: ptr[Service], source: ptr[mut Source], first: u64) {
+start_pending :: fn(service : ptr[Service], source : ptr[mut Source], first : u64) {
     runtime.array_reset(&source.pending)
     file_header(service, source, first, &source.pending)
 }
@@ -620,7 +656,7 @@ start_pending :: fn(service: ptr[Service], source: ptr[mut Source], first: u64) 
  * @param into Where it's added, at the end.
  * @param first The number of the first record after it.
  */
-add_start :: fn(service: ptr[Service], into: ptr[mut u8[..]], first: u64) {
+add_start :: fn(service : ptr[Service], into : ptr[mut u8[..]], first : u64) {
     start := StoredStart.{boot = service.boot, first = first}
     start.entry = runtime.SlopOsEventsEntry.{size = cast[u32](size_of(StoredStart)), kind = STORED_START}
     add_bytes(into, view_of(cast[ptr[u8]](&start), size_of(StoredStart)))
@@ -632,7 +668,7 @@ add_start :: fn(service: ptr[Service], into: ptr[mut u8[..]], first: u64) {
  * @param into Where it's added, at the end.
  * @param instance The ring, by its instance among the source's, from 1.
  */
-add_instance :: fn(into: ptr[mut u8[..]], instance: u32) {
+add_instance :: fn(into : ptr[mut u8[..]], instance : u32) {
     marker := StoredInstance.{instance = instance}
     marker.entry = runtime.SlopOsEventsEntry.{size = cast[u32](size_of(StoredInstance)), kind = STORED_INSTANCE}
     add_bytes(into, view_of(cast[ptr[u8]](&marker), size_of(StoredInstance)))
@@ -644,7 +680,7 @@ add_instance :: fn(into: ptr[mut u8[..]], instance: u32) {
  * @param into The list, grown with context's allocator.
  * @param bytes The bytes, copied.
  */
-add_bytes :: fn(into: ptr[mut u8[..]], bytes: u8[]) {
+add_bytes :: fn(into : ptr[mut u8[..]], bytes : u8[]) {
     for byte in bytes {
         runtime.array_add(into, byte)
     }
@@ -656,7 +692,7 @@ add_bytes :: fn(into: ptr[mut u8[..]], bytes: u8[]) {
  * @param memory The service's handle to the ring.
  * @return The header, a copy; null once its program, which owns it, has ended, or the ring's been retired.
  */
-read_header :: fn(memory: slop_os.Memory) -> runtime.SlopOsEventsRing? {
+read_header :: fn(memory : slop_os.Memory) -> runtime.SlopOsEventsRing? {
     header := runtime.SlopOsEventsRing.{}
     if slop_os.memory_read(memory, 0, view_of(cast[ptr[mut u8]](&header), size_of(runtime.SlopOsEventsRing))) is_error {
         return null
@@ -671,7 +707,7 @@ read_header :: fn(memory: slop_os.Memory) -> runtime.SlopOsEventsRing? {
  * @param service The events service's state.
  * @param slot The ring, by its slot in rings; one past them, or a free one, does nothing.
  */
-ring_doorbell :: fn(service: ptr[mut Service], slot: usize) {
+ring_doorbell :: fn(service : ptr[mut Service], slot : usize) {
     if slot >= MAX_RINGS || service.rings[slot].source == NOWHERE {
         return void
     }
@@ -700,7 +736,7 @@ ring_doorbell :: fn(service: ptr[mut Service], slot: usize) {
  * @param service The events service's state.
  * @param slot The ring, by its slot in rings.
  */
-release :: fn(service: ptr[mut Service], slot: usize) {
+release :: fn(service : ptr[mut Service], slot : usize) {
     ring :: &service.rings[slot % MAX_RINGS]
     _ = slop_os.port_unbind(service.port, DOORBELL_KEY + cast[u64](slot))
     _ = slop_os.handle_close(cast[slop_os.Handle](ring.memory))
@@ -723,7 +759,7 @@ release :: fn(service: ptr[mut Service], slot: usize) {
  * @return False if entries were left in the ring for want of memory, to be read again later; true otherwise, read,
  *     with nothing to read, or let go.
  */
-drain :: fn(service: ptr[mut Service], slot: usize) -> bool {
+drain :: fn(service : ptr[mut Service], slot : usize) -> bool {
     if slot >= MAX_RINGS || service.rings[slot].source == NOWHERE {
         return true
     }
@@ -788,8 +824,14 @@ drain :: fn(service: ptr[mut Service], slot: usize) -> bool {
             count :: cast[usize](format.count)
             if count <= bytes.count - size_of(runtime.SlopOsEventsFormat) {
                 text_at :: source.texts.count
-                add_bytes(&source.texts, view_of(cast[ptr[u8]](data + at + cast[u64](size_of(runtime.SlopOsEventsFormat))), count))
-                runtime.array_add(&source.formats, FormatText.{instance = ring.instance, offset = format.offset, at = text_at, count = count})
+                add_bytes(
+                    &source.texts,
+                    view_of(cast[ptr[u8]](data + at + cast[u64](size_of(runtime.SlopOsEventsFormat))), count)
+                )
+                runtime.array_add(
+                    &source.formats,
+                    FormatText.{instance = ring.instance, offset = format.offset, at = text_at, count = count}
+                )
                 add_bytes(&fresh, bytes)
             }
         }
@@ -797,7 +839,11 @@ drain :: fn(service: ptr[mut Service], slot: usize) -> bool {
             given :: cast[ptr[runtime.SlopOsEventsSchema]](entry)
             count :: cast[usize](given.count)
             if count <= bytes.count - size_of(runtime.SlopOsEventsSchema) {
-                learn_schema(service, given.hash, view_of(cast[ptr[u8]](data + at + cast[u64](size_of(runtime.SlopOsEventsSchema))), count))
+                learn_schema(
+                    service,
+                    given.hash,
+                    view_of(cast[ptr[u8]](data + at + cast[u64](size_of(runtime.SlopOsEventsSchema))), count)
+                )
                 note_used(source, given.hash)
                 add_bytes(&fresh, bytes)
             }
@@ -814,8 +860,11 @@ drain :: fn(service: ptr[mut Service], slot: usize) -> bool {
         }
         read += entry_size
     }
-    _ = slop_os.memory_write(ring.memory, cast[u64](offset_of(runtime.SlopOsEventsRing, read)),
-        view_of(cast[ptr[u8]](&read), size_of(u64)))
+    _ = slop_os.memory_write(
+        ring.memory,
+        cast[u64](offset_of(runtime.SlopOsEventsRing, read)),
+        view_of(cast[ptr[u8]](&read), size_of(u64))
+    )
     show(service, source, fresh)
     keep(service, source, fresh, first)
     return true
@@ -828,7 +877,7 @@ drain :: fn(service: ptr[mut Service], slot: usize) -> bool {
  * @param source The entries' source, for its name and its format strings.
  * @param entries Entries as they're stored, a StoredInstance before each ring's.
  */
-show :: fn(service: ptr[mut Service], source: ptr[Source], entries #escaping : u8[]) {
+show :: fn(service : ptr[mut Service], source : ptr[Source], entries #escaping : u8[]) {
     instance : u32 = 0
     at : usize = 0
     text : u8[..]
@@ -864,9 +913,14 @@ show :: fn(service: ptr[mut Service], source: ptr[Source], entries #escaping : u
  * @return The name of the level it's at or above: "trace" below 10, then "debug", "info", "warn", "error", and "fatal"
  *     from 50.
  */
-level_name :: fn(level: u8) -> string {
-    return if level < 10 { "trace" } else if level < 20 { "debug" } else if level < 30 { "info" } else if level < 40 { "warn" }
-        else if level < 50 { "error" } else { "fatal" }
+level_name :: fn(level : u8) -> string {
+    return if level < 10 {
+        "trace"
+    }
+    else if level < 20 {
+        "debug"
+    }
+    else if level < 30 { "info" } else if level < 40 { "warn" } else if level < 50 { "error" } else { "fatal" }
 }
 
 /**
@@ -883,7 +937,7 @@ level_name :: fn(level: u8) -> string {
  * @param entries The entries, as they're stored, a StoredInstance first.
  * @param first The number of their first record, among the source's this boot.
  */
-keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], first: u64) {
+keep :: fn(service : ptr[mut Service], source : ptr[mut Source], entries : u8[], first : u64) {
     if service.storing {
         // What memory has first, then these; a file past its budget's half moved aside first, so each starts whole
         if source.pending.count > 0 {
@@ -924,7 +978,8 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
  * of memory partway (decisions/0104).
  *
  * Each list gets as much as entries that size could add to it, and the pending bytes all they may hold: at most
- * PENDING_BYTES, or a file header alone if it's more, as add_pending takes nothing past PENDING_BYTES. The bounds are the
+ * PENDING_BYTES, or a file header alone if it's more, as add_pending takes nothing past PENDING_BYTES. The bounds are
+ * the
  * entries' own, each format string's and schema's entry at least its header, as what's reserved stays for the source's
  * life, and every source's comes from the one budget (decisions/0104).
  *
@@ -935,8 +990,13 @@ keep :: fn(service: ptr[mut Service], source: ptr[mut Source], entries: u8[], fi
  * @param fresh The list the entries to keep are gathered into.
  * @return True if everything's reserved; false, with nothing to be read, without the memory. What was reserved stays.
  */
-room_to_drain :: fn(service: ptr[mut Service], source: ptr[mut Source], size: usize, copied: ptr[mut u8[..]], fresh: ptr[mut u8[..]])
-    -> bool {
+room_to_drain :: fn(
+    service : ptr[mut Service],
+    source : ptr[mut Source],
+    size : usize,
+    copied : ptr[mut u8[..]],
+    fresh : ptr[mut u8[..]]
+) -> bool {
     formats :: size / size_of(runtime.SlopOsEventsFormat) + 1
     schemas :: size / size_of(runtime.SlopOsEventsSchema) + 1
     if !(runtime.array_try_reserve(copied, size) == null
@@ -949,7 +1009,8 @@ room_to_drain :: fn(service: ptr[mut Service], source: ptr[mut Source], size: us
         return false
     }
     header :: header_bound(service, source)
-    return runtime.array_try_reserve(&source.pending, if header > PENDING_BYTES { header } else { PENDING_BYTES }) == null
+    return runtime.array_try_reserve(&source.pending, if header > PENDING_BYTES { header } else { PENDING_BYTES })
+        == null
 }
 
 /**
@@ -959,10 +1020,13 @@ room_to_drain :: fn(service: ptr[mut Service], source: ptr[mut Source], size: us
  * @param source The source whose rings, format strings, texts and schemas used are bounded; only read.
  * @return The most bytes it could write, counted from the lists' capacities, not their counts.
  */
-header_bound :: fn(service: ptr[Service], source: ptr[Source]) -> usize {
-    return size_of(StoredStart) + cast[usize](source.instances + 2) * (size_of(StoredInstance) + 8)
-        + source.formats.capacity * (size_of(runtime.SlopOsEventsFormat) + 8) + source.texts.capacity
-        + source.used.capacity * (size_of(runtime.SlopOsEventsSchema) + 8) + service.schema_bytes.capacity
+header_bound :: fn(service : ptr[Service], source : ptr[Source]) -> usize {
+    return size_of(StoredStart)
+        + cast[usize](source.instances + 2) * (size_of(StoredInstance) + 8)
+        + source.formats.capacity * (size_of(runtime.SlopOsEventsFormat) + 8)
+        + source.texts.capacity
+        + source.used.capacity * (size_of(runtime.SlopOsEventsSchema) + 8)
+        + service.schema_bytes.capacity
 }
 
 /**
@@ -972,7 +1036,7 @@ header_bound :: fn(service: ptr[Service], source: ptr[Source]) -> usize {
  * @param entries The entries, as they're stored.
  * @param first The number of their first record, so how many are dropped is the source's count less it.
  */
-add_pending :: fn(source: ptr[mut Source], entries: u8[], first: u64) {
+add_pending :: fn(source : ptr[mut Source], entries : u8[], first : u64) {
     if source.pending.count + entries.count > PENDING_BYTES {
         source.dropped += source.count - first
         return void
@@ -991,7 +1055,7 @@ add_pending :: fn(source: ptr[mut Source], entries: u8[], first: u64) {
  * @param first The number of the first record after it.
  * @param into Where it's written, at the end.
  */
-file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: ptr[mut u8[..]]) {
+file_header :: fn(service : ptr[Service], source : ptr[Source], first : u64, into : ptr[mut u8[..]]) {
     add_start(service, into, first)
     last :: source.instances + 1
     for instance in cast[u32](1)..<last {
@@ -999,8 +1063,10 @@ file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: 
         for format in source.formats {
             if format.instance == instance && format.at + format.count <= source.texts.count {
                 entry := runtime.SlopOsEventsFormat.{offset = format.offset, count = cast[u32](format.count)}
-                entry.entry = runtime.SlopOsEventsEntry.{size = cast[u32](padded(size_of(runtime.SlopOsEventsFormat) + format.count)),
-                    kind = runtime.SLOP_OS_EVENTS_FORMAT}
+                entry.entry = runtime.SlopOsEventsEntry.{
+                    size = cast[u32](padded(size_of(runtime.SlopOsEventsFormat) + format.count)),
+                    kind = runtime.SLOP_OS_EVENTS_FORMAT,
+                }
                 add_bytes(into, view_of(cast[ptr[u8]](&entry), size_of(runtime.SlopOsEventsFormat)))
                 for byte in part(source.texts, format.at, format.count) {
                     runtime.array_add(into, byte)
@@ -1015,8 +1081,10 @@ file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: 
             case None => continue
         }
         entry := runtime.SlopOsEventsSchema.{hash = used.hash, count = cast[u32](known.count)}
-        entry.entry = runtime.SlopOsEventsEntry.{size = cast[u32](padded(size_of(runtime.SlopOsEventsSchema) + known.count)),
-            kind = runtime.SLOP_OS_EVENTS_SCHEMA}
+        entry.entry = runtime.SlopOsEventsEntry.{
+            size = cast[u32](padded(size_of(runtime.SlopOsEventsSchema) + known.count)),
+            kind = runtime.SLOP_OS_EVENTS_SCHEMA,
+        }
         add_bytes(into, view_of(cast[ptr[u8]](&entry), size_of(runtime.SlopOsEventsSchema)))
         for byte in known {
             runtime.array_add(into, byte)
@@ -1031,7 +1099,7 @@ file_header :: fn(service: ptr[Service], source: ptr[Source], first: u64, into: 
  * @param count A size in bytes; 0 gives 0, and one already a multiple of 8 is given back as it is.
  * @return count rounded up to a multiple of 8.
  */
-padded :: fn(count: usize) -> usize {
+padded :: fn(count : usize) -> usize {
     return (count + 7) & ~cast[usize](7)
 }
 
@@ -1041,7 +1109,7 @@ padded :: fn(count: usize) -> usize {
  * @param into The list padded, grown with context's allocator; nothing's added if its count's already a multiple of
  *     8.
  */
-pad :: fn(into: ptr[mut u8[..]]) {
+pad :: fn(into : ptr[mut u8[..]]) {
     loop {
         if (into.count & 7) == 0 {
             break
@@ -1058,7 +1126,7 @@ pad :: fn(into: ptr[mut u8[..]]) {
  * @param service The events service's state, its directory given by Store.
  * @param source The source, whose file's noted as not started once it's moved.
  */
-rotate_if_full :: fn(service: ptr[mut Service], source: ptr[mut Source]) {
+rotate_if_full :: fn(service : ptr[mut Service], source : ptr[mut Source]) {
     budget :: if source.budget != 0 { source.budget } else { events.SERVICE_BUDGET }
     if !source.filed || source.file_bytes < budget / 2 {
         return void
@@ -1083,7 +1151,7 @@ rotate_if_full :: fn(service: ptr[mut Service], source: ptr[mut Source]) {
  * @param bytes The entries, as they're stored.
  * @return True if they're written; false if the file couldn't be opened or written, which may leave part of them in it.
  */
-write_file :: fn(service: ptr[mut Service], source: ptr[mut Source], bytes: u8[]) -> bool {
+write_file :: fn(service : ptr[mut Service], source : ptr[mut Source], bytes : u8[]) -> bool {
     path_storage : u8[64]
     path :: path_of(source, ".events", &path_storage)
     file :: match os.open_in(service.store, path, .APPEND) {
@@ -1108,7 +1176,7 @@ write_file :: fn(service: ptr[mut Service], source: ptr[mut Source], bytes: u8[]
  * @param storage Where the name's written, cut off at 64 bytes.
  * @return The name, a view of storage, good while it is.
  */
-path_of :: fn(source: ptr[Source], extension: string, storage: ptr[mut u8[64]]) -> string {
+path_of :: fn(source : ptr[Source], extension : string, storage : ptr[mut u8[64]]) -> string {
     count : usize = 0
     for byte in source.name {
         if count < source.name_count && count < storage.count {
@@ -1133,7 +1201,7 @@ path_of :: fn(source: ptr[Source], extension: string, storage: ptr[mut u8[64]]) 
  * @param count The part's length in bytes.
  * @return A view of the part, good while bytes are; empty if count is 0 or they aren't all there.
  */
-part :: fn(bytes: u8[], at: usize, count: usize) -> u8[] {
+part :: fn(bytes : u8[], at : usize, count : usize) -> u8[] {
     none : u8[]
     if count == 0 || at >= bytes.count || count > bytes.count - at {
         return none
@@ -1157,7 +1225,7 @@ none_bytes :: fn() -> u8[] {
  * @param bytes The bytes viewed, taken as text whatever they hold; not copied.
  * @return A string of them, good while they are; "" for none.
  */
-text_of :: fn(bytes: u8[]) -> string {
+text_of :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
@@ -1170,7 +1238,7 @@ text_of :: fn(bytes: u8[]) -> string {
  * @param end The directory's channel end, which moves to the service; if it can't be opened as a directory, nothing
  *     changes.
  */
-store :: fn(service: ptr[mut Service], end: slop_os.Channel) {
+store :: fn(service : ptr[mut Service], end : slop_os.Channel) {
     directory, error :: os.directory_on(end)
     if error != null {
         return void
@@ -1200,7 +1268,7 @@ store :: fn(service: ptr[mut Service], end: slop_os.Channel) {
  * @param hash The type's schema hash.
  * @param bytes The schema, copied.
  */
-learn_schema :: fn(service: ptr[mut Service], hash: u8[32], bytes: u8[]) {
+learn_schema :: fn(service : ptr[mut Service], hash : u8[32], bytes : u8[]) {
     if schema_of(service, hash) is_some {
         return void
     }
@@ -1218,7 +1286,7 @@ learn_schema :: fn(service: ptr[mut Service], hash: u8[32], bytes: u8[]) {
  * @param hash The type's schema hash.
  * @return The schema, a view of schema_bytes, good until the next schema's learned; null if it isn't known.
  */
-schema_of :: fn(service: ptr[Service], hash: u8[32]) -> u8[]? {
+schema_of :: fn(service : ptr[Service], hash : u8[32]) -> u8[]? {
     for known in service.schemas {
         if same_hash(known.hash, hash) && known.at + known.count <= service.schema_bytes.count {
             return part(service.schema_bytes, known.at, known.count)
@@ -1234,7 +1302,7 @@ schema_of :: fn(service: ptr[Service], hash: u8[32]) -> u8[]? {
  * @param b Another.
  * @return True if every byte is.
  */
-same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
+same_hash :: fn(a : u8[32], b : u8[32]) -> bool {
     for byte, i in a {
         if byte != b[i] {
             return false
@@ -1249,7 +1317,7 @@ same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
  * @param source The source whose schemas used gain the hash, grown with context's allocator, unless it's there.
  * @param hash The type's schema hash; noted once.
  */
-note_used :: fn(source: ptr[mut Source], hash: u8[32]) {
+note_used :: fn(source : ptr[mut Source], hash : u8[32]) {
     for used in source.used {
         if same_hash(used.hash, hash) {
             return void
@@ -1273,8 +1341,15 @@ note_used :: fn(source: ptr[mut Source], hash: u8[32]) {
  * @param into Where the text's written, at the end.
  * @return The record's level, a LogLevel; 0 if it isn't a whole record.
  */
-render :: fn(service: ptr[Service], entries #escaping : u8[], at: usize, formats: ptr[FormatText[..]], texts: u8[], instance: u32,
-    into: ptr[mut u8[..]]) -> u8 {
+render :: fn(
+    service : ptr[Service],
+    entries #escaping : u8[],
+    at : usize,
+    formats : ptr[FormatText[..]],
+    texts : u8[],
+    instance : u32,
+    into : ptr[mut u8[..]]
+) -> u8 {
     size :: entry_size_at(entries, at)
     if size < size_of(runtime.SlopOsEventsRecord) {
         return 0
@@ -1299,7 +1374,11 @@ render :: fn(service: ptr[Service], entries #escaping : u8[], at: usize, formats
         none : u8[]
         value :: part(entries, value_at, value_count)
         // Without the memory for more, what's read so far is shown
-        if runtime.array_try_add(&arguments, schema.Argument.{schema = schema_of(service, argument.hash) or_else none, value = value}) != null {
+        if runtime.array_try_add(
+            &arguments,
+            schema.Argument.{schema = schema_of(service, argument.hash) or_else none, value = value}
+        )
+            != null {
             break
         }
         count += 1
@@ -1309,7 +1388,10 @@ render :: fn(service: ptr[Service], entries #escaping : u8[], at: usize, formats
     start : usize = 0
     if record.named != 0 {
         for format in formats^ {
-            if format.instance == instance && format.offset == record.format && format.at + format.count <= texts.count && format.count > 0 {
+            if format.instance == instance
+                && format.offset == record.format
+                && format.at + format.count <= texts.count
+                && format.count > 0 {
                 format_string = text_of(part(texts, format.at, format.count))
                 break
             }
@@ -1337,7 +1419,7 @@ render :: fn(service: ptr[Service], entries #escaping : u8[], at: usize, formats
  * @param at Where it starts, in bytes.
  * @return Its value, bytes past the end taken as 0.
  */
-word_of :: fn(bytes: u8[], at: usize) -> u64 {
+word_of :: fn(bytes : u8[], at : usize) -> u64 {
     result : u64 = 0
     for i in cast[usize](0)..<8 {
         if at + i < bytes.count {
@@ -1354,7 +1436,7 @@ word_of :: fn(bytes: u8[], at: usize) -> u64 {
  * @param at Where the entry starts, in bytes.
  * @return Its size in bytes, a multiple of 8, header included; 0 if there isn't a whole one there.
  */
-entry_size_at :: fn(entries: u8[], at: usize) -> usize {
+entry_size_at :: fn(entries : u8[], at : usize) -> usize {
     if at + size_of(runtime.SlopOsEventsEntry) > entries.count {
         return 0
     }
@@ -1372,7 +1454,7 @@ entry_size_at :: fn(entries: u8[], at: usize) -> usize {
  * @param at Where the entry starts, in bytes.
  * @return Its kind: one of the ring's SLOP_OS_EVENTS_ kinds, or STORED_START or STORED_INSTANCE.
  */
-kind_at :: fn(entries: u8[], at: usize) -> u16 {
+kind_at :: fn(entries : u8[], at : usize) -> u16 {
     return cast[ptr[runtime.SlopOsEventsEntry]](address_in(entries, at)).kind
 }
 
@@ -1383,7 +1465,7 @@ kind_at :: fn(entries: u8[], at: usize) -> u16 {
  * @param at The byte's offset, not checked.
  * @return Its address, good while entries are.
  */
-address_in :: fn(entries: u8[], at: usize) -> uintptr {
+address_in :: fn(entries : u8[], at : usize) -> uintptr {
     return cast[uintptr](entries.data) + cast[uintptr](at)
 }
 
@@ -1399,7 +1481,7 @@ address_in :: fn(entries: u8[], at: usize) -> uintptr {
  * @param level The lowest level wanted, a LogLevel.
  * @return True if a record was found and sent; false if there's none yet, or no source of that name, with nothing sent.
  */
-answer :: fn(service: ptr[mut Service], end: slop_os.Channel, name: u8[], from: u64, level: u8) -> bool {
+answer :: fn(service : ptr[mut Service], end : slop_os.Channel, name : u8[], from : u64, level : u8) -> bool {
     index :: find_source(service, name)
     if index == NOWHERE {
         return false
@@ -1438,7 +1520,7 @@ answer :: fn(service: ptr[mut Service], end: slop_os.Channel, name: u8[], from: 
  * @param level The lowest level wanted, a LogLevel.
  * @return True if it's held; false if the name is too long, or there's no room to hold another.
  */
-hold :: fn(service: ptr[mut Service], client: usize, name: u8[], from: u64, level: u8) -> bool {
+hold :: fn(service : ptr[mut Service], client : usize, name : u8[], from : u64, level : u8) -> bool {
     if name.count > NAME_BYTES {
         return false
     }
@@ -1463,7 +1545,7 @@ hold :: fn(service: ptr[mut Service], client: usize, name: u8[], from: u64, leve
  *
  * @param service The events service's state.
  */
-answer_waiting :: fn(service: ptr[mut Service]) {
+answer_waiting :: fn(service : ptr[mut Service]) {
     for i in cast[usize](0)..<MAX_WAITING {
         waiting :: service.waiting[i]
         if waiting.client == NOWHERE || waiting.client >= service.connected.ends.count {
@@ -1489,7 +1571,7 @@ answer_waiting :: fn(service: ptr[mut Service]) {
  * @param level The lowest level wanted, a LogLevel.
  * @return Where the record's entry starts in bytes, or NOWHERE if there's none.
  */
-find :: fn(service: ptr[mut Service], bytes: u8[], scan: ptr[mut Scan], from: u64, level: u8) -> usize {
+find :: fn(service : ptr[mut Service], bytes : u8[], scan : ptr[mut Scan], from : u64, level : u8) -> usize {
     at : usize = 0
     loop {
         size :: entry_size_at(bytes, at)
@@ -1510,18 +1592,31 @@ find :: fn(service: ptr[mut Service], bytes: u8[], scan: ptr[mut Scan], from: u6
             format :: cast[ptr[runtime.SlopOsEventsFormat]](address_in(bytes, at))
             if cast[usize](format.count) <= size - size_of(runtime.SlopOsEventsFormat) {
                 // Without the memory to keep it, its records are shown without their format string
-                _ = runtime.array_try_add(&scan.formats, FormatText.{instance = scan.instance, offset = format.offset,
-                    at = at + size_of(runtime.SlopOsEventsFormat), count = cast[usize](format.count)})
+                _ = runtime.array_try_add(
+                    &scan.formats,
+                    FormatText.{
+                        instance = scan.instance,
+                        offset = format.offset,
+                        at = at + size_of(runtime.SlopOsEventsFormat),
+                        count = cast[usize](format.count),
+                    }
+                )
             }
         }
         else if kind == runtime.SLOP_OS_EVENTS_SCHEMA && size >= size_of(runtime.SlopOsEventsSchema) {
             given :: cast[ptr[runtime.SlopOsEventsSchema]](address_in(bytes, at))
             count :: cast[usize](given.count)
             if count <= size - size_of(runtime.SlopOsEventsSchema) && count > 0 {
-                learn_schema(service, given.hash, view_of(cast[ptr[u8]](address_in(bytes, at + size_of(runtime.SlopOsEventsSchema))), count))
+                learn_schema(
+                    service,
+                    given.hash,
+                    view_of(cast[ptr[u8]](address_in(bytes, at + size_of(runtime.SlopOsEventsSchema))), count)
+                )
             }
         }
-        else if kind == runtime.SLOP_OS_EVENTS_RECORD && size >= size_of(runtime.SlopOsEventsRecord) && scan.boot_matches {
+        else if kind == runtime.SLOP_OS_EVENTS_RECORD
+            && size >= size_of(runtime.SlopOsEventsRecord)
+            && scan.boot_matches {
             number :: scan.number
             scan.number += 1
             if number >= from && cast[ptr[runtime.SlopOsEventsRecord]](address_in(bytes, at)).level >= level {
@@ -1542,7 +1637,14 @@ find :: fn(service: ptr[mut Service], bytes: u8[], scan: ptr[mut Scan], from: u6
  * @param scan The scan that found it, numbered one past it.
  * @param stored Whether it was read from a file, rather than memory.
  */
-send_found :: fn(service: ptr[mut Service], end: slop_os.Channel, bytes #escaping : u8[], at: usize, scan: ptr[mut Scan], stored: bool) {
+send_found :: fn(
+    service : ptr[mut Service],
+    end : slop_os.Channel,
+    bytes #escaping : u8[],
+    at : usize,
+    scan : ptr[mut Scan],
+    stored : bool
+) {
     text : u8[..]
     defer runtime.array_free(&text)
     level :: render(service, bytes, at, &scan.formats, bytes, scan.instance, &text)
@@ -1551,8 +1653,13 @@ send_found :: fn(service: ptr[mut Service], end: slop_os.Channel, bytes #escapin
     out := os.Outgoing.{}
     response :: os.begin[events.Response](&out)
     shown :: part(text, 0, count)
-    found := events.Found.{number = scan.number - 1, time = record.time, level = level, stored = stored,
-        text = os.append(&out, shown)}
+    found := events.Found.{
+        number = scan.number - 1,
+        time = record.time,
+        level = level,
+        stored = stored,
+        text = os.append(&out, shown),
+    }
     // Its first argument, typed, past the format string when that's an argument
     argument :: first_argument(bytes, at)
     if argument.count > 0 && argument.count <= events.ARGUMENT_LIMIT && argument.at + argument.count <= bytes.count {
@@ -1572,7 +1679,7 @@ send_found :: fn(service: ptr[mut Service], end: slop_os.Channel, bytes #escapin
  * @param into Where its bytes are added, at the end; part of them may be there when it fails.
  * @return True if it was read whole; false if it isn't there, a read failed, or there's no memory for it.
  */
-read_file :: fn(service: ptr[mut Service], source: ptr[Source], extension: string, into: ptr[mut u8[..]]) -> bool {
+read_file :: fn(service : ptr[mut Service], source : ptr[Source], extension : string, into : ptr[mut u8[..]]) -> bool {
     path_storage : u8[64]
     file :: match os.open_in(service.store, path_of(source, extension, &path_storage), .READ) {
         case Ok(opened) => opened
@@ -1616,7 +1723,7 @@ ArgumentAt :: struct {
  * @param at Where the record's entry starts.
  * @return The argument; a count of 0 if it has none, or its entry doesn't hold it whole.
  */
-first_argument :: fn(bytes: u8[], at: usize) -> ArgumentAt {
+first_argument :: fn(bytes : u8[], at : usize) -> ArgumentAt {
     none :: ArgumentAt.{}
     size :: entry_size_at(bytes, at)
     if size < size_of(runtime.SlopOsEventsRecord) {
@@ -1646,4 +1753,3 @@ first_argument :: fn(bytes: u8[], at: usize) -> ArgumentAt {
     }
     return none
 }
-

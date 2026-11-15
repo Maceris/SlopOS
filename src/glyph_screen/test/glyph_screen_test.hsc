@@ -7,9 +7,9 @@
 package glyph_screen_test
 
 import runtime from "base:runtime"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
+import testing from "std:testing"
 import glyph_screen from ".."
 import screen from "../../screen"
 
@@ -36,15 +36,25 @@ Framebuffer :: struct {
  * @return The framebuffer, which the caller frees with free_framebuffer; Error if it couldn't be allocated or the
  *     canvas made, the failure recorded.
  */
-framebuffer :: fn(t: ptr[mut testing.T]) -> Result[Framebuffer, testing.Stopped] {
+framebuffer :: fn(t : ptr[mut testing.T]) -> Result[Framebuffer, testing.Stopped] {
     pixels, error :: runtime.new_array(u32, cast[usize](WIDTH * HEIGHT))
     if error != null || pixels.count == 0 {
         testing.fail(t, "the stand-in framebuffer is allocated")
         return .Error(.Failed)
     }
     address :: cast[u64](cast[usize](&pixels[0]))
-    layout :: slop_os.FramebufferLayout.{width = WIDTH, height = HEIGHT, pitch = WIDTH * 4, bits_per_pixel = 32, red_size = 8,
-        red_shift = 16, green_size = 8, green_shift = 8, blue_size = 8, blue_shift = 0}
+    layout :: slop_os.FramebufferLayout.{
+        width = WIDTH,
+        height = HEIGHT,
+        pitch = WIDTH * 4,
+        bits_per_pixel = 32,
+        red_size = 8,
+        red_shift = 16,
+        green_size = 8,
+        green_shift = 8,
+        blue_size = 8,
+        blue_shift = 0,
+    }
     match glyph_screen.make_canvas(address, layout) {
         case Some(canvas) => return .Ok(Framebuffer.{pixels = pixels, address = address, canvas = canvas})
         case None => {
@@ -60,11 +70,11 @@ framebuffer :: fn(t: ptr[mut testing.T]) -> Result[Framebuffer, testing.Stopped]
  *
  * @param made The framebuffer, whose pixels aren't used after.
  */
-free_framebuffer :: fn(made: Framebuffer) {
+free_framebuffer :: fn(made : Framebuffer) {
     runtime.free_array(made.pixels)
 }
 
-the_grid_is_centered #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_grid_is_centered #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made :: framebuffer(t)?
     defer free_framebuffer(made)
     // 12x24 glyphs: 960 by 576 pixels, centered
@@ -75,7 +85,7 @@ the_grid_is_centered #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     return .Ok
 }
 
-cells_are_drawn_in_their_colours_and_only_when_they_change #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+cells_are_drawn_in_their_colours_and_only_when_they_change #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := framebuffer(t)?
     defer free_framebuffer(made)
     pixels :: made.pixels
@@ -86,27 +96,43 @@ cells_are_drawn_in_their_colours_and_only_when_they_change #test :: fn(t: ptr[mu
     red :: terminal.Style.{foreground = terminal.palette(1)}
     screen.put(model, string_bytes("H"), 1, red)
     glyph_screen.draw(&canvas, model, true)
-    testing.expect_eq(t, pixel(pixels, canvas.left + 79 * 12 + 1, canvas.top + 1), 0xaaaaaa,
-        "the status line is inverse, so its blank cells are the default foreground")
+    testing.expect_eq(
+        t,
+        pixel(pixels, canvas.left + 79 * 12 + 1, canvas.top + 1),
+        0xaaaaaa,
+        "the status line is inverse, so its blank cells are the default foreground"
+    )
     testing.expect(t, lit(pixels, canvas.left, canvas.top + 24, 0xaa0000) > 0, "the H, on row 1, is drawn in red")
     testing.expect(t, lit(pixels, canvas.left, canvas.top + 24, 0x000000) > 0, "on the default background")
-    testing.expect(t, lit(pixels, canvas.left + 12, canvas.top + 24, 0xaaaaaa) >= 12 * 24 / 2,
-        "the cursor, after the H, is inverse: mostly the default foreground")
+    testing.expect(
+        t,
+        lit(pixels, canvas.left + 12, canvas.top + 24, 0xaaaaaa) >= 12 * 24 / 2,
+        "the cursor, after the H, is inverse: mostly the default foreground"
+    )
     // Rows that didn't change aren't drawn again
     marked :: cast[usize]((canvas.top + 48) * WIDTH + canvas.left)
     if marked < pixels.count {
         pixels[marked] = 0x123456
     }
     glyph_screen.draw(&canvas, model, true)
-    testing.expect_eq(t, pixel(pixels, canvas.left, canvas.top + 48), 0x123456, "row 2 didn't change, so it isn't drawn again")
+    testing.expect_eq(
+        t,
+        pixel(pixels, canvas.left, canvas.top + 48),
+        0x123456,
+        "row 2 didn't change, so it isn't drawn again"
+    )
     return .Ok
 }
 
-colours_come_from_the_palette_the_cube_and_rgb #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+colours_come_from_the_palette_the_cube_and_rgb #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     cube, cube_back :: glyph_screen.colors_of(terminal.Style.{foreground = terminal.palette(196)})
     grey, grey_back :: glyph_screen.colors_of(terminal.Style.{foreground = terminal.palette(244)})
-    chosen, chosen_back :: glyph_screen.colors_of(terminal.Style.{foreground = terminal.rgb(1, 2, 3), attributes = terminal.INVERSE})
-    bright, bright_back :: glyph_screen.colors_of(terminal.Style.{foreground = terminal.palette(1), attributes = terminal.BOLD})
+    chosen, chosen_back :: glyph_screen.colors_of(
+        terminal.Style.{foreground = terminal.rgb(1, 2, 3), attributes = terminal.INVERSE}
+    )
+    bright, bright_back :: glyph_screen.colors_of(
+        terminal.Style.{foreground = terminal.palette(1), attributes = terminal.BOLD}
+    )
     testing.expect_eq(t, cube, 0xff0000, "196 is the colour cube's pure red")
     testing.expect_eq(t, grey, 0x808080, "244 is the grey ramp's 0x80")
     testing.expect_eq(t, chosen, 0x000000, "inverse, the foreground is the default background")
@@ -115,12 +141,26 @@ colours_come_from_the_palette_the_cube_and_rgb #test :: fn(t: ptr[mut testing.T]
     return .Ok
 }
 
-a_small_framebuffer_takes_the_small_font #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_small_framebuffer_takes_the_small_font #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made :: framebuffer(t)?
     defer free_framebuffer(made)
-    small_layout :: slop_os.FramebufferLayout.{width = 800, height = 600, pitch = 800 * 4, bits_per_pixel = 32, red_size = 8,
-        red_shift = 16, green_size = 8, green_shift = 8, blue_size = 8, blue_shift = 0}
-    small :: testing.require_some(t, glyph_screen.make_canvas(made.address, small_layout), "a canvas fits 800x600 pixels")?
+    small_layout :: slop_os.FramebufferLayout.{
+        width = 800,
+        height = 600,
+        pitch = 800 * 4,
+        bits_per_pixel = 32,
+        red_size = 8,
+        red_shift = 16,
+        green_size = 8,
+        green_shift = 8,
+        blue_size = 8,
+        blue_shift = 0,
+    }
+    small :: testing.require_some(
+        t,
+        glyph_screen.make_canvas(made.address, small_layout),
+        "a canvas fits 800x600 pixels"
+    )?
     testing.expect_eq(t, small.font.width, 8, "80 by 24 cells of 12x24 don't fit 800x600, so the 8x16 font is used")
     testing.expect_eq(t, small.columns, 80, "8-pixel glyphs fit 80 columns")
     testing.expect_eq(t, small.rows, 24, "16-pixel glyphs fit 24 rows")
@@ -137,7 +177,7 @@ a_small_framebuffer_takes_the_small_font #test :: fn(t: ptr[mut testing.T]) -> t
  * @param y The pixel's row, from 0.
  * @return The pixel, as 0xRRGGBB in the test's layout; 0xffffffff, which no drawn pixel is, past the buffer's end.
  */
-pixel :: fn(pixels: u32[], x: u32, y: u32) -> u32 {
+pixel :: fn(pixels : u32[], x : u32, y : u32) -> u32 {
     at :: cast[usize](y * WIDTH + x)
     return if at < pixels.count { pixels[at] } else { cast[u32](0xffffffff) }
 }
@@ -151,7 +191,7 @@ pixel :: fn(pixels: u32[], x: u32, y: u32) -> u32 {
  * @param color The colour, as the pixel holds it.
  * @return How many of the cell's 288 pixels are that colour; pixels past the buffer's end aren't.
  */
-lit :: fn(pixels: u32[], x: u32, y: u32, color: u32) -> u32 {
+lit :: fn(pixels : u32[], x : u32, y : u32, color : u32) -> u32 {
     count : u32 = 0
     for row in 0..<cast[u32](24) {
         for column in 0..<cast[u32](12) {

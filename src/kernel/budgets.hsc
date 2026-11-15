@@ -68,7 +68,7 @@ CpuTime :: struct {
  * @return The budget, with all of budget_ns available, in counter ticks. Its lock is used in place, so it's put where
  *     it lives before it's used.
  */
-make_budget :: fn(kernel: ptr[Kernel], priority: u8, period_ns: u64, budget_ns: u64) -> CpuTime {
+make_budget :: fn(kernel : ptr[Kernel], priority : u8, period_ns : u64, budget_ns : u64) -> CpuTime {
     result : CpuTime
     result.priority = priority
     result.period = ticks_of(kernel, period_ns)
@@ -85,9 +85,10 @@ make_budget :: fn(kernel: ptr[Kernel], priority: u8, period_ns: u64, budget_ns: 
  * @param nanoseconds The time, in nanoseconds.
  * @return The time in counter ticks, rounded down.
  */
-ticks_of :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
+ticks_of :: fn(kernel : ptr[Kernel], nanoseconds : u64) -> u64 {
     frequency :: kernel.counter_frequency
-    return nanoseconds / runtime.NANOSECONDS_PER_SECOND * frequency + nanoseconds % runtime.NANOSECONDS_PER_SECOND * frequency / runtime.NANOSECONDS_PER_SECOND
+    return nanoseconds / runtime.NANOSECONDS_PER_SECOND * frequency
+        + nanoseconds % runtime.NANOSECONDS_PER_SECOND * frequency / runtime.NANOSECONDS_PER_SECOND
 }
 
 /**
@@ -97,12 +98,13 @@ ticks_of :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
  * @param ticks The time, in counter ticks.
  * @return The time in nanoseconds, rounded down.
  */
-nanoseconds_of :: fn(kernel: ptr[Kernel], ticks: u64) -> u64 {
+nanoseconds_of :: fn(kernel : ptr[Kernel], ticks : u64) -> u64 {
     frequency :: kernel.counter_frequency
     if frequency == 0 {
         return 0
     }
-    return ticks / frequency * runtime.NANOSECONDS_PER_SECOND + ticks % frequency * runtime.NANOSECONDS_PER_SECOND / frequency
+    return ticks / frequency * runtime.NANOSECONDS_PER_SECOND
+        + ticks % frequency * runtime.NANOSECONDS_PER_SECOND / frequency
 }
 
 /**
@@ -115,7 +117,7 @@ nanoseconds_of :: fn(kernel: ptr[Kernel], ticks: u64) -> u64 {
  * @param now The counter's value now, in ticks.
  * @return True if it's unlimited or has time available; false while it's spent, or paying a debt.
  */
-has_time :: fn(budget: ptr[mut CpuTime], now: u64) -> bool {
+has_time :: fn(budget : ptr[mut CpuTime], now : u64) -> bool {
     if budget.unlimited {
         return true
     }
@@ -139,15 +141,17 @@ has_time :: fn(budget: ptr[mut CpuTime], now: u64) -> bool {
  * @param used The time used, in counter ticks.
  * @param now The counter's value now, in ticks, for replenishing first.
  */
-charge :: fn(budget: ptr[mut CpuTime], start: u64, used: u64, now: u64) {
+charge :: fn(budget : ptr[mut CpuTime], start : u64, used : u64, now : u64) {
     if budget.unlimited {
         return void
     }
     lock_at(&budget.lock, .CpuTime)
     defer unlock_at(&budget.lock, .CpuTime)
     replenish(budget, now)
-    // What ran past what was left is owed, and paid from the refills before they give time again: every tick used
-    // comes back, so a budget's time left, its refills and its debt always add up to its budget
+    /*
+     * What ran past what was left is owed, and paid from the refills before they give time again: every tick used
+     * comes back, so a budget's time left, its refills and its debt always add up to its budget
+     */
     if used > budget.available {
         budget.debt += used - budget.available
         budget.available = 0
@@ -176,7 +180,7 @@ charge :: fn(budget: ptr[mut CpuTime], start: u64, used: u64, now: u64) {
  * @param budget The budget, its lock held.
  * @param now The counter's value now, in ticks; refills at or before it come back.
  */
-replenish :: fn(budget: ptr[mut CpuTime], now: u64) {
+replenish :: fn(budget : ptr[mut CpuTime], now : u64) {
     loop {
         refill :: budget.refills[budget.first % MAX_REFILLS]
         if refill.at > now {
@@ -198,6 +202,6 @@ replenish :: fn(budget: ptr[mut CpuTime], now: u64) {
  * @param b The other value, any u64.
  * @return The smaller, or either when they're equal.
  */
-min_u64 :: fn(a, b: u64) -> u64 {
+min_u64 :: fn(a, b : u64) -> u64 {
     return if a < b { a } else { b }
 }

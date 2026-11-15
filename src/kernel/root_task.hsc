@@ -7,9 +7,9 @@ import text_buffer from "std:text_buffer"
 import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import elf_loader from "../elf_loader"
-import frames from "frames"
-import test_device from "../test_device"
 import robustness from "../robustness"
+import test_device from "../test_device"
+import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -68,7 +68,7 @@ RootLayout :: struct {
  * @param kernel The kernel, with its root budget, root CPU budget and platform capability made; called once, on the
  *     boot CPU.
  */
-start_root_task :: fn(kernel: ptr[mut Kernel]) {
+start_root_task :: fn(kernel : ptr[mut Kernel]) {
     if kernel.modules.count == 0 {
         runtime.log_warn("no root task: the boot has no modules")
         return void
@@ -82,8 +82,10 @@ start_root_task :: fn(kernel: ptr[mut Kernel]) {
                 _ = destroy_object(kernel, kernel.firmware)
                 kernel.firmware = 0
             }
-            // Its process's destruction takes a grace period for each step, as a root task's end does, before what's
-            // left is checked when the kernel halts (timer.hsc)
+            /*
+             * Its process's destruction takes a grace period for each step, as a root task's end does, before what's
+             * left is checked when the kernel halts (timer.hsc)
+             */
             #if robustness.ON {
                 kernel.stop_after_ticks += ROOT_END_TICKS
             }
@@ -103,8 +105,11 @@ start_root_task :: fn(kernel: ptr[mut Kernel]) {
  * @param module The module, an ELF executable in frames the bootloader loaded it into, read through the direct map.
  * @return Null once it's started; otherwise what went wrong, always a constant string, never on the stack.
  */
-load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> string? #unrestricted {
-    file :: view_of(cast[ptr[u8]](frames.virtual_of(&kernel.frames, module.contents.base)), cast[usize](module.contents.size))
+load_root_task :: fn(kernel : ptr[mut Kernel], module : boot_info.BootModule) -> string? #unrestricted {
+    file :: view_of(
+        cast[ptr[u8]](frames.virtual_of(&kernel.frames, module.contents.base)),
+        cast[usize](module.contents.size)
+    )
     executable := elf_loader.Executable.{}
     match elf_loader.read(file) {
         case Ok(read) => executable = read
@@ -138,8 +143,13 @@ load_root_task :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule) -> s
  * @param file The module's bytes, in the direct map.
  * @return Null once it's started; otherwise what failed, a constant string.
  */
-start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: ptr[mut Process], executable: ptr[elf_loader.Executable],
-    file: u8[]) -> string? #unrestricted {
+start_in :: fn(
+    kernel : ptr[mut Kernel],
+    module : boot_info.BootModule,
+    process : ptr[mut Process],
+    executable : ptr[elf_loader.Executable],
+    file : u8[]
+) -> string? #unrestricted {
     budget :: kernel.root_budget
     space := cast[ptr[mut AddressSpace]](0)
     match create_address_space(kernel, cast[u64](process), budget) {
@@ -148,7 +158,9 @@ start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: p
     }
     // Room for as many grants as it can be given, which add_grant doesn't pass
     grant_count :: MAX_ROOT_GRANTS
-    block_size :: page_up(cast[u64](size_of(slop_os.StartupBlock)) + cast[u64](grant_count + 1) * cast[u64](size_of(slop_os.Grant)))
+    block_size :: page_up(
+        cast[u64](size_of(slop_os.StartupBlock)) + cast[u64](grant_count + 1) * cast[u64](size_of(slop_os.Grant))
+    )
     layout :: choose_layout(kernel, executable.size, block_size)
     not_loaded :: load_image(kernel, process, space, executable, file, layout.image)
     if (not_loaded is_some) {
@@ -174,7 +186,15 @@ start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: p
     process.shadow_region = layout.free + ROOT_FREE_SIZE - ROOT_SHADOW_REGION_SIZE
     process.shadow_slots = MAX_SHADOW_STACKS
     thread := cast[ptr[mut Thread]](0)
-    match create_thread(kernel, cast[u64](process), space, &start, arch_interface.VectorConfig.{extended = false}, 0, budget) {
+    match create_thread(
+        kernel,
+        cast[u64](process),
+        space,
+        &start,
+        arch_interface.VectorConfig.{extended = false},
+        0,
+        budget
+    ) {
         case Ok(made) => thread = made
         case Error(error) => return "no thread"
     }
@@ -196,7 +216,7 @@ start_in :: fn(kernel: ptr[mut Kernel], module: boot_info.BootModule, process: p
  * @return The layout, every address page-aligned and in the user range. A part bigger than its room is put at the
  *     room's start.
  */
-choose_layout :: fn(kernel: ptr[Kernel], image_size: u64, block_size: u64) -> RootLayout {
+choose_layout :: fn(kernel : ptr[Kernel], image_size : u64, block_size : u64) -> RootLayout {
     low_address, high_address :: arch.user_address_range()
     low :: page_up(cast[u64](low_address))
     high :: cast[u64](high_address) & ~(PAGE - 1)
@@ -222,7 +242,7 @@ choose_layout :: fn(kernel: ptr[Kernel], image_size: u64, block_size: u64) -> Ro
  * @return An address from start to start plus room less size, page-aligned, so the bytes fit; start itself with
  *     no_kaslr, or when size is room or more, when they may not fit.
  */
-random_place :: fn(kernel: ptr[Kernel], start: u64, room: u64, size: u64) -> u64 {
+random_place :: fn(kernel : ptr[Kernel], start : u64, room : u64, size : u64) -> u64 {
     if kernel.options.no_kaslr || size >= room {
         return start
     }
@@ -237,7 +257,7 @@ random_place :: fn(kernel: ptr[Kernel], start: u64, room: u64, size: u64) -> u64
  * @return The CPU's hardware entropy, tried up to 10 times; failing that, the boot seed's 32 bytes folded into 64
  *     bits by exclusive or, the same value at every call.
  */
-random_bits :: fn(kernel: ptr[Kernel]) -> u64 {
+random_bits :: fn(kernel : ptr[Kernel]) -> u64 {
     for i in 0..<10 {
         match arch.hardware_entropy() {
             case Some(value) => return value
@@ -257,7 +277,7 @@ random_bits :: fn(kernel: ptr[Kernel]) -> u64 {
  * @param value The bytes or address, at most a page below 2^64, where it would wrap.
  * @return The smallest multiple of PAGE at least value.
  */
-page_up :: fn(value: u64) -> u64 {
+page_up :: fn(value : u64) -> u64 {
     return (value + PAGE - 1) & ~(PAGE - 1)
 }
 
@@ -268,7 +288,7 @@ page_up :: fn(value: u64) -> u64 {
  * @param b The number compared with a, any u64.
  * @return Whichever is larger, b when they're equal.
  */
-max_u64 :: fn(a, b: u64) -> u64 {
+max_u64 :: fn(a, b : u64) -> u64 {
     return if a > b { a } else { b }
 }
 
@@ -289,8 +309,14 @@ max_u64 :: fn(a, b: u64) -> u64 {
  * @param base Where the image goes, a page-aligned user virtual address.
  * @return Null once it's loaded and mapped; otherwise what failed, a constant string.
  */
-load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[mut AddressSpace], executable: ptr[elf_loader.Executable],
-    file: u8[], base: u64) -> string? #unrestricted {
+load_image :: fn(
+    kernel : ptr[mut Kernel],
+    process : ptr[mut Process],
+    space : ptr[mut AddressSpace],
+    executable : ptr[elf_loader.Executable],
+    file : u8[],
+    base : u64
+) -> string? #unrestricted {
     buffer, error :: runtime.new_array(u8, cast[usize](executable.size))
     if error != null {
         return "no memory to load it in"
@@ -302,7 +328,8 @@ load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[
     if elf_loader.relocate(executable, file, buffer, base) is_error {
         return "its relocations don't apply"
     }
-    image :: create_memory(kernel, cast[u64](process), kernel.root_budget, executable.size) or_return "no memory for its image"
+    image :: create_memory(kernel, cast[u64](process), kernel.root_budget, executable.size)
+        or_return "no memory for its image"
     if !copy_into(kernel, image, buffer) {
         return "no frames for its image"
     }
@@ -323,7 +350,15 @@ load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[
             middle_end :: min_u64(end, relro_end)
             failure := map_part(kernel, image, space, base, start, middle_start, protection)
             if (failure is_none) {
-                failure = map_part(kernel, image, space, base, middle_start, middle_end, cast[u32](slop_os.PROTECTION_READ))
+                failure = map_part(
+                    kernel,
+                    image,
+                    space,
+                    base,
+                    middle_start,
+                    middle_end,
+                    cast[u32](slop_os.PROTECTION_READ)
+                )
             }
             if (failure is_none) {
                 failure = map_part(kernel, image, space, base, middle_end, end, protection)
@@ -353,8 +388,15 @@ load_image :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[
  * @param protection The part's protection, slop_os.PROTECTION_* bits.
  * @return Null once it's mapped, or when there was nothing to map; otherwise what failed, a constant string.
  */
-map_part :: fn(kernel: ptr[mut Kernel], image: ptr[mut Memory], space: ptr[mut AddressSpace], base: u64, start: u64, end: u64,
-    protection: u32) -> string? #unrestricted {
+map_part :: fn(
+    kernel : ptr[mut Kernel],
+    image : ptr[mut Memory],
+    space : ptr[mut AddressSpace],
+    base : u64,
+    start : u64,
+    end : u64,
+    protection : u32
+) -> string? #unrestricted {
     if end <= start {
         return null
     }
@@ -372,7 +414,7 @@ map_part :: fn(kernel: ptr[mut Kernel], image: ptr[mut Memory], space: ptr[mut A
  * @param bytes The bytes, from the start of the memory object on; the caller keeps them, as they're copied.
  * @return True once they're all copied; false if a frame couldn't be had, when the pages before it are copied.
  */
-copy_into :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], bytes: u8[]) -> bool {
+copy_into :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory], bytes : u8[]) -> bool {
     count :: cast[u64](bytes.count)
     for page in 0..<page_up(count) / PAGE {
         frame :: frame_for(kernel, memory, page)
@@ -381,8 +423,11 @@ copy_into :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], bytes: u8[]) -
         }
         offset :: page * PAGE
         size :: min_u64(PAGE, count - offset)
-        intrinsics.mem_copy_non_overlapping(cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame))),
-            cast[rawptr](cast[u64](bytes.data) + offset), cast[usize](size))
+        intrinsics.mem_copy_non_overlapping(
+            cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame))),
+            cast[rawptr](cast[u64](bytes.data) + offset),
+            cast[usize](size)
+        )
     }
     return true
 }
@@ -402,8 +447,14 @@ copy_into :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], bytes: u8[]) -
  * @param block_size The startup block's bytes, a whole number of pages, with room for MAX_ROOT_GRANTS grants.
  * @return Null once it's written and mapped; otherwise what failed, a constant string.
  */
-write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], space: ptr[mut AddressSpace], own: boot_info.BootModule,
-    layout: RootLayout, block_size: u64) -> string? #unrestricted {
+write_startup_block :: fn(
+    kernel : ptr[mut Kernel],
+    process : ptr[mut Process],
+    space : ptr[mut AddressSpace],
+    own : boot_info.BootModule,
+    layout : RootLayout,
+    block_size : u64
+) -> string? #unrestricted {
     buffer, error :: runtime.new_array(u8, cast[usize](block_size))
     if error != null {
         return "no memory for its startup block"
@@ -412,8 +463,10 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     block :: cast[ptr[mut slop_os.StartupBlock]](buffer.data)
     block.abi_version = slop_os.ABI_VERSION
     block.size = cast[u32](size_of(slop_os.StartupBlock))
-    block.process = cast[slop_os.Process](handle_for(kernel, process, cast[u64](process), .Process, false) or_return "no handle to itself")
-    block.space = cast[slop_os.AddressSpace](handle_for(kernel, process, cast[u64](space), .AddressSpace, true) or_return "no handle to its space")
+    block.process = cast[slop_os.Process](handle_for(kernel, process, cast[u64](process), .Process, false)
+        or_return "no handle to itself")
+    block.space = cast[slop_os.AddressSpace](handle_for(kernel, process, cast[u64](space), .AddressSpace, true)
+        or_return "no handle to its space")
     block.budget = cast[slop_os.MemoryBudget](handle_for(kernel, process, kernel.root_budget, .MemoryBudget, false)
         or_return "no handle to the root budget")
     block.free_base = layout.free
@@ -428,7 +481,8 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     platform :: handle_for(kernel, process, kernel.platform, .Platform, false) or_return "no handle to the platform"
     count = add_grant(grants, count, "platform", .Platform, platform)
     // The root CPU budget, which it gives the scheduler service to split (decisions/0093)
-    cpu_budget :: handle_for(kernel, process, kernel.root_cpu_budget, .CpuBudget, false) or_return "no handle to the root CPU budget"
+    cpu_budget :: handle_for(kernel, process, kernel.root_cpu_budget, .CpuBudget, false)
+        or_return "no handle to the root CPU budget"
     count = add_grant(grants, count, "cpu_budget", .CpuBudget, cpu_budget)
     log :: create_debug_log(kernel, process) or_return "no debug log"
     count = add_grant(grants, count, "debug_log", .DebugLog, log)
@@ -451,8 +505,14 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
         if i == 0 {
             continue
         }
-        memory :: create_module_memory(kernel, cast[u64](process), kernel.root_budget, cast[u64](module.contents.base),
-            page_up(module.contents.size)) or_return "no memory object for a module"
+        memory :: create_module_memory(
+            kernel,
+            cast[u64](process),
+            kernel.root_budget,
+            cast[u64](module.contents.base),
+            page_up(module.contents.size)
+        )
+            or_return "no memory object for a module"
         handle :: handle_for(kernel, process, cast[u64](memory), .Memory, true) or_return "no handle to a module"
         label_storage : u8[slop_os.GRANT_LABEL_SIZE]
         label := text_buffer.make(label_storage)
@@ -464,7 +524,8 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
     if cast[u64](block.grants) + cast[u64](count) * cast[u64](size_of(slop_os.Grant)) > block_size {
         return "too many grants"
     }
-    memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, block_size) or_return "no memory for its startup block"
+    memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, block_size)
+        or_return "no memory for its startup block"
     if !copy_into(kernel, memory, buffer) {
         return "no frames for its startup block"
     }
@@ -482,9 +543,10 @@ write_startup_block :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], sp
  * @return An owning handle to the memory, in the process's table, at least one byte bigger than the command line, a
  *     whole number of pages; null if there's no memory or no handle.
  */
-copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
+copy_of_command_line :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) -> slop_os.Handle? {
     text :: kernel.command_line
-    memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, page_up(cast[u64](text.count) + 1)) or_return null
+    memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, page_up(cast[u64](text.count) + 1))
+        or_return null
     if !copy_into(kernel, memory, string_bytes(text)) {
         return null
     }
@@ -499,14 +561,17 @@ copy_of_command_line :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -
  * @return An owning handle to the page's memory, in the process's table; the RAM it gives as the kernel's is the
  *     page's own frame's physical address. Null if there's no memory, no frame or no handle.
  */
-test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
+test_device_page :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) -> slop_os.Handle? {
     memory :: create_memory(kernel, cast[u64](process), kernel.root_budget, PAGE) or_return null
     frame :: frame_for(kernel, memory, 0)
     if frame == 0 {
         return null
     }
     device :: arch.test_device()
-    info :: cast[ptr[mut test_device.TestDeviceInfo]](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame)))
+    info :: cast[ptr[mut test_device.TestDeviceInfo]](frames.virtual_of(
+        &kernel.frames,
+        cast[boot_info.PhysicalAddress](frame)
+    ))
     kind : slop_os.ControllerKind = match device.kind {
         case .IoApic => .IoApic
         case .GicDistributor => .GicDistributor
@@ -531,7 +596,13 @@ test_device_page :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> sl
  * @param owning Whether it's the owning handle: the caller sees the process owns the object.
  * @return The handle, or null if it couldn't be made, as the table is full or there's no memory.
  */
-handle_for :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64, kind: slop_os.ObjectKind, owning: bool) -> slop_os.Handle? {
+handle_for :: fn(
+    kernel : ptr[mut Kernel],
+    process : ptr[mut Process],
+    object : u64,
+    kind : slop_os.ObjectKind,
+    owning : bool
+) -> slop_os.Handle? {
     header :: cast[ptr[ObjectHeader]](object)
     match install(kernel, &process.table, object, header.generation, kind, slop_os.RIGHTS_ALL, owning) {
         case Ok(handle) => {
@@ -554,7 +625,13 @@ handle_for :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64
  * @param handle The handle, in the root task's table.
  * @return How many grants there are now: count plus 1, or count if there was no room, when an error is logged.
  */
-add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: slop_os.ObjectKind, handle: slop_os.Handle) -> usize {
+add_grant :: fn(
+    grants : mut slop_os.Grant[],
+    count : usize,
+    label : string,
+    kind : slop_os.ObjectKind,
+    handle : slop_os.Handle
+) -> usize {
     if count >= grants.count {
         runtime.log_error("the root task has room for % grants, so it isn't given %", grants.count, label)
         return count
@@ -576,7 +653,7 @@ add_grant :: fn(grants: mut slop_os.Grant[], count: usize, label: string, kind: 
  * @param name A boot module's name, any string; compared byte by byte, so the case of the ending matters.
  * @return True if it ends with ".library", which may be all of it.
  */
-is_library :: fn(name: string) -> bool {
+is_library :: fn(name : string) -> bool {
     ending :: ".library"
     if name.count < ending.count {
         return false

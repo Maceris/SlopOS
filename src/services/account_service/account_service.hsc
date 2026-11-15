@@ -29,17 +29,17 @@ import compiler from "base:compiler"
 import runtime from "base:runtime"
 import crypto from "std:crypto"
 import os from "std:os"
-import strings from "std:strings"
-import time from "std:time"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import log_line from "../../log_line"
+import strings from "std:strings"
+import time from "std:time"
 import account_records from "../../account_records"
+import service_kit from "../../libraries/service_kit"
+import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
 import storage from "../../protocols/storage"
 import slopfs from "../../slopfs"
-import service_kit from "../../libraries/service_kit"
 
 /** The name of the plain volume the accounts' and shares' records are kept on. */
 ACCOUNTS_VOLUME :: "accounts"
@@ -164,7 +164,11 @@ OpenedShare :: struct {
  *     manager or if dialing it failed; 3 if the accounts volume couldn't be found, made or read; 4 if the listener
  *     couldn't be served.
  */
-main :: fn(log: slop_os.DebugLog?, storage_service: os.Channel[connector.Connector]?, clients: os.Listener[accounts.Accounts]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    storage_service : os.Channel[connector.Connector]?,
+    clients : os.Listener[accounts.Accounts]
+) -> int {
     block :: slop_os.startup_block()
     service := Service.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
     service.port = slop_os.port_create(block.budget) or_return 1
@@ -185,7 +189,12 @@ main :: fn(log: slop_os.DebugLog?, storage_service: os.Channel[connector.Connect
     if !service_kit.add_client(&connected, service.port, clients.end) {
         return 4
     }
-    log_line.write(service.log, "account_service: serving % account%", service.count, if service.count == 1 { "" } else { "s" })
+    log_line.write(
+        service.log,
+        "account_service: serving % account%",
+        service.count,
+        if service.count == 1 { "" } else { "s" }
+    )
     into := os.Incoming.{}
     loop {
         with {
@@ -215,7 +224,7 @@ main :: fn(log: slop_os.DebugLog?, storage_service: os.Channel[connector.Connect
  * @return True once it's open and counted; false, with why logged for some, if there's no container, or the volume
  *     couldn't be opened, made, connected to or listed.
  */
-open_store :: fn(service: ptr[mut Service]) -> bool {
+open_store :: fn(service : ptr[mut Service]) -> bool {
     block :: slop_os.startup_block()
     found := cast[u32](0xffffffff)
     for index in 0..<cast[u32](64) {
@@ -243,8 +252,15 @@ open_store :: fn(service: ptr[mut Service]) -> bool {
         case NoVolume => {
             out := os.Outgoing.{}
             creating :: os.begin[storage.Request](&out)
-            creating^ = .CreateVolume(storage.NewVolume.{partition = found, name = os.append(&out, string_bytes(ACCOUNTS_VOLUME)),
-                passphrase = os.append(&out, u8.[]), cipher = cast[u8](slopfs.Cipher.None), now = now_of()})
+            creating^ = .CreateVolume(
+                storage.NewVolume.{
+                    partition = found,
+                    name = os.append(&out, string_bytes(ACCOUNTS_VOLUME)),
+                    passphrase = os.append(&out, u8.[]),
+                    cipher = cast[u8](slopfs.Cipher.None),
+                    now = now_of(),
+                }
+            )
             match ask_storage(service, &out) {
                 case OpenedFiles(opened) => root = opened
                 case _ => {
@@ -294,7 +310,12 @@ open_store :: fn(service: ptr[mut Service]) -> bool {
  * @param index The client's index; one past the clients, or dropped, is passed over.
  * @param into Where each request is received, reused from one to the next.
  */
-serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(
+    service : ptr[mut Service],
+    connected : ptr[mut service_kit.Clients],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= connected.ends.count {
         return void
     }
@@ -324,44 +345,89 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
         response^ = .Failed
         match os.message_of[accounts.Request](into)^ {
             case Describe => response^ = .Described(accounts.Status.{accounts = service.count})
-            case Create(creation) => response^ = create(service, os.items(into, creation.name), os.items(into, creation.password), creation.now)
-            case Share(asked) => response^ = share(service, os.items(into, asked.owner), os.items(into, asked.name), os.items(into, asked.member))
-            case Unshare(asked) => response^ = unshare(service, os.items(into, asked.owner), os.items(into, asked.name), os.items(into, asked.member))
+            case Create(
+                creation
+            ) => response^ = create(
+                service,
+                os.items(into, creation.name),
+                os.items(into, creation.password),
+                creation.now
+            )
+            case Share(
+                asked
+            ) => response^ = share(
+                service,
+                os.items(into, asked.owner),
+                os.items(into, asked.name),
+                os.items(into, asked.member)
+            )
+            case Unshare(
+                asked
+            ) => response^ = unshare(
+                service,
+                os.items(into, asked.owner),
+                os.items(into, asked.name),
+                os.items(into, asked.member)
+            )
             case CreateBy(elevated) => {
                 administrator :: os.items(into, elevated.administrator.name)
-                response^ = limited(service, index, administrator) or_else create_by(service, index, administrator,
-                    os.items(into, elevated.administrator.password), os.items(into, elevated.creation.name), os.items(into, elevated.creation.password),
-                    elevated.creation.now)
+                response^ = limited(service, index, administrator)
+                    or_else create_by(
+                        service,
+                        index,
+                        administrator,
+                        os.items(into, elevated.administrator.password),
+                        os.items(into, elevated.creation.name),
+                        os.items(into, elevated.creation.password),
+                        elevated.creation.now
+                    )
             }
             case CheckAdministrator(credentials) => {
                 administrator :: os.items(into, credentials.name)
-                response^ = limited(service, index, administrator) or_else check_administrator(service, index, administrator,
-                    os.items(into, credentials.password))
+                response^ = limited(service, index, administrator)
+                    or_else check_administrator(service, index, administrator, os.items(into, credentials.password))
             }
             case OpenHome(credentials) => {
                 name :: os.items(into, credentials.name)
-                response^ = limited(service, index, name) or_else open_home(service, index, name, os.items(into, credentials.password), &out)
+                response^ = limited(service, index, name)
+                    or_else open_home(service, index, name, os.items(into, credentials.password), &out)
             }
             case ChangePassword(change) => {
                 name :: os.items(into, change.name)
                 response^ = limited(service, index, name)
-                    or_else change_password(service, index, name, os.items(into, change.password), os.items(into, change.new_password))
+                    or_else change_password(
+                        service,
+                        index,
+                        name,
+                        os.items(into, change.password),
+                        os.items(into, change.new_password)
+                    )
             }
             case Recover(recovery) => {
                 name :: os.items(into, recovery.name)
                 response^ = limited(service, index, name)
-                    or_else recover(service, index, name, os.items(into, recovery.code), os.items(into, recovery.new_password))
+                    or_else recover(
+                        service,
+                        index,
+                        name,
+                        os.items(into, recovery.code),
+                        os.items(into, recovery.new_password)
+                    )
             }
             case ListKeys(name) => response^ = list_keys(service, os.items(into, name), &out)
             case AddKey(change) => response^ = add_key(service, os.items(into, change.name), os.items(into, change.key))
-            case RemoveKey(change) => response^ = remove_key(service, os.items(into, change.name), os.items(into, change.key))
+            case RemoveKey(
+                change
+            ) => response^ = remove_key(service, os.items(into, change.name), os.items(into, change.key))
             case Remote => {
                 if index < service.remote.count {
                     service.remote[index] = true
                 }
                 response^ = .Done
             }
-            case OpenHomeByKey(login) => response^ = open_home_by_key(service, os.items(into, login.name), os.items(into, login.key))
+            case OpenHomeByKey(
+                login
+            ) => response^ = open_home_by_key(service, os.items(into, login.name), os.items(into, login.key))
             case Connect(connection) => {
                 match service_kit.add_client_index(connected, service.port, connection.end) {
                     case Some(added) => {
@@ -393,7 +459,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
  * @return Created with its recovery code's text, shown once; Refused once there's an account already; or as
  *     made_account answers.
  */
-create :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u64) -> accounts.Response {
+create :: fn(service : ptr[mut Service], name : u8[], password : u8[], now : u64) -> accounts.Response {
     if service.count > 0 {
         return .Refused
     }
@@ -418,10 +484,18 @@ create :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u64) ->
  * @return Created with the new account's recovery code's text, shown once; WrongCredentials for a wrong name or
  *     password, or an account that isn't the administrator's; or as made_account answers.
  */
-create_by :: fn(service: ptr[mut Service], client: usize, administrator: u8[], administrator_password: u8[], name: u8[], password: u8[],
-    now: u64) -> accounts.Response {
+create_by :: fn(
+    service : ptr[mut Service],
+    client : usize,
+    administrator : u8[],
+    administrator_password : u8[],
+    name : u8[],
+    password : u8[],
+    now : u64
+) -> accounts.Response {
     record := read_record(service, administrator) or_else dummy_record()
-    home := account_records.unlock_home(&record, administrator_password) or_return failed(service, client, administrator)
+    home := account_records.unlock_home(&record, administrator_password)
+        or_return failed(service, client, administrator)
     account_records.zero_key(&home)
     if !account_records.is_administrator(&record) {
         return failed(service, client, administrator)
@@ -440,7 +514,12 @@ create_by :: fn(service: ptr[mut Service], client: usize, administrator: u8[], a
  * @param password Their password; the home secret it unseals is wiped at once.
  * @return Done; WrongCredentials for a wrong name or password, or an account that isn't the administrator's.
  */
-check_administrator :: fn(service: ptr[mut Service], client: usize, administrator: u8[], password: u8[]) -> accounts.Response {
+check_administrator :: fn(
+    service : ptr[mut Service],
+    client : usize,
+    administrator : u8[],
+    password : u8[]
+) -> accounts.Response {
     record := read_record(service, administrator) or_else dummy_record()
     home := account_records.unlock_home(&record, password) or_return failed(service, client, administrator)
     account_records.zero_key(&home)
@@ -467,7 +546,13 @@ check_administrator :: fn(service: ptr[mut Service], client: usize, administrato
  *     PasswordRefused with the PasswordProblem; AlreadyExists for a name that's an account's; Failed if the record or
  *     the home volume couldn't be made or written, which may leave a home volume without a record.
  */
-made_account :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u64, administrator: bool) -> accounts.Response {
+made_account :: fn(
+    service : ptr[mut Service],
+    name : u8[],
+    password : u8[],
+    now : u64,
+    administrator : bool
+) -> accounts.Response {
     if !account_records.valid_name(name) {
         return .NameRefused
     }
@@ -482,13 +567,26 @@ made_account :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u
     defer account_records.zero_key(&home)
     code := account_records.new_recovery_code()
     defer zero_code(&code)
-    record := account_records.new_record(name, administrator, now, password, account_records.PASSWORD_ARGON2, &home, &code)
+    record := account_records.new_record(
+        name,
+        administrator,
+        now,
+        password,
+        account_records.PASSWORD_ARGON2,
+        &home,
+        &code
+    )
         or_return .Failed
     if !make_home(service, name, &home) || !write_record(service, &record) {
         return .Failed
     }
     service.count += 1
-    log_line.write(service.log, "account_service: made the account %, %", text_of(name), if administrator { "the administrator" } else { "as the administrator allowed" })
+    log_line.write(
+        service.log,
+        "account_service: made the account %, %",
+        text_of(name),
+        if administrator { "the administrator" } else { "as the administrator allowed" }
+    )
     return .Created(accounts.RecoveryText.{text = account_records.recovery_text(&code)})
 }
 
@@ -507,7 +605,13 @@ made_account :: fn(service: ptr[mut Service], name: u8[], password: u8[], now: u
  * @return OpenedHome with the home volume's root, whose end moves to the client; WrongCredentials for a wrong name or
  *     password; Failed if the volume couldn't be opened.
  */
-open_home :: fn(service: ptr[mut Service], client: usize, name: u8[], password: u8[], out: ptr[mut os.Outgoing]) -> accounts.Response {
+open_home :: fn(
+    service : ptr[mut Service],
+    client : usize,
+    name : u8[],
+    password : u8[],
+    out : ptr[mut os.Outgoing]
+) -> accounts.Response {
     record := read_record(service, name) or_else dummy_record()
     home := account_records.unlock_home(&record, password) or_return failed(service, client, name)
     defer account_records.zero_key(&home)
@@ -536,7 +640,12 @@ open_home :: fn(service: ptr[mut Service], client: usize, name: u8[], password: 
  * @param home The home volume's secret, read only.
  * @param root The home volume's root, which stays the caller's; the links are made in it.
  */
-join_shares #constant_time :: fn(service: ptr[mut Service], record: ptr[mut account_records.AccountRecord], home: ptr[crypto.Key256], root: slop_os.Channel) {
+join_shares #constant_time :: fn(
+    service : ptr[mut Service],
+    record : ptr[mut account_records.AccountRecord],
+    home : ptr[crypto.Key256],
+    root : slop_os.Channel
+) {
     if !account_records.has_keys(record) {
         if !account_records.set_keys(record, home) || !write_record(service, record) {
             return void
@@ -568,9 +677,13 @@ join_shares #constant_time :: fn(service: ptr[mut Service], record: ptr[mut acco
  * @param root The home volume's root, which stays the caller's; the link is made in it.
  * @param name The share's name, from its record's file name.
  */
-join_share #constant_time :: fn(service: ptr[mut Service], record: ptr[account_records.AccountRecord], key: ptr[crypto.X25519SecretKey],
-    root: slop_os.Channel, name: u8[]) {
-
+join_share #constant_time :: fn(
+    service : ptr[mut Service],
+    record : ptr[account_records.AccountRecord],
+    key : ptr[crypto.X25519SecretKey],
+    root : slop_os.Channel,
+    name : u8[]
+) {
     share := read_share(service, name) or_return void
     who :: account_records.name_of(record)
     secret := member_secret(&share, who, key, record) or_return void
@@ -594,7 +707,11 @@ join_share #constant_time :: fn(service: ptr[mut Service], record: ptr[account_r
     match open_shared(service, name, &next_secret) {
         case OpenedFiles(shared) => {
             if promote_next(service, name) {
-                log_line.write(service.log, "account_service: % has its new volume key's record in place", text_of(name))
+                log_line.write(
+                    service.log,
+                    "account_service: % has its new volume key's record in place",
+                    text_of(name)
+                )
             }
             keep_secret(service, name, &next_secret)
             linked(service, root, name, who, shared.end)
@@ -612,9 +729,12 @@ join_share #constant_time :: fn(service: ptr[mut Service], record: ptr[account_r
  * @param record The member's account record, whose public key the secret was sealed to.
  * @return The secret, for the caller to wipe; null if they aren't a member, or it doesn't unseal.
  */
-member_secret #constant_time :: fn(share: ptr[account_records.ShareRecord], name: u8[], key: ptr[crypto.X25519SecretKey],
-    record: ptr[account_records.AccountRecord]) -> crypto.Key256? {
-
+member_secret #constant_time :: fn(
+    share : ptr[account_records.ShareRecord],
+    name : u8[],
+    key : ptr[crypto.X25519SecretKey],
+    record : ptr[account_records.AccountRecord]
+) -> crypto.Key256? {
     for &member, i in share.members {
         if i >= cast[usize](cast[u32](share.member_count)) {
             break
@@ -635,7 +755,7 @@ member_secret #constant_time :: fn(share: ptr[account_records.ShareRecord], name
  * @param who The member's account name, for the log.
  * @param shared The share's volume's root, closed here.
  */
-linked :: fn(service: ptr[mut Service], root: slop_os.Channel, name: u8[], who: u8[], shared: slop_os.Channel) {
+linked :: fn(service : ptr[mut Service], root : slop_os.Channel, name : u8[], who : u8[], shared : slop_os.Channel) {
     if link_share(root, name, shared) {
         log_line.write(service.log, "account_service: % joined %", text_of(who), text_of(name))
     }
@@ -659,7 +779,7 @@ linked :: fn(service: ptr[mut Service], root: slop_os.Channel, name: u8[], who: 
  *     is someone else's, or its secret isn't kept; NoSuchAccount if the member has no account, or either has no key
  *     pair yet; Failed if the volume couldn't be made, the share is full, or the record couldn't be written.
  */
-share :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) -> accounts.Response {
+share :: fn(service : ptr[mut Service], owner : u8[], name : u8[], member : u8[]) -> accounts.Response {
     if !account_records.valid_name(name) {
         return .NameRefused
     }
@@ -693,7 +813,10 @@ share :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) ->
             if !make_shared(service, name, &secret) {
                 return .Failed
             }
-            record = account_records.ShareRecord.{version = cast[u32le](account_records.SHARE_VERSION), name_bytes = cast[u32le](cast[u32](name.count))}
+            record = account_records.ShareRecord.{
+                version = cast[u32le](account_records.SHARE_VERSION),
+                name_bytes = cast[u32le](cast[u32](name.count)),
+            }
             for byte, i in name {
                 if i < record.name.count {
                     record.name[i] = byte
@@ -734,7 +857,12 @@ share :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) ->
  *     has no key pair, a record couldn't be written or synced, or the volume couldn't take a new key or be opened,
  *     the member then still in it.
  */
-unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[], member: u8[]) -> accounts.Response {
+unshare #constant_time :: fn(
+    service : ptr[mut Service],
+    owner : u8[],
+    name : u8[],
+    member : u8[]
+) -> accounts.Response {
     record := read_share(service, name) or_return .Refused
     count :: cast[usize](cast[u32](record.member_count))
     if count == 0 || !same(account_records.member_name(&record.members[0]), owner) {
@@ -764,7 +892,8 @@ unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[],
             continue
         }
         left := read_record(service, account_records.member_name(each)) or_return .Failed
-        if !account_records.has_keys(&left) || !add_member(&next, account_records.member_name(each), &left, &next_secret) {
+        if !account_records.has_keys(&left)
+            || !add_member(&next, account_records.member_name(each), &left, &next_secret) {
             return .Failed
         }
     }
@@ -775,8 +904,13 @@ unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[],
     out := os.Outgoing.{}
     rekeying :: os.begin[storage.Request](&out)
     passphrase := compiler.declassify(next_secret)
-    rekeying^ = .Rekey(storage.VolumeRekeyed.{partition = service.container, name = shared_name(&out, name),
-        passphrase = os.append(&out, passphrase[0..<32])})
+    rekeying^ = .Rekey(
+        storage.VolumeRekeyed.{
+            partition = service.container,
+            name = shared_name(&out, name),
+            passphrase = os.append(&out, passphrase[0..<32]),
+        }
+    )
     for i in cast[usize](0)..<32 {
         passphrase[i] = 0
     }
@@ -787,7 +921,12 @@ unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[],
         case Rotated(floor) => generation = floor
         case _ => {
             drop_next(service, name)
-            log_line.write(service.log, "account_service: % couldn't be given a new volume key, so % is still in it", text_of(name), text_of(member))
+            log_line.write(
+                service.log,
+                "account_service: % couldn't be given a new volume key, so % is still in it",
+                text_of(name),
+                text_of(member)
+            )
             return .Failed
         }
     }
@@ -803,8 +942,14 @@ unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[],
         }
         case _ => return .Failed
     }
-    log_line.write(service.log, "account_service: took % out of %, revoked % links into it, and gave it a new volume key, sealing with key generation %",
-        text_of(member), text_of(name), revoked, generation)
+    log_line.write(
+        service.log,
+        "account_service: took % out of %, revoked % links into it, and gave it a new volume key, sealing with key generation %",
+        text_of(member),
+        text_of(name),
+        revoked,
+        generation
+    )
     return root_grant(service, name, &next_secret)
 }
 
@@ -817,13 +962,18 @@ unshare #constant_time :: fn(service: ptr[mut Service], owner: u8[], name: u8[],
  * @param secret The share's secret, read only.
  * @return True once they're in the record; false if it's full, the name's too long, or the seal failed.
  */
-add_member #constant_time :: fn(record: ptr[mut account_records.ShareRecord], member: u8[], member_record: ptr[account_records.AccountRecord],
-    secret: ptr[crypto.Key256]) -> bool {
+add_member #constant_time :: fn(
+    record : ptr[mut account_records.ShareRecord],
+    member : u8[],
+    member_record : ptr[account_records.AccountRecord],
+    secret : ptr[crypto.Key256]
+) -> bool {
     at :: cast[usize](cast[u32](record.member_count))
     if at >= record.members.count || member.count > account_records.MAX_NAME_BYTES {
         return false
     }
-    sealed :: account_records.seal_share(secret, member_record.public_key, account_records.share_name(record)) or_return false
+    sealed :: account_records.seal_share(secret, member_record.public_key, account_records.share_name(record))
+        or_return false
     made := account_records.ShareMember.{name_bytes = cast[u32le](cast[u32](member.count)), sealed = sealed}
     for byte, i in member {
         if i < made.name.count {
@@ -844,7 +994,11 @@ add_member #constant_time :: fn(record: ptr[mut account_records.ShareRecord], me
  * @param secret The share's secret, which its volume is opened with.
  * @return Shared with the grant, which moves to the client; Failed if the volume couldn't be opened or granted.
  */
-root_grant #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) -> accounts.Response {
+root_grant #constant_time :: fn(
+    service : ptr[mut Service],
+    name : u8[],
+    secret : ptr[crypto.Key256]
+) -> accounts.Response {
     root :: match open_shared(service, name, secret) {
         case OpenedFiles(opened) => opened.end
         case _ => return .Failed
@@ -871,7 +1025,7 @@ root_grant #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: p
  * @param shared The shared volume's root, which stays the caller's; the link grants it to write.
  * @return True if it made a link; false if the one there opens, or a link couldn't be made.
  */
-link_share :: fn(root: slop_os.Channel, name: u8[], shared: slop_os.Channel) -> bool {
+link_share :: fn(root : slop_os.Channel, name : u8[], shared : slop_os.Channel) -> bool {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, root) or_return false
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -923,7 +1077,7 @@ link_share :: fn(root: slop_os.Channel, name: u8[], shared: slop_os.Channel) -> 
  * @param root The shared volume's root, which stays the caller's.
  * @return How many were revoked.
  */
-revoke_all :: fn(root: slop_os.Channel) -> u64 {
+revoke_all :: fn(root : slop_os.Channel) -> u64 {
     port :: os.port_for(slop_os.startup_block().budget, root) or_return 0
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     numbers : u64[64]
@@ -968,7 +1122,7 @@ revoke_all :: fn(root: slop_os.Channel) -> u64 {
  * @param out The request, put together by the caller.
  * @return The answer, whose handles are the caller's; Unsupported if it couldn't be sent or answered.
  */
-ask_directory :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> dir.Response {
+ask_directory :: fn(end : slop_os.Channel, port : slop_os.Port, out : ptr[mut os.Outgoing]) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -989,7 +1143,7 @@ ask_directory :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
  * @param storage Where the path is written; what doesn't fit is cut.
  * @return The path, a view of storage, good as long as it is.
  */
-share_path :: fn(name: u8[], storage: ptr[mut u8[PATH_BYTES + 8]]) -> u8[] {
+share_path :: fn(name : u8[], storage : ptr[mut u8[PATH_BYTES + 8]]) -> u8[] {
     count : usize = 0
     for byte in string_bytes(SHARED_DIRECTORY) {
         if count < storage.count {
@@ -1020,10 +1174,12 @@ share_path :: fn(name: u8[], storage: ptr[mut u8[PATH_BYTES + 8]]) -> u8[] {
  * @param name The share's name, copied; one longer than MAX_NAME_BYTES isn't kept.
  * @param secret The secret, copied; the caller wipes its own.
  */
-keep_secret #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) {
+keep_secret #constant_time :: fn(service : ptr[mut Service], name : u8[], secret : ptr[crypto.Key256]) {
     free := service.opened.count
     for &each, i in service.opened {
-        if each.name_bytes == name.count && each.name_bytes <= each.name.count && same(each.name[0..<each.name_bytes], name) {
+        if each.name_bytes == name.count
+            && each.name_bytes <= each.name.count
+            && same(each.name[0..<each.name_bytes], name) {
             each.secret = secret^
             return void
         }
@@ -1051,9 +1207,11 @@ keep_secret #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: 
  * @param secret Where the secret is copied, for the caller to wipe; untouched if it isn't kept.
  * @return True if it's kept.
  */
-kept_secret #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[mut crypto.Key256]) -> bool {
+kept_secret #constant_time :: fn(service : ptr[mut Service], name : u8[], secret : ptr[mut crypto.Key256]) -> bool {
     for &each in service.opened {
-        if each.name_bytes == name.count && each.name_bytes <= each.name.count && same(each.name[0..<each.name_bytes], name) {
+        if each.name_bytes == name.count
+            && each.name_bytes <= each.name.count
+            && same(each.name[0..<each.name_bytes], name) {
             secret^ = each.secret
             return true
         }
@@ -1072,12 +1230,19 @@ kept_secret #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: 
  * @param secret The share's secret, read only.
  * @return True once it's made; false if the storage manager refused.
  */
-make_shared #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) -> bool {
+make_shared #constant_time :: fn(service : ptr[mut Service], name : u8[], secret : ptr[crypto.Key256]) -> bool {
     out := os.Outgoing.{}
     creating :: os.begin[storage.Request](&out)
     passphrase := compiler.declassify(secret^)
-    creating^ = .CreateVolume(storage.NewVolume.{partition = service.container, name = shared_name(&out, name),
-        passphrase = os.append(&out, passphrase[0..<32]), cipher = cast[u8](slopfs.Cipher.Aes256Gcm), now = now_of()})
+    creating^ = .CreateVolume(
+        storage.NewVolume.{
+            partition = service.container,
+            name = shared_name(&out, name),
+            passphrase = os.append(&out, passphrase[0..<32]),
+            cipher = cast[u8](slopfs.Cipher.Aes256Gcm),
+            now = now_of(),
+        }
+    )
     for i in cast[usize](0)..<32 {
         passphrase[i] = 0
     }
@@ -1102,12 +1267,21 @@ make_shared #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: 
  * @param secret The share's secret, read only.
  * @return The storage manager's answer: OpenedFiles with the volume's root, the caller's to close, or another.
  */
-open_shared #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: ptr[crypto.Key256]) -> storage.Response {
+open_shared #constant_time :: fn(
+    service : ptr[mut Service],
+    name : u8[],
+    secret : ptr[crypto.Key256]
+) -> storage.Response {
     out := os.Outgoing.{}
     opening :: os.begin[storage.Request](&out)
     passphrase := compiler.declassify(secret^)
-    opening^ = .OpenVolume(storage.VolumeAt.{partition = service.container, name = shared_name(&out, name),
-        passphrase = os.append(&out, passphrase[0..<32])})
+    opening^ = .OpenVolume(
+        storage.VolumeAt.{
+            partition = service.container,
+            name = shared_name(&out, name),
+            passphrase = os.append(&out, passphrase[0..<32]),
+        }
+    )
     for i in cast[usize](0)..<32 {
         passphrase[i] = 0
     }
@@ -1123,7 +1297,7 @@ open_shared #constant_time :: fn(service: ptr[mut Service], name: u8[], secret: 
  * @param name The share's name; what doesn't fit is cut.
  * @return Where it is in the message.
  */
-shared_name :: fn(out: ptr[mut os.Outgoing], name: u8[]) -> slop_os.Relative[u8] {
+shared_name :: fn(out : ptr[mut os.Outgoing], name : u8[]) -> slop_os.Relative[u8] {
     bytes : u8[HOME_NAME_BYTES + 2]
     count : usize = 0
     for character in SHARED_PREFIX {
@@ -1149,7 +1323,7 @@ shared_name :: fn(out: ptr[mut os.Outgoing], name: u8[]) -> slop_os.Relative[u8]
  * @return The record; null for a name that isn't valid_name's, no file, or one that isn't a record of this version,
  *     of this name, with at most MAX_MEMBERS members.
  */
-read_share :: fn(service: ptr[mut Service], name: u8[]) -> account_records.ShareRecord? {
+read_share :: fn(service : ptr[mut Service], name : u8[]) -> account_records.ShareRecord? {
     return read_share_from(service, name, SHARE_SUFFIX)
 }
 
@@ -1162,7 +1336,7 @@ read_share :: fn(service: ptr[mut Service], name: u8[]) -> account_records.Share
  * @return The record; null for a name that isn't valid_name's, no file, or one that isn't a record of this version,
  *     of this name, with at most MAX_MEMBERS members.
  */
-read_share_from :: fn(service: ptr[mut Service], name: u8[], suffix: string) -> account_records.ShareRecord? {
+read_share_from :: fn(service : ptr[mut Service], name : u8[], suffix : string) -> account_records.ShareRecord? {
     if !account_records.valid_name(name) {
         return null
     }
@@ -1180,7 +1354,8 @@ read_share_from :: fn(service: ptr[mut Service], name: u8[], suffix: string) -> 
             view[i] = byte
         }
     }
-    if cast[u32](record.version) != account_records.SHARE_VERSION || !same(account_records.share_name(&record), name)
+    if cast[u32](record.version) != account_records.SHARE_VERSION
+        || !same(account_records.share_name(&record), name)
         || cast[u32](record.member_count) > cast[u32](account_records.MAX_MEMBERS) {
         return null
     }
@@ -1196,7 +1371,7 @@ read_share_from :: fn(service: ptr[mut Service], name: u8[], suffix: string) -> 
  * @param record The share's record, read only; its name names the file, and all of it is written as it's laid out.
  * @return True once it's in place.
  */
-write_share :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRecord]) -> bool {
+write_share :: fn(service : ptr[mut Service], record : ptr[account_records.ShareRecord]) -> bool {
     return write_share_as(service, record, SHARE_SUFFIX)
 }
 
@@ -1209,7 +1384,7 @@ write_share :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRe
  * @param suffix SHARE_SUFFIX for its record, or NEXT_SUFFIX for the next one.
  * @return True once it's in place.
  */
-write_share_as :: fn(service: ptr[mut Service], record: ptr[account_records.ShareRecord], suffix: string) -> bool {
+write_share_as :: fn(service : ptr[mut Service], record : ptr[account_records.ShareRecord], suffix : string) -> bool {
     name :: account_records.share_name(record)
     fresh : u8[PATH_BYTES]
     kept : u8[PATH_BYTES]
@@ -1230,7 +1405,7 @@ write_share_as :: fn(service: ptr[mut Service], record: ptr[account_records.Shar
  * @param name The share's name.
  * @return True once it's in place and synced.
  */
-promote_next :: fn(service: ptr[mut Service], name: u8[]) -> bool {
+promote_next :: fn(service : ptr[mut Service], name : u8[]) -> bool {
     next : u8[PATH_BYTES]
     kept : u8[PATH_BYTES]
     if os.rename_in(service.store, path_of(name, NEXT_SUFFIX, &next), path_of(name, SHARE_SUFFIX, &kept)) is_some {
@@ -1245,7 +1420,7 @@ promote_next :: fn(service: ptr[mut Service], name: u8[]) -> bool {
  * @param service The service, on whose accounts volume <name>.next is deleted, if it's there.
  * @param name The share's name.
  */
-drop_next :: fn(service: ptr[mut Service], name: u8[]) {
+drop_next :: fn(service : ptr[mut Service], name : u8[]) {
     next : u8[PATH_BYTES]
     _ = os.remove_in(service.store, path_of(name, NEXT_SUFFIX, &next), false)
 }
@@ -1256,7 +1431,7 @@ drop_next :: fn(service: ptr[mut Service], name: u8[]) {
  * @param file A file's name in the service's store, as its listing gives it; only read.
  * @return The name without ".share", a view of file; null if it isn't a share's record's.
  */
-share_stem :: fn(file: u8[]) -> u8[]? {
+share_stem :: fn(file : u8[]) -> u8[]? {
     suffix :: string_bytes(SHARE_SUFFIX)
     if file.count <= suffix.count {
         return null
@@ -1276,7 +1451,7 @@ share_stem :: fn(file: u8[]) -> u8[]? {
  *
  * @param key The key, all 32 bytes overwritten with zeros in place.
  */
-zero_x25519 #constant_time :: fn(key: ptr[mut crypto.X25519SecretKey]) {
+zero_x25519 #constant_time :: fn(key : ptr[mut crypto.X25519SecretKey]) {
     for i in cast[usize](0)..<32 {
         key[i] = 0
     }
@@ -1296,7 +1471,13 @@ zero_x25519 #constant_time :: fn(key: ptr[mut crypto.X25519SecretKey]) {
  * @return Done once it's changed; PasswordRefused with the PasswordProblem; WrongCredentials for a wrong name or
  *     password; Failed if it couldn't be sealed or written.
  */
-change_password :: fn(service: ptr[mut Service], client: usize, name: u8[], password: u8[], new_password: u8[]) -> accounts.Response {
+change_password :: fn(
+    service : ptr[mut Service],
+    client : usize,
+    name : u8[],
+    password : u8[],
+    new_password : u8[]
+) -> accounts.Response {
     match account_records.password_problem(name, new_password) {
         case Some(problem) => return .PasswordRefused(cast[u8](problem))
         case None => {}
@@ -1322,7 +1503,13 @@ change_password :: fn(service: ptr[mut Service], client: usize, name: u8[], pass
  * @return Done once it's changed; PasswordRefused with the PasswordProblem; WrongCredentials for a wrong name or
  *     code; Failed if it couldn't be sealed or written.
  */
-recover :: fn(service: ptr[mut Service], client: usize, name: u8[], typed: u8[], new_password: u8[]) -> accounts.Response {
+recover :: fn(
+    service : ptr[mut Service],
+    client : usize,
+    name : u8[],
+    typed : u8[],
+    new_password : u8[]
+) -> accounts.Response {
     match account_records.password_problem(name, new_password) {
         case Some(problem) => return .PasswordRefused(cast[u8](problem))
         case None => {}
@@ -1347,8 +1534,14 @@ recover :: fn(service: ptr[mut Service], client: usize, name: u8[], typed: u8[],
  * @param password The new password, checked with password_problem already; read only.
  * @return Done once it's written; Failed if it couldn't be sealed or written.
  */
-replace_password #constant_time :: fn(service: ptr[mut Service], record: ptr[mut account_records.AccountRecord], home: ptr[crypto.Key256], password: u8[]) -> accounts.Response {
-    if !account_records.set_password(record, home, password, account_records.PASSWORD_ARGON2) || !write_record(service, record) {
+replace_password #constant_time :: fn(
+    service : ptr[mut Service],
+    record : ptr[mut account_records.AccountRecord],
+    home : ptr[crypto.Key256],
+    password : u8[]
+) -> accounts.Response {
+    if !account_records.set_password(record, home, password, account_records.PASSWORD_ARGON2)
+        || !write_record(service, record) {
         return .Failed
     }
     return .Done
@@ -1362,8 +1555,12 @@ replace_password #constant_time :: fn(service: ptr[mut Service], record: ptr[mut
  */
 dummy_record :: fn() -> account_records.AccountRecord {
     parameters :: account_records.PASSWORD_ARGON2
-    return account_records.AccountRecord.{version = cast[u32le](account_records.RECORD_VERSION), memory_kib = cast[u32le](parameters.memory_kib),
-        passes = cast[u32le](parameters.passes), lanes = cast[u32le](parameters.lanes)}
+    return account_records.AccountRecord.{
+        version = cast[u32le](account_records.RECORD_VERSION),
+        memory_kib = cast[u32le](parameters.memory_kib),
+        passes = cast[u32le](parameters.passes),
+        lanes = cast[u32le](parameters.lanes),
+    }
 }
 
 /**
@@ -1374,7 +1571,7 @@ dummy_record :: fn() -> account_records.AccountRecord {
  * @param name The account name asked about; one not tracked has no wait.
  * @return RateLimited with how long the longer of the two waits is, in nanoseconds; null if neither must wait.
  */
-limited :: fn(service: ptr[mut Service], client: usize, name: u8[]) -> accounts.Response? {
+limited :: fn(service : ptr[mut Service], client : usize, name : u8[]) -> accounts.Response? {
     now :: slop_os.clock_monotonic() or_else 0
     wait := cast[u64](0)
     if client < service.clients.count && service.clients[client].next > now {
@@ -1401,7 +1598,7 @@ limited :: fn(service: ptr[mut Service], client: usize, name: u8[]) -> accounts.
  * @param name The account name tried, counted even if it's no account's; a place is made for it if needed.
  * @return WrongCredentials, the answer to give.
  */
-failed :: fn(service: ptr[mut Service], client: usize, name: u8[]) -> accounts.Response {
+failed :: fn(service : ptr[mut Service], client : usize, name : u8[]) -> accounts.Response {
     now :: slop_os.clock_monotonic() or_else 0
     if client < service.clients.count {
         count(&service.clients[client], CLIENT_FREE_FAILURES, now)
@@ -1422,8 +1619,13 @@ failed :: fn(service: ptr[mut Service], client: usize, name: u8[]) -> accounts.R
  * @param tracked The account's counts.
  * @return The count the client's tries go to.
  */
-counted_for :: fn(service: ptr[Service], client: usize, tracked: ptr[mut Tracked]) -> ptr[mut Failures] {
-    return if client < service.remote.count && service.remote[client] { &tracked.remote_failures } else { &tracked.failures }
+counted_for :: fn(service : ptr[Service], client : usize, tracked : ptr[mut Tracked]) -> ptr[mut Failures] {
+    return if client < service.remote.count && service.remote[client] {
+        &tracked.remote_failures
+    }
+    else {
+        &tracked.failures
+    }
 }
 
 /**
@@ -1434,7 +1636,7 @@ counted_for :: fn(service: ptr[Service], client: usize, tracked: ptr[mut Tracked
  * @param free How many wrong attempts in a row are free.
  * @param now The monotonic clock now, in nanoseconds.
  */
-count :: fn(failures: ptr[mut Failures], free: u32, now: u64) {
+count :: fn(failures : ptr[mut Failures], free : u32, now : u64) {
     failures.count += 1
     if failures.count > free {
         doublings :: failures.count - free - 1
@@ -1456,7 +1658,7 @@ count :: fn(failures: ptr[mut Failures], free: u32, now: u64) {
  * @param client The client index of who asked; past the clients, only the name's count starts again.
  * @param name The account's name; if it isn't tracked, nothing's changed for it.
  */
-succeeded :: fn(service: ptr[mut Service], client: usize, name: u8[]) {
+succeeded :: fn(service : ptr[mut Service], client : usize, name : u8[]) {
     if client < service.clients.count {
         service.clients[client] = Failures.{}
     }
@@ -1476,14 +1678,17 @@ succeeded :: fn(service: ptr[mut Service], client: usize, name: u8[]) {
  * @param add Whether to make a place for it if there's none, in place of the one counted longest ago.
  * @return What's counted for it, in service; null if there's none and add is false, or the name's too long.
  */
-tracked_of :: fn(service: ptr[mut Service], name: u8[], add: bool) -> ptr[mut Tracked]? {
+tracked_of :: fn(service : ptr[mut Service], name : u8[], add : bool) -> ptr[mut Tracked]? {
     if name.count > account_records.MAX_NAME_BYTES {
         return null
     }
     oldest : usize = 0
     for i in 0..<service.tracked.count {
         each :: &service.tracked[i]
-        if each.name_bytes == name.count && each.name_bytes <= each.name.count && same(each.name[0..<each.name_bytes], name) && each.used != 0 {
+        if each.name_bytes == name.count
+            && each.name_bytes <= each.name.count
+            && same(each.name[0..<each.name_bytes], name)
+            && each.used != 0 {
             return each
         }
         if each.used < service.tracked[oldest].used {
@@ -1514,13 +1719,20 @@ tracked_of :: fn(service: ptr[mut Service], name: u8[], add: bool) -> ptr[mut Tr
  * @param home The home volume's secret, read only.
  * @return True once it's made; false if the storage manager refused.
  */
-make_home #constant_time :: fn(service: ptr[mut Service], name: u8[], home: ptr[crypto.Key256]) -> bool {
+make_home #constant_time :: fn(service : ptr[mut Service], name : u8[], home : ptr[crypto.Key256]) -> bool {
     out := os.Outgoing.{}
     creating :: os.begin[storage.Request](&out)
     // Only the storage manager and the volume server see it, which unwraps the volume's key with it
     passphrase := compiler.declassify(home^)
-    creating^ = .CreateVolume(storage.NewVolume.{partition = service.container, name = home_name(&out, name),
-        passphrase = os.append(&out, passphrase[0..<32]), cipher = cast[u8](slopfs.Cipher.Aes256Gcm), now = now_of()})
+    creating^ = .CreateVolume(
+        storage.NewVolume.{
+            partition = service.container,
+            name = home_name(&out, name),
+            passphrase = os.append(&out, passphrase[0..<32]),
+            cipher = cast[u8](slopfs.Cipher.Aes256Gcm),
+            now = now_of(),
+        }
+    )
     for i in cast[usize](0)..<32 {
         passphrase[i] = 0
     }
@@ -1545,12 +1757,21 @@ make_home #constant_time :: fn(service: ptr[mut Service], name: u8[], home: ptr[
  * @param home The home volume's secret, read only.
  * @return The storage manager's answer: OpenedFiles with the volume's root, or another.
  */
-open_volume_with #constant_time :: fn(service: ptr[mut Service], name: u8[], home: ptr[crypto.Key256]) -> storage.Response {
+open_volume_with #constant_time :: fn(
+    service : ptr[mut Service],
+    name : u8[],
+    home : ptr[crypto.Key256]
+) -> storage.Response {
     out := os.Outgoing.{}
     opening :: os.begin[storage.Request](&out)
     passphrase := compiler.declassify(home^)
-    opening^ = .OpenVolume(storage.VolumeAt.{partition = service.container, name = home_name(&out, name),
-        passphrase = os.append(&out, passphrase[0..<32])})
+    opening^ = .OpenVolume(
+        storage.VolumeAt.{
+            partition = service.container,
+            name = home_name(&out, name),
+            passphrase = os.append(&out, passphrase[0..<32]),
+        }
+    )
     for i in cast[usize](0)..<32 {
         passphrase[i] = 0
     }
@@ -1566,7 +1787,7 @@ open_volume_with #constant_time :: fn(service: ptr[mut Service], name: u8[], hom
  * @param name The account's name; what doesn't fit is cut.
  * @return Where it is in the message.
  */
-home_name :: fn(out: ptr[mut os.Outgoing], name: u8[]) -> slop_os.Relative[u8] {
+home_name :: fn(out : ptr[mut os.Outgoing], name : u8[]) -> slop_os.Relative[u8] {
     bytes : u8[HOME_NAME_BYTES]
     count : usize = 0
     for character in HOME_PREFIX {
@@ -1595,11 +1816,16 @@ home_name :: fn(out: ptr[mut os.Outgoing], name: u8[]) -> slop_os.Relative[u8] {
  * @param passphrase Its passphrase; empty for a plain volume.
  * @return The storage manager's answer: OpenedFiles with its root, NoVolume if there's none of that name, or another.
  */
-open_volume :: fn(service: ptr[mut Service], name: string, passphrase: u8[]) -> storage.Response {
+open_volume :: fn(service : ptr[mut Service], name : string, passphrase : u8[]) -> storage.Response {
     out := os.Outgoing.{}
     opening :: os.begin[storage.Request](&out)
-    opening^ = .OpenVolume(storage.VolumeAt.{partition = service.container, name = os.append(&out, string_bytes(name)),
-        passphrase = os.append(&out, passphrase)})
+    opening^ = .OpenVolume(
+        storage.VolumeAt.{
+            partition = service.container,
+            name = os.append(&out, string_bytes(name)),
+            passphrase = os.append(&out, passphrase),
+        }
+    )
     return ask_storage(service, &out)
 }
 
@@ -1611,7 +1837,7 @@ open_volume :: fn(service: ptr[mut Service], name: string, passphrase: u8[]) -> 
  * @param out The request, put together by the caller, who wipes it if it holds a secret.
  * @return The answer, whose handles are the caller's; Failed if it couldn't be sent or answered.
  */
-ask_storage :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing]) -> storage.Response {
+ask_storage :: fn(service : ptr[mut Service], out : ptr[mut os.Outgoing]) -> storage.Response {
     if storage.send_request(service.manager, service.manager_port, out) is_some {
         return .Failed
     }
@@ -1635,7 +1861,7 @@ ask_storage :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing]) -> stora
  * @return The record; null for a name that isn't valid_name's, no file, or one that isn't a record of a known size and
  *     version, of this name.
  */
-read_record :: fn(service: ptr[mut Service], name: u8[]) -> account_records.AccountRecord? {
+read_record :: fn(service : ptr[mut Service], name : u8[]) -> account_records.AccountRecord? {
     if !account_records.valid_name(name) {
         return null
     }
@@ -1655,7 +1881,12 @@ read_record :: fn(service: ptr[mut Service], name: u8[]) -> account_records.Acco
             view[i] = byte
         }
     }
-    expected :: if contents.count == account_records.RECORD_V1_BYTES { cast[u32](1) } else { account_records.RECORD_VERSION }
+    expected :: if contents.count == account_records.RECORD_V1_BYTES {
+        cast[u32](1)
+    }
+    else {
+        account_records.RECORD_VERSION
+    }
     if cast[u32](record.version) != expected || !same(account_records.name_of(&record), name) {
         return null
     }
@@ -1673,7 +1904,7 @@ read_record :: fn(service: ptr[mut Service], name: u8[]) -> account_records.Acco
  *     out.
  * @return True once it's in place and synced.
  */
-write_record :: fn(service: ptr[mut Service], record: ptr[account_records.AccountRecord]) -> bool {
+write_record :: fn(service : ptr[mut Service], record : ptr[account_records.AccountRecord]) -> bool {
     name :: account_records.name_of(record)
     fresh : u8[PATH_BYTES]
     kept : u8[PATH_BYTES]
@@ -1695,7 +1926,7 @@ write_record :: fn(service: ptr[mut Service], record: ptr[account_records.Accoun
  * @param service The service, whose accounts volume's root is asked, the answer waited for.
  * @return True once it's synced; false if it couldn't be asked, or didn't answer Done.
  */
-sync_store :: fn(service: ptr[mut Service]) -> bool {
+sync_store :: fn(service : ptr[mut Service]) -> bool {
     out := os.Outgoing.{}
     syncing :: os.begin[dir.Request](&out)
     syncing^ = .Sync
@@ -1720,7 +1951,7 @@ sync_store :: fn(service: ptr[mut Service]) -> bool {
  * @param into Where it's written; what doesn't fit is cut.
  * @return The file name, a view of into, good as long as it is.
  */
-path_of :: fn(name: u8[], suffix: string, into: ptr[mut u8[PATH_BYTES]]) -> string {
+path_of :: fn(name : u8[], suffix : string, into : ptr[mut u8[PATH_BYTES]]) -> string {
     count : usize = 0
     for byte in name {
         if count < into.count {
@@ -1754,7 +1985,7 @@ now_of :: fn() -> u64 {
  *
  * @param code The recovery code, all 16 bytes overwritten with zeros in place.
  */
-zero_code #constant_time :: fn(code: ptr[mut account_records.RecoveryCode]) {
+zero_code #constant_time :: fn(code : ptr[mut account_records.RecoveryCode]) {
     for i in cast[usize](0)..<16 {
         code[i] = 0
     }
@@ -1765,7 +1996,7 @@ zero_code #constant_time :: fn(code: ptr[mut account_records.RecoveryCode]) {
  *
  * @param into The message received, every word of it zeroed in place; it can receive the next after.
  */
-wipe :: fn(into: ptr[mut os.Incoming]) {
+wipe :: fn(into : ptr[mut os.Incoming]) {
     for i in 0..<into.words.count {
         into.words[i] = 0
     }
@@ -1776,7 +2007,7 @@ wipe :: fn(into: ptr[mut os.Incoming]) {
  *
  * @param out The message built, every word of it zeroed in place, once it's been sent.
  */
-wipe_out :: fn(out: ptr[mut os.Outgoing]) {
+wipe_out :: fn(out : ptr[mut os.Outgoing]) {
     for i in 0..<out.words.count {
         out.words[i] = 0
     }
@@ -1789,7 +2020,7 @@ wipe_out :: fn(out: ptr[mut os.Outgoing]) {
  * @param b The byte string it's compared with, read only; may be empty.
  * @return True if they're the same bytes.
  */
-same :: fn(a: u8[], b: u8[]) -> bool {
+same :: fn(a : u8[], b : u8[]) -> bool {
     if a.count != b.count {
         return false
     }
@@ -1807,6 +2038,6 @@ same :: fn(a: u8[], b: u8[]) -> bool {
  * @param name The name's bytes, not checked to be UTF-8; the text returned is a view of them.
  * @return It as text, a view of name; empty for none.
  */
-text_of :: fn(name: u8[]) -> string {
+text_of :: fn(name : u8[]) -> string {
     return if name.count == 0 { "" } else { string_of(&name[0], name.count) }
 }

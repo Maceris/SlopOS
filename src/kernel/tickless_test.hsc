@@ -18,7 +18,7 @@ TICKLESS_TICKS : u64 : 60
  *
  * @param kernel The kernel, whose stop_after_ticks it sets; called on the boot CPU at boot.
  */
-start_tickless_test :: fn(kernel: ptr[mut Kernel]) {
+start_tickless_test :: fn(kernel : ptr[mut Kernel]) {
     kernel.stop_after_ticks = TICKLESS_TICKS
 }
 
@@ -30,7 +30,7 @@ start_tickless_test :: fn(kernel: ptr[mut Kernel]) {
  * @param kernel The kernel, whose tickless_baseline holds the count from TICKLESS_FROM.
  * @param tick The boot CPU's tick count, from 1.
  */
-tickless_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
+tickless_test_tick :: fn(kernel : ptr[mut Kernel], tick : u64) {
     if !kernel.options.test_tickless || (tick != TICKLESS_FROM && tick != TICKLESS_TICKS) {
         return void
     }
@@ -38,8 +38,15 @@ tickless_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
         kernel.tickless_baseline = other_timer_interrupts(kernel)
         return void
     }
-    _ = run_tests("test_tickless", testing.Test.[.{name = "idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts",
-        run = idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts}])
+    _ = run_tests(
+        "test_tickless",
+        testing.Test.[
+            .{
+                name = "idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts",
+                run = idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts,
+            }
+        ]
+    )
 }
 
 /**
@@ -49,12 +56,17 @@ tickless_test_tick :: fn(kernel: ptr[mut Kernel], tick: u64) {
  * @param t The test's state.
  * @return Ok once it's run.
  */
-idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
     online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
     testing.expect_ne(t, online, 1, "the test is booted with more than one CPU, so there are others to idle")
     taken :: other_timer_interrupts(kernel) - kernel.tickless_baseline
-    testing.expect_eq(t, taken, 0, "an idle CPU with nothing to run sets no timer deadline, so it takes no timer interrupts")
+    testing.expect_eq(
+        t,
+        taken,
+        0,
+        "an idle CPU with nothing to run sets no timer deadline, so it takes no timer interrupts"
+    )
     return .Ok
 }
 
@@ -64,7 +76,7 @@ idle_cpus_other_than_the_boot_cpu_take_no_timer_interrupts #test :: fn(t: ptr[mu
  * @param kernel The kernel, whose per_cpus are read, each count atomically.
  * @return The sum over each online CPU's PerCpu but the boot CPU's; 0 with one CPU online.
  */
-other_timer_interrupts :: fn(kernel: ptr[Kernel]) -> u64 {
+other_timer_interrupts :: fn(kernel : ptr[Kernel]) -> u64 {
     others := cast[u64](0)
     per_cpus :: kernel.per_cpus
     online :: cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.online_cpus))

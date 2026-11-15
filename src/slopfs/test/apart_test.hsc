@@ -29,7 +29,7 @@ Side :: struct {
  * @param data Whether they're for a file's bytes, which a quota and the reserve hold back.
  * @return The first block; null if there's no room, as space_allocate says.
  */
-side_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
+side_allocate :: fn(context : rawptr, blocks : u64, owner : u64, data : bool) -> u64? {
     side :: cast[ptr[mut Side]](context)
     return slopfs.space_allocate(cast[rawptr](&side.container.space), blocks, side.id, data)
 }
@@ -43,7 +43,7 @@ side_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64
  * @param owner Whose the tree says it is; the Side's ID is used instead.
  * @param birth The transaction it was born in.
  */
-side_release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64) {
+side_release :: fn(context : rawptr, address : u64, blocks : u64, owner : u64, birth : u64) {
     side :: cast[ptr[mut Side]](context)
     slopfs.space_release(cast[rawptr](&side.container.space), address, blocks, side.id, birth)
 }
@@ -66,13 +66,18 @@ Apart :: struct {
  * @return What's made, the caller's to free with free_apart; null if the volume's record or memory for it couldn't
  *     be had.
  */
-apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut Apart]? {
+apart :: fn(container #escaping : ptr[mut slopfs.Container], id : u64) -> ptr[mut Apart]? {
     record :: slopfs.volume_record(container, id) or_return null
     slopfs.close_volume(container, id)
     made := runtime.new(Apart)
     made.side = Side.{container = container, id = id}
-    made.nodes = slopfs.Nodes.{device = container.device, transaction = container.nodes.transaction, space = cast[rawptr](&made.side),
-        allocate = side_allocate, release = side_release}
+    made.nodes = slopfs.Nodes.{
+        device = container.device,
+        transaction = container.nodes.transaction,
+        space = cast[rawptr](&made.side),
+        allocate = side_allocate,
+        release = side_release,
+    }
     match slopfs.attach_volume(&made.nodes, container.device, id, record, null) {
         case Ok(volume) => made.volume = volume
         case Error(error) => {
@@ -90,7 +95,7 @@ apart :: fn(container #escaping : ptr[mut slopfs.Container], id: u64) -> ptr[mut
  * @param made The volume apart, from apart; its nodes start the container's next transaction.
  * @return True if it was committed; false on any error.
  */
-commit_apart :: fn(made: ptr[mut Apart]) -> bool {
+commit_apart :: fn(made : ptr[mut Apart]) -> bool {
     record :: slopfs.write_volume(made.volume) or_return false
     if slopfs.commit_volume(made.side.container, made.side.id, &record) is_error {
         return false
@@ -104,7 +109,7 @@ commit_apart :: fn(made: ptr[mut Apart]) -> bool {
  *
  * @param made The volume apart, from apart; it may not be used again.
  */
-free_apart :: fn(made: ptr[mut Apart]) {
+free_apart :: fn(made : ptr[mut Apart]) {
     for i in 0..<made.nodes.dirty.used.count {
         if i < made.nodes.dirty.used.count && i < made.nodes.dirty.values.count && made.nodes.dirty.used[i] {
             runtime.free(made.nodes.dirty.values[i])
@@ -122,14 +127,16 @@ free_apart :: fn(made: ptr[mut Apart]) {
  * @param name The name looked for, compared byte for byte with each volume's.
  * @return Its ID; 0 if no volume has the name, or it couldn't be looked up.
  */
-volume_id :: fn(container: ptr[mut slopfs.Container], name: string) -> u64 {
+volume_id :: fn(container : ptr[mut slopfs.Container], name : string) -> u64 {
     match slopfs.find_volume(container, name) {
         case Ok(found) => return found or_else 0
         case Error(error) => return 0
     }
 }
 
-volumes_apart_commit_alone_and_a_crash_keeps_each_ones_last_commit_leaking_nothing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+volumes_apart_commit_alone_and_a_crash_keeps_each_ones_last_commit_leaking_nothing #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     device :: formatted(t, BLOCKS, 0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
@@ -141,7 +148,11 @@ volumes_apart_commit_alone_and_a_crash_keeps_each_ones_last_commit_leaking_nothi
     require_done(t, making_b, "a new container has room for a second volume")?
     require_commit(t, container, "the new volumes commit")?
     a :: testing.require_some(t, apart(container, volume_id(container, "a")), "a committed volume is taken apart")?
-    b :: testing.require_some(t, apart(container, volume_id(container, "b")), "a second committed volume is taken apart")?
+    b :: testing.require_some(
+        t,
+        apart(container, volume_id(container, "b")),
+        "a second committed volume is taken apart"
+    )?
     data := runtime.new(Data)
     defer runtime.free(data)
     pattern(data.bytes, 7)
@@ -191,7 +202,11 @@ volumes_apart_commit_alone_and_a_crash_keeps_each_ones_last_commit_leaking_nothi
     mounting_after :: slopfs.mount(device)
     after :: testing.require_ok(t, mounting_after, "the disk as the crash left it mounts")?
     defer slopfs.unmount(after)
-    checks_out(t, after, "after the crash, b's uncommitted blocks aren't leaked, and what it freed uncommitted isn't used twice")
+    checks_out(
+        t,
+        after,
+        "after the crash, b's uncommitted blocks aren't leaked, and what it freed uncommitted isn't used twice"
+    )
     opening_a :: slopfs.open_volume(after, volume_id(after, "a"))
     va :: testing.require_ok(t, opening_a, "a opens after the crash")?
     opening_b :: slopfs.open_volume(after, volume_id(after, "b"))
@@ -206,16 +221,22 @@ volumes_apart_commit_alone_and_a_crash_keeps_each_ones_last_commit_leaking_nothi
         reading :: slopfs.read(va, file or_else 0, 0, back.bytes[0..<300000])
         read :: testing.require_ok(t, reading, "each of a's committed files is there and reads")?
         testing.expect_eq(t, read, 300000, "each of a's committed files is whole")
-        testing.expect_none(t, difference(back.bytes[0..<300000], data.bytes[0..<300000]),
-            "each of a's committed files holds what was written, none of its blocks taken by b's")
+        testing.expect_none(
+            t,
+            difference(back.bytes[0..<300000], data.bytes[0..<300000]),
+            "each of a's committed files holds what was written, none of its blocks taken by b's"
+        )
     }
     looking_old :: slopfs.lookup(vb, slopfs.ROOT_OBJECT, "old")
     kept :: testing.require_ok(t, looking_old, "b's old file is looked up")?
     reading_old :: slopfs.read(vb, kept or_else 0, 0, back.bytes[0..<200000])
     read :: testing.require_ok(t, reading_old, "b's removal wasn't committed, so its old file is there and reads")?
     testing.expect_eq(t, read, 200000, "b's old file is whole")
-    testing.expect_none(t, difference(back.bytes[0..<200000], data.bytes[0..<200000]),
-        "b's old file holds what was written: what b freed uncommitted wasn't given to a")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<200000], data.bytes[0..<200000]),
+        "b's old file holds what was written: what b freed uncommitted wasn't given to a"
+    )
     looking_pending :: slopfs.lookup(vb, slopfs.ROOT_OBJECT, "pending")
     pending_after :: testing.require_ok(t, looking_pending, "b's pending file is looked up")?
     testing.expect_none(t, pending_after, "b's uncommitted file was never there")

@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import iommu_interface from "../iommu_interface"
-import boot_info from "../boot_info"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+import boot_info from "../boot_info"
+import iommu_interface from "../iommu_interface"
 
 // Each architecture's IOMMU package, by one name
 #if TARGET_ARCH == .x86_64 {
@@ -111,8 +111,15 @@ IommuPath :: struct {
  * @error TooManyIommus MAX_IOMMUS are registered already, or MAX_IOMMU_SCOPES scopes; an IOMMU registered before
  *     the scopes ran out stays registered.
  */
-register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physical: u64, size: u64, first: u32, count: u32,
-    stream: u32) -> Result[u32, slop_os.DeviceError] {
+register_iommu :: fn(
+    kernel : ptr[mut Kernel],
+    kind : iommu_interface.IommuKind,
+    physical : u64,
+    size : u64,
+    first : u32,
+    count : u32,
+    stream : u32
+) -> Result[u32, slop_os.DeviceError] {
     if count == 0 || (first & 0xffff) + count > 0x10000 || stream > ~count {
         return .Error(.InvalidSize)
     }
@@ -126,7 +133,8 @@ register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, p
     known := false
     for i in 0..<cast[usize](kernel.iommu_scope_count) {
         scope :: &kernel.iommu_scopes[i % MAX_IOMMU_SCOPES]
-        known = known || (scope.iommu == index && scope.first == first && scope.count == count && scope.stream == stream)
+        known = known
+            || (scope.iommu == index && scope.first == first && scope.count == count && scope.stream == stream)
     }
     slot :: cast[usize](kernel.iommu_scope_count)
     full :: !known && slot >= MAX_IOMMU_SCOPES
@@ -149,7 +157,7 @@ register_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, p
  * @param physical The physical address of its registers.
  * @return Its number, its index in kernel.iommus, or null if none of that kind is registered there.
  */
-find_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physical: u64) -> u32? {
+find_iommu :: fn(kernel : ptr[mut Kernel], kind : iommu_interface.IommuKind, physical : u64) -> u32? {
     for index in 0..<cast[usize](intrinsics.atomic_load_u32_acquire(&kernel.iommu_count)) {
         if index < MAX_IOMMUS && kernel.iommus[index].physical == physical && kernel.iommus[index].kind == kind {
             return cast[u32](index)
@@ -173,7 +181,12 @@ find_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physi
  * @error NoIommu The registers aren't an IOMMU of that kind the kernel can drive; they're unmapped again.
  * @error TooManyIommus MAX_IOMMUS are registered already; the registers are unmapped again.
  */
-add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physical: u64, size: u64) -> Result[u32, slop_os.DeviceError] {
+add_iommu :: fn(
+    kernel : ptr[mut Kernel],
+    kind : iommu_interface.IommuKind,
+    physical : u64,
+    size : u64
+) -> Result[u32, slop_os.DeviceError] {
     mapped := cast[u64](0)
     match map_device(kernel, cast[boot_info.PhysicalAddress](physical), size) {
         case Ok(address) => mapped = address
@@ -194,7 +207,14 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
     again :: find_iommu(kernel, kind, physical)
     full :: (again is_none) && cast[usize](index) >= MAX_IOMMUS
     if (again is_none) && cast[usize](index) < MAX_IOMMUS {
-        kernel.iommus[cast[usize](index)] = RegisteredIommu.{unit = unit, kind = kind, info = info, registers = mapped, physical = physical, size = size}
+        kernel.iommus[cast[usize](index)] = RegisteredIommu.{
+            unit = unit,
+            kind = kind,
+            info = info,
+            registers = mapped,
+            physical = physical,
+            size = size,
+        }
         intrinsics.atomic_store_u32_release(&kernel.iommu_count, index + 1)
     }
     unlock_at(&kernel.iommus_lock, .Iommus)
@@ -202,8 +222,16 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
         unmap_device(kernel, mapped, size)
         return if full { .Error(.TooManyIommus) } else { .Ok(again or_else 0) }
     }
-    runtime.log_info("IOMMU %: %, % KiB of registers at %{#018x}, version %.%, %-bit I/O addresses", index, kind_name(kind), size / 1024,
-        physical, info.major, info.minor, info.address_bits)
+    runtime.log_info(
+        "IOMMU %: %, % KiB of registers at %{#018x}, version %.%, %-bit I/O addresses",
+        index,
+        kind_name(kind),
+        size / 1024,
+        physical,
+        info.major,
+        info.minor,
+        info.address_bits
+    )
     start_translation(kernel, index)
     return .Ok(index)
 }
@@ -214,7 +242,7 @@ add_iommu :: fn(kernel: ptr[mut Kernel], kind: iommu_interface.IommuKind, physic
  * @param kind The kind; any not VT-d, AMD-Vi or SMMUv3 is named as RISC-V's.
  * @return Its name, a string literal: "VT-d", "AMD-Vi", "SMMUv3" or "RISC-V IOMMU".
  */
-kind_name :: fn(kind: iommu_interface.IommuKind) -> string {
+kind_name :: fn(kind : iommu_interface.IommuKind) -> string {
     if kind == .VtD {
         return "VT-d"
     }
@@ -231,7 +259,7 @@ kind_name :: fn(kind: iommu_interface.IommuKind) -> string {
  * @return The interface's kind, or null for a value that's no kind; whether the kernel can drive it is found when
  *     it's identified.
  */
-iommu_kind :: fn(kind: u32) -> iommu_interface.IommuKind? {
+iommu_kind :: fn(kind : u32) -> iommu_interface.IommuKind? {
     if kind == cast[u32](slop_os.IommuKind.VtD) {
         return iommu_interface.IommuKind.VtD
     }
@@ -256,13 +284,15 @@ iommu_kind :: fn(kind: u32) -> iommu_interface.IommuKind? {
  * @param address The device's address (slop_os.device_address), its segment in the upper 16 bits.
  * @return The IOMMU's number plus one and the device's stream there, or a path with iommu 0 if no scope covers it.
  */
-iommu_path :: fn(kernel: ptr[mut Kernel], address: u32) -> IommuPath {
+iommu_path :: fn(kernel : ptr[mut Kernel], address : u32) -> IommuPath {
     path := IommuPath.{}
     narrowest := cast[u32](0)
     lock_at(&kernel.iommus_lock, .Iommus)
     for i in 0..<cast[usize](kernel.iommu_scope_count) {
         scope :: &kernel.iommu_scopes[i % MAX_IOMMU_SCOPES]
-        if address >> 16 == scope.first >> 16 && address >= scope.first && address - scope.first < scope.count
+        if address >> 16 == scope.first >> 16
+            && address >= scope.first
+            && address - scope.first < scope.count
             && (path.iommu == 0 || scope.count < narrowest) {
             path = IommuPath.{iommu = scope.iommu + 1, stream = scope.stream + (address - scope.first)}
             narrowest = scope.count

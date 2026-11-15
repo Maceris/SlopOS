@@ -4,12 +4,12 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import programs from "../../protocols/programs"
-import powerbox from "../../protocols/powerbox"
+import bundle from "../../bundle"
 import config from "../../protocols/config"
+import powerbox from "../../protocols/powerbox"
+import programs from "../../protocols/programs"
 import session from "../../protocols/session"
 import system_records from "../../system_records"
-import bundle from "../../bundle"
 
 /*
  * What a session's shell asks of its own session (decisions/0179, 11e4): its programs running, an installation of it
@@ -32,12 +32,13 @@ UserList :: struct {
 /**
  * Open a session's user's list in the config store, declared, so it reads as empty before it's written.
  *
- * @param sessions The session manager, whose config store connection for users' values is asked, waiting for its answer.
+ * @param sessions The session manager, whose config store connection for users' values is asked, waiting for its
+ *     answer.
  * @param number The session's number; one past MAX_SESSIONS, or without a user, has no list.
  * @return The list's connection, the caller's to close with close_user_list; null without the store, for a session
  *     without a user, or if it couldn't be opened or declared.
  */
-open_user_list :: fn(sessions: ptr[mut Manager], number: u32) -> UserList? {
+open_user_list :: fn(sessions : ptr[mut Manager], number : u32) -> UserList? {
     if sessions.settings_end == NONE || cast[usize](number) >= sessions.sessions.count {
         return null
     }
@@ -49,7 +50,9 @@ open_user_list :: fn(sessions: ptr[mut Manager], number: u32) -> UserList? {
     count :: owner_of(user_of(made), "", &owner)
     out := os.Outgoing.{}
     request :: os.begin[config.Request](&out)
-    request^ = .ValueFor(config.ValueFor.{owner = os.append(&out, owner[0..<count]), name = os.append(&out, string_bytes(USER_LIST))})
+    request^ = .ValueFor(
+        config.ValueFor.{owner = os.append(&out, owner[0..<count]), name = os.append(&out, string_bytes(USER_LIST))}
+    )
     into := os.Incoming.{}
     connection :: match config.ask(sessions.settings_end, sessions.settings_port, &out, &into) {
         case Opened(opened) => config.Config[system_records.Installations].{end = opened.end}
@@ -73,7 +76,7 @@ open_user_list :: fn(sessions: ptr[mut Manager], number: u32) -> UserList? {
  *
  * @param list What open_user_list gave; not used after.
  */
-close_user_list :: fn(list: UserList) {
+close_user_list :: fn(list : UserList) {
     _ = slop_os.handle_close(cast[slop_os.Handle](list.port))
     _ = slop_os.handle_close(cast[slop_os.Handle](list.connection.end))
 }
@@ -86,7 +89,7 @@ close_user_list :: fn(list: UserList) {
  * @return The list; empty for a session without a user, without the store, before it's written, or if it can't be read
  *     or isn't valid.
  */
-read_user_installations :: fn(sessions: ptr[mut Manager], number: u32) -> system_records.Installations {
+read_user_installations :: fn(sessions : ptr[mut Manager], number : u32) -> system_records.Installations {
     list :: open_user_list(sessions, number) or_return system_records.Installations.{}
     defer close_user_list(list)
     value := os.Outgoing.{}
@@ -109,7 +112,11 @@ read_user_installations :: fn(sessions: ptr[mut Manager], number: u32) -> system
  * @return Whether the store kept it; false for a session without a user, without the store, or for a list that isn't
  *     valid.
  */
-write_user_installations :: fn(sessions: ptr[mut Manager], number: u32, given: system_records.Installations) -> bool {
+write_user_installations :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    given : system_records.Installations
+) -> bool {
     written := given
     written.set = 1
     if system_records.installations_check(&written) is_some {
@@ -119,7 +126,8 @@ write_user_installations :: fn(sessions: ptr[mut Manager], number: u32, given: s
     defer close_user_list(list)
     value := os.Outgoing.{}
     os.begin[system_records.Installations](&value)^ = written
-    fields :: config.field_bit[system_records.Installations]("count") | config.field_bit[system_records.Installations]("set")
+    fields :: config.field_bit[system_records.Installations]("count")
+        | config.field_bit[system_records.Installations]("set")
         | config.field_bit[system_records.Installations]("entries")
     return config.write(list.connection, list.port, os.value_bytes(&value), fields) is_ok
 }
@@ -131,7 +139,7 @@ write_user_installations :: fn(sessions: ptr[mut Manager], number: u32, given: s
  * @param sessions The session manager.
  * @param number The session's number; one without a user has none.
  */
-start_user_installations :: fn(sessions: ptr[mut Manager], number: u32) {
+start_user_installations :: fn(sessions : ptr[mut Manager], number : u32) {
     list :: read_user_installations(sessions, number)
     for i in cast[usize](0)..<list.entries.count {
         if i < cast[usize](list.count) {
@@ -150,11 +158,25 @@ start_user_installations :: fn(sessions: ptr[mut Manager], number: u32) {
  * @param out The answer's message, which items are appended to.
  * @return The answer.
  */
-own_session_answer :: fn(sessions: ptr[mut Manager], number: u32, request: programs.Request, into: ptr[os.Incoming], out: ptr[mut os.Outgoing]) -> programs.Response {
+own_session_answer :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    request : programs.Request,
+    into : ptr[os.Incoming],
+    out : ptr[mut os.Outgoing]
+) -> programs.Response {
     return match request {
         case Running => running_programs(sessions, number, out)
         case EndInstallation(name) => end_installation(sessions, number, text_from(os.items(into, name)))
-        case Install(installing) => install(sessions, number, text_from(os.items(into, installing.name)), text_from(os.items(into, installing.program)), out)
+        case Install(
+            installing
+        ) => install(
+            sessions,
+            number,
+            text_from(os.items(into, installing.name)),
+            text_from(os.items(into, installing.program)),
+            out
+        )
         case Uninstall(name) => uninstall_users(sessions, number, text_from(os.items(into, name)))
         case Installation(index) => installation_at(sessions, number, index, out)
         case Powerbox(name) => powerbox_answer(sessions, number, text_from(os.items(into, name)))
@@ -170,7 +192,7 @@ own_session_answer :: fn(sessions: ptr[mut Manager], number: u32, request: progr
  * @param out The answer's message, the programs appended to it.
  * @return RunningPrograms.
  */
-running_programs :: fn(sessions: ptr[mut Manager], number: u32, out: ptr[mut os.Outgoing]) -> programs.Response {
+running_programs :: fn(sessions : ptr[mut Manager], number : u32, out : ptr[mut os.Outgoing]) -> programs.Response {
     listed : session.Program[session.MAX_PROGRAMS]
     count :: list(sessions, number, &listed)
     running : programs.RunningProgram[programs.MAX_RUNNING]
@@ -181,8 +203,14 @@ running_programs :: fn(sessions: ptr[mut Manager], number: u32, out: ptr[mut os.
         }
         index :: cast[usize](each.index)
         installed :: index < sessions.programs.count && sessions.programs[index].installation
-        running[made] = programs.RunningProgram.{name = each.name, name_bytes = each.name_bytes, responding = each.responding,
-            installation = if installed { cast[u8](1) } else { cast[u8](0) }, memory = each.memory, memory_limit = each.memory_limit}
+        running[made] = programs.RunningProgram.{
+            name = each.name,
+            name_bytes = each.name_bytes,
+            responding = each.responding,
+            installation = if installed { cast[u8](1) } else { cast[u8](0) },
+            memory = each.memory,
+            memory_limit = each.memory_limit,
+        }
         // What it ran and what services ran and charged for it (decisions/0185, 12h)
         if index < sessions.programs.count {
             program :: &sessions.programs[index]
@@ -211,10 +239,13 @@ running_programs :: fn(sessions: ptr[mut Manager], number: u32, out: ptr[mut os.
  * @param name The installation's name.
  * @return Done once it's ended; Refused(NotInstalled) if no installation of the session's is running by that name.
  */
-end_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> programs.Response {
+end_installation :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> programs.Response {
     for i in 0..<sessions.count {
-        if i < sessions.programs.count && sessions.programs[i].running && sessions.programs[i].installation
-            && sessions.programs[i].session == number && name_of(&sessions.programs[i]) == name {
+        if i < sessions.programs.count
+            && sessions.programs[i].running
+            && sessions.programs[i].installation
+            && sessions.programs[i].session == number
+            && name_of(&sessions.programs[i]) == name {
             _ = end_program(sessions, i, "as its session's shell asked")
             return .Done
         }
@@ -234,7 +265,13 @@ end_installation :: fn(sessions: ptr[mut Manager], number: u32, name: string) ->
  * @return Done once it's listed, started where it can be; NeedsParameter with a parameter it can't go without that an
  *     installation isn't given; Refused with why otherwise.
  */
-install :: fn(sessions: ptr[mut Manager], number: u32, name: string, program: string, out: ptr[mut os.Outgoing]) -> programs.Response {
+install :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    name : string,
+    program : string,
+    out : ptr[mut os.Outgoing]
+) -> programs.Response {
     if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].user_bytes == 0 {
         return .Refused(.NoUser)
     }
@@ -266,7 +303,12 @@ install :: fn(sessions: ptr[mut Manager], number: u32, name: string, program: st
     if !write_user_installations(sessions, number, users) {
         return .Refused(.Failed)
     }
-    runtime.log_info("installed % (%) for %", name, program, text_from(user_of(&sessions.sessions[cast[usize](number)])))
+    runtime.log_info(
+        "installed % (%) for %",
+        name,
+        program,
+        text_from(user_of(&sessions.sessions[cast[usize](number)]))
+    )
     for other in user_sessions(sessions, number) {
         _ = start_installation(sessions, other, entry)
     }
@@ -285,13 +327,20 @@ install :: fn(sessions: ptr[mut Manager], number: u32, name: string, program: st
  *     NoUser for a session without a user, Failed if the snapshot or the list couldn't be written, when nothing's
  *     changed.
  */
-uninstall_users :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> programs.Response {
+uninstall_users :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> programs.Response {
     if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].user_bytes == 0 {
         return .Refused(.NoUser)
     }
     users :: read_user_installations(sessions, number)
     if !has_installation(users, name) {
-        return .Refused(if has_installation(read_installations(sessions), name) { programs.InstallProblem.Systems } else { programs.InstallProblem.NotInstalled })
+        return .Refused(
+            if has_installation(read_installations(sessions), name) {
+                programs.InstallProblem.Systems
+            }
+            else {
+                programs.InstallProblem.NotInstalled
+            }
+        )
     }
     if !snapshot_home(sessions, number) {
         return .Refused(.Failed)
@@ -328,15 +377,26 @@ uninstall_users :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> 
  * @param out The answer's message, its names appended to it.
  * @return Listed; End past the last.
  */
-installation_at :: fn(sessions: ptr[mut Manager], number: u32, index: u32, out: ptr[mut os.Outgoing]) -> programs.Response {
+installation_at :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    index : u32,
+    out : ptr[mut os.Outgoing]
+) -> programs.Response {
     systems :: read_installations(sessions)
     users :: read_user_installations(sessions, number)
     at := cast[usize](index)
     for list, i in system_records.Installations.[systems, users] {
         if at < cast[usize](list.count) && at < list.entries.count {
             entry :: &list.entries[at]
-            return .Listed(programs.Installed.{name = os.append(out, string_bytes(system_records.text_of(&entry.name))),
-                program = os.append(out, string_bytes(system_records.text_of(&entry.program))), users = i == 1, next = index + 1})
+            return .Listed(
+                programs.Installed.{
+                    name = os.append(out, string_bytes(system_records.text_of(&entry.name))),
+                    program = os.append(out, string_bytes(system_records.text_of(&entry.program))),
+                    users = i == 1,
+                    next = index + 1,
+                }
+            )
         }
         at -= if at < cast[usize](list.count) { at } else { cast[usize](list.count) }
     }
@@ -350,7 +410,7 @@ installation_at :: fn(sessions: ptr[mut Manager], number: u32, index: u32, out: 
  * @param number The session's number.
  * @return Whether it was taken; false without an apps directory, or if its volume refused.
  */
-snapshot_home :: fn(sessions: ptr[mut Manager], number: u32) -> bool {
+snapshot_home :: fn(sessions : ptr[mut Manager], number : u32) -> bool {
     if cast[usize](number) >= sessions.sessions.count {
         return false
     }
@@ -383,7 +443,7 @@ snapshot_home :: fn(sessions: ptr[mut Manager], number: u32) -> bool {
  * @param number The session's number, below MAX_SESSIONS.
  * @return Their numbers, on the heap, never freed; empty for a number past MAX_SESSIONS.
  */
-user_sessions :: fn(sessions: ptr[mut Manager], number: u32) -> u32[] {
+user_sessions :: fn(sessions : ptr[mut Manager], number : u32) -> u32[] {
     found : u32[..]
     if cast[usize](number) >= sessions.sessions.count {
         return found[0..<0]
@@ -404,7 +464,7 @@ user_sessions :: fn(sessions: ptr[mut Manager], number: u32) -> u32[] {
  * @param name The name.
  * @return True if one of its first count entries has it.
  */
-has_installation :: fn(list: system_records.Installations, name: string) -> bool {
+has_installation :: fn(list : system_records.Installations, name : string) -> bool {
     for i in cast[usize](0)..<list.entries.count {
         if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) == name {
             return true
@@ -420,7 +480,7 @@ has_installation :: fn(list: system_records.Installations, name: string) -> bool
  * @param into The field, filled with the name and zeros after it.
  * @return Whether it's such a name; into is left zeros, or part filled, if not.
  */
-record_of :: fn(name: string, into: ptr[mut u8[system_records.NAME_BYTES]]) -> bool {
+record_of :: fn(name : string, into : ptr[mut u8[system_records.NAME_BYTES]]) -> bool {
     bytes :: string_bytes(name)
     if bytes.count == 0 || bytes.count > programs.MAX_INSTALLATION_NAME {
         return false
@@ -440,7 +500,7 @@ record_of :: fn(name: string, into: ptr[mut u8[system_records.NAME_BYTES]]) -> b
  * @param b The other.
  * @return True if they have the same bytes.
  */
-same_bytes :: fn(a: u8[], b: u8[]) -> bool {
+same_bytes :: fn(a : u8[], b : u8[]) -> bool {
     if a.count != b.count {
         return false
     }
@@ -458,7 +518,7 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
  * @param bytes UTF-8, a view of the message.
  * @return A view of them as a string, "" for none.
  */
-text_from :: fn(bytes: u8[]) -> string {
+text_from :: fn(bytes : u8[]) -> string {
     if bytes.count == 0 {
         return ""
     }
@@ -474,13 +534,19 @@ text_from :: fn(bytes: u8[]) -> string {
  * @param number The session's number.
  * @param end The connection's end, which moves to the session manager; closed if there's no room, or it can't be bound.
  */
-add_finder :: fn(sessions: ptr[mut Manager], number: u32, end: slop_os.Channel, powerbox: bool = false) {
+add_finder :: fn(sessions : ptr[mut Manager], number : u32, end : slop_os.Channel, powerbox : bool = false) {
     for &finder, i in sessions.finders {
         if finder.in_use {
             continue
         }
         signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-        if slop_os.port_bind(sessions.port, cast[slop_os.Handle](end), signals, FINDER_KEY + cast[u64](i), .Persistent) is_error {
+        if slop_os.port_bind(
+            sessions.port,
+            cast[slop_os.Handle](end),
+            signals,
+            FINDER_KEY + cast[u64](i),
+            .Persistent
+        ) is_error {
             break
         }
         finder^ = Finder.{in_use = true, session = number, end = end, powerbox = powerbox}
@@ -495,7 +561,7 @@ add_finder :: fn(sessions: ptr[mut Manager], number: u32, end: slop_os.Channel, 
  * @param sessions The session manager.
  * @param index Its index among the finders; one not in use is left as it is.
  */
-drop_finder :: fn(sessions: ptr[mut Manager], index: usize) {
+drop_finder :: fn(sessions : ptr[mut Manager], index : usize) {
     if index >= sessions.finders.count || !sessions.finders[index].in_use {
         return void
     }
@@ -506,12 +572,13 @@ drop_finder :: fn(sessions: ptr[mut Manager], index: usize) {
 
 /**
  * Answer what each finding connection has asked, until it's asked nothing more: Find, List and Describe as a shell's
- * programs connection answers them, Connect with another finder, and Unsupported to the rest. One that's gone is let go.
+ * programs connection answers them, Connect with another finder, and Unsupported to the rest. One that's gone is let
+ * go.
  *
  * @param sessions The session manager.
  * @param into Where each request is received, reused.
  */
-serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
+serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
     for i in 0..<sessions.finders.count {
         loop {
             if i >= sessions.finders.count || !sessions.finders[i].in_use {
@@ -541,12 +608,31 @@ serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
                     add_finder(sessions, sessions.finders[i].session, connection.end)
                     continue
                 }
-                case Powerbox(name) => response^ = powerbox_answer(sessions, sessions.finders[i].session, text_from(os.items(into, name)))
-                case Locate(name) => response^ = if sessions.finders[i].powerbox {
-                    programs.Response.Located(locate_program(sessions, sessions.finders[i].session, text_from(os.items(into, name))))
-                } else { programs.Response.Refused(.NotAllowed) }
-                case Attach(attaching) => response^ = attach_program(sessions, sessions.finders[i].session, sessions.finders[i].powerbox,
-                    text_from(os.items(into, attaching.name)), attaching.port, attaching.key, attaching.elevated, &out)
+                case Powerbox(
+                    name
+                ) => response^ = powerbox_answer(sessions, sessions.finders[i].session, text_from(os.items(into, name)))
+                case Locate(
+                    name
+                ) => response^ = if sessions.finders[i].powerbox {
+                    programs.Response.Located(
+                        locate_program(sessions, sessions.finders[i].session, text_from(os.items(into, name)))
+                    )
+                }
+                else {
+                    programs.Response.Refused(.NotAllowed)
+                }
+                case Attach(
+                    attaching
+                ) => response^ = attach_program(
+                    sessions,
+                    sessions.finders[i].session,
+                    sessions.finders[i].powerbox,
+                    text_from(os.items(into, attaching.name)),
+                    attaching.port,
+                    attaching.key,
+                    attaching.elevated,
+                    &out
+                )
                 case _ => response^ = .Unsupported
             }
             _ = programs.send_response(end, sessions.port, &out)
@@ -564,7 +650,7 @@ serve_finders :: fn(sessions: ptr[mut Manager], into: ptr[mut os.Incoming]) {
  * @param name Its name, as its program's.
  * @param name_bytes How many of name's bytes are its.
  */
-remember_pressed :: fn(sessions: ptr[mut Manager], number: u32, name: u8[session.NAME_BYTES], name_bytes: u8) {
+remember_pressed :: fn(sessions : ptr[mut Manager], number : u32, name : u8[session.NAME_BYTES], name_bytes : u8) {
     for &pressed in sessions.pressed {
         if !pressed.in_use {
             pressed^ = Pressed.{in_use = true, session = number, name = name, name_bytes = name_bytes}
@@ -581,14 +667,17 @@ remember_pressed :: fn(sessions: ptr[mut Manager], number: u32, name: u8[session
  * @param sessions The session manager.
  * @param number The session shown; NO_SESSION starts none.
  */
-restart_pressed :: fn(sessions: ptr[mut Manager], number: u32) {
+restart_pressed :: fn(sessions : ptr[mut Manager], number : u32) {
     for &pressed in sessions.pressed {
         if !pressed.in_use || pressed.session != number {
             continue
         }
         pressed.in_use = false
         name :: text_from(first_bytes(pressed.name[0..<pressed.name.count], cast[usize](pressed.name_bytes)))
-        for list in system_records.Installations.[read_installations(sessions), read_user_installations(sessions, number)] {
+        for list in system_records.Installations.[
+            read_installations(sessions),
+            read_user_installations(sessions, number)
+        ] {
             for i in cast[usize](0)..<list.entries.count {
                 if i < cast[usize](list.count) && system_records.text_of(&list.entries[i].name) == name {
                     runtime.log_info("starting % again in session %, stopped under memory pressure", name, number)
@@ -606,7 +695,7 @@ restart_pressed :: fn(sessions: ptr[mut Manager], number: u32) {
  * @param count How many of its bytes are used; past its end, all of them.
  * @return A view of them.
  */
-first_bytes :: fn(bytes: u8[], count: usize) -> u8[] {
+first_bytes :: fn(bytes : u8[], count : usize) -> u8[] {
     if count > bytes.count {
         return bytes
     }
@@ -622,7 +711,7 @@ first_bytes :: fn(bytes: u8[], count: usize) -> u8[] {
  * @return PowerboxGiven with the connection's end, the shell's; Refused(Failed) for a session without a powerbox, or
  *     if it couldn't be made.
  */
-powerbox_answer :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> programs.Response {
+powerbox_answer :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> programs.Response {
     return match powerbox_for(sessions, number, name) {
         case Some(made) => programs.Response.PowerboxGiven(made)
         case None => programs.Response.Refused(.Failed)
@@ -648,8 +737,16 @@ powerbox_answer :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> 
  * @return Attached, with the program's process, intercept, address space, image and program name, each handle the
  *     powerbox's; or Refused.
  */
-attach_program :: fn(sessions: ptr[mut Manager], number: u32, from_powerbox: bool, name: string, port: slop_os.Port, key: u64,
-    elevated: bool, out: ptr[mut os.Outgoing]) -> programs.Response {
+attach_program :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    from_powerbox : bool,
+    name : string,
+    port : slop_os.Port,
+    key : u64,
+    elevated : bool,
+    out : ptr[mut os.Outgoing]
+) -> programs.Response {
     if !from_powerbox {
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
         return .Refused(.NotAllowed)
@@ -675,7 +772,9 @@ attach_program :: fn(sessions: ptr[mut Manager], number: u32, from_powerbox: boo
     index :: found or_else sessions.programs.count
     if index >= sessions.programs.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
-        return .Refused(if elsewhere { programs.InstallProblem.NeedsAdministrator } else { programs.InstallProblem.NotRunning })
+        return .Refused(
+            if elsewhere { programs.InstallProblem.NeedsAdministrator } else { programs.InstallProblem.NotRunning }
+        )
     }
     program :: &sessions.programs[index]
     // Its faults' intercept let go, so the debugger's can be attached
@@ -701,13 +800,26 @@ attach_program :: fn(sessions: ptr[mut Manager], number: u32, from_powerbox: boo
     }
     // The port's bound by the intercept now, so the session manager's handle to it can go
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT) | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT)
+        | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     process :: slop_os.handle_duplicate(cast[slop_os.Handle](program.process), rights) or_else slop_os.NO_HANDLE
     runtime.log_info("attached a debugger to %", name)
     program_name :: if cast[usize](program.program_bytes) <= program.program_name.count && program.program_bytes > 0 {
-        program.program_name[0..<cast[usize](program.program_bytes)] } else { program.name[0..<0] }
-    return .Attached(powerbox.Attached.{process = cast[slop_os.Process](process), intercept = intercept, space = space,
-        image = program.image, program = os.append(out, program_name)})
+        program.program_name[0..<cast[usize](program.program_bytes)]
+    }
+    else {
+        program.name[0..<0]
+    }
+    return .Attached(
+        powerbox.Attached.{
+            process = cast[slop_os.Process](process),
+            intercept = intercept,
+            space = space,
+            image = program.image,
+            program = os.append(out, program_name),
+        }
+    )
 }
 
 /**
@@ -718,7 +830,7 @@ attach_program :: fn(sessions: ptr[mut Manager], number: u32, from_powerbox: boo
  * @param name The program's name, as its session runs it.
  * @return Here if the asking session runs it, Elsewhere if only another session does, Nowhere if none does.
  */
-locate_program :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> programs.Location {
+locate_program :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> programs.Location {
     found := programs.Location.Nowhere
     for &program, i in sessions.programs {
         if i >= sessions.count || !program.running || cast[usize](program.name_bytes) > program.name.count {
@@ -734,4 +846,3 @@ locate_program :: fn(sessions: ptr[mut Manager], number: u32, name: string) -> p
     }
     return found
 }
-

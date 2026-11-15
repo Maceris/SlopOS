@@ -1,10 +1,10 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import lifecycle from "std:os/slop_os/lifecycle"
+import shell_language as language from "../../shell_language"
 
 /*
  * The profiler (decisions/0183, 12d): profile name arguments runs a program as a call would, its intercept sampling
@@ -62,10 +62,11 @@ Hot :: struct {
  * @return Null once it's ended and its profile's said; an error if there's no program, or it couldn't be made or
  *     started.
  */
-profile_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+profile_program :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     call :: prepare_recorded(shell, tree, "profile")?
     defer end_call(call)
-    port :: slop_os.port_create(slop_os.startup_block().budget) or_return error_at(tree.at, "there's no memory to profile it")
+    port :: slop_os.port_create(slop_os.startup_block().budget)
+        or_return error_at(tree.at, "there's no memory to profile it")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     match start_profiled(shell, call, port) {
         case Some(error) => return .Error(error)
@@ -112,17 +113,31 @@ profile_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
  * @param port The profiler's port.
  * @return Null once it's started; why it didn't otherwise.
  */
-start_profiled :: fn(shell: ptr[mut Shell], call: ptr[mut Call], port: slop_os.Port) -> EvalError? {
+start_profiled :: fn(shell : ptr[mut Shell], call : ptr[mut Call], port : slop_os.Port) -> EvalError? {
     tree :: call.tree
-    manager :: shell.manager or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
-    ends :: lifecycle.make(slop_os.startup_block().budget) or_return EvalError.{message = "there's no memory to start it", at = tree.at}
-    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = PROFILE_END_KEY}, lifecycle = ends.b,
-        faults = os.LaunchFaults.{port = port, key = PROFILE_STOP_KEY}}
+    manager :: shell.manager
+        or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
+    ends :: lifecycle.make(slop_os.startup_block().budget)
+        or_return EvalError.{message = "there's no memory to start it", at = tree.at}
+    options := os.LaunchOptions.{
+        watch = os.LaunchWatch.{port = port, key = PROFILE_END_KEY},
+        lifecycle = ends.b,
+        faults = os.LaunchFaults.{port = port, key = PROFILE_STOP_KEY},
+    }
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
     budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
-    match os.launch_named(manager, shell.manager_port, tree.text, call.executable, budget, call.grants, call.values, options) {
+    match os.launch_named(
+        manager,
+        shell.manager_port,
+        tree.text,
+        call.executable,
+        budget,
+        call.grants,
+        call.values,
+        options
+    ) {
         case Ok(made) => {
             call.started = true
             call.launched = made
@@ -148,7 +163,7 @@ start_profiled :: fn(shell: ptr[mut Shell], call: ptr[mut Call], port: slop_os.P
  * @param places The program counters counted so far, which grow.
  * @return How many samples were taken.
  */
-take_samples :: fn(intercept: slop_os.Intercept, places: ptr[mut Place[..]]) -> u64 {
+take_samples :: fn(intercept : slop_os.Intercept, places : ptr[mut Place[..]]) -> u64 {
     total : u64 = 0
     samples : slop_os.Sample[64]
     loop {
@@ -173,7 +188,7 @@ take_samples :: fn(intercept: slop_os.Intercept, places: ptr[mut Place[..]]) -> 
  * @param address The program counter.
  * @param fiber The fiber running, 0 for none.
  */
-count_place :: fn(places: ptr[mut Place[..]], address: u64, fiber: u64) {
+count_place :: fn(places : ptr[mut Place[..]], address : u64, fiber : u64) {
     for &place in places^ {
         if place.address == address && place.fiber == fiber {
             place.count += 1
@@ -191,7 +206,7 @@ count_place :: fn(places: ptr[mut Place[..]], address: u64, fiber: u64) {
  * @param places The program counters sampled, on which fibers, the most first.
  * @param names Each place's function, as say_hot named it, in places' order; a place past them is "elsewhere".
  */
-say_fiber_samples :: fn(shell: ptr[mut Shell], places: ptr[Place[..]], names: ptr[string[..]]) {
+say_fiber_samples :: fn(shell : ptr[mut Shell], places : ptr[Place[..]], names : ptr[string[..]]) {
     named :: names^
     fibers : SampledFiber[..]
     defer runtime.array_free(&fibers)
@@ -234,7 +249,13 @@ say_fiber_samples :: fn(shell: ptr[mut Shell], places: ptr[Place[..]], names: pt
  * @param total How many samples there were in all.
  * @param names Where each named place's function goes, in places' order, on the heap: the first PROFILE_PLACES.
  */
-say_hot :: fn(shell: ptr[mut Shell], call: ptr[Call], places: ptr[mut Place[..]], total: u64, names: ptr[mut string[..]]) {
+say_hot :: fn(
+    shell : ptr[mut Shell],
+    call : ptr[Call],
+    places : ptr[mut Place[..]],
+    total : u64,
+    names : ptr[mut string[..]]
+) {
     image :: call.launched.image
     offsets : u64[PROFILE_PLACES]
     count : usize = 0
@@ -284,7 +305,7 @@ say_hot :: fn(shell: ptr[mut Shell], call: ptr[Call], places: ptr[mut Place[..]]
  * @param line "name+0x1c", or "?".
  * @return "name", on the heap; "?" or an empty line as "elsewhere".
  */
-function_of :: fn(line: string) -> string {
+function_of :: fn(line : string) -> string {
     bytes :: string_bytes(line)
     end := bytes.count
     for byte, i in bytes {
@@ -304,7 +325,7 @@ function_of :: fn(line: string) -> string {
  *
  * @param places The places, sorted in place.
  */
-sort_places :: fn(places: mut Place[]) {
+sort_places :: fn(places : mut Place[]) {
     for i in cast[usize](1)..<places.count {
         j := i
         loop {
@@ -328,7 +349,7 @@ sort_places :: fn(places: mut Place[]) {
  *
  * @param fibers The fibers, sorted in place.
  */
-sort_sampled :: fn(fibers: mut SampledFiber[]) {
+sort_sampled :: fn(fibers : mut SampledFiber[]) {
     for i in cast[usize](1)..<fibers.count {
         j := i
         loop {
@@ -352,7 +373,7 @@ sort_sampled :: fn(fibers: mut SampledFiber[]) {
  *
  * @param hot The functions, sorted in place.
  */
-sort_hot :: fn(hot: mut Hot[]) {
+sort_hot :: fn(hot : mut Hot[]) {
     for i in cast[usize](1)..<hot.count {
         j := i
         loop {

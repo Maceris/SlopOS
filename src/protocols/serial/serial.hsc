@@ -67,7 +67,7 @@ Response :: union {
  * @return False for Write, which sends the same bytes twice, and Read, which takes bytes another Read would have; true
  *     for Features and Connect.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Write(_) => false
         case Read(_) => false
@@ -91,7 +91,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Serial]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Serial]? {
     pair :: os.channel_for[Serial](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

@@ -31,8 +31,14 @@ MOST_ACPI_MEMORY : u64 : 16 * 1024 * 1024
  * @return ClaimedAcpi with a read-only copy of the tables and the SCI's IRQ, NO_HANDLE if it can't be made; NoDevice
  *     without a FADT and a DSDT, or if they can't be copied.
  */
-claim_acpi :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, tables: u64, size: u64)
-    -> protocol.Response {
+claim_acpi :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    client : usize,
+    tables : u64,
+    size : u64
+) -> protocol.Response {
     if (pci.firmware_table(tables, size, "FACP") is_none) || (pci.firmware_table(tables, size, "DSDT") is_none) {
         return .NoDevice
     }
@@ -51,7 +57,7 @@ claim_acpi :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mu
  * @param client The client, by its index.
  * @return True if it claimed ACPI last.
  */
-is_acpi :: fn(state: ptr[Platform], client: usize) -> bool {
+is_acpi :: fn(state : ptr[Platform], client : usize) -> bool {
     return state.acpi_claimed && state.acpi_claimer == client
 }
 
@@ -64,14 +70,20 @@ is_acpi :: fn(state: ptr[Platform], client: usize) -> bool {
  * @param range The ports.
  * @return GivenPorts; Refused for another client, ports past 65535, or among PCI_PORTS'.
  */
-give_ports :: fn(platform: slop_os.Platform, state: ptr[Platform], client: usize, range: protocol.PortRange) -> protocol.Response {
+give_ports :: fn(
+    platform : slop_os.Platform,
+    state : ptr[Platform],
+    client : usize,
+    range : protocol.PortRange
+) -> protocol.Response {
     if !is_acpi(state, client) || range.count == 0 || range.first > 0xffff || range.count > 0x10000 - range.first {
         return .Refused
     }
     if range.first < PCI_PORTS + PCI_PORT_COUNT && PCI_PORTS < range.first + range.count {
         return .Refused
     }
-    ports :: slop_os.io_ports_create(platform, slop_os.startup_block().budget, range.first, range.count) or_return .Refused
+    ports :: slop_os.io_ports_create(platform, slop_os.startup_block().budget, range.first, range.count)
+        or_return .Refused
     return .GivenPorts(ports)
 }
 
@@ -85,8 +97,16 @@ give_ports :: fn(platform: slop_os.Platform, state: ptr[Platform], client: usize
  * @return GivenMemory; Refused for another client, a range over MOST_ACPI_MEMORY, or one overlapping RAM the kernel
  *     owns or the host bridge's ECAM.
  */
-give_memory :: fn(platform: slop_os.Platform, state: ptr[Platform], client: usize, range: protocol.MemoryRange) -> protocol.Response {
-    if !is_acpi(state, client) || range.size == 0 || range.size > MOST_ACPI_MEMORY || range.address > 0xffffffffffffffff - range.size {
+give_memory :: fn(
+    platform : slop_os.Platform,
+    state : ptr[Platform],
+    client : usize,
+    range : protocol.MemoryRange
+) -> protocol.Response {
+    if !is_acpi(state, client)
+        || range.size == 0
+        || range.size > MOST_ACPI_MEMORY
+        || range.address > 0xffffffffffffffff - range.size {
         return .Refused
     }
     base :: range.address & ~(PAGE - 1)
@@ -99,7 +119,8 @@ give_memory :: fn(platform: slop_os.Platform, state: ptr[Platform], client: usiz
     if state.host.ecam != 0 && overlaps(base, size, state.host.ecam, pci.ecam_size(&state.host)) {
         return .Refused
     }
-    memory :: slop_os.memory_create_physical(platform, slop_os.startup_block().budget, base, size, .Device) or_return .Refused
+    memory :: slop_os.memory_create_physical(platform, slop_os.startup_block().budget, base, size, .Device)
+        or_return .Refused
     return .GivenMemory(memory)
 }
 
@@ -111,7 +132,7 @@ give_memory :: fn(platform: slop_os.Platform, state: ptr[Platform], client: usiz
  * @return The register's address in the mapping; null for a function the host bridge doesn't reach, a width that
  *     isn't 8, 16 or 32, or an access past the function's 4 KiB or not aligned to its width.
  */
-config_register :: fn(state: ptr[Platform], access: protocol.ConfigAccess) -> u64? {
+config_register :: fn(state : ptr[Platform], access : protocol.ConfigAccess) -> u64? {
     host :: &state.host
     if state.ecam == 0 {
         return null
@@ -139,7 +160,7 @@ config_register :: fn(state: ptr[Platform], access: protocol.ConfigAccess) -> u6
  * @param access The access.
  * @return ConfigValue; Refused for another client, or an access config_register refuses.
  */
-config_read :: fn(state: ptr[Platform], client: usize, access: protocol.ConfigAccess) -> protocol.Response {
+config_read :: fn(state : ptr[Platform], client : usize, access : protocol.ConfigAccess) -> protocol.Response {
     if !is_acpi(state, client) {
         return .Refused
     }
@@ -164,7 +185,7 @@ config_read :: fn(state: ptr[Platform], client: usize, access: protocol.ConfigAc
  * @param access The access.
  * @return Done; Refused for another client, an access config_register refuses, or one reaching those registers.
  */
-config_write :: fn(state: ptr[Platform], client: usize, access: protocol.ConfigAccess) -> protocol.Response {
+config_write :: fn(state : ptr[Platform], client : usize, access : protocol.ConfigAccess) -> protocol.Response {
     if !is_acpi(state, client) {
         return .Refused
     }
@@ -173,7 +194,10 @@ config_write :: fn(state: ptr[Platform], client: usize, access: protocol.ConfigA
     offset :: register & 4095
     bytes :: cast[u64](access.width / 8)
     header :: pci.read_u8(function, 0x0e) & 0x7f
-    if header == 0 && (overlaps(offset, bytes, 0x04, 2) || overlaps(offset, bytes, 0x10, 0x18) || overlaps(offset, bytes, 0x30, 4)) {
+    if header == 0
+        && (overlaps(offset, bytes, 0x04, 2)
+            || overlaps(offset, bytes, 0x10, 0x18)
+            || overlaps(offset, bytes, 0x30, 4)) {
         return .Refused
     }
     if access.width == 8 {
@@ -201,8 +225,15 @@ config_write :: fn(state: ptr[Platform], client: usize, access: protocol.ConfigA
  * @param size Its bytes.
  * @return Done; Refused for another client, a FADT without PM1a's control block, or the kernel refusing them.
  */
-give_sleep_types :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[Platform], client: usize, types: protocol.SleepTypes,
-    tables: u64, size: u64) -> protocol.Response {
+give_sleep_types :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[Platform],
+    client : usize,
+    types : protocol.SleepTypes,
+    tables : u64,
+    size : u64
+) -> protocol.Response {
     if !is_acpi(state, client) {
         return .Refused
     }
@@ -211,10 +242,21 @@ give_sleep_types :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: 
     if fadt.pm1a_control == 0 {
         return .Refused
     }
-    match slop_os.power_set_off(platform, cast[u32](fadt.pm1a_control), cast[u32](fadt.pm1b_control), cast[u32](types.a), cast[u32](types.b)) {
+    match slop_os.power_set_off(
+        platform,
+        cast[u32](fadt.pm1a_control),
+        cast[u32](fadt.pm1b_control),
+        cast[u32](types.a),
+        cast[u32](types.b)
+    ) {
         case Ok => {
-            log_line.write(to, "platform: the machine turns off with S5's sleep types % and %, by PM1 control port %", types.a, types.b,
-                fadt.pm1a_control)
+            log_line.write(
+                to,
+                "platform: the machine turns off with S5's sleep types % and %, by PM1 control port %",
+                types.a,
+                types.b,
+                fadt.pm1a_control
+            )
             return .Done
         }
         case Error(error) => {

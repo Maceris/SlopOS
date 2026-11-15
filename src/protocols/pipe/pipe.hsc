@@ -51,7 +51,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return False for both: what was read or written would be again.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
         case Write(_) => false

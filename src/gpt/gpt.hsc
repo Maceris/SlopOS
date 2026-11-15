@@ -139,7 +139,7 @@ Disk :: struct #scoped {
      * Read count blocks, from block first, into into, which holds at least count * BLOCK_BYTES bytes; true if they
      * were read, false if the disk couldn't be read there.
      */
-    read : fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool,
+    read : fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool,
 }
 
 /** Why a disk's table couldn't be read. */
@@ -167,7 +167,7 @@ ReadError :: enum {
  * @error BadEntries The primary's header checks out but its entries don't, and the backup didn't give a table.
  * @error Unreadable The primary's header or entries couldn't be read, and the backup didn't give a table.
  */
-read_table :: fn(disk: ptr[Disk], buffer: mut u8[]) -> Result[Table, ReadError] {
+read_table :: fn(disk : ptr[Disk], buffer : mut u8[]) -> Result[Table, ReadError] {
     if disk.block_count < 2 * (ENTRY_BLOCKS + 2) || cast[u64](buffer.count) < ENTRY_BLOCKS * BLOCK_BYTES {
         return .Error(.NoTable)
     }
@@ -198,7 +198,7 @@ read_table :: fn(disk: ptr[Disk], buffer: mut u8[]) -> Result[Table, ReadError] 
  *     before it starts.
  * @error Unreadable The header's block or its entries couldn't be read, or buffer can't hold the entries.
  */
-read_at :: fn(disk: ptr[Disk], at: u64, buffer: mut u8[]) -> Result[Table, ReadError] {
+read_at :: fn(disk : ptr[Disk], at : u64, buffer : mut u8[]) -> Result[Table, ReadError] {
     header_block : u8[512]
     if !disk.read(disk.context, at, 1, header_block) {
         return .Error(.Unreadable)
@@ -209,14 +209,20 @@ read_at :: fn(disk: ptr[Disk], at: u64, buffer: mut u8[]) -> Result[Table, ReadE
     }
     entries_bytes :: cast[u64](cast[u32](header.entry_count)) * cast[u64](cast[u32](header.entry_size))
     blocks :: (entries_bytes + BLOCK_BYTES - 1) / BLOCK_BYTES
-    if blocks > ENTRY_BLOCKS || buffer.count == 0 || entries_bytes > cast[u64](buffer.count)
+    if blocks > ENTRY_BLOCKS
+        || buffer.count == 0
+        || entries_bytes > cast[u64](buffer.count)
         || !disk.read(disk.context, cast[u64](header.entries_block), blocks, buffer) {
         return .Error(.Unreadable)
     }
     if crc32(view_of(&buffer[0], cast[usize](entries_bytes))) != cast[u32](header.entries_crc) {
         return .Error(.BadEntries)
     }
-    table := Table.{disk_guid = header.disk_guid, first_usable = cast[u64](header.first_usable), last_usable = cast[u64](header.last_usable)}
+    table := Table.{
+        disk_guid = header.disk_guid,
+        first_usable = cast[u64](header.first_usable),
+        last_usable = cast[u64](header.last_usable),
+    }
     for index in 0..<cast[u64](cast[u32](header.entry_count)) {
         if cast[usize](table.count) >= table.partitions.count {
             break
@@ -235,8 +241,13 @@ read_at :: fn(disk: ptr[Disk], at: u64, buffer: mut u8[]) -> Result[Table, ReadE
         if first < table.first_usable || last > table.last_usable || last < first {
             return .Error(.BadEntries)
         }
-        partition := Partition.{first = first, count = last - first + 1, type_guid = entry.type_guid, unique_guid = entry.unique_guid,
-            attributes = cast[u64](entry.attributes)}
+        partition := Partition.{
+            first = first,
+            count = last - first + 1,
+            type_guid = entry.type_guid,
+            unique_guid = entry.unique_guid,
+            attributes = cast[u64](entry.attributes),
+        }
         partition.name_length = utf8_of_name(&entry.name, &partition.name)
         table.partitions[cast[usize](table.count)] = partition
         table.count += 1
@@ -257,16 +268,20 @@ read_at :: fn(disk: ptr[Disk], at: u64, buffer: mut u8[]) -> Result[Table, ReadE
  * @param block_count The disk's size in blocks.
  * @return True if every check passes; false if any fails.
  */
-header_checks_out :: fn(header: ptr[Header], block: u8[], at: u64, block_count: u64) -> bool {
+header_checks_out :: fn(header : ptr[Header], block : u8[], at : u64, block_count : u64) -> bool {
     for character, i in SIGNATURE {
         if i >= header.signature.count || header.signature[i] != cast[u8](character) {
             return false
         }
     }
     size :: cast[u32](header.header_size)
-    if cast[u32](header.revision) != REVISION || size < HEADER_BYTES || cast[u64](size) > BLOCK_BYTES
-        || cast[u64](header.my_block) != at || cast[u32](header.entry_size) != ENTRY_BYTES
-        || cast[u32](header.entry_count) == 0 || cast[u32](header.entry_count) > ENTRY_COUNT {
+    if cast[u32](header.revision) != REVISION
+        || size < HEADER_BYTES
+        || cast[u64](size) > BLOCK_BYTES
+        || cast[u64](header.my_block) != at
+        || cast[u32](header.entry_size) != ENTRY_BYTES
+        || cast[u32](header.entry_count) == 0
+        || cast[u32](header.entry_count) > ENTRY_COUNT {
         return false
     }
     copy : u8[512]
@@ -295,7 +310,7 @@ header_checks_out :: fn(header: ptr[Header], block: u8[], at: u64, block_count: 
  * @param into Where the UTF-8 goes, from its start; bytes past the returned length are left as they were.
  * @return The UTF-8 length in bytes, 0 to NAME_BYTES. An unpaired surrogate becomes '?'.
  */
-utf8_of_name :: fn(name: ptr[u16le[NAME_UNITS]], into: ptr[mut u8[NAME_BYTES]]) -> u32 {
+utf8_of_name :: fn(name : ptr[u16le[NAME_UNITS]], into : ptr[mut u8[NAME_BYTES]]) -> u32 {
     length : usize = 0
     i : usize = 0
     loop {
@@ -335,7 +350,7 @@ utf8_of_name :: fn(name: ptr[u16le[NAME_UNITS]], into: ptr[mut u8[NAME_BYTES]]) 
  * @return Where the next code point goes: at plus its 1 to 4 bytes, or at unchanged if they didn't fit, so nothing
  *     was written.
  */
-put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
+put_utf8 :: fn(into : ptr[mut u8[NAME_BYTES]], at : usize, code : u32) -> usize {
     bytes : u8[4]
     count : usize = 0
     if code < 0x80 {
@@ -378,7 +393,7 @@ put_utf8 :: fn(into: ptr[mut u8[NAME_BYTES]], at: usize, code: u32) -> usize {
  * @param partition The partition, as read_table filled it.
  * @return Its name, UTF-8, possibly empty: a view into partition's name, good as long as the partition is.
  */
-name_of :: fn(partition: ptr[Partition]) -> string {
+name_of :: fn(partition : ptr[Partition]) -> string {
     return string_of(&partition.name[0], cast[usize](partition.name_length))
 }
 
@@ -388,7 +403,7 @@ name_of :: fn(partition: ptr[Partition]) -> string {
  * @param guid The GUID, as its 16 bytes are on disk.
  * @return True if all 16 bytes are zero.
  */
-is_zero :: fn(guid: Guid) -> bool {
+is_zero :: fn(guid : Guid) -> bool {
     for byte in guid {
         if byte != 0 {
             return false
@@ -403,7 +418,7 @@ is_zero :: fn(guid: Guid) -> bool {
  * @param bytes The bytes, possibly none.
  * @return The CRC; 0 for no bytes.
  */
-crc32 :: fn(bytes: u8[]) -> u32 {
+crc32 :: fn(bytes : u8[]) -> u32 {
     crc := cast[u32](0xffffffff)
     for byte in bytes {
         crc ~= cast[u32](byte)
@@ -450,15 +465,19 @@ NewPartition :: struct {
  * @return True if the table was written; false if the image or disk is too small, there are too many partitions,
  *     or one is empty or outside the usable blocks.
  */
-write_table :: fn(image: mut u8[], block_count: u64, disk_guid: Guid, partitions: NewPartition[]) -> bool {
-    if cast[u64](image.count) < block_count * BLOCK_BYTES || block_count < 2 * (ENTRY_BLOCKS + 2) || partitions.count > cast[usize](ENTRY_COUNT) {
+write_table :: fn(image : mut u8[], block_count : u64, disk_guid : Guid, partitions : NewPartition[]) -> bool {
+    if cast[u64](image.count) < block_count * BLOCK_BYTES
+        || block_count < 2 * (ENTRY_BLOCKS + 2)
+        || partitions.count > cast[usize](ENTRY_COUNT) {
         return false
     }
     first_usable :: ENTRY_BLOCKS + 2
     last_usable :: block_count - ENTRY_BLOCKS - 2
     entries : u8[16384]
     for partition, index in partitions {
-        if partition.count == 0 || partition.first < first_usable || partition.first + partition.count - 1 > last_usable {
+        if partition.count == 0
+            || partition.first < first_usable
+            || partition.first + partition.count - 1 > last_usable {
             return false
         }
         at :: index * cast[usize](ENTRY_BYTES)
@@ -495,7 +514,16 @@ write_table :: fn(image: mut u8[], block_count: u64, disk_guid: Guid, partitions
         put_u8(image, backup + i, byte)
     }
     put_header(image, 1, block_count - 1, 2, first_usable, last_usable, disk_guid, entries_crc)
-    put_header(image, block_count - 1, 1, block_count - ENTRY_BLOCKS - 1, first_usable, last_usable, disk_guid, entries_crc)
+    put_header(
+        image,
+        block_count - 1,
+        1,
+        block_count - ENTRY_BLOCKS - 1,
+        first_usable,
+        last_usable,
+        disk_guid,
+        entries_crc
+    )
     return true
 }
 
@@ -514,12 +542,29 @@ write_table :: fn(image: mut u8[], block_count: u64, disk_guid: Guid, partitions
  *     same in both copies of the header.
  * @param entries_crc The CRC32 of the ENTRY_COUNT entries' bytes.
  */
-put_header :: fn(image: mut u8[], at: u64, alternate: u64, entries_block: u64, first_usable: u64, last_usable: u64, disk_guid: Guid,
-    entries_crc: u32) {
-    header := Header.{revision = cast[u32le](REVISION), header_size = cast[u32le](HEADER_BYTES), my_block = cast[u64le](at),
-        alternate_block = cast[u64le](alternate), first_usable = cast[u64le](first_usable), last_usable = cast[u64le](last_usable),
-        disk_guid = disk_guid, entries_block = cast[u64le](entries_block), entry_count = cast[u32le](ENTRY_COUNT),
-        entry_size = cast[u32le](ENTRY_BYTES), entries_crc = cast[u32le](entries_crc)}
+put_header :: fn(
+    image : mut u8[],
+    at : u64,
+    alternate : u64,
+    entries_block : u64,
+    first_usable : u64,
+    last_usable : u64,
+    disk_guid : Guid,
+    entries_crc : u32
+) {
+    header := Header.{
+        revision = cast[u32le](REVISION),
+        header_size = cast[u32le](HEADER_BYTES),
+        my_block = cast[u64le](at),
+        alternate_block = cast[u64le](alternate),
+        first_usable = cast[u64le](first_usable),
+        last_usable = cast[u64le](last_usable),
+        disk_guid = disk_guid,
+        entries_block = cast[u64le](entries_block),
+        entry_count = cast[u32le](ENTRY_COUNT),
+        entry_size = cast[u32le](ENTRY_BYTES),
+        entries_crc = cast[u32le](entries_crc),
+    }
     for character, i in SIGNATURE {
         if i < header.signature.count {
             header.signature[i] = cast[u8](character)
@@ -539,7 +584,7 @@ put_header :: fn(image: mut u8[], at: u64, alternate: u64, entries_block: u64, f
  * @param at The byte offset; past the image's end, nothing is written.
  * @param value The byte, any value.
  */
-put_u8 :: fn(image: mut u8[], at: usize, value: u8) {
+put_u8 :: fn(image : mut u8[], at : usize, value : u8) {
     if at < image.count {
         image[at] = value
     }
@@ -552,7 +597,7 @@ put_u8 :: fn(image: mut u8[], at: usize, value: u8) {
  * @param at The byte offset of its first byte.
  * @param value The value, any u32, written low byte first.
  */
-put_u32 :: fn(image: mut u8[], at: usize, value: u32) {
+put_u32 :: fn(image : mut u8[], at : usize, value : u32) {
     for i in 0..<cast[usize](4) {
         put_u8(image, at + i, cast[u8]((value >> (8 * cast[u32](i))) & 0xff))
     }

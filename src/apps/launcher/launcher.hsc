@@ -1,6 +1,7 @@
 /**
  * The launcher (decisions/0192, 15e): a GUI session's first program. It lists the bundle store's GUI programs, those
- * whose manifest is a GUI program's entry (src/gui_programs), by name, itself left out, and starts the one clicked, giving it a
+ * whose manifest is a GUI program's entry (src/gui_programs), by name, itself left out, and starts the one clicked,
+ * giving it a
  * connection to the compositor of its own, its own connection to the process manager, and a programs connection that
  * only finds programs. It says what it lists and starts in its debug log: "lists <n> programs", "started <name>".
  */
@@ -9,11 +10,11 @@ package launcher
 import runtime from "base:runtime"
 import crypto from "std:crypto"
 import os from "std:os"
-import schema from "std:schema"
-import ui from "std:ui"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import process_manager from "std:os/slop_os/process_manager"
+import schema from "std:schema"
+import ui from "std:ui"
 import gui_kit from "../../gui_kit"
 import gui_programs from "../../gui_programs"
 import programs from "../../protocols/programs"
@@ -65,8 +66,13 @@ Launcher :: struct {
  * @return 0 once its window's closed; 2 without a compositor, the process manager or a programs connection, or when its
  *     window can't be made.
  */
-main :: fn(log: slop_os.DebugLog?, surface: os.Channel[surface.Surface]?, home: os.Channel[dir.Dir]?,
-    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[programs.Programs]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    surface : os.Channel[surface.Surface]?,
+    home : os.Channel[dir.Dir]?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    programs : os.Channel[programs.Programs]?
+) -> int {
     startup :: slop_os.startup_block()
     launcher :: runtime.new(Launcher)
     launcher.manager = manager or_return 2
@@ -91,7 +97,7 @@ main :: fn(log: slop_os.DebugLog?, surface: os.Channel[surface.Surface]?, home: 
 }
 
 /** Ask the programs connection something, giving its answer. */
-ask :: fn(launcher: ptr[mut Launcher], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> programs.Response? {
+ask :: fn(launcher : ptr[mut Launcher], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> programs.Response? {
     if programs.send_request(launcher.programs.end, launcher.programs_port, out) is_some {
         return null
     }
@@ -102,7 +108,7 @@ ask :: fn(launcher: ptr[mut Launcher], out: ptr[mut os.Outgoing], into: ptr[mut 
 }
 
 /** List the bundle store's programs whose manifest is a GUI program's entry. */
-list_programs :: fn(launcher: ptr[mut Launcher]) {
+list_programs :: fn(launcher : ptr[mut Launcher]) {
     expected :: schema.hash(type_info_of(type_of(gui_programs.shape)))
     into := os.Incoming.{}
     for index in cast[u32](0)..<256 {
@@ -122,8 +128,11 @@ list_programs :: fn(launcher: ptr[mut Launcher]) {
             }
             case _ => return void
         }
-        found :: find(launcher, name_of(&name)) or_else programs.Program.{executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
-            manifest = cast[slop_os.Memory](slop_os.NO_HANDLE)}
+        found :: find(launcher, name_of(&name))
+            or_else programs.Program.{
+                executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
+                manifest = cast[slop_os.Memory](slop_os.NO_HANDLE),
+            }
         // Itself not among them: it's running
         gui :: manifest_hash(found.manifest, found.manifest_size) == expected && !is_named(&name, "launcher")
         _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
@@ -136,7 +145,7 @@ list_programs :: fn(launcher: ptr[mut Launcher]) {
 }
 
 /** Find a program by name: its executable and manifest, the caller's to close. */
-find :: fn(launcher: ptr[mut Launcher], name: u8[]) -> programs.Program? {
+find :: fn(launcher : ptr[mut Launcher], name : u8[]) -> programs.Program? {
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
     request^ = .Find(os.append(&out, name))
@@ -149,14 +158,21 @@ find :: fn(launcher: ptr[mut Launcher], name: u8[]) -> programs.Program? {
 }
 
 /** A manifest's schema hash: BLAKE3 of its bytes; all zeros when it can't be read. */
-manifest_hash :: fn(manifest: slop_os.Memory, size: u64) -> u8[32] {
+manifest_hash :: fn(manifest : slop_os.Memory, size : u64) -> u8[32] {
     hashed : u8[32]
     if size == 0 || size > 1 << 20 {
         return hashed
     }
     mapped :: (size + 4095) / 4096 * 4096
     address :: runtime.reserve_addresses(cast[usize](mapped)) or_return hashed
-    if slop_os.memory_map(manifest, slop_os.startup_block().space, address, 0, mapped, slop_os.PROTECTION_READ) is_error {
+    if slop_os.memory_map(
+        manifest,
+        slop_os.startup_block().space,
+        address,
+        0,
+        mapped,
+        slop_os.PROTECTION_READ
+    ) is_error {
         return hashed
     }
     hasher := crypto.blake3_start()
@@ -167,7 +183,7 @@ manifest_hash :: fn(manifest: slop_os.Memory, size: u64) -> u8[32] {
 }
 
 /** A frame: the programs, a button each; the one clicked started. */
-frame :: fn(launcher: ptr[mut Launcher]) {
+frame :: fn(launcher : ptr[mut Launcher]) {
     u :: gui_kit.begin(launcher.window)
     _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 12, padding_y = 12, gap = 8})
     _ = ui.label(u, "Programs", ui.TextStyle.{size = 18})
@@ -190,7 +206,7 @@ frame :: fn(launcher: ptr[mut Launcher]) {
 }
 
 /** Start a program it lists, with its grants. */
-start :: fn(launcher: ptr[mut Launcher], listed: Listed) {
+start :: fn(launcher : ptr[mut Launcher], listed : Listed) {
     if listed.name_count == 0 || listed.name_count > listed.name.count {
         return void
     }
@@ -202,26 +218,35 @@ start :: fn(launcher: ptr[mut Launcher], listed: Listed) {
     grants := gui_programs.GuiGrants.{
         surface = surface.connect(launcher.window.end, launcher.window.port, budget),
         manager = process_manager.connect(launcher.manager.end, launcher.manager_port, budget),
-        programs = programs.connect(launcher.programs.end, launcher.programs_port, budget)}
-    match os.launch(launcher.manager, launcher.manager_port, name, found.executable, PROGRAM_BUDGET, gui_programs.shape, grants) {
+        programs = programs.connect(launcher.programs.end, launcher.programs_port, budget),
+    }
+    match os.launch(
+        launcher.manager,
+        launcher.manager_port,
+        name,
+        found.executable,
+        PROGRAM_BUDGET,
+        gui_programs.shape,
+        grants
+    ) {
         case Ok(_) => runtime.log_info("started %", name)
         case Error(_) => runtime.log_info("% didn't start", name)
     }
 }
 
 /** A program's name as it's listed. */
-name_of :: fn(listed: ptr[Listed]) -> u8[] {
+name_of :: fn(listed : ptr[Listed]) -> u8[] {
     kept :: listed.name[0..<NAME_BYTES]
     return if listed.name_count <= kept.count { kept[0..<listed.name_count] } else { kept }
 }
 
 /** Bytes as text. */
-string_of_bytes :: fn(bytes: u8[]) -> string {
+string_of_bytes :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
 /** Whether a program's listed name is a name. */
-is_named :: fn(listed: ptr[Listed], name: string) -> bool {
+is_named :: fn(listed : ptr[Listed], name : string) -> bool {
     bytes :: name_of(listed)
     other :: string_bytes(name)
     if bytes.count != other.count {

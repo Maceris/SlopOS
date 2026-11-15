@@ -2,8 +2,8 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import robustness from "../robustness"
 import boot_info from "../boot_info"
+import robustness from "../robustness"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -58,7 +58,7 @@ StopReason :: enum #backed_by(u8) {
  * @param reason Why the kernel stopped: the code given to the emulator with test_exit, and the reason sealed in the
  *     panic record for a fault.
  */
-stop :: fn(reason: StopReason) #never_returns {
+stop :: fn(reason : StopReason) #never_returns {
     if intrinsics.carrier().program_data == null {
         arch.halt()
     }
@@ -88,7 +88,7 @@ stop :: fn(reason: StopReason) #never_returns {
  * @param options The command line's options, of which only test_exit is read.
  * @param reason The code the emulator exits with, under test_exit.
  */
-stop_with :: fn(options: ptr[Options], reason: StopReason) #never_returns {
+stop_with :: fn(options : ptr[Options], reason : StopReason) #never_returns {
     runtime.log_info("halting")
     if options.test_exit {
         arch.test_exit(cast[u32](reason))
@@ -105,7 +105,7 @@ stop_with :: fn(options: ptr[Options], reason: StopReason) #never_returns {
  * @param command_line The command line the bootloader passed, or empty if it passed none.
  * @param message Why booting failed, logged as a fatal line.
  */
-boot_failed :: fn(command_line: string, message: string) #never_returns {
+boot_failed :: fn(command_line : string, message : string) #never_returns {
     runtime.log_fatal(message)
     options :: parse_command_line(command_line)
     stop_with(&options, .BootFailed)

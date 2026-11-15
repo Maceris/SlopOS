@@ -35,14 +35,16 @@ ADDRESS_BITS : u64 : 0x0000ffffffffffff
  * @param kernel The kernel, whose options say which run.
  * @param ticks The boot CPU's ticks so far.
  */
-control_flow_test_tick :: fn(kernel: ptr[Kernel], ticks: u64) {
+control_flow_test_tick :: fn(kernel : ptr[Kernel], ticks : u64) {
     if ticks != CONTROL_FLOW_TEST_TICK {
         return void
     }
     on :: arch.kernel_control_flow()
     if kernel.options.test_tamper {
         if !on.signed_returns && !on.shadow_stack {
-            runtime.log_info("test_tamper: skipped: the kernel has neither signed returns nor a shadow stack on this CPU")
+            runtime.log_info(
+                "test_tamper: skipped: the kernel has neither signed returns nor a shadow stack on this CPU"
+            )
         }
         else {
             runtime.log_info("test_tamper: returning through a tampered return address")
@@ -52,7 +54,9 @@ control_flow_test_tick :: fn(kernel: ptr[Kernel], ticks: u64) {
     }
     if kernel.options.test_branch {
         if !on.landing_pads {
-            runtime.log_info("test_branch: skipped: the kernel's indirect branches aren't checked for landing pads on this CPU")
+            runtime.log_info(
+                "test_branch: skipped: the kernel's indirect branches aren't checked for landing pads on this CPU"
+            )
         }
         else {
             runtime.log_info("test_branch: branching into the middle of a function")
@@ -77,10 +81,10 @@ control_flow_test_tick :: fn(kernel: ptr[Kernel], ticks: u64) {
  *
  * @param address The function's address, or one inside it; it takes nothing and gives nothing.
  */
-call_unseen :: fn(address: u64) {
+call_unseen :: fn(address : u64) {
     kept := address
     unseen :: intrinsics.volatile_load_u64(&kept)
-    cast[fn()](cast[rawptr](cast[uintptr](unseen)))()
+    cast[(fn())](cast[rawptr](cast[uintptr](unseen)))()
 }
 
 /**

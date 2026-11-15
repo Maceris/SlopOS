@@ -95,12 +95,14 @@ Found :: struct {
     /** The record, rendered as text, as UTF-8. */
     text : slop_os.Relative[u8],
     /**
-     * Its first argument's schema hash (decisions/0185, 12g), so a reader can tell a typed record it knows, like a crash
+     * Its first argument's schema hash (decisions/0185, 12g), so a reader can tell a typed record it knows, like a
+     * crash
      * report; all zeros for a record without one.
      */
     argument_hash : u8[32],
     /**
-     * That argument's value, as schema_write_value wrote it, which schema.read_value reads; empty without one, or for one
+     * That argument's value, as schema_write_value wrote it, which schema.read_value reads; empty without one, or for
+     * one
      * bigger than ARGUMENT_LIMIT.
      */
     argument : slop_os.Relative[u8],
@@ -176,7 +178,7 @@ Response :: union {
  * @return False for Open, which opens another ring, and Retire and Adopt, whose handles were given; true for Store
  *     and Budget, which again change nothing, Query, which only reads, and Connect.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Open(_) => false
         case Store(_) => true
@@ -203,7 +205,12 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The answer, copied out of into; Unsupported if the request couldn't be sent, the connection's gone, or its
  *     answer isn't the protocol.
  */
-ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
+ask :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -227,7 +234,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
  * @return What to launch the program with as os.LaunchEvents: the ring's owning handle and the doorbell's end, the
  *     caller's; null if the service refused, or couldn't be asked.
  */
-open :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> os.LaunchEvents? {
+open :: fn(end : slop_os.Channel, port : slop_os.Port, name : string) -> os.LaunchEvents? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .Open(os.append(&out, string_bytes(name)))
@@ -247,7 +254,7 @@ open :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> os.LaunchE
  * @param bytes The most bytes of its records kept, from MIN_BUDGET up.
  * @return True once it's set; false if the service refused, or couldn't be asked.
  */
-set_budget :: fn(end: slop_os.Channel, port: slop_os.Port, name: string, bytes: u64) -> bool {
+set_budget :: fn(end : slop_os.Channel, port : slop_os.Port, name : string, bytes : u64) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .Budget(BudgetOf.{source = os.append(&out, string_bytes(name)), bytes = bytes})

@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../arch_interface"
-import boot_info from "../boot_info"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
+import boot_info from "../boot_info"
 import frames from "frames"
 import slab from "slab"
 
@@ -121,7 +121,7 @@ Memory :: struct #align(16) {
  * @param generation The generation the holder was made at; a memory object since destroyed isn't counted, as its
  *     count goes with it.
  */
-hold_memory :: fn(object: u64, generation: u32) {
+hold_memory :: fn(object : u64, generation : u32) {
     if is_live(object, generation) {
         _ = intrinsics.interlocked_increment_u64(&cast[ptr[mut Memory]](object).held)
     }
@@ -139,7 +139,7 @@ hold_memory :: fn(object: u64, generation: u32) {
  * @param object The memory object, as an address.
  * @param generation The generation the holder was made at; a memory object since destroyed is passed by.
  */
-let_go_of_memory :: fn(kernel: ptr[mut Kernel], object: u64, generation: u32) {
+let_go_of_memory :: fn(kernel : ptr[mut Kernel], object : u64, generation : u32) {
     if !is_live(object, generation) {
         return void
     }
@@ -186,7 +186,7 @@ MemoryMapping :: struct {
  * @param size The memory's size in bytes, a whole number of pages.
  * @return The bytes, a whole number of frames: one for the directory, and one per PAGES_PER_LEAF pages or part of it.
  */
-page_array_bytes :: fn(size: u64) -> u64 {
+page_array_bytes :: fn(size : u64) -> u64 {
     pages :: size / frames.FRAME_SIZE
     leaves :: (pages + PAGES_PER_LEAF - 1) / PAGES_PER_LEAF
     return (1 + leaves) * frames.FRAME_SIZE
@@ -208,7 +208,12 @@ page_array_bytes :: fn(size: u64) -> u64 {
  * @error OutOfMemory No slot or frames for it or its page array; nothing is left.
  * @error ObjectGone The owner is being destroyed; the memory is destroyed again.
  */
-create_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64) -> Result[ptr[mut Memory], slop_os.MemoryError] {
+create_memory :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    size : u64
+) -> Result[ptr[mut Memory], slop_os.MemoryError] {
     return create_memory_charging(kernel, owner, budget, size, size)
 }
 
@@ -229,15 +234,24 @@ create_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64)
  * @error OutOfMemory No slot or frames for it or its page array; nothing is left.
  * @error ObjectGone The owner is being destroyed; the memory is destroyed again.
  */
-create_memory_charging :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64, charged: u64)
-    -> Result[ptr[mut Memory], slop_os.MemoryError] {
+create_memory_charging :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    size : u64,
+    charged : u64
+) -> Result[ptr[mut Memory], slop_os.MemoryError] {
     if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
         return .Error(.InvalidSize)
     }
     object := cast[u64](0)
     match new_object(kernel, .Memory, budget, charged + page_array_bytes(size)) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.MemoryError.BudgetExceeded } else { slop_os.MemoryError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.MemoryError.BudgetExceeded } else { slop_os.MemoryError.OutOfMemory }
+        )
     }
     memory :: cast[ptr[mut Memory]](object)
     memory.size = size
@@ -287,18 +301,31 @@ create_memory_charging :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, s
  * @error OutOfMemory No slot for it.
  * @error ObjectGone The owner is being destroyed; the memory is destroyed again.
  */
-create_device_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, physical: u64, size: u64, cache: arch_interface.CacheMode)
-    -> Result[ptr[mut Memory], slop_os.DeviceError] {
+create_device_memory :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    physical : u64,
+    size : u64,
+    cache : arch_interface.CacheMode
+) -> Result[ptr[mut Memory], slop_os.DeviceError] {
     if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
         return .Error(.InvalidSize)
     }
-    if physical == 0 || physical & (frames.FRAME_SIZE - 1) != 0 || physical > ~size || overlaps_kernel_ram(kernel, physical, size) {
+    if physical == 0
+        || physical & (frames.FRAME_SIZE - 1) != 0
+        || physical > ~size
+        || overlaps_kernel_ram(kernel, physical, size) {
         return .Error(.BadAddress)
     }
     object := cast[u64](0)
     match new_object(kernel, .Memory, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory }
+        )
     }
     memory :: cast[ptr[mut Memory]](object)
     memory.size = size
@@ -326,8 +353,9 @@ create_device_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
  * @param physical The device memory's first physical address.
  * @param size Its size in bytes.
  */
-give_up_framebuffer :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64) {
-    if kernel.framebuffer_size == 0 || physical >= kernel.framebuffer_physical + kernel.framebuffer_size
+give_up_framebuffer :: fn(kernel : ptr[mut Kernel], physical : u64, size : u64) {
+    if kernel.framebuffer_size == 0
+        || physical >= kernel.framebuffer_physical + kernel.framebuffer_size
         || physical + size <= kernel.framebuffer_physical {
         return void
     }
@@ -360,16 +388,30 @@ give_up_framebuffer :: fn(kernel: ptr[mut Kernel], physical: u64, size: u64) {
  * @error OutOfMemory No slot for it.
  * @error ObjectGone The parent or the owner is being destroyed; nothing is left.
  */
-create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: ptr[mut Memory], offset: u64, size: u64, allowed: u32)
-    -> Result[ptr[mut Memory], slop_os.MemoryError] {
-    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || offset & (frames.FRAME_SIZE - 1) != 0 || offset > parent.size
+create_window :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    parent : ptr[mut Memory],
+    offset : u64,
+    size : u64,
+    allowed : u32
+) -> Result[ptr[mut Memory], slop_os.MemoryError] {
+    if size == 0
+        || size & (frames.FRAME_SIZE - 1) != 0
+        || offset & (frames.FRAME_SIZE - 1) != 0
+        || offset > parent.size
         || size > parent.size - offset {
         return .Error(.InvalidSize)
     }
     object := cast[u64](0)
     match new_object(kernel, .Memory, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.MemoryError.BudgetExceeded } else { slop_os.MemoryError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.MemoryError.BudgetExceeded } else { slop_os.MemoryError.OutOfMemory }
+        )
     }
     window :: cast[ptr[mut Memory]](object)
     window.size = size
@@ -414,7 +456,7 @@ create_window :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, parent: pt
  * @return The slot, a pointer into a leaf in the direct map, valid until the memory is released. It holds 0, a frame's
  *     physical address, or for paged memory PAGE_WANTED or PAGE_REPORTED; read and written atomically.
  */
-page_slot :: fn(memory: ptr[Memory], page: u64) -> ptr[mut u64] {
+page_slot :: fn(memory : ptr[Memory], page : u64) -> ptr[mut u64] {
     leaf :: cast[ptr[u64]](memory.directory + (page / PAGES_PER_LEAF % PAGES_PER_LEAF) * 8)^
     return cast[ptr[mut u64]](leaf + page % PAGES_PER_LEAF * 8)
 }
@@ -433,7 +475,7 @@ page_slot :: fn(memory: ptr[Memory], page: u64) -> ptr[mut u64] {
  * @return True if the kernel may copy the page through the direct map; false for device registers, framebuffers, and
  *     anything past RAM, which have to be refused rather than reached there.
  */
-reachable_in_direct_map :: fn(kernel: ptr[Kernel], physical: u64, cache: arch_interface.CacheMode) -> bool {
+reachable_in_direct_map :: fn(kernel : ptr[Kernel], physical : u64, cache : arch_interface.CacheMode) -> bool {
     return cache == .WriteBack && (physical >> frames.FRAME_SHIFT) < kernel.frames.frame_count
 }
 
@@ -449,7 +491,7 @@ reachable_in_direct_map :: fn(kernel: ptr[Kernel], physical: u64, cache: arch_in
  *     window's, its parent's; paged memory's, 0 if it hasn't been supplied. 0 when anonymous memory needs a frame and
  *     there are none.
  */
-frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 {
+frame_for :: fn(kernel : ptr[mut Kernel], memory : ptr[Memory], page : u64) -> u64 {
     if memory.physical != 0 {
         return memory.physical + page * frames.FRAME_SIZE
     }
@@ -502,13 +544,23 @@ frame_for :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], page: u64) -> u64 
  *     writable) all the way.
  * @return True if the thread blocked for a pager: its call is to be made again, and no result is written.
  */
-copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, thread: ptr[mut Thread], address: u64, count: u64,
-    to_user: bool) -> (slop_os.MemoryError?, bool) {
+copy_memory :: fn(
+    kernel : ptr[mut Kernel],
+    memory : ptr[Memory],
+    offset : u64,
+    thread : ptr[mut Thread],
+    address : u64,
+    count : u64,
+    to_user : bool
+) -> (slop_os.MemoryError?, bool) {
     if offset > memory.size || count > memory.size - offset {
         return slop_os.MemoryError.InvalidSize, false
     }
     root, first :: paged_root(memory, 0)
-    if !to_user && (root.pager_binding != 0 || root.boot_module || (memory.allowed & cast[u32](slop_os.PROTECTION_WRITE)) == 0) {
+    if !to_user
+        && (root.pager_binding != 0
+            || root.boot_module
+            || (memory.allowed & cast[u32](slop_os.PROTECTION_WRITE)) == 0) {
         return slop_os.MemoryError.WrongKind, false
     }
     space :: thread.space
@@ -548,7 +600,12 @@ copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, thr
             }
         }
         bytes :: cast[u64](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](frame))) + within
-        copied :: if to_user { copy_to_user(kernel, space, address + done, bytes, part) } else { copy_from_user(kernel, space, address + done, bytes, part) }
+        copied :: if to_user {
+            copy_to_user(kernel, space, address + done, bytes, part)
+        }
+        else {
+            copy_from_user(kernel, space, address + done, bytes, part)
+        }
         if !copied {
             return slop_os.MemoryError.BadAddress, false
         }
@@ -568,7 +625,7 @@ copy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], offset: u64, thr
  *     the windows are queued on this CPU's list to destroy later.
  * @param memory The memory being destroyed, already marked dying.
  */
-destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+destroy_memory :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory]) {
     // DMA memory's devices reach it no more, before its frames can go
     unmap_dma_memory(kernel, memory)
     // Paged memory's waiting threads touch their pages again, which are no longer mapped
@@ -623,7 +680,7 @@ destroy_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
  * @param kernel The kernel, on whose calling CPU's list each window is queued (destroy_later).
  * @param memory The memory whose windows are destroyed; its list is empty after.
  */
-destroy_windows :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+destroy_windows :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory]) {
     loop {
         lock_at(&memory.lock, .Memory)
         window :: memory.first_window
@@ -644,7 +701,7 @@ destroy_windows :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
  * @param parent The window's parent, whose lock the caller holds.
  * @param window The window; its in_parent is false after.
  */
-unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
+unlink_window :: fn(parent : ptr[mut Memory], window : ptr[mut Memory]) {
     if !window.in_parent {
         return void
     }
@@ -677,7 +734,13 @@ unlink_window :: fn(parent: ptr[mut Memory], window: ptr[mut Memory]) {
  * @error BudgetExceeded The budget can't pay for its slot.
  * @error OwnerGone The owner is being destroyed; the memory is destroyed again, and its frames go to the allocator.
  */
-create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, physical: u64, size: u64) -> Result[ptr[mut Memory], ObjectError] {
+create_module_memory :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    physical : u64,
+    size : u64
+) -> Result[ptr[mut Memory], ObjectError] {
     object :: new_object(kernel, .Memory, budget, 0)?
     memory :: cast[ptr[mut Memory]](object)
     memory.size = size
@@ -713,16 +776,29 @@ create_module_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, phy
  * @error OutOfMemory No slot, or no free block of that order below limit.
  * @error ObjectGone The owner is being destroyed; the memory is destroyed again.
  */
-create_contiguous_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, size: u64, limit: u64, allowed: u32)
-    -> Result[ptr[mut Memory], slop_os.DeviceError] {
-    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE || (limit != 0 && limit < size) {
+create_contiguous_memory :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    size : u64,
+    limit : u64,
+    allowed : u32
+) -> Result[ptr[mut Memory], slop_os.DeviceError] {
+    if size == 0
+        || size & (frames.FRAME_SIZE - 1) != 0
+        || size > slop_os.MAX_MEMORY_SIZE
+        || (limit != 0 && limit < size) {
         return .Error(.InvalidSize)
     }
     order :: frames.order_for(size)
     object := cast[u64](0)
     match new_object(kernel, .Memory, budget, frames.FRAME_SIZE << order) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory }
+        )
     }
     memory :: cast[ptr[mut Memory]](object)
     block := cast[u64](0)
@@ -733,7 +809,10 @@ create_contiguous_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64,
             return .Error(.OutOfMemory)
         }
     }
-    intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](block))), cast[usize](frames.FRAME_SIZE << order))
+    intrinsics.mem_zero(
+        cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](block))),
+        cast[usize](frames.FRAME_SIZE << order)
+    )
     memory.size = size
     memory.physical = block
     memory.cache = .WriteBack
@@ -759,7 +838,7 @@ create_contiguous_memory :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64,
  * @param kernel The kernel, whose frame allocator the frames go back to.
  * @param memory The memory, no longer mapped anywhere.
  */
-release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
+release_memory :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory]) {
     if memory.block_order != 0 {
         frames.free(&kernel.frames, cast[boot_info.PhysicalAddress](memory.physical), memory.block_order - 1)
         memory.block_order = 0
@@ -808,26 +887,42 @@ release_memory :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory]) {
  *     bad range of the memory, BadAddress for a bad or taken user range, BudgetExceeded if the space's budget can't
  *     pay for the mapping, OutOfMemory if there's no slot, ObjectGone if the memory or space is being destroyed.
  */
-memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mut AddressSpace], address: u64, offset: u64,
-    size: u64, protection: u32) -> slop_os.MemoryError? {
+memory_map :: fn(
+    kernel : ptr[mut Kernel],
+    memory : ptr[mut Memory],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    offset : u64,
+    size : u64,
+    protection : u32
+) -> slop_os.MemoryError? {
     writable :: protection & cast[u32](slop_os.PROTECTION_WRITE) != 0
     executable :: protection & cast[u32](slop_os.PROTECTION_EXECUTE) != 0
     guarded :: protection & cast[u32](slop_os.PROTECTION_GUARDED) != 0
     shadow_stack :: protection & SHADOW_STACK_PROTECTION != 0
-    if protection & 7 == 0 || protection & ~(cast[u32](15) | SHADOW_STACK_PROTECTION) != 0 || (writable && executable)
-        || (guarded && !executable) || (shadow_stack && (writable || executable)) {
+    if protection & 7 == 0
+        || protection & ~(cast[u32](15) | SHADOW_STACK_PROTECTION) != 0
+        || (writable && executable)
+        || (guarded && !executable)
+        || (shadow_stack && (writable || executable)) {
         return slop_os.MemoryError.BadProtection
     }
     // A window, only as its parent's handle allowed; guarding takes nothing more
     if protection & 7 & ~memory.allowed != 0 {
         return slop_os.MemoryError.MissingRight
     }
-    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || offset & (frames.FRAME_SIZE - 1) != 0 || offset > memory.size
+    if size == 0
+        || size & (frames.FRAME_SIZE - 1) != 0
+        || offset & (frames.FRAME_SIZE - 1) != 0
+        || offset > memory.size
         || size > memory.size - offset {
         return slop_os.MemoryError.InvalidSize
     }
     low, high :: arch.user_address_range()
-    if address & (frames.FRAME_SIZE - 1) != 0 || address < cast[u64](low) || address >= cast[u64](high) || size > cast[u64](high) - address {
+    if address & (frames.FRAME_SIZE - 1) != 0
+        || address < cast[u64](low)
+        || address >= cast[u64](high)
+        || size > cast[u64](high) - address {
         return slop_os.MemoryError.BadAddress
     }
     slot_size :: kernel.pools.mappings.object_size
@@ -842,8 +937,13 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
     }
     mapping :: cast[ptr[mut MemoryMapping]](address_of_mapping)
     mapping^ = MemoryMapping.{
-        space = cast[u64](space), space_generation = generation, memory = cast[u64](memory), address = address,
-        size = size, offset = offset, protection = protection,
+        space = cast[u64](space),
+        space_generation = generation,
+        memory = cast[u64](memory),
+        address = address,
+        size = size,
+        offset = offset,
+        protection = protection,
     }
     failure := cast[u32](0)
     lock_at(&memory.lock, .Memory)
@@ -881,7 +981,7 @@ memory_map :: fn(kernel: ptr[mut Kernel], memory: ptr[mut Memory], space: ptr[mu
  * @param address The user virtual address a mapping starts at, as memory_map was given it.
  * @return Null if a mapping starts there; NotMapped if none does.
  */
-memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64) -> slop_os.MemoryError? {
+memory_unmap :: fn(kernel : ptr[mut Kernel], space : ptr[mut AddressSpace], address : u64) -> slop_os.MemoryError? {
     lock_at(&space.lock, .Space)
     found := cast[u64](0)
     with {
@@ -916,7 +1016,7 @@ memory_unmap :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], addres
  * @param address The mapping's first address.
  * @return The memory object, as an address, and its generation then; 0 for none.
  */
-memory_mapped_at :: fn(space: ptr[mut AddressSpace], address: u64) -> (u64, u32) {
+memory_mapped_at :: fn(space : ptr[mut AddressSpace], address : u64) -> (u64, u32) {
     lock_at(&space.lock, .Space)
     defer unlock_at(&space.lock, .Space)
     mapping := space.first_mapping
@@ -942,7 +1042,7 @@ memory_mapped_at :: fn(space: ptr[mut AddressSpace], address: u64) -> (u64, u32)
  * @param kernel The kernel: each mapping's slot goes back to its pool, and TLB entries are shot down on every CPU.
  * @param space The address space being destroyed.
  */
-take_down_space_mappings :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
+take_down_space_mappings :: fn(kernel : ptr[mut Kernel], space : ptr[mut AddressSpace]) {
     loop {
         lock_at(&space.lock, .Space)
         claimed := cast[u64](0)
@@ -976,7 +1076,7 @@ take_down_space_mappings :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSp
  *     lock.
  * @return True if this caller claimed it, and has to take it down; false if someone else did first.
  */
-claim :: fn(mapping: ptr[mut MemoryMapping]) -> bool {
+claim :: fn(mapping : ptr[mut MemoryMapping]) -> bool {
     _, first :: intrinsics.interlocked_compare_exchange_u32(&mapping.claimed, 1, 0)
     return first
 }
@@ -991,7 +1091,7 @@ claim :: fn(mapping: ptr[mut MemoryMapping]) -> bool {
  *     frame cache, and the slot goes back to the mapping pool.
  * @param mapping The mapping, claimed by this caller; it's freed, and can't be used after.
  */
-take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
+take_down :: fn(kernel : ptr[mut Kernel], mapping : ptr[mut MemoryMapping]) {
     space :: cast[ptr[mut AddressSpace]](mapping.space)
     memory :: cast[ptr[mut Memory]](mapping.memory)
     lock_at(&space.lock, .Space)
@@ -1023,7 +1123,11 @@ take_down :: fn(kernel: ptr[mut Kernel], mapping: ptr[mut MemoryMapping]) {
  *     thread waits for the pager, and has to be switched away from; Failed when the address isn't mapped, the access
  *     isn't allowed, the page was present already, or no frame could be had, and the thread can't go on.
  */
-resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.PageFault) -> FaultOutcome {
+resolve_fault :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    fault : arch_interface.PageFault
+) -> FaultOutcome {
     space :: thread.space
     lock_at(&space.lock, .Space)
     defer unlock_at(&space.lock, .Space)
@@ -1043,8 +1147,12 @@ resolve_fault :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arc
  *     isn't mapped, the access isn't allowed, the page was present already, no frame could be had, or the page is
  *     paged memory not yet supplied and there's no thread to wait.
  */
-resolve_fault_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]?, space: ptr[mut AddressSpace],
-    fault: arch_interface.PageFault) -> FaultOutcome {
+resolve_fault_locked :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread]?,
+    space : ptr[mut AddressSpace],
+    fault : arch_interface.PageFault
+) -> FaultOutcome {
     address :: cast[u64](fault.address) & ~(frames.FRAME_SIZE - 1)
     found := cast[ptr[mut MemoryMapping]](0)
     with {
@@ -1086,7 +1194,15 @@ resolve_fault_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]?, sp
     root, root_page :: paged_root(memory, page)
     if root.pager_binding != 0 {
         waiting :: thread or_return FaultOutcome.Failed
-        return resolve_paged_fault(kernel, waiting, space, address, root, root_page, mapping_for(protection, memory.cache))
+        return resolve_paged_fault(
+            kernel,
+            waiting,
+            space,
+            address,
+            root,
+            root_page,
+            mapping_for(protection, memory.cache)
+        )
     }
     // A whole 2 MiB of anonymous memory, where the mapping lines it up with a large page (decisions/0129)
     match large_frame(kernel, memory, found, address, page) {
@@ -1102,10 +1218,22 @@ resolve_fault_locked :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]?, sp
     if frame == 0 {
         return .Failed
     }
-    mapped, error :: map_pages_locked(kernel, space, address, frame, frames.FRAME_SIZE, mapping_for(protection, memory.cache))
+    mapped, error :: map_pages_locked(
+        kernel,
+        space,
+        address,
+        frame,
+        frames.FRAME_SIZE,
+        mapping_for(protection, memory.cache)
+    )
     // Another CPU may have mapped it meanwhile, for a fault of its own
     return match error {
-        case Some(failure) => if failure == .AlreadyMapped { FaultOutcome.Mapped } else { FaultOutcome.Failed }
+        case Some(failure) => if failure == .AlreadyMapped {
+            FaultOutcome.Mapped
+        }
+        else {
+            FaultOutcome.Failed
+        }
         case None => FaultOutcome.Mapped
     }
 }
@@ -1134,22 +1262,39 @@ LARGE_ORDER : u64 : 9
  * @return The block's physical address, 2 MiB aligned; null if a large page can't map it, and the fault maps a page as
  *     before.
  */
-large_frame :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], mapping: ptr[MemoryMapping], address: u64, page: u64) -> u64? {
-    if memory.physical != 0 || memory.parent != 0 || memory.pager_binding != 0 || memory.domain != 0 || memory.size < LARGE_PAGE {
+large_frame :: fn(
+    kernel : ptr[mut Kernel],
+    memory : ptr[Memory],
+    mapping : ptr[MemoryMapping],
+    address : u64,
+    page : u64
+) -> u64? {
+    if memory.physical != 0
+        || memory.parent != 0
+        || memory.pager_binding != 0
+        || memory.domain != 0
+        || memory.size < LARGE_PAGE {
         return null
     }
     first :: page / PAGES_PER_LEAF * PAGES_PER_LEAF
     start :: address - (page - first) * frames.FRAME_SIZE
-    if (first + PAGES_PER_LEAF) * frames.FRAME_SIZE > memory.size || start & (LARGE_PAGE - 1) != 0 || start < mapping.address
+    if (first + PAGES_PER_LEAF) * frames.FRAME_SIZE > memory.size
+        || start & (LARGE_PAGE - 1) != 0
+        || start < mapping.address
         || start + LARGE_PAGE > mapping.address + mapping.size {
         return null
     }
     held :: intrinsics.atomic_load_u64_acquire(page_slot(memory, first))
     if held == 0 {
         block :: cast[u64](frames.allocate_frames(&kernel.frames, LARGE_ORDER) or_return null)
-        intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](block))), cast[usize](LARGE_PAGE))
-        // Each page claimed for the block; one a fault on the same page gave a frame first keeps it, and the block's
-        // frames that weren't claimed go back
+        intrinsics.mem_zero(
+            cast[mut rawptr](frames.virtual_of(&kernel.frames, cast[boot_info.PhysicalAddress](block))),
+            cast[usize](LARGE_PAGE)
+        )
+        /*
+         * Each page claimed for the block; one a fault on the same page gave a frame first keeps it, and the block's
+         * frames that weren't claimed go back
+         */
         whole := true
         for i in cast[u64](0)..<PAGES_PER_LEAF {
             frame :: block + i * frames.FRAME_SIZE
@@ -1183,7 +1328,7 @@ large_frame :: fn(kernel: ptr[mut Kernel], memory: ptr[Memory], mapping: ptr[Mem
  * @param cache The memory's cache mode.
  * @return A user, non-global mapping: ReadWrite if writable, else ReadExecute if executable, else Read.
  */
-mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_interface.Mapping {
+mapping_for :: fn(protection : u32, cache : arch_interface.CacheMode) -> arch_interface.Mapping {
     kind := arch_interface.Protection.Read
     if protection & cast[u32](slop_os.PROTECTION_WRITE) != 0 {
         kind = .ReadWrite
@@ -1193,8 +1338,14 @@ mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_inte
     }
     guarded :: protection & cast[u32](slop_os.PROTECTION_GUARDED) != 0
     shadow_stack :: protection & SHADOW_STACK_PROTECTION != 0
-    return arch_interface.Mapping.{protection = kind, cache = cache, user = true, global = false, guarded = guarded,
-        shadow_stack = shadow_stack}
+    return arch_interface.Mapping.{
+        protection = kind,
+        cache = cache,
+        user = true,
+        global = false,
+        guarded = guarded,
+        shadow_stack = shadow_stack,
+    }
 }
 
 /**
@@ -1206,7 +1357,7 @@ mapping_for :: fn(protection: u32, cache: arch_interface.CacheMode) -> arch_inte
  * @param size Its size in bytes.
  * @return True if no mapping or ring overlaps the range.
  */
-range_free :: fn(kernel: ptr[Kernel], space: ptr[AddressSpace], address: u64, size: u64) -> bool {
+range_free :: fn(kernel : ptr[Kernel], space : ptr[AddressSpace], address : u64, size : u64) -> bool {
     with {
         mapping := space.first_mapping
     }
@@ -1246,7 +1397,7 @@ range_free :: fn(kernel: ptr[Kernel], space: ptr[AddressSpace], address: u64, si
  * @param other_size Its size in bytes.
  * @return True if they share any address.
  */
-overlaps :: fn(address: u64, size: u64, other: u64, other_size: u64) -> bool {
+overlaps :: fn(address : u64, size : u64, other : u64, other_size : u64) -> bool {
     return address < other + other_size && other < address + size
 }
 
@@ -1256,7 +1407,7 @@ overlaps :: fn(address: u64, size: u64, other: u64, other_size: u64) -> bool {
  * @param space The space, whose lock the caller holds.
  * @param mapping The mapping, on no space's list.
  */
-link_to_space :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut MemoryMapping]) {
+link_to_space :: fn(space : ptr[mut AddressSpace], mapping : ptr[mut MemoryMapping]) {
     mapping.space_previous = 0
     mapping.space_next = space.first_mapping
     if space.first_mapping != 0 {
@@ -1271,7 +1422,7 @@ link_to_space :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut MemoryMapping
  * @param space The space, whose lock the caller holds.
  * @param mapping The mapping, on the space's list.
  */
-unlink_from_space :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut MemoryMapping]) {
+unlink_from_space :: fn(space : ptr[mut AddressSpace], mapping : ptr[mut MemoryMapping]) {
     if mapping.space_previous != 0 {
         cast[ptr[mut MemoryMapping]](mapping.space_previous).space_next = mapping.space_next
     }
@@ -1289,7 +1440,7 @@ unlink_from_space :: fn(space: ptr[mut AddressSpace], mapping: ptr[mut MemoryMap
  * @param memory The memory, whose lock the caller holds.
  * @param mapping The mapping, on no memory's list.
  */
-link_to_memory :: fn(memory: ptr[mut Memory], mapping: ptr[mut MemoryMapping]) {
+link_to_memory :: fn(memory : ptr[mut Memory], mapping : ptr[mut MemoryMapping]) {
     mapping.memory_previous = 0
     mapping.memory_next = memory.first_mapping
     if memory.first_mapping != 0 {
@@ -1304,7 +1455,7 @@ link_to_memory :: fn(memory: ptr[mut Memory], mapping: ptr[mut MemoryMapping]) {
  * @param memory The memory, whose lock the caller holds.
  * @param mapping The mapping, on the memory's list.
  */
-unlink_from_memory :: fn(memory: ptr[mut Memory], mapping: ptr[mut MemoryMapping]) {
+unlink_from_memory :: fn(memory : ptr[mut Memory], mapping : ptr[mut MemoryMapping]) {
     if mapping.memory_previous != 0 {
         cast[ptr[mut MemoryMapping]](mapping.memory_previous).memory_next = mapping.memory_next
     }

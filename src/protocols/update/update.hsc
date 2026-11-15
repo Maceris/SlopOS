@@ -106,7 +106,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for every request: told again, the update service finds nothing more to do.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return true
 }
 
@@ -127,7 +127,12 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The answer, copied out of into; Unsupported if the request couldn't be sent, the connection's gone, or its
  *     answer isn't the protocol.
  */
-ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
+ask :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
     }

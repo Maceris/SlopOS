@@ -2,8 +2,8 @@ package test_perf
 
 import intrinsics from "base:intrinsics"
 import math from "std:math"
-import slop_os from "std:os/slop_os"
 import fast from "std:math/fast"
+import slop_os from "std:os/slop_os"
 import testing from "std:testing"
 import test_kit from "../../test_kit"
 
@@ -28,7 +28,7 @@ math_values :: fn() -> f32[MATH_VALUES] {
 }
 
 /** Keep a result from being left out as unused. */
-keep :: fn(value: f64) {
+keep :: fn(value : f64) {
     sink := value
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](&sink), bit_cast[u64](value))
 }
@@ -41,7 +41,7 @@ keep :: fn(value: f64) {
  * @param values The arguments.
  * @param function The function.
  */
-time_f32 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]], function: (fn(x: f32) -> f32)) {
+time_f32 :: fn(log : slop_os.DebugLog, name : string, values : ptr[f32[MATH_VALUES]], function : (fn(x : f32) -> f32)) {
     sum := 0.0
     for value in values^ {
         sum += cast[f64](function(value))
@@ -56,9 +56,12 @@ time_f32 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]
 }
 
 /** The same eight at a time. */
-time_f32x8 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]],
-    function: (fn(x: vector[f32, 8]) -> vector[f32, 8])) {
-
+time_f32x8 :: fn(
+    log : slop_os.DebugLog,
+    name : string,
+    values : ptr[f32[MATH_VALUES]],
+    function : (fn(x : vector[f32, 8]) -> vector[f32, 8])
+) {
     sum := 0.0
     start := test_kit.clock_now()
     for pass in 0..<2 {
@@ -76,7 +79,7 @@ time_f32x8 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUE
 }
 
 /** The same in f64, one value at a time. */
-time_f64 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]], function: (fn(x: f64) -> f64)) {
+time_f64 :: fn(log : slop_os.DebugLog, name : string, values : ptr[f32[MATH_VALUES]], function : (fn(x : f64) -> f64)) {
     sum := 0.0
     for value in values^ {
         sum += function(cast[f64](value))
@@ -91,9 +94,12 @@ time_f64 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]
 }
 
 /** The same in f64, four at a time. */
-time_f64x4 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUES]],
-    function: (fn(x: vector[f64, 4]) -> vector[f64, 4])) {
-
+time_f64x4 :: fn(
+    log : slop_os.DebugLog,
+    name : string,
+    values : ptr[f32[MATH_VALUES]],
+    function : (fn(x : vector[f64, 4]) -> vector[f64, 4])
+) {
     sum := 0.0
     start := test_kit.clock_now()
     for pass in 0..<2 {
@@ -112,18 +118,22 @@ time_f64x4 :: fn(log: slop_os.DebugLog, name: string, values: ptr[f32[MATH_VALUE
 }
 
 /* log on the values' magnitudes, in each tier */
-log_f32 :: fn(x: f32) -> f32 { return math.log(abs(x)) }
-log_f32x8 :: fn(x: vector[f32, 8]) -> vector[f32, 8] {
+log_f32 :: fn(x : f32) -> f32 {
+    return math.log(abs(x))
+}
+log_f32x8 :: fn(x : vector[f32, 8]) -> vector[f32, 8] {
     return math.log(bit_cast[vector[f32, 8]](bit_cast[vector[u32, 8]](x) & 0x7fff_ffff))
 }
-fast_log_f32x8 :: fn(x: vector[f32, 8]) -> vector[f32, 8] {
+fast_log_f32x8 :: fn(x : vector[f32, 8]) -> vector[f32, 8] {
     return fast.log(bit_cast[vector[f32, 8]](bit_cast[vector[u32, 8]](x) & 0x7fff_ffff))
 }
-log_f64 :: fn(x: f64) -> f64 { return math.log(abs(x)) }
-log_f64x4 :: fn(x: vector[f64, 4]) -> vector[f64, 4] {
+log_f64 :: fn(x : f64) -> f64 {
+    return math.log(abs(x))
+}
+log_f64x4 :: fn(x : vector[f64, 4]) -> vector[f64, 4] {
     return math.log(bit_cast[vector[f64, 4]](bit_cast[vector[u64, 4]](x) & 0x7fff_ffff_ffff_ffff))
 }
-fast_log_f64x4 :: fn(x: vector[f64, 4]) -> vector[f64, 4] {
+fast_log_f64x4 :: fn(x : vector[f64, 4]) -> vector[f64, 4] {
     return fast.log(bit_cast[vector[f64, 4]](bit_cast[vector[u64, 4]](x) & 0x7fff_ffff_ffff_ffff))
 }
 
@@ -134,7 +144,7 @@ fast_log_f64x4 :: fn(x: vector[f64, 4]) -> vector[f64, 4] {
  * @param t The test's state.
  * @return Ok once they're measured and logged.
  */
-float_math_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+float_math_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     values := math_values()
     time_f32(given.log, "math_sin_f32", &values, math.sin[f32])

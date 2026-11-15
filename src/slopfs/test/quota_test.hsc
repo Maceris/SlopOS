@@ -24,12 +24,17 @@ CHUNK : usize : 65536
  * @param id The volume whose owners records are summed; any ID, one with none giving 0.
  * @return The blocks; all ones if the owners tree couldn't be read.
  */
-owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
+owned_blocks :: fn(container : ptr[mut slopfs.Container], id : u64) -> u64 {
     value := slopfs.OwnerValue.{}
     at := slopfs.Key.{}
     total : u64 = 0
     loop {
-        found :: match slopfs.tree_next(&container.nodes, &container.owners, at, view_of(cast[ptr[mut u8]](&value), size_of(slopfs.OwnerValue))) {
+        found :: match slopfs.tree_next(
+            &container.nodes,
+            &container.owners,
+            at,
+            view_of(cast[ptr[mut u8]](&value), size_of(slopfs.OwnerValue))
+        ) {
             case Ok(next) => next or_break
             case Error(error) => return 0xffffffffffffffff
         }
@@ -48,7 +53,7 @@ owned_blocks :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
  * @param id The volume to compare; any ID, one with no account and no owners records counting as 0 both ways.
  * @return True if usage_of's used is owned_blocks'.
  */
-counted :: fn(container: ptr[mut slopfs.Container], id: u64) -> bool {
+counted :: fn(container : ptr[mut slopfs.Container], id : u64) -> bool {
     return slopfs.usage_of(container, id).used == owned_blocks(container, id)
 }
 
@@ -60,7 +65,7 @@ counted :: fn(container: ptr[mut slopfs.Container], id: u64) -> bool {
  * @param data The bytes, the first CHUNK of them written.
  * @return True if it was made and written; false if either failed, as at a quota or the reserve.
  */
-write_file :: fn(volume: ptr[mut slopfs.Volume], number: int, data: ptr[mut Data]) -> bool {
+write_file :: fn(volume : ptr[mut slopfs.Volume], number : int, data : ptr[mut Data]) -> bool {
     name : u8[16]
     length :: name_of_number(name, number)
     file :: match slopfs.create(volume, slopfs.ROOT_OBJECT, string_of(&name[0], length), .File) {
@@ -83,7 +88,7 @@ write_file :: fn(volume: ptr[mut slopfs.Volume], number: int, data: ptr[mut Data
  * @param number The file's number, its name.
  * @return True if it was removed; false on any error.
  */
-remove_file :: fn(volume: ptr[mut slopfs.Volume], number: int) -> bool {
+remove_file :: fn(volume : ptr[mut slopfs.Volume], number : int) -> bool {
     name : u8[16]
     length :: name_of_number(name, number)
     match slopfs.remove(volume, slopfs.ROOT_OBJECT, string_of(&name[0], length)) {
@@ -121,7 +126,7 @@ QUOTA : u64 : 5 * 16 + 16
  * @return The volume, the caller's to free with free_limited; Error if any of it failed, the failure recorded and
  *     nothing left to free.
  */
-limited :: fn(t: ptr[mut testing.T]) -> Result[Limited, testing.Stopped] {
+limited :: fn(t : ptr[mut testing.T]) -> Result[Limited, testing.Stopped] {
     device :: formatted(t, QUOTA_BLOCKS, 0x90)?
     made := Limited.{device = device, quota = QUOTA, data = runtime.new(Data)}
     pattern(made.data.bytes[0..<CHUNK], 5)
@@ -139,7 +144,7 @@ limited :: fn(t: ptr[mut testing.T]) -> Result[Limited, testing.Stopped] {
  * @param made The disk, formatted; the rest is set here.
  * @return Ok if it's all done; Error(Failed), the failure recorded, if not.
  */
-limit :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> testing.Outcome {
+limit :: fn(t : ptr[mut testing.T], made : ptr[mut Limited]) -> testing.Outcome {
     mounting :: slopfs.mount(made.device)
     made.container = testing.require_ok(t, mounting, "a formatted disk mounts")?
     made.mounted = true
@@ -150,7 +155,11 @@ limit :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> testing.Outcome {
     setting :: slopfs.set_quota(made.container, made.id, made.quota)
     require_done(t, setting, "a volume takes a quota")?
     require_commit(t, made.container, "a quota commits")?
-    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's, once committed")
+    testing.expect(
+        t,
+        counted(made.container, made.id),
+        "a volume's count of its blocks is the owners tree's, once committed"
+    )
     return .Ok
 }
 
@@ -159,7 +168,7 @@ limit :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> testing.Outcome {
  *
  * @param made What limited made, which isn't used after.
  */
-free_limited :: fn(made: ptr[mut Limited]) {
+free_limited :: fn(made : ptr[mut Limited]) {
     if made.mounted {
         slopfs.unmount(made.container)
     }
@@ -175,7 +184,7 @@ free_limited :: fn(made: ptr[mut Limited]) {
  * @param made The volume with a quota, empty.
  * @return How many files were written, numbered 0 on; Error(Failed), the failure recorded, if they didn't commit.
  */
-fill_to_quota :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> Result[int, testing.Stopped] {
+fill_to_quota :: fn(t : ptr[mut testing.T], made : ptr[mut Limited]) -> Result[int, testing.Stopped] {
     written := 0
     for number in 0..<20 {
         if !write_file(made.volume, number, made.data) {
@@ -183,14 +192,26 @@ fill_to_quota :: fn(t: ptr[mut testing.T], made: ptr[mut Limited]) -> Result[int
         }
         written += 1
     }
-    testing.expect(t, written >= 4 && written <= 6, "a quota of five chunks and room for the tree takes about five chunks")
+    testing.expect(
+        t,
+        written >= 4 && written <= 6,
+        "a quota of five chunks and room for the tree takes about five chunks"
+    )
     require_commit(t, made.container, "what was written within the quota commits")?
-    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's, once committed")
-    testing.expect(t, slopfs.usage_of(made.container, made.id).used <= made.quota + 16, "a volume uses at most its quota and a chunk")
+    testing.expect(
+        t,
+        counted(made.container, made.id),
+        "a volume's count of its blocks is the owners tree's, once committed"
+    )
+    testing.expect(
+        t,
+        slopfs.usage_of(made.container, made.id).used <= made.quota + 16,
+        "a volume uses at most its quota and a chunk"
+    )
     return .Ok(written)
 }
 
-writes_stop_at_the_quota_and_a_delete_makes_room #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+writes_stop_at_the_quota_and_a_delete_makes_room #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := limited(t)?
     defer free_limited(&made)
     fill_to_quota(t, &made)?
@@ -198,11 +219,15 @@ writes_stop_at_the_quota_and_a_delete_makes_room #test :: fn(t: ptr[mut testing.
     require_commit(t, made.container, "a delete at the quota commits")?
     testing.expect(t, write_file(made.volume, 100, made.data), "a delete at the quota makes room for another file")
     require_commit(t, made.container, "a file written in the room made commits")?
-    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's, once committed")
+    testing.expect(
+        t,
+        counted(made.container, made.id),
+        "a volume's count of its blocks is the owners tree's, once committed"
+    )
     return .Ok
 }
 
-a_snapshot_keeps_its_blocks_charged_until_it_goes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_snapshot_keeps_its_blocks_charged_until_it_goes #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := limited(t)?
     defer free_limited(&made)
     container :: made.container
@@ -215,21 +240,40 @@ a_snapshot_keeps_its_blocks_charged_until_it_goes #test :: fn(t: ptr[mut testing
         _ = remove_file(made.volume, number)
     }
     require_commit(t, container, "removing the files commits")?
-    testing.expect(t, counted(container, made.id), "a volume's count of its blocks is the owners tree's with a snapshot")
-    testing.expect(t, slopfs.usage_of(container, made.id).used + 8 >= before,
-        "files deleted under a snapshot free nothing: the snapshot holds their blocks, charged to the volume")
-    testing.expect(t, !write_file(made.volume, 200, made.data), "with the snapshot's blocks charged, the volume is still at its quota")
+    testing.expect(
+        t,
+        counted(container, made.id),
+        "a volume's count of its blocks is the owners tree's with a snapshot"
+    )
+    testing.expect(
+        t,
+        slopfs.usage_of(container, made.id).used + 8 >= before,
+        "files deleted under a snapshot free nothing: the snapshot holds their blocks, charged to the volume"
+    )
+    testing.expect(
+        t,
+        !write_file(made.volume, 200, made.data),
+        "with the snapshot's blocks charged, the volume is still at its quota"
+    )
     deleting :: slopfs.delete_snapshot(container, made.id, name_bytes("held"), null)
     require_done(t, deleting, "a snapshot without clones is deleted")?
     require_commit(t, container, "the snapshot's deletion commits")?
-    testing.expect(t, counted(container, made.id), "a volume's count of its blocks is the owners tree's once its snapshot goes")
-    testing.expect(t, slopfs.usage_of(container, made.id).used < before, "deleting the snapshot frees the blocks only it held")
+    testing.expect(
+        t,
+        counted(container, made.id),
+        "a volume's count of its blocks is the owners tree's once its snapshot goes"
+    )
+    testing.expect(
+        t,
+        slopfs.usage_of(container, made.id).used < before,
+        "deleting the snapshot frees the blocks only it held"
+    )
     testing.expect(t, write_file(made.volume, 200, made.data), "with the snapshot gone, there's room under the quota")
     _ = commits(t, container, "a file written once the snapshot went commits")
     return .Ok
 }
 
-the_quota_and_every_count_last_across_a_mount #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_quota_and_every_count_last_across_a_mount #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := limited(t)?
     defer free_limited(&made)
     written :: fill_to_quota(t, &made)?
@@ -244,8 +288,17 @@ the_quota_and_every_count_last_across_a_mount #test :: fn(t: ptr[mut testing.T])
     mounting :: slopfs.mount(made.device)
     made.container = testing.require_ok(t, mounting, "the container mounts again")?
     made.mounted = true
-    testing.expect(t, counted(made.container, made.id), "a volume's count of its blocks is the owners tree's after a mount")
-    testing.expect_eq(t, slopfs.usage_of(made.container, made.id).quota, made.quota, "a volume's quota is kept across a mount")
+    testing.expect(
+        t,
+        counted(made.container, made.id),
+        "a volume's count of its blocks is the owners tree's after a mount"
+    )
+    testing.expect_eq(
+        t,
+        slopfs.usage_of(made.container, made.id).quota,
+        made.quota,
+        "a volume's quota is kept across a mount"
+    )
     opening :: slopfs.open_volume(made.container, made.id)
     made.volume = testing.require_ok(t, opening, "the volume opens again")?
     all_six := true
@@ -259,7 +312,7 @@ the_quota_and_every_count_last_across_a_mount #test :: fn(t: ptr[mut testing.T])
     return .Ok
 }
 
-the_reserve_keeps_room_to_delete_and_commit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_reserve_keeps_room_to_delete_and_commit #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     blocks : u64 = 512
     device :: formatted(t, blocks, 0xa0)?
     defer free_device(device)
@@ -286,11 +339,18 @@ the_reserve_keeps_room_to_delete_and_commit #test :: fn(t: ptr[mut testing.T]) -
     // Full to the reserve, which only a file's bytes keep out of
     reserve :: slopfs.reserve_of(blocks)
     testing.expect_ge(t, slopfs.free_blocks(container) + 16, reserve, "files' bytes don't go into the reserve")
-    testing.expect(t, slopfs.free_blocks(container) <= reserve + 16 + 2 * slopfs.NODE_BLOCKS * 4,
-        "files' bytes take everything but the reserve, a chunk, and the trees' nodes")
+    testing.expect(
+        t,
+        slopfs.free_blocks(container) <= reserve + 16 + 2 * slopfs.NODE_BLOCKS * 4,
+        "files' bytes take everything but the reserve, a chunk, and the trees' nodes"
+    )
     full :: slopfs.free_blocks(container)
     for number in 0..<written {
-        testing.expect(t, remove_file(volume, number), "deleting works full to the reserve, the tree's rewrite taken from it")
+        testing.expect(
+            t,
+            remove_file(volume, number),
+            "deleting works full to the reserve, the tree's rewrite taken from it"
+        )
     }
     require_commit(t, container, "deletes full to the reserve commit")?
     require_commit(t, container, "a commit after the deletes frees what they gave back")?

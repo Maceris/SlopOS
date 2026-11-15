@@ -12,7 +12,7 @@ import platform as protocol from "../../protocols/platform"
  * the kernel the first time a line of one is wanted, and IRQs made for the lines of the devices that don't signal by
  * MSIs: the SCI, for the ACPI service; and on AArch64 the GPIO controller the power button is wired to.
  */
-//SPEC: ACPI 6.5, §5.2.12 (MADT); Linux's gpio-keys, arm,pl061 and arm,gic-v3 bindings
+// SPEC: ACPI 6.5, §5.2.12 (MADT); Linux's gpio-keys, arm,pl061 and arm,gic-v3 bindings
 
 /** The most interrupt controllers registered. */
 MAX_CONTROLLERS :: 8
@@ -41,8 +41,13 @@ Controller :: struct {
  * @param address Its registers' physical address.
  * @return It; null if the kernel refused it, or there's no room to keep it.
  */
-controller_at :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], kind: slop_os.ControllerKind, address: u64)
-    -> Controller? {
+controller_at :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    kind : slop_os.ControllerKind,
+    address : u64
+) -> Controller? {
     for controller, i in state.controllers {
         if i >= state.controller_count {
             break
@@ -81,16 +86,30 @@ controller_at :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr
  * @return The IRQ, which moves to whoever it's given; NO_HANDLE if the line's past the controller's or the kernel
  *     refused it.
  */
-irq_for :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, controller: Controller, line: u32, level: bool, low: bool) -> slop_os.Irq {
+irq_for :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    controller : Controller,
+    line : u32,
+    level : bool,
+    low : bool
+) -> slop_os.Irq {
     none :: cast[slop_os.Irq](slop_os.NO_HANDLE)
     if line >= controller.lines {
         return none
     }
-    flags :: (if level { slop_os.IRQ_LEVEL } else { cast[u32](0) }) | (if low { slop_os.IRQ_ACTIVE_LOW } else { cast[u32](0) })
+    flags :: (if level { slop_os.IRQ_LEVEL } else { cast[u32](0) })
+        | (if low { slop_os.IRQ_ACTIVE_LOW } else { cast[u32](0) })
     match slop_os.irq_create(platform, slop_os.startup_block().budget, controller.number, line, flags) {
         case Ok(irq) => return irq
         case Error(error) => {
-            log_line.write(to, "platform: no IRQ for line % of the interrupt controller at %: %", line, controller.address, error)
+            log_line.write(
+                to,
+                "platform: no IRQ for line % of the interrupt controller at %: %",
+                line,
+                controller.address,
+                error
+            )
             return none
         }
     }
@@ -105,7 +124,7 @@ irq_for :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, controller: Cont
  * @param state The platform service's state, its firmware tables mapped.
  * @return The IRQ, which moves to the ACPI service; NO_HANDLE without a MADT, a FADT, or an I/O APIC with the line.
  */
-sci_irq :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform]) -> slop_os.Irq {
+sci_irq :: fn(to : slop_os.DebugLog, platform : slop_os.Platform, state : ptr[mut Platform]) -> slop_os.Irq {
     none :: cast[slop_os.Irq](slop_os.NO_HANDLE)
     fadt_region :: pci.firmware_table(state.tables, state.tables_size, "FACP") or_return none
     madt_region := pci.firmware_table(state.tables, state.tables_size, "APIC") or_else devicetree.Region.{}
@@ -113,8 +132,10 @@ sci_irq :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
         log_line.write(to, "platform: no SCI, as there's no MADT")
         return none
     }
-    fadt :: acpi_tables.parse_fadt(view_of(cast[ptr[u8]](fadt_region.address), cast[usize](fadt_region.size))) or_return none
-    madt := acpi_tables.parse_madt(view_of(cast[ptr[u8]](madt_region.address), cast[usize](madt_region.size))) or_return none
+    fadt :: acpi_tables.parse_fadt(view_of(cast[ptr[u8]](fadt_region.address), cast[usize](fadt_region.size)))
+        or_return none
+    madt := acpi_tables.parse_madt(view_of(cast[ptr[u8]](madt_region.address), cast[usize](madt_region.size)))
+        or_return none
     signaling :: acpi_tables.route_isa(&madt, cast[u32](fadt.sci), true, true)
     // The I/O APIC whose lines start nearest below the GSI
     chosen : acpi_tables.IoApic? = null
@@ -122,12 +143,18 @@ sci_irq :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
         if i >= madt.io_apic_count {
             break
         }
-        if io_apic.gsi_base <= signaling.gsi && ((chosen is_none) || io_apic.gsi_base > (chosen or_else io_apic).gsi_base) {
+        if io_apic.gsi_base <= signaling.gsi
+            && ((chosen is_none) || io_apic.gsi_base > (chosen or_else io_apic).gsi_base) {
             chosen = io_apic
         }
     }
     if chosen is_none {
-        log_line.write(to, "platform: no SCI, as no I/O APIC of the MADT's % has GSI %", madt.io_apic_count, signaling.gsi)
+        log_line.write(
+            to,
+            "platform: no SCI, as no I/O APIC of the MADT's % has GSI %",
+            madt.io_apic_count,
+            signaling.gsi
+        )
         return none
     }
     io_apic :: chosen or_return none
@@ -142,8 +169,13 @@ sci_irq :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
     }
     irq :: irq_for(to, platform, controller, signaling.gsi - io_apic.gsi_base, signaling.level, signaling.low)
     if cast[slop_os.Handle](irq) != slop_os.NO_HANDLE {
-        log_line.write(to, "platform: the SCI is GSI %, %-triggered, active-%", signaling.gsi, if signaling.level { "level" } else { "edge" },
-            if signaling.low { "low" } else { "high" })
+        log_line.write(
+            to,
+            "platform: the SCI is GSI %, %-triggered, active-%",
+            signaling.gsi,
+            if signaling.level { "level" } else { "edge" },
+            if signaling.low { "low" } else { "high" }
+        )
     }
     return irq
 }
@@ -158,7 +190,11 @@ sci_irq :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
  * @return ClaimedPowerButton, whose handles move to the client; NoDevice without a devicetree, such a key, a PL061, a
  *     GIC, or if they can't be made.
  */
-claim_power_button :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform]) -> protocol.Response {
+claim_power_button :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform]
+) -> protocol.Response {
     blob :: pci.firmware_table(state.tables, state.tables_size, "DTB ") or_return .NoDevice
     tree := devicetree.open(blob.address) or_return .NoDevice
     key := devicetree.find_node(&tree, "", 0, false, "linux,code", KEY_POWER) or_return .NoDevice
@@ -192,7 +228,13 @@ claim_power_button :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state
         return .NoDevice
     }
     memory := cast[slop_os.Memory](slop_os.NO_HANDLE)
-    match slop_os.memory_create_physical(platform, slop_os.startup_block().budget, registers.address, PL061_SIZE, .Device) {
+    match slop_os.memory_create_physical(
+        platform,
+        slop_os.startup_block().budget,
+        registers.address,
+        PL061_SIZE,
+        .Device
+    ) {
         case Ok(made) => memory = made
         case Error(_) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](irq))

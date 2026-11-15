@@ -5,7 +5,8 @@
  *
  * At its start it says whether the watchdog reset the machine the boot before, which its reload register keeps.
  */
-//SPEC: Intel 6300ESB I/O Controller Hub datasheet, §15 (the watchdog timer); Linux's i6300esb.c
+// SPEC: Intel 6300ESB I/O Controller Hub datasheet, §15 (the watchdog timer); Linux's i6300esb.c
+
 package i6300esb
 
 import intrinsics from "base:intrinsics"
@@ -74,9 +75,19 @@ Driver :: struct {
  * @return 0 once asked to stop, having disarmed it; on failing to start, 2 if its registers can't be mapped, 4
  *     without a port, 5 if the listener can't be served.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    clients: os.Listener[watchdog.Watchdog]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[watchdog.Watchdog]
+) -> int {
     block :: slop_os.startup_block()
     driver := Driver.{}
     driver.config = driver_kit.map_device(config) or_return 2
@@ -128,7 +139,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  * @param index The client, by its index; a dropped one does nothing.
  * @param into Where each request is received.
  */
-serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
     }
@@ -185,8 +196,11 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  * @param seconds The timeout asked for.
  * @return The timeout taken: seconds, between LEAST_SECONDS and MOST_SECONDS.
  */
-arm :: fn(driver: ptr[mut Driver], seconds: u32) -> u32 {
-    taken :: if seconds < LEAST_SECONDS { LEAST_SECONDS } else if seconds > MOST_SECONDS { MOST_SECONDS } else { seconds }
+arm :: fn(driver : ptr[mut Driver], seconds : u32) -> u32 {
+    taken :: if seconds < LEAST_SECONDS {
+        LEAST_SECONDS
+    }
+    else if seconds > MOST_SECONDS { MOST_SECONDS } else { seconds }
     // Each stage counts seconds << 9 ticks at about 1 kHz, half the timeout, as Linux's i6300esb.c sets them
     preload :: taken << 9
     unlock(driver.registers)
@@ -206,7 +220,7 @@ arm :: fn(driver: ptr[mut Driver], seconds: u32) -> u32 {
  *
  * @param driver The driver.
  */
-disarm :: fn(driver: ptr[mut Driver]) {
+disarm :: fn(driver : ptr[mut Driver]) {
     write_config_u8(driver.config, LOCK, 0)
     if driver.armed {
         runtime.log_info("disarmed")
@@ -219,32 +233,32 @@ disarm :: fn(driver: ptr[mut Driver]) {
  *
  * @param registers Where the memory BAR is mapped.
  */
-unlock :: fn(registers: u64) {
+unlock :: fn(registers : u64) {
     write_u16(registers, RELOAD, UNLOCK1)
     write_u16(registers, RELOAD, UNLOCK2)
 }
 
 /** Read a 16-bit register of the memory BAR. */
-read_u16 :: fn(registers: u64, offset: u64) -> u16 {
+read_u16 :: fn(registers : u64, offset : u64) -> u16 {
     return intrinsics.volatile_load_u16(cast[ptr[u16]](registers + offset))
 }
 
 /** Write a 16-bit register of the memory BAR. */
-write_u16 :: fn(registers: u64, offset: u64, value: u16) {
+write_u16 :: fn(registers : u64, offset : u64, value : u16) {
     intrinsics.volatile_store_u16(cast[ptr[mut u16]](registers + offset), value)
 }
 
 /** Write a 32-bit register of the memory BAR. */
-write_u32 :: fn(registers: u64, offset: u64, value: u32) {
+write_u32 :: fn(registers : u64, offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](registers + offset), value)
 }
 
 /** Write a 16-bit register of the configuration space. */
-write_config_u16 :: fn(config: u64, offset: u64, value: u16) {
+write_config_u16 :: fn(config : u64, offset : u64, value : u16) {
     intrinsics.volatile_store_u16(cast[ptr[mut u16]](config + offset), value)
 }
 
 /** Write an 8-bit register of the configuration space. */
-write_config_u8 :: fn(config: u64, offset: u64, value: u8) {
+write_config_u8 :: fn(config : u64, offset : u64, value : u8) {
     intrinsics.volatile_store_u8(cast[ptr[mut u8]](config + offset), value)
 }

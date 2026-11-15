@@ -28,7 +28,7 @@ BOOT_TICKS : u64 : 3
  * @param hint The counter's frequency in Hz as the bootloader measured it, or null if it didn't, when it's found or
  *     measured here (arch.init_timer), which can busy-wait some milliseconds.
  */
-start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
+start_timer :: fn(kernel : ptr[mut Kernel], hint : u64?) {
     kernel.counter_frequency = arch.init_timer(hint)
     start_clock(kernel)
     runtime.log_info("timer: counter at % kHz", kernel.counter_frequency / 1000)
@@ -40,7 +40,7 @@ start_timer :: fn(kernel: ptr[mut Kernel], hint: u64?) {
  *
  * @param kernel The kernel, whose counter_frequency must be set.
  */
-set_next_tick :: fn(kernel: ptr[Kernel]) {
+set_next_tick :: fn(kernel : ptr[Kernel]) {
     cpu :: per_cpu()
     cpu.next_tick = arch.counter() + kernel.counter_frequency / TICKS_PER_SECOND
     program_deadline(cpu)
@@ -111,7 +111,7 @@ ROOT_END_TICKS : u64 : 20
  * @param kernel The kernel, whose root_ended and root_stop_tick it reads and sets.
  * @param tick The boot CPU's tick count, from 1.
  */
-root_task_ended :: fn(kernel: ptr[mut Kernel], tick: u64) {
+root_task_ended :: fn(kernel : ptr[mut Kernel], tick : u64) {
     state :: intrinsics.atomic_load_u32_acquire(&kernel.root_ended)
     if state == 1 {
         kernel.root_stop_tick = tick + ROOT_END_TICKS

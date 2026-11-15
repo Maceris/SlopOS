@@ -11,9 +11,16 @@ HEAP_TEST_BLOCKS :: 200
  * small blocks aligned beyond their size; reported to the kernel's log.
  */
 test_heap :: fn() {
-    _ = run_tests("test_heap", testing.Test.[
-        .{name = "heap_blocks_keep_their_contents_grown_shrunk_and_freed", run = heap_blocks_keep_their_contents_grown_shrunk_and_freed},
-        .{name = "over_aligned_heap_blocks_come_aligned", run = over_aligned_heap_blocks_come_aligned}])
+    _ = run_tests(
+        "test_heap",
+        testing.Test.[
+            .{
+                name = "heap_blocks_keep_their_contents_grown_shrunk_and_freed",
+                run = heap_blocks_keep_their_contents_grown_shrunk_and_freed,
+            },
+            .{name = "over_aligned_heap_blocks_come_aligned", run = over_aligned_heap_blocks_come_aligned}
+        ]
+    )
 }
 
 /**
@@ -25,7 +32,7 @@ test_heap :: fn() {
  * @return Ok once it's run, every block freed; Error if a block couldn't be allocated or resized, when what was
  *     allocated is left unfreed.
  */
-heap_blocks_keep_their_contents_grown_shrunk_and_freed #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+heap_blocks_keep_their_contents_grown_shrunk_and_freed #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     addresses : u64[HEAP_TEST_BLOCKS]
     sizes : u64[HEAP_TEST_BLOCKS]
     for i in 0..<HEAP_TEST_BLOCKS {
@@ -48,21 +55,40 @@ heap_blocks_keep_their_contents_grown_shrunk_and_freed #test :: fn(t: ptr[mut te
         }
         old_size :: sizes[i]
         size :: heap_test_size(cast[u64](i), 1)
-        bytes, error :: context.allocator.function(context.allocator.data, cast[usize](size), 1, cast[rawptr](addresses[i]),
-            cast[usize](old_size))
+        bytes, error :: context.allocator.function(
+            context.allocator.data,
+            cast[usize](size),
+            1,
+            cast[rawptr](addresses[i]),
+            cast[usize](old_size)
+        )
         testing.require(t, error == null, "the heap has room to resize every block, freeing each one's old space")?
         address :: cast[u64](bytes.data)
         kept :: if size < old_size { size } else { old_size }
-        testing.expect(t, holds(address, kept, cast[u64](i)), "a block resized keeps the bytes it had, up to its new size")
+        testing.expect(
+            t,
+            holds(address, kept, cast[u64](i)),
+            "a block resized keeps the bytes it had, up to its new size"
+        )
         testing.expect(t, is_zeroed(address, kept, size), "what a block grows by comes zeroed")
         fill(address, size, cast[u64](i))
         addresses[i] = address
         sizes[i] = size
     }
     lost_after :: first_changed(addresses, sizes)
-    testing.expect_none(t, lost_after, "no block's bytes change when others are resized, as no two blocks overlap after either")
+    testing.expect_none(
+        t,
+        lost_after,
+        "no block's bytes change when others are resized, as no two blocks overlap after either"
+    )
     for i in 0..<HEAP_TEST_BLOCKS {
-        _, freed :: context.allocator.function(context.allocator.data, 0, 1, cast[rawptr](addresses[i]), cast[usize](sizes[i]))
+        _, freed :: context.allocator.function(
+            context.allocator.data,
+            0,
+            1,
+            cast[rawptr](addresses[i]),
+            cast[usize](sizes[i])
+        )
     }
     return .Ok
 }
@@ -74,7 +100,7 @@ heap_blocks_keep_their_contents_grown_shrunk_and_freed #test :: fn(t: ptr[mut te
  * @param t The test's state.
  * @return Ok once it's run; Error at the first alignment with no block, when nothing is left allocated.
  */
-over_aligned_heap_blocks_come_aligned #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+over_aligned_heap_blocks_come_aligned #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     with {
         alignment : usize = 32
     }
@@ -97,7 +123,7 @@ over_aligned_heap_blocks_come_aligned #test :: fn(t: ptr[mut testing.T]) -> test
  * @param sizes Each block's size in bytes, in the same order; only as many blocks as both have are checked.
  * @return The first block's index whose bytes aren't heap_test_byte's for it; none if every block holds its own.
  */
-first_changed :: fn(addresses: u64[], sizes: u64[]) -> usize? {
+first_changed :: fn(addresses : u64[], sizes : u64[]) -> usize? {
     for address, i in addresses {
         if i < sizes.count && !holds(address, sizes[i], cast[u64](i)) {
             return i
@@ -113,7 +139,7 @@ first_changed :: fn(addresses: u64[], sizes: u64[]) -> usize? {
  * @param round 0 for the first allocation, 1 for the resize, which gives most blocks another size.
  * @return The size in bytes: 1 to 3000, or 20000 or 29000 for the big ones.
  */
-heap_test_size :: fn(i: u64, round: u64) -> u64 {
+heap_test_size :: fn(i : u64, round : u64) -> u64 {
     if (i + round) % 25 == 0 {
         return 20000 + round * 9000
     }
@@ -127,7 +153,7 @@ heap_test_size :: fn(i: u64, round: u64) -> u64 {
  * @param offset The byte's offset in the block.
  * @return The byte, 0 to 250.
  */
-heap_test_byte :: fn(block: u64, offset: u64) -> u8 {
+heap_test_byte :: fn(block : u64, offset : u64) -> u8 {
     return cast[u8]((block * 7 + offset) % 251)
 }
 
@@ -138,7 +164,7 @@ heap_test_byte :: fn(block: u64, offset: u64) -> u8 {
  * @param size How many bytes to fill.
  * @param block The block's index, which picks its pattern; holds has to be given the same one.
  */
-fill :: fn(address: u64, size: u64, block: u64) {
+fill :: fn(address : u64, size : u64, block : u64) {
     for offset in 0..<size {
         cast[ptr[mut u8]](address + offset)^ = heap_test_byte(block, offset)
     }
@@ -152,7 +178,7 @@ fill :: fn(address: u64, size: u64, block: u64) {
  * @param block The block's index, the same one fill was given for it.
  * @return True if every byte is as heap_test_byte gives it.
  */
-holds :: fn(address: u64, size: u64, block: u64) -> bool {
+holds :: fn(address : u64, size : u64, block : u64) -> bool {
     for offset in 0..<size {
         if cast[ptr[u8]](address + offset)^ != heap_test_byte(block, offset) {
             return false
@@ -169,7 +195,7 @@ holds :: fn(address: u64, size: u64, block: u64) -> bool {
  * @param end The offset just past the last byte to check; at or below start, nothing is checked.
  * @return True if every byte from start to end is 0.
  */
-is_zeroed :: fn(address: u64, start: u64, end: u64) -> bool {
+is_zeroed :: fn(address : u64, start : u64, end : u64) -> bool {
     for offset in start..<end {
         if cast[ptr[u8]](address + offset)^ != 0 {
             return false

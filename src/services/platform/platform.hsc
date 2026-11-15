@@ -19,10 +19,10 @@ import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import pci from "../../pci"
 import platform as protocol from "../../protocols/platform"
-import service_kit from "../../libraries/service_kit"
 
 /** The most PCI functions enumerated and given out; ones past it are skipped, and bridges among them not scanned. */
 MAX_FUNCTIONS :: 64
@@ -191,8 +191,13 @@ WINDOWS_WAIT : u64 : 5_000_000_000
  *     configuration space can't be, 4 without a port, and 5 if its first client can't be added. Serving, it doesn't
  *     return.
  */
-main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os.Memory, clients: os.Listener[protocol.Platform],
-    command_line: slop_os.Memory?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    platform : slop_os.Platform,
+    firmware : slop_os.Memory,
+    clients : os.Listener[protocol.Platform],
+    command_line : slop_os.Memory?
+) -> int {
     block :: slop_os.startup_block()
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     space :: block.space
@@ -244,11 +249,17 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
         log_line.write(to, "platform: % ranges of requester IDs registered with their IOMMUs", ranges)
     }
     // With ACPI, the windows are the host bridge's _CRS, which the ACPI service gives; until then, nothing's placed
-    if (pci.firmware_table(tables, tables_size, "FACP") is_some) && (pci.firmware_table(tables, tables_size, "DSDT") is_some) {
+    if (pci.firmware_table(tables, tables_size, "FACP") is_some)
+        && (pci.firmware_table(tables, tables_size, "DSDT") is_some) {
         state.placing = true
         state.place_by = (slop_os.clock_monotonic() or_else 0) + WINDOWS_WAIT
-        log_line.write(to, "platform: % functions on buses % to %, their BARs placed once the ACPI service gives the host bridge's windows",
-            state.count, host.first_bus, state.highest_bus)
+        log_line.write(
+            to,
+            "platform: % functions on buses % to %, their BARs placed once the ACPI service gives the host bridge's windows",
+            state.count,
+            host.first_bus,
+            state.highest_bus
+        )
     }
     else {
         place_all(to, state)
@@ -262,13 +273,20 @@ main :: fn(log: slop_os.DebugLog?, platform: slop_os.Platform, firmware: slop_os
  * @param to The debug log.
  * @param state The platform service's state, whose BARs are placed and placing cleared.
  */
-place_all :: fn(to: slop_os.DebugLog, state: ptr[mut Platform]) {
+place_all :: fn(to : slop_os.DebugLog, state : ptr[mut Platform]) {
     for i in 0..<state.count {
         place_bars(to, state, i)
     }
     state.placing = false
-    log_line.write(to, "platform: % functions on buses % to %, % BARs placed, % left unplaced", state.count, state.host.first_bus,
-        state.highest_bus, state.placed, state.unplaced)
+    log_line.write(
+        to,
+        "platform: % functions on buses % to %, % BARs placed, % left unplaced",
+        state.count,
+        state.host.first_bus,
+        state.highest_bus,
+        state.placed,
+        state.unplaced
+    )
 }
 
 /**
@@ -280,8 +298,13 @@ place_all :: fn(to: slop_os.DebugLog, state: ptr[mut Platform]) {
  * @param connected The clients, whose deferred requests are answered.
  * @param port The port their ends are bound to.
  */
-finish_placing :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[service_kit.Clients],
-    port: slop_os.Port) {
+finish_placing :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    connected : ptr[service_kit.Clients],
+    port : slop_os.Port
+) {
     if state.placing {
         place_all(to, state)
     }
@@ -296,8 +319,16 @@ finish_placing :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: pt
         if cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
             continue
         }
-        answer(end, port, if waiting.reissue { reissue(to, platform, state, waiting.client, waiting.address) }
-            else { claim(to, platform, state, waiting.client, waiting.wanted) })
+        answer(
+            end,
+            port,
+            if waiting.reissue {
+                reissue(to, platform, state, waiting.client, waiting.address)
+            }
+            else {
+                claim(to, platform, state, waiting.client, waiting.wanted)
+            }
+        )
     }
     state.deferred_count = 0
 }
@@ -312,20 +343,37 @@ finish_placing :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: pt
  * @param port The port their ends are bound to.
  * @param waiting The request.
  */
-defer_request :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[service_kit.Clients],
-    port: slop_os.Port, waiting: Deferred) {
+defer_request :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    connected : ptr[service_kit.Clients],
+    port : slop_os.Port,
+    waiting : Deferred
+) {
     at :: state.deferred_count
     if at < state.deferred.count {
         state.deferred[at] = waiting
         state.deferred_count = at + 1
         return void
     }
-    log_line.write(to, "platform: too many requests waiting for the host bridge's windows, so BARs are placed by the memory map's gaps")
+    log_line.write(
+        to,
+        "platform: too many requests waiting for the host bridge's windows, so BARs are placed by the memory map's gaps"
+    )
     finish_placing(to, platform, state, connected, port)
     if waiting.client < connected.ends.count {
         end :: connected.ends[waiting.client]
-        answer(end, port, if waiting.reissue { reissue(to, platform, state, waiting.client, waiting.address) }
-            else { claim(to, platform, state, waiting.client, waiting.wanted) })
+        answer(
+            end,
+            port,
+            if waiting.reissue {
+                reissue(to, platform, state, waiting.client, waiting.address)
+            }
+            else {
+                claim(to, platform, state, waiting.client, waiting.wanted)
+            }
+        )
     }
 }
 
@@ -342,8 +390,15 @@ defer_request :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr
  * @param given The windows.
  * @return Done; Refused for a client that hasn't claimed ACPI.
  */
-take_windows :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[service_kit.Clients],
-    port: slop_os.Port, client: usize, given: protocol.BridgeWindows) -> protocol.Response {
+take_windows :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    connected : ptr[service_kit.Clients],
+    port : slop_os.Port,
+    client : usize,
+    given : protocol.BridgeWindows
+) -> protocol.Response {
     if !is_acpi(state, client) {
         return .Refused
     }
@@ -357,8 +412,13 @@ take_windows :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
         if cast[u32](i) >= given.count || cast[usize](count) >= windows.count {
             break
         }
-        windows[cast[usize](count)] = pci.Window.{cpu = window.cpu, pci = window.pci, size = window.size,
-            wide = window.pci >= cast[u64](4) << 30, prefetchable = window.prefetchable}
+        windows[cast[usize](count)] = pci.Window.{
+            cpu = window.cpu,
+            pci = window.pci,
+            size = window.size,
+            wide = window.pci >= cast[u64](4) << 30,
+            prefetchable = window.prefetchable,
+        }
         count += 1
     }
     if count > 0 {
@@ -383,7 +443,7 @@ take_windows :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
  * @param bus The bus to scan; a bus past the host's last is skipped.
  * @param parent The bridge the bus is behind, by its index in the functions, or NO_PARENT for the host's own bus.
  */
-scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
+scan_bus :: fn(state : ptr[mut Platform], bus : u8, parent : u32) {
     if bus > state.host.last_bus {
         return void
     }
@@ -402,9 +462,17 @@ scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
             header :: pci.read_u8(config, pci.HEADER_TYPE)
             index :: state.count
             if index < state.functions.count {
-                state.functions[index] = Function.{bus = bus, device = cast[u8](device), function = cast[u8](function),
-                    vendor = vendor, device_id = pci.read_u16(config, pci.DEVICE_ID), class = pci.read_u32(config, pci.CLASS_REVISION) >> 8,
-                    bridge = header & 0x7f == HEADER_BRIDGE, parent = parent, config = config}
+                state.functions[index] = Function.{
+                    bus = bus,
+                    device = cast[u8](device),
+                    function = cast[u8](function),
+                    vendor = vendor,
+                    device_id = pci.read_u16(config, pci.DEVICE_ID),
+                    class = pci.read_u32(config, pci.CLASS_REVISION) >> 8,
+                    bridge = header & 0x7f == HEADER_BRIDGE,
+                    parent = parent,
+                    config = config,
+                }
                 state.count += 1
             }
             if header & 0x7f == HEADER_BRIDGE && index < state.functions.count {
@@ -439,7 +507,7 @@ scan_bus :: fn(state: ptr[mut Platform], bus: u8, parent: u32) {
  * @param state The platform service's state: the function's bars are set.
  * @param index The function, by its index in the functions; one past their count does nothing.
  */
-size_bars :: fn(state: ptr[mut Platform], index: usize) {
+size_bars :: fn(state : ptr[mut Platform], index : usize) {
     if index >= state.functions.count {
         return void
     }
@@ -477,8 +545,12 @@ size_bars :: fn(state: ptr[mut Platform], index: usize) {
         size :: if mask == 0 { cast[u64](0) } else { ~mask + 1 }
         address :: (cast[u64](original) & 0xfffffff0) | (cast[u64](upper) << 32)
         if bar < function.bars.count {
-            function.bars[bar] = Bar.{pci = if state.reassign && function.vendor == VIRTIO_VENDOR { cast[u64](0) } else { address },
-                size = size, wide = wide, prefetchable = original & 8 != 0}
+            function.bars[bar] = Bar.{
+                pci = if state.reassign && function.vendor == VIRTIO_VENDOR { cast[u64](0) } else { address },
+                size = size,
+                wide = wide,
+                prefetchable = original & 8 != 0,
+            }
         }
         bar += if wide { 2 } else { 1 }
     }
@@ -498,7 +570,7 @@ size_bars :: fn(state: ptr[mut Platform], index: usize) {
  *     or unplaced counted.
  * @param index The function, by its index in the functions; one past their count does nothing.
  */
-place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
+place_bars :: fn(to : slop_os.DebugLog, state : ptr[mut Platform], index : usize) {
     if index >= state.functions.count {
         return void
     }
@@ -511,7 +583,9 @@ place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
         }
         any = true
         current :: function.bars[bar]
-        if current.pci != 0 && fits_window(state, function, current, current.pci) && free_at(state, index, current.pci, current.size) {
+        if current.pci != 0
+            && fits_window(state, function, current, current.pci)
+            && free_at(state, index, current.pci, current.size) {
             function.bars[bar].valid = true
             continue
         }
@@ -526,14 +600,29 @@ place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
                     pci.write_u32(function.config, offset + 4, cast[u32](address >> 32))
                 }
                 state.placed += 1
-                log_line.write(to, "platform: BAR % of %:%.% placed at %{#018x}, % bytes", bar, function.bus, function.device, function.function,
-                    address, current.size)
+                log_line.write(
+                    to,
+                    "platform: BAR % of %:%.% placed at %{#018x}, % bytes",
+                    bar,
+                    function.bus,
+                    function.device,
+                    function.function,
+                    address,
+                    current.size
+                )
             }
             case None => {
                 every = false
                 state.unplaced += 1
-                log_line.write(to, "platform: no room for BAR % of %:%.%, % bytes", bar, function.bus, function.device, function.function,
-                    current.size)
+                log_line.write(
+                    to,
+                    "platform: no room for BAR % of %:%.%, % bytes",
+                    bar,
+                    function.bus,
+                    function.device,
+                    function.function,
+                    current.size
+                )
             }
         }
     }
@@ -550,7 +639,7 @@ place_bars :: fn(to: slop_os.DebugLog, state: ptr[mut Platform], index: usize) {
  * @param bridge The bridge, by its index in the functions.
  * @return True if bridge is the function's parent, or its parent's, and so on up to the host's bus.
  */
-is_behind :: fn(state: ptr[Platform], index: usize, bridge: u32) -> bool {
+is_behind :: fn(state : ptr[Platform], index : usize, bridge : u32) -> bool {
     at := if index < state.functions.count { state.functions[index].parent } else { NO_PARENT }
     for depth in 0..<MAX_FUNCTIONS {
         if at == NO_PARENT || cast[usize](at) >= state.functions.count {
@@ -574,13 +663,15 @@ is_behind :: fn(state: ptr[Platform], index: usize, bridge: u32) -> bool {
  * @param address Where it would be, a PCI address.
  * @return True if all of its bytes from address are in such a window.
  */
-fits_window :: fn(state: ptr[Platform], function: ptr[Function], bar: Bar, address: u64) -> bool {
+fits_window :: fn(state : ptr[Platform], function : ptr[Function], bar : Bar, address : u64) -> bool {
     if function.parent != NO_PARENT {
         low, high :: bridge_window(state, function.parent)
         return low <= high && address >= low && address + bar.size - 1 <= high
     }
     for window, i in state.host.windows {
-        if cast[u32](i) < state.host.window_count && (bar.wide || !window.wide) && address >= window.pci
+        if cast[u32](i) < state.host.window_count
+            && (bar.wide || !window.wide)
+            && address >= window.pci
             && address + bar.size <= window.pci + window.size {
             return true
         }
@@ -596,7 +687,7 @@ fits_window :: fn(state: ptr[Platform], function: ptr[Function], bar: Bar, addre
  * @return low The window's first PCI address, 1 MiB aligned; above high when there's no window.
  * @return high The window's last PCI address, the last byte of a 1 MiB block.
  */
-bridge_window :: fn(state: ptr[Platform], index: u32) -> (low: u64, high: u64) {
+bridge_window :: fn(state : ptr[Platform], index : u32) -> (low : u64, high : u64) {
     if cast[usize](index) >= state.functions.count {
         return 1, 0
     }
@@ -618,7 +709,7 @@ bridge_window :: fn(state: ptr[Platform], index: u32) -> (low: u64, high: u64) {
  * @param size The range's size in bytes.
  * @return True if nothing overlaps it.
  */
-free_at :: fn(state: ptr[Platform], index: usize, address: u64, size: u64) -> bool {
+free_at :: fn(state : ptr[Platform], index : usize, address : u64, size : u64) -> bool {
     if overlaps(address, size, state.host.ecam, pci.ecam_size(&state.host)) {
         return false
     }
@@ -660,7 +751,7 @@ free_at :: fn(state: ptr[Platform], index: usize, address: u64, size: u64) -> bo
  * @param b_size The second range's size in bytes.
  * @return True if some address is in both; a range wrapping past the top of the address space isn't handled.
  */
-overlaps :: fn(a: u64, a_size: u64, b: u64, b_size: u64) -> bool {
+overlaps :: fn(a : u64, a_size : u64, b : u64, b_size : u64) -> bool {
     return a < b + b_size && b < a + a_size
 }
 
@@ -678,7 +769,7 @@ overlaps :: fn(a: u64, a_size: u64, b: u64, b_size: u64) -> bool {
  * @param bar The BAR, for its size and whether it's 64-bit; its size is a power of two, not 0.
  * @return The PCI address to place it at, or null if there's no room in any window it may be in.
  */
-find_place :: fn(state: ptr[Platform], index: usize, function: ptr[Function], bar: Bar) -> u64? {
+find_place :: fn(state : ptr[Platform], index : usize, function : ptr[Function], bar : Bar) -> u64? {
     if function.parent != NO_PARENT {
         low, high :: bridge_window(state, function.parent)
         if low > high {
@@ -712,7 +803,7 @@ find_place :: fn(state: ptr[Platform], index: usize, function: ptr[Function], ba
  *     range's end. The first aligned address is tried before the end is checked, so it can be returned even when the
  *     BAR doesn't fit in the range.
  */
-first_fit :: fn(state: ptr[Platform], index: usize, bar: Bar, start: u64, size: u64) -> u64? {
+first_fit :: fn(state : ptr[Platform], index : usize, bar : Bar, start : u64, size : u64) -> u64? {
     at := pci.round_up(start, bar.size)
     loop {
         if free_at(state, index, at, bar.size) {
@@ -732,12 +823,18 @@ first_fit :: fn(state: ptr[Platform], index: usize, bar: Bar, start: u64, size: 
  * @return The RAM's ranges, a view into the firmware tables' copy, good while it's mapped; empty without a "RAM "
  *     table.
  */
-ram_of :: fn(tables: u64, size: u64) -> slop_os.PhysicalRange[] {
+ram_of :: fn(tables : u64, size : u64) -> slop_os.PhysicalRange[] {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
-    entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
+    entries :: view_of(
+        cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))),
+        cast[usize](header.count)
+    )
     for &entry in entries {
         if pci.signature_of(entry) == "RAM " && entry.offset + cast[u64](entry.size) <= size {
-            return view_of(cast[ptr[slop_os.PhysicalRange]](tables + entry.offset), cast[usize](entry.size) / size_of(slop_os.PhysicalRange))
+            return view_of(
+                cast[ptr[slop_os.PhysicalRange]](tables + entry.offset),
+                cast[usize](entry.size) / size_of(slop_os.PhysicalRange)
+            )
         }
     }
     return view_of(cast[ptr[slop_os.PhysicalRange]](tables), 0)
@@ -750,7 +847,7 @@ ram_of :: fn(tables: u64, size: u64) -> slop_os.PhysicalRange[] {
  * @param word The word, matched whole.
  * @return True if the command line has it; false without a command line, or if it can't be read.
  */
-has_word :: fn(command_line: slop_os.Memory?, word: string) -> bool {
+has_word :: fn(command_line : slop_os.Memory?, word : string) -> bool {
     memory :: command_line or_return false
     text :: service_kit.text_of(slop_os.startup_block(), memory) or_return false
     return service_kit.has_word(text, word)
@@ -767,7 +864,12 @@ has_word :: fn(command_line: slop_os.Memory?, word: string) -> bool {
  * @param clients The listener for its first client, the supervisor; others connect through Connect.
  * @return Only on failing to start serving: 4 without a port, 5 if the first client can't be added.
  */
-serve :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], clients: os.Listener[protocol.Platform]) -> int {
+serve :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    clients : os.Listener[protocol.Platform]
+) -> int {
     block :: slop_os.startup_block()
     port :: slop_os.port_create(block.budget) or_return 4
     connected := service_kit.Clients.{}
@@ -788,7 +890,10 @@ serve :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(port, packets, if state.placing { state.place_by } else { slop_os.NO_DEADLINE })
         if state.placing && (slop_os.clock_monotonic() or_else 0) >= state.place_by {
-            log_line.write(to, "platform: no windows from the ACPI service in time, so BARs are placed by the memory map's gaps")
+            log_line.write(
+                to,
+                "platform: no windows from the ACPI service in time, so BARs are placed by the memory map's gaps"
+            )
             finish_placing(to, platform, state, &connected, port)
         }
     }
@@ -809,8 +914,15 @@ serve :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
  * @param port The port every client's end is bound to.
  * @param into Where each request is received; overwritten by each.
  */
-serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], connected: ptr[mut service_kit.Clients],
-    index: usize, port: slop_os.Port, into: ptr[mut os.Incoming]) {
+serve_client :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    connected : ptr[mut service_kit.Clients],
+    index : usize,
+    port : slop_os.Port,
+    into : ptr[mut os.Incoming]
+) {
     if index >= connected.ends.count {
         return void
     }
@@ -849,7 +961,14 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
             }
             case Reissue(address) => {
                 if state.placing {
-                    defer_request(to, platform, state, connected, port, Deferred.{client = index, reissue = true, address = address})
+                    defer_request(
+                        to,
+                        platform,
+                        state,
+                        connected,
+                        port,
+                        Deferred.{client = index, reissue = true, address = address}
+                    )
                     continue
                 }
                 out := os.Outgoing.{}
@@ -875,8 +994,12 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
             case PhysicalMemory(range) => answer(end, port, give_memory(platform, state, index, range))
             case ConfigRead(access) => answer(end, port, config_read(state, index, access))
             case ConfigWrite(access) => answer(end, port, config_write(state, index, access))
-            case GiveSleepTypes(types) => answer(end, port, give_sleep_types(to, platform, state, index, types, state.tables, state.tables_size))
-            case HostWindows(given) => answer(end, port, take_windows(to, platform, state, connected, port, index, given))
+            case GiveSleepTypes(
+                types
+            ) => answer(end, port, give_sleep_types(to, platform, state, index, types, state.tables, state.tables_size))
+            case HostWindows(
+                given
+            ) => answer(end, port, take_windows(to, platform, state, connected, port, index, given))
         }
     }
 }
@@ -888,7 +1011,7 @@ serve_client :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[
  * @param port The port it's bound to.
  * @param response The response; what it holds moves to the client.
  */
-answer :: fn(end: slop_os.Channel, port: slop_os.Port, response #escaping : protocol.Response) {
+answer :: fn(end : slop_os.Channel, port : slop_os.Port, response #escaping : protocol.Response) {
     out := os.Outgoing.{}
     made :: os.begin[protocol.Response](&out)
     made^ = response
@@ -910,7 +1033,13 @@ answer :: fn(end: slop_os.Channel, port: slop_os.Port, response #escaping : prot
  * @return Claimed with the device's bundle, which moves to the client with the response; or NoDevice if no function
  *     has that address, another client claimed it, or its bundle can't be made.
  */
-reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, address: u32) -> protocol.Response {
+reissue :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    client : usize,
+    address : u32
+) -> protocol.Response {
     for &function, i in state.functions {
         if i >= state.count {
             break
@@ -918,8 +1047,10 @@ reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
         if slop_os.device_address(state.host.segment, function.bus, function.device, function.function) != address {
             continue
         }
-        // Unclaimed here, it was claimed from the platform service before this one, which the root task started again
-        // (decisions/0140): the client asking for it again is its claimer
+        /*
+         * Unclaimed here, it was claimed from the platform service before this one, which the root task started again
+         * (decisions/0140): the client asking for it again is its claimer
+         */
         if !function.claimed {
             function.claimed = true
             function.claimer = client
@@ -952,13 +1083,21 @@ reissue :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut P
  * @return Claimed with the device's bundle, which moves to the client with the response; or NoDevice if nothing
  *     unclaimed matches.
  */
-claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize, wanted: protocol.Wanted)
-    -> protocol.Response {
+claim :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    client : usize,
+    wanted : protocol.Wanted
+) -> protocol.Response {
     for &function, i in state.functions {
         if i >= state.count {
             break
         }
-        if function.claimed || function.bridge || function.class == CLASS_HOST_BRIDGE || !matches(function, wanted.devices) {
+        if function.claimed
+            || function.bridge
+            || function.class == CLASS_HOST_BRIDGE
+            || !matches(function, wanted.devices) {
             continue
         }
         function.trusted = wanted.trusted
@@ -966,11 +1105,24 @@ claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
             case Some(device) => {
                 function.claimed = true
                 function.claimer = client
-                log_line.write(to, "platform: %:%.% (% %) claimed", function.bus, function.device, function.function,
-                    function.vendor, function.device_id)
+                log_line.write(
+                    to,
+                    "platform: %:%.% (% %) claimed",
+                    function.bus,
+                    function.device,
+                    function.function,
+                    function.vendor,
+                    function.device_id
+                )
                 return .Claimed(device)
             }
-            case None => log_line.write(to, "platform: %:%.% can't be given out", function.bus, function.device, function.function)
+            case None => log_line.write(
+                to,
+                "platform: %:%.% can't be given out",
+                function.bus,
+                function.device,
+                function.function
+            )
         }
     }
     return .NoDevice
@@ -983,7 +1135,7 @@ claim :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Pla
  * @param wanted What's wanted: a vendor, a device and a class, each ANY_ID or ANY_CLASS for any.
  * @return True if each of the three is any or the function's.
  */
-matches :: fn(function: ptr[Function], wanted: protocol.DeviceMatch) -> bool {
+matches :: fn(function : ptr[Function], wanted : protocol.DeviceMatch) -> bool {
     return (wanted.vendor == protocol.ANY_ID || wanted.vendor == function.vendor)
         && (wanted.device == protocol.ANY_ID || wanted.device == function.device_id)
         && (wanted.class == protocol.ANY_CLASS || wanted.class == function.class)
@@ -1000,18 +1152,36 @@ matches :: fn(function: ptr[Function], wanted: protocol.DeviceMatch) -> bool {
  *     memory couldn't be made; or null, with what was made closed, if its Device, configuration space or domain can't
  *     be made, or the Device can't be attached.
  */
-bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: ptr[Function]) -> protocol.PciDevice? {
+bundle_of :: fn(
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    function : ptr[Function]
+) -> protocol.PciDevice? {
     block :: slop_os.startup_block()
     host :: &state.host
     address :: slop_os.device_address(host.segment, function.bus, function.device, function.function)
-    result := protocol.PciDevice.{address = address, vendor = function.vendor, device_id = function.device_id, class = function.class}
+    result := protocol.PciDevice.{
+        address = address,
+        vendor = function.vendor,
+        device_id = function.device_id,
+        class = function.class,
+    }
     config_physical :: host.ecam + pci.function_offset(host, function.bus, function.device, function.function)
-    result.device = slop_os.device_create(platform, block.budget, address, pci.msi_source(host, address), config_physical) or_return null
+    result.device = slop_os.device_create(
+        platform,
+        block.budget,
+        address,
+        pci.msi_source(host, address),
+        config_physical
+    )
+        or_return null
     result.config = slop_os.memory_create_physical(platform, block.budget, config_physical, pci.FUNCTION_BYTES, .Device)
         or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
     trust :: if function.trusted { slop_os.DMA_DOMAIN_TRUSTED } else { cast[u32](0) }
-    result.domain = slop_os.dma_domain_create(platform, block.budget, trust) or_else cast[slop_os.DmaDomain](slop_os.NO_HANDLE)
-    attached := cast[slop_os.Handle](result.config) != slop_os.NO_HANDLE && cast[slop_os.Handle](result.domain) != slop_os.NO_HANDLE
+    result.domain = slop_os.dma_domain_create(platform, block.budget, trust)
+        or_else cast[slop_os.DmaDomain](slop_os.NO_HANDLE)
+    attached := cast[slop_os.Handle](result.config) != slop_os.NO_HANDLE
+        && cast[slop_os.Handle](result.domain) != slop_os.NO_HANDLE
     if attached {
         if slop_os.device_attach(platform, result.device, result.domain) is_error {
             attached = false
@@ -1025,7 +1195,13 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
     for bar, i in function.bars {
         if bar.valid && bar.size != 0 && i < bars.count {
             cpu :: cpu_address(host, bar.pci)
-            bars[i] = slop_os.memory_create_physical(platform, block.budget, cpu & ~(PAGE - 1), pci.round_up(bar.size + (cpu & (PAGE - 1)), PAGE), .Device)
+            bars[i] = slop_os.memory_create_physical(
+                platform,
+                block.budget,
+                cpu & ~(PAGE - 1),
+                pci.round_up(bar.size + (cpu & (PAGE - 1)), PAGE),
+                .Device
+            )
                 or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
         }
     }
@@ -1045,7 +1221,7 @@ bundle_of :: fn(platform: slop_os.Platform, state: ptr[mut Platform], function: 
  * @param address An address on the PCI bus, as a BAR is programmed with; any value.
  * @return The CPU's address for it; address itself if it's in no window.
  */
-cpu_address :: fn(host: ptr[pci.Host], address: u64) -> u64 {
+cpu_address :: fn(host : ptr[pci.Host], address : u64) -> u64 {
     for window, i in host.windows {
         if cast[u32](i) < host.window_count && address >= window.pci && address - window.pci < window.size {
             return address - window.pci + window.cpu
@@ -1060,8 +1236,12 @@ cpu_address :: fn(host: ptr[pci.Host], address: u64) -> u64 {
  * @param device The bundle; its BARs, which aren't made yet when it's closed, are left alone, and its handles aren't
  *     cleared.
  */
-close_bundle :: fn(device: ptr[mut protocol.PciDevice]) {
-    for handle in slop_os.Handle.[cast[slop_os.Handle](device.device), cast[slop_os.Handle](device.config), cast[slop_os.Handle](device.domain)] {
+close_bundle :: fn(device : ptr[mut protocol.PciDevice]) {
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](device.device),
+        cast[slop_os.Handle](device.config),
+        cast[slop_os.Handle](device.domain)
+    ] {
         if handle != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(handle)
         }

@@ -1,11 +1,11 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import terminal from "std:terminal"
 import slop_os from "std:os/slop_os"
+import terminal from "std:terminal"
 import powerbox from "../../protocols/powerbox"
+import shell_language as language from "../../shell_language"
 
 /*
  * Attaching the debugger to a program the shell didn't start (decisions/0185, 12f): debug attach name asks the
@@ -23,24 +23,36 @@ import powerbox from "../../protocols/powerbox"
  * @return Null once the debugger's let it go or it's ended; an error without a powerbox, if it's refused, or if
  *     there's no such program.
  */
-attach_debugged :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count != 2 || tree.children[1].kind != .Word {
         return error_at(tree.at, "debug attach takes the name of a program the session runs: debug attach name")
     }
     name :: tree.children[1].text
-    end :: powerbox_connection(shell, "shell") or_return error_at(tree.at, "debug attach needs the session's powerbox, which this session hasn't")
+    end :: powerbox_connection(shell, "shell")
+        or_return error_at(tree.at, "debug attach needs the session's powerbox, which this session hasn't")
     defer slop_os.handle_close(cast[slop_os.Handle](end))
-    reply :: os.port_for(slop_os.startup_block().budget, end) or_return error_at(tree.at, "the powerbox can't be reached")
+    reply :: os.port_for(slop_os.startup_block().budget, end)
+        or_return error_at(tree.at, "the powerbox can't be reached")
     defer slop_os.handle_close(cast[slop_os.Handle](reply))
-    port :: slop_os.port_create(slop_os.startup_block().budget) or_return error_at(tree.at, "there's no memory to debug it")
+    port :: slop_os.port_create(slop_os.startup_block().budget)
+        or_return error_at(tree.at, "there's no memory to debug it")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     // A copy of the port goes to the powerbox, then the session manager, which attaches the intercept on it
-    given :: slop_os.handle_duplicate(cast[slop_os.Handle](port), cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PORT_BIND)
-        | cast[u32](slop_os.RIGHT_TRANSFER))) or_return error_at(tree.at, "the port can't be given")
+    given :: slop_os.handle_duplicate(
+        cast[slop_os.Handle](port),
+        cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PORT_BIND) | cast[u32](slop_os.RIGHT_TRANSFER))
+    )
+        or_return error_at(tree.at, "the port can't be given")
     out := os.Outgoing.{}
     request :: os.begin[powerbox.Request](&out)
-    request^ = .RequestDebug(powerbox.DebugRequest.{name = os.append(&out, string_bytes(name)),
-        purpose = os.append(&out, string_bytes("as you asked in the shell")), port = cast[slop_os.Port](given), key = DEBUG_STOP_KEY})
+    request^ = .RequestDebug(
+        powerbox.DebugRequest.{
+            name = os.append(&out, string_bytes(name)),
+            purpose = os.append(&out, string_bytes("as you asked in the shell")),
+            port = cast[slop_os.Port](given),
+            key = DEBUG_STOP_KEY,
+        }
+    )
     if powerbox.send_request(end, reply, &out) != null {
         return error_at(tree.at, "the powerbox can't be reached")
     }
@@ -55,19 +67,35 @@ attach_debugged :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
     attached := powerbox.Attached.{}
     match os.message_of[powerbox.Response](&into)^ {
         case Attached(given_back) => attached = given_back
-        case Busy => return error_at(tree.at, "the powerbox is asking the user something else; try again once that's answered")
+        case Busy => return error_at(
+            tree.at,
+            "the powerbox is asking the user something else; try again once that's answered"
+        )
         case _ => return error_at(tree.at, message("debugging % was refused, or it isn't running", name))
     }
     program_bytes :: os.items(&into, attached.program)
-    program :: if program_bytes.count > 0 { message("%", string_of(&program_bytes[0], program_bytes.count)) } else { name }
+    program :: if program_bytes.count > 0 {
+        message("%", string_of(&program_bytes[0], program_bytes.count))
+    }
+    else {
+        name
+    }
     // The call it's debugged through: its program's file for the symbols program, and what it was given
     named := runtime.new(Node)
     named^ = Node.{kind = .Call, at = tree.at, text = program}
     call := runtime.new(Call)
-    call^ = Call.{tree = named, executable = cast[slop_os.Memory](slop_os.NO_HANDLE), started = true,
-        lifecycle = cast[slop_os.Channel](slop_os.NO_HANDLE)}
-    call.launched = os.Launched.{process = attached.process, budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE), image = attached.image,
-        faults = os.LaunchedFaults.{intercept = attached.intercept, space = attached.space}}
+    call^ = Call.{
+        tree = named,
+        executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
+        started = true,
+        lifecycle = cast[slop_os.Channel](slop_os.NO_HANDLE),
+    }
+    call.launched = os.Launched.{
+        process = attached.process,
+        budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
+        image = attached.image,
+        faults = os.LaunchedFaults.{intercept = attached.intercept, space = attached.space},
+    }
     match find_program(shell, program) {
         case Some(found) => {
             call.executable = found.executable
@@ -98,8 +126,14 @@ attach_debugged :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
         session.file = &file
     }
     suspended :: suspend_all(&session)
-    say(shell, message("attached to %, its % threads suspended; break, watch, step, continue, where, registers, threads, fibers, print, quit",
-        name, suspended))
+    say(
+        shell,
+        message(
+            "attached to %, its % threads suspended; break, watch, step, continue, where, registers, threads, fibers, print, quit",
+            name,
+            suspended
+        )
+    )
     editor := terminal.LineEditor.{}
     loop {
         if session.ended {
@@ -127,7 +161,7 @@ attach_debugged :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
  * @param session The session, whose thread becomes the first suspended and which is marked suspended.
  * @return How many were suspended.
  */
-suspend_all :: fn(session: ptr[mut Debugging]) -> u32 {
+suspend_all :: fn(session : ptr[mut Debugging]) -> u32 {
     process :: session.call.launched.process
     ids : u64[64]
     count :: slop_os.process_threads(process, ids) or_else 0
@@ -155,7 +189,7 @@ suspend_all :: fn(session: ptr[mut Debugging]) -> u32 {
  *
  * @param session The session, no longer marked suspended.
  */
-resume_all :: fn(session: ptr[mut Debugging]) {
+resume_all :: fn(session : ptr[mut Debugging]) {
     process :: session.call.launched.process
     ids : u64[64]
     count :: slop_os.process_threads(process, ids) or_else 0
@@ -174,7 +208,7 @@ resume_all :: fn(session: ptr[mut Debugging]) {
  *
  * @param session The session, ended after, as let go.
  */
-let_go :: fn(session: ptr[mut Debugging]) {
+let_go :: fn(session : ptr[mut Debugging]) {
     process :: session.call.launched.process
     none := slop_os.ThreadDebug.{}
     _ = slop_os.process_set_debug(process, &none)

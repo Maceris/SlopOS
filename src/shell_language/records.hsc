@@ -27,7 +27,14 @@ import text_buffer from "std:text_buffer"
  * @return Null once it's written; why it can't be otherwise, a sentence for a person: the wrong kind of value, a number
  *     out of the type's range, an enum member it hasn't, a record missing a field, or a type the shell can't give.
  */
-encode :: fn(manifest: ptr[schema.Schema], place: usize, given: Value, bare: bool, out: ptr[mut u8[..]], offset: usize) -> string? {
+encode :: fn(
+    manifest : ptr[schema.Schema],
+    place : usize,
+    given : Value,
+    bare : bool,
+    out : ptr[mut u8[..]],
+    offset : usize
+) -> string? {
     unaliased :: schema.unaliased_place(manifest, place)
     type :: schema.type_in(manifest, unaliased) or_return "its manifest is cut short"
     size :: cast[usize](type.size)
@@ -211,7 +218,7 @@ encode :: fn(manifest: ptr[schema.Schema], place: usize, given: Value, bare: boo
  * @param value The number, of which only the low count bytes are written; any above are dropped.
  * @param count How many of its bytes, at most 8.
  */
-put :: fn(out: ptr[mut u8[..]], offset: usize, value: u64, count: usize) {
+put :: fn(out : ptr[mut u8[..]], offset : usize, value : u64, count : usize) {
     target : mut u8[] = out^
     for i in cast[usize](0)..<count {
         at :: offset + i
@@ -228,7 +235,7 @@ put :: fn(out: ptr[mut u8[..]], offset: usize, value: u64, count: usize) {
  * @param bytes The bytes, copied.
  * @return Where they start in out, in bytes.
  */
-tail :: fn(out: ptr[mut u8[..]], bytes: u8[]) -> usize {
+tail :: fn(out : ptr[mut u8[..]], bytes : u8[]) -> usize {
     align(out)
     start :: out.count
     for byte in bytes {
@@ -244,7 +251,7 @@ tail :: fn(out: ptr[mut u8[..]], bytes: u8[]) -> usize {
  * @param out The bytes added to.
  * @param count How many zero bytes are added; 0 adds none.
  */
-zero :: fn(out: ptr[mut u8[..]], count: usize) {
+zero :: fn(out : ptr[mut u8[..]], count : usize) {
     for i in cast[usize](0)..<count {
         runtime.array_add(out, cast[u8](0))
     }
@@ -255,7 +262,7 @@ zero :: fn(out: ptr[mut u8[..]], count: usize) {
  *
  * @param out The bytes, grown by 0 to 7 zero bytes; nothing's added when its count is a multiple of 8 already.
  */
-align :: fn(out: ptr[mut u8[..]]) {
+align :: fn(out : ptr[mut u8[..]]) {
     loop {
         if out.count % 8 == 0 {
             break
@@ -270,7 +277,7 @@ align :: fn(out: ptr[mut u8[..]]) {
  * @param text The word, as written: an optional - then decimal digits, nothing else, not even spaces.
  * @return The number; null if it's empty, has anything but digits after the sign, or more than 18 digits.
  */
-integer_of :: fn(text: string) -> i64? {
+integer_of :: fn(text : string) -> i64? {
     if text.count == 0 {
         return null
     }
@@ -295,7 +302,7 @@ integer_of :: fn(text: string) -> i64? {
  * @param text The word; one starting with - isn't read.
  * @return The duration, in nanoseconds; null if it isn't one, or has a size's unit or none.
  */
-duration_of :: fn(text: string) -> i64? {
+duration_of :: fn(text : string) -> i64? {
     for character, i in text {
         if character < '0' || character > '9' {
             number :: integer_of(slice(text, 0, i)) or_return null
@@ -316,13 +323,18 @@ duration_of :: fn(text: string) -> i64? {
  * @param place The type's place among the manifest's types, taken as it is: an alias is named as itself.
  * @return Its name, a view of the manifest's text; or its kind, a literal; "value" for a place not in the manifest.
  */
-type_text :: fn(manifest: ptr[schema.Schema], place: usize) -> string {
+type_text :: fn(manifest : ptr[schema.Schema], place : usize) -> string {
     type :: schema.type_in(manifest, place) or_return "value"
     if type.name.count > 0 {
         return type.name
     }
     return match type.kind {
-        case .Integer => if type.is_signed { "whole number" } else { "count" }
+        case .Integer => if type.is_signed {
+            "whole number"
+        }
+        else {
+            "count"
+        }
         case .Boolean => "bool"
         case .String => "string"
         case .Array => "list"
@@ -338,7 +350,7 @@ type_text :: fn(manifest: ptr[schema.Schema], place: usize) -> string {
  *     constants gives "".
  * @return The list, on the heap, never freed, cut at 256 bytes; the enum's name if it couldn't be copied.
  */
-members_text :: fn(type: ptr[schema.Type]) -> string {
+members_text :: fn(type : ptr[schema.Type]) -> string {
     storage : u8[256]
     out := text_buffer.make(storage)
     for constant, i in type.constants {
@@ -365,7 +377,7 @@ members_text :: fn(type: ptr[schema.Type]) -> string {
  * @return The value; Null for a type the shell doesn't read, or one not in the manifest. An enum's value without a
  *     member is an Int.
  */
-decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize, depth: usize) -> Value {
+decode :: fn(manifest : ptr[schema.Schema], place : usize, bytes : u8[], at : usize, depth : usize) -> Value {
     type :: schema.type_in(manifest, schema.unaliased_place(manifest, place)) or_return Value.Null
     size :: cast[usize](type.size)
     if depth > 16 {
@@ -432,7 +444,11 @@ decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize,
             if member_type.size == 0 {
                 continue
             }
-            set_field(made, strings.clone(member.name) or_else "", decode(manifest, member.type, bytes, at + cast[usize](member.offset), depth + 1))
+            set_field(
+                made,
+                strings.clone(member.name) or_else "",
+                decode(manifest, member.type, bytes, at + cast[usize](member.offset), depth + 1)
+            )
         }
         return .Record(made)
     }
@@ -500,7 +516,7 @@ decode :: fn(manifest: ptr[schema.Schema], place: usize, bytes: u8[], at: usize,
  * @param place The type's place, before its aliases are followed.
  * @return True if it, or an alias it names on the way to its integer, is named ByteCount.
  */
-is_byte_count :: fn(manifest: ptr[schema.Schema], place: usize) -> bool {
+is_byte_count :: fn(manifest : ptr[schema.Schema], place : usize) -> bool {
     at := place
     for step in 0..<8 {
         type :: schema.type_in(manifest, at) or_return false
@@ -523,7 +539,7 @@ is_byte_count :: fn(manifest: ptr[schema.Schema], place: usize) -> bool {
  * @param count How many bytes it is, at most 8.
  * @return The number; 0 if the bytes aren't all there, or count is past 8.
  */
-number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
+number_in :: fn(bytes : u8[], at : usize, count : usize) -> u64 {
     if count > 8 || at > bytes.count || count > bytes.count - at {
         return 0
     }
@@ -542,7 +558,7 @@ number_in :: fn(bytes: u8[], at: usize, count: usize) -> u64 {
  * @param count How many bytes it is.
  * @return The text, on the heap, never freed; "" if the bytes aren't all there, there are none, or there's no memory.
  */
-text_in :: fn(bytes: u8[], at: usize, count: usize) -> string {
+text_in :: fn(bytes : u8[], at : usize, count : usize) -> string {
     if count == 0 || at >= bytes.count || count > bytes.count - at {
         return ""
     }

@@ -207,7 +207,7 @@ Part :: struct {
  * @return The transport; null if it lacks the common configuration, the notification area, or MSI-X, or its MSI-X
  *     table's BAR isn't mapped.
  */
-open :: fn(config: u64, bars: u64[6]) -> Transport? {
+open :: fn(config : u64, bars : u64[6]) -> Transport? {
     transport := Transport.{config = config}
     found := cast[u32](0)
     with {
@@ -268,7 +268,7 @@ RESET_SPINS : u64 : 1 << 24
  * @return The features taken, which the device accepted; null, the device marked FAILED, if its reset never finished,
  *     it isn't modern (no VERSION_1), or it refused them.
  */
-start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
+start :: fn(transport : ptr[Transport], wanted : u64) -> u64? {
     common :: transport.common
     write_u8(common, DEVICE_STATUS, 0)
     spins := cast[u64](0)
@@ -318,7 +318,7 @@ start :: fn(transport: ptr[Transport], wanted: u64) -> u64? {
  * @return True once it's set; false, nothing written, if entry is past the table's, or the MSI-X capability isn't
  *     found.
  */
-set_vector :: fn(transport: ptr[Transport], entry: u32, address: u64, data: u32) -> bool {
+set_vector :: fn(transport : ptr[Transport], entry : u32, address : u64, data : u32) -> bool {
     if entry >= transport.msix_entries {
         return false
     }
@@ -342,7 +342,7 @@ set_vector :: fn(transport: ptr[Transport], entry: u32, address: u64, data: u32)
  * @param entry The MSI-X table entry, or NO_VECTOR for none.
  * @return True if the device took it; false if it reads back NO_VECTOR, as a device that refused it gives.
  */
-set_config_vector :: fn(transport: ptr[Transport], entry: u16) -> bool {
+set_config_vector :: fn(transport : ptr[Transport], entry : u16) -> bool {
     write_u16(transport.common, CONFIG_MSIX_VECTOR, entry)
     return read_u16(transport.common, CONFIG_MSIX_VECTOR) == entry
 }
@@ -353,7 +353,7 @@ set_config_vector :: fn(transport: ptr[Transport], entry: u16) -> bool {
  * @param size The queue's size in descriptors, 1 to MAX_QUEUE_SIZE.
  * @return The offset in bytes.
  */
-device_ring_at :: fn(size: u64) -> u64 {
+device_ring_at :: fn(size : u64) -> u64 {
     // The driver's ring: flags, index, an entry for each descriptor, and the used event
     driver_end :: 16 * size + 6 + 2 * size
     return (driver_end + 3) & ~cast[u64](3)
@@ -365,7 +365,7 @@ device_ring_at :: fn(size: u64) -> u64 {
  * @param size The queue's size in descriptors, 1 to MAX_QUEUE_SIZE.
  * @return The bytes, not rounded to pages: 3334 for 128, so one page holds it; 6662 for 256.
  */
-queue_bytes :: fn(size: u64) -> u64 {
+queue_bytes :: fn(size : u64) -> u64 {
     // The device's ring: flags, index, an element for each descriptor, and the available event
     return device_ring_at(size) + 6 + 8 * size
 }
@@ -387,7 +387,14 @@ queue_bytes :: fn(size: u64) -> u64 {
  * @return The queue, all its descriptors free; null if the device has no such queue, won't take the vector, or the
  *     memory doesn't hold a queue of one descriptor.
  */
-setup_queue :: fn(transport: ptr[Transport], index: u16, page: u64, device_page: u64, bytes: u64, vector: u16) -> Queue? {
+setup_queue :: fn(
+    transport : ptr[Transport],
+    index : u16,
+    page : u64,
+    device_page : u64,
+    bytes : u64,
+    vector : u16
+) -> Queue? {
     common :: transport.common
     if index >= read_u16(common, NUM_QUEUES) {
         return null
@@ -419,13 +426,20 @@ setup_queue :: fn(transport: ptr[Transport], index: u16, page: u64, device_page:
     }
     notify_off :: cast[u64](read_u16(common, QUEUE_NOTIFY_OFF))
     write_u16(common, QUEUE_ENABLE, 1)
-    queue := Queue.{index = index, size = cast[u16](size), page = page, driver_ring = 16 * size, device_ring = device_ring,
-        notify = transport.notify + notify_off * cast[u64](transport.notify_multiplier)}
+    queue := Queue.{
+        index = index,
+        size = cast[u16](size),
+        page = page,
+        driver_ring = 16 * size,
+        device_ring = device_ring,
+        notify = transport.notify + notify_off * cast[u64](transport.notify_multiplier),
+    }
     for &word, i in queue.free {
         first :: cast[u64](i) * 64
-        word^ = if size >= first + 64 { cast[u64](0xffffffffffffffff) }
-            else if size > first { (cast[u64](1) << (size - first)) - 1 }
-            else { cast[u64](0) }
+        word^ = if size >= first + 64 {
+            cast[u64](0xffffffffffffffff)
+        }
+        else if size > first { (cast[u64](1) << (size - first)) - 1 } else { cast[u64](0) }
     }
     return queue
 }
@@ -436,8 +450,12 @@ setup_queue :: fn(transport: ptr[Transport], index: u16, page: u64, device_page:
  * @param transport The device's transport, as open made it, after start and setup_queue; its device status is written,
  *     not read back.
  */
-ready :: fn(transport: ptr[Transport]) {
-    write_u8(transport.common, DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK)
+ready :: fn(transport : ptr[Transport]) {
+    write_u8(
+        transport.common,
+        DEVICE_STATUS,
+        STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK
+    )
 }
 
 /**
@@ -449,7 +467,7 @@ ready :: fn(transport: ptr[Transport]) {
  * @param device_writes Whether the device writes it; false for one it reads.
  * @return The descriptor's index, which take_used gives back once the device's done; NO_DESCRIPTOR if none is free.
  */
-offer :: fn(queue: ptr[mut Queue], device_address: u64, length: u32, device_writes: bool) -> u16 {
+offer :: fn(queue : ptr[mut Queue], device_address : u64, length : u32, device_writes : bool) -> u16 {
     return offer_chain(queue, Part.[Part.{address = device_address, length = length, device_writes = device_writes}])
 }
 
@@ -462,7 +480,7 @@ offer :: fn(queue: ptr[mut Queue], device_address: u64, length: u32, device_writ
  * @return The first descriptor's index, which take_used gives back; NO_DESCRIPTOR, nothing offered, if there are no
  *     parts, not enough descriptors are free, or there are more than MAX_CHAIN parts.
  */
-offer_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
+offer_chain :: fn(queue : ptr[mut Queue], parts : Part[]) -> u16 {
     id :: add_chain(queue, parts)
     notify(queue)
     return id
@@ -473,7 +491,7 @@ offer_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
  *
  * @param queue The queue, set up and ready, whose unnotified count goes back to 0.
  */
-notify :: fn(queue: ptr[mut Queue]) {
+notify :: fn(queue : ptr[mut Queue]) {
     if queue.unnotified == 0 {
         return void
     }
@@ -496,7 +514,7 @@ notify :: fn(queue: ptr[mut Queue]) {
  * @return The first descriptor's index, which take_used gives back; NO_DESCRIPTOR, nothing added, if there are no
  *     parts, not enough descriptors are free, or there are more than MAX_CHAIN parts.
  */
-add_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
+add_chain :: fn(queue : ptr[mut Queue], parts : Part[]) -> u16 {
     if parts.count == 0 {
         return NO_DESCRIPTOR
     }
@@ -544,7 +562,10 @@ add_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
     queue.next_available += 1
     // The descriptor and entry are where the device reads them before it sees the index
     intrinsics.fence_sequentially_consistent()
-    intrinsics.volatile_store_u16(cast[ptr[mut u16]](queue.page + queue.driver_ring + 2), bit_cast[u16](cast[u16le](queue.next_available)))
+    intrinsics.volatile_store_u16(
+        cast[ptr[mut u16]](queue.page + queue.driver_ring + 2),
+        bit_cast[u16](cast[u16le](queue.next_available))
+    )
     queue.unnotified += 1
     return id
 }
@@ -556,7 +577,7 @@ add_chain :: fn(queue: ptr[mut Queue], parts: Part[]) -> u16 {
  * @param id The descriptor's index; one past MAX_QUEUE_SIZE counts as free.
  * @return True if it's free.
  */
-is_free :: fn(queue: ptr[Queue], id: u16) -> bool {
+is_free :: fn(queue : ptr[Queue], id : u16) -> bool {
     word :: cast[usize](id) / 64
     if word >= queue.free.count {
         return true
@@ -571,7 +592,7 @@ is_free :: fn(queue: ptr[Queue], id: u16) -> bool {
  * @param id The descriptor's index, below the queue's size; one past MAX_QUEUE_SIZE is passed over.
  * @param free True to mark it free, false taken.
  */
-set_free :: fn(queue: ptr[mut Queue], id: u16, free: bool) {
+set_free :: fn(queue : ptr[mut Queue], id : u16, free : bool) {
     word :: cast[usize](id) / 64
     if word >= queue.free.count {
         return void
@@ -599,7 +620,7 @@ Used :: struct {
  * @param queue The queue, which isn't changed.
  * @return Its index, below the queue's size; null if every one is in a chain the device has.
  */
-first_free :: fn(queue: ptr[Queue]) -> u16? {
+first_free :: fn(queue : ptr[Queue]) -> u16? {
     for word, i in queue.free {
         if word == 0 {
             continue
@@ -629,7 +650,7 @@ first_free :: fn(queue: ptr[Queue]) -> u16? {
  * @return The chain's first descriptor's index and how many bytes the device wrote; null if the device hasn't
  *     finished another.
  */
-take_used :: fn(queue: ptr[mut Queue]) -> Used? {
+take_used :: fn(queue : ptr[mut Queue]) -> Used? {
     used_index : u16 = bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](queue.page + queue.device_ring + 2)))
     id := cast[u32](0)
     length := cast[u32](0)
@@ -639,7 +660,10 @@ take_used :: fn(queue: ptr[mut Queue]) -> Used? {
         }
         // The element is read after the index that says it's there
         intrinsics.fence_sequentially_consistent()
-        element :: cast[ptr[UsedElement]](queue.page + queue.device_ring + 4 + cast[u64](queue.last_used % queue.size) * 8)
+        element :: cast[ptr[UsedElement]](queue.page
+            + queue.device_ring
+            + 4
+            + cast[u64](queue.last_used % queue.size) * 8)
         queue.last_used += 1
         id = element.id
         length = element.length
@@ -672,7 +696,7 @@ take_used :: fn(queue: ptr[mut Queue]) -> Used? {
  * @param transport The device's transport, as open made it; its ISR status byte is read, which clears it.
  * @return The status; 0 if the device has no ISR status.
  */
-interrupt_status :: fn(transport: ptr[Transport]) -> u8 {
+interrupt_status :: fn(transport : ptr[Transport]) -> u8 {
     return if transport.isr == 0 { cast[u8](0) } else { intrinsics.volatile_load_u8(cast[ptr[u8]](transport.isr)) }
 }
 
@@ -684,7 +708,7 @@ interrupt_status :: fn(transport: ptr[Transport]) -> u8 {
  * @return The register's value as the device gives it at the load; never cached, nor merged with other volatile
  *     accesses.
  */
-read_u8 :: fn(base: u64, offset: u64) -> u8 {
+read_u8 :: fn(base : u64, offset : u64) -> u8 {
     return intrinsics.volatile_load_u8(cast[ptr[u8]](base + offset))
 }
 
@@ -695,7 +719,7 @@ read_u8 :: fn(base: u64, offset: u64) -> u8 {
  * @param offset The register's offset in bytes, 2-byte aligned.
  * @return The register's value, read as little-endian and given in the CPU's order.
  */
-read_u16 :: fn(base: u64, offset: u64) -> u16 {
+read_u16 :: fn(base : u64, offset : u64) -> u16 {
     return bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](base + offset)))
 }
 
@@ -706,7 +730,7 @@ read_u16 :: fn(base: u64, offset: u64) -> u16 {
  * @param offset The register's offset in bytes, 4-byte aligned.
  * @return The register's value, read as little-endian and given in the CPU's order.
  */
-read_u32 :: fn(base: u64, offset: u64) -> u32 {
+read_u32 :: fn(base : u64, offset : u64) -> u32 {
     return bit_cast[u32le](intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset)))
 }
 
@@ -717,7 +741,7 @@ read_u32 :: fn(base: u64, offset: u64) -> u32 {
  * @param offset The register's offset in bytes.
  * @param value What's written.
  */
-write_u8 :: fn(base: u64, offset: u64, value: u8) {
+write_u8 :: fn(base : u64, offset : u64, value : u8) {
     intrinsics.volatile_store_u8(cast[ptr[mut u8]](base + offset), value)
 }
 
@@ -728,7 +752,7 @@ write_u8 :: fn(base: u64, offset: u64, value: u8) {
  * @param offset The register's offset in bytes, 2-byte aligned.
  * @param value What's written.
  */
-write_u16 :: fn(base: u64, offset: u64, value: u16) {
+write_u16 :: fn(base : u64, offset : u64, value : u16) {
     intrinsics.volatile_store_u16(cast[ptr[mut u16]](base + offset), bit_cast[u16](cast[u16le](value)))
 }
 
@@ -739,7 +763,7 @@ write_u16 :: fn(base: u64, offset: u64, value: u16) {
  * @param offset The register's offset in bytes, 4-byte aligned.
  * @param value What's written.
  */
-write_u32 :: fn(base: u64, offset: u64, value: u32) {
+write_u32 :: fn(base : u64, offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), bit_cast[u32](cast[u32le](value)))
 }
 
@@ -750,7 +774,7 @@ write_u32 :: fn(base: u64, offset: u64, value: u32) {
  * @param offset The register's offset in bytes, 8-byte aligned.
  * @param value What's written.
  */
-write_u64 :: fn(base: u64, offset: u64, value: u64) {
+write_u64 :: fn(base : u64, offset : u64, value : u64) {
     write_u32(base, offset, cast[u32](value))
     write_u32(base, offset + 4, cast[u32](value >> 32))
 }

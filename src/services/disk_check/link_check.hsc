@@ -2,10 +2,10 @@ package disk_check
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import testing from "std:testing"
 import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
 import grant from "std:os/slop_os/grant"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /*
@@ -40,10 +40,14 @@ LANDED_FILE :: "shared/from the system volume.txt"
  *     step the rest builds on failed: making or granting what's shared, keeping it as links, opening what a link
  *     reached, or listing the links issued.
  */
-links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+links_reach_another_volume_and_grant_nothing_further #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     system :: system_of(t, given)?
-    sealed :: testing.require_some(t, given.sealed, "the sealed volume's test, run before, unlocked the encrypted volume")?
+    sealed :: testing.require_some(
+        t,
+        given.sealed,
+        "the sealed volume's test, run before, unlocked the encrypted volume"
+    )?
     buffer :: buffer_of(t, given)?
     budget :: slop_os.startup_block().budget
     system_bound :: os.port_for(budget, system.end)
@@ -53,8 +57,16 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
     into := os.Incoming.{}
 
     // What the sealed volume shares, granted
-    testing.require(t, made_directory(sealed.end, sealed_port, SHARED_DIRECTORY), "the encrypted volume makes a directory")?
-    testing.require(t, write_new(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, buffer), "the encrypted volume takes a new file")?
+    testing.require(
+        t,
+        made_directory(sealed.end, sealed_port, SHARED_DIRECTORY),
+        "the encrypted volume makes a directory"
+    )?
+    testing.require(
+        t,
+        write_new(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, buffer),
+        "the encrypted volume takes a new file"
+    )?
     granted_directory :: granted(sealed.end, sealed_port, SHARED_DIRECTORY, true)
     whole :: testing.require_some(t, granted_directory, "a volume grants a directory of its own, to write")?
     granted_file :: granted(sealed.end, sealed_port, SHARED_FILE, false)
@@ -72,17 +84,33 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
     }
 
     // Written and read through them
-    testing.expect(t, write_new(system.end, system_port, THROUGH_FILE, THROUGH_TEXT, buffer),
-        "a file is written through a link to a directory granted to write")
-    testing.expect(t, holds(sealed.end, sealed_port, LANDED_FILE, THROUGH_TEXT, buffer),
-        "a file written through a link lands in the volume that granted it")
-    testing.expect(t, holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, buffer), "a file reads through a link to its directory")
-    testing.expect(t, holds(system.end, system_port, "links/note", SHARED_TEXT, buffer), "a file reads through a link to it")
+    testing.expect(
+        t,
+        write_new(system.end, system_port, THROUGH_FILE, THROUGH_TEXT, buffer),
+        "a file is written through a link to a directory granted to write"
+    )
+    testing.expect(
+        t,
+        holds(sealed.end, sealed_port, LANDED_FILE, THROUGH_TEXT, buffer),
+        "a file written through a link lands in the volume that granted it"
+    )
+    testing.expect(
+        t,
+        holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, buffer),
+        "a file reads through a link to its directory"
+    )
+    testing.expect(
+        t,
+        holds(system.end, system_port, "links/note", SHARED_TEXT, buffer),
+        "a file reads through a link to it"
+    )
     out := os.Outgoing.{}
     writing :: os.begin[dir.Request](&out)
     writing^ = .OpenFile(dir.OpenFile.{path = bytes_of(&out, "links/note"), creation = .Existing})
     match ask_dir(system.end, system_port, &out, &into) {
-        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "a link to a file granted to read opens nothing to write")
+        case Failed(
+            error
+        ) => testing.expect_eq(t, error, .ReadOnly, "a link to a file granted to read opens nothing to write")
         case _ => testing.fail(t, "a link to a file granted to read opens nothing to write")
     }
     testing.expect(t, lists_link(system.end, system_port, "linked"), "a link lists as a link in its directory")
@@ -98,12 +126,23 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
     }
     reached_bound :: os.port_for(budget, reached.end)
     reached_port :: testing.require_some(t, reached_bound, "the budget has room for a port")?
-    testing.expect(t, holds(reached.end, reached_port, "note.txt", SHARED_TEXT, buffer), "a directory opened through a link reads its files")
+    testing.expect(
+        t,
+        holds(reached.end, reached_port, "note.txt", SHARED_TEXT, buffer),
+        "a directory opened through a link reads its files"
+    )
     out = os.Outgoing.{}
     regranting :: os.begin[dir.Request](&out)
     regranting^ = .Grant(dir.GrantOf.{path = bytes_of(&out, "note.txt"), write = false})
     match ask_dir(reached.end, reached_port, &out, &into) {
-        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "what a link reached grants nothing: it isn't the holder's to share")
+        case Failed(
+            error
+        ) => testing.expect_eq(
+            t,
+            error,
+            .ReadOnly,
+            "what a link reached grants nothing: it isn't the holder's to share"
+        )
         case Granted(made) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](made.end))
             testing.fail(t, "what a link reached grants nothing: it isn't the holder's to share")
@@ -114,7 +153,14 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
     listing :: os.begin[dir.Request](&out)
     listing^ = .Links(0)
     match ask_dir(reached.end, reached_port, &out, &into) {
-        case Failed(error) => testing.expect_eq(t, error, .ReadOnly, "what a link reached lists no links: they're its volume's, not the holder's")
+        case Failed(
+            error
+        ) => testing.expect_eq(
+            t,
+            error,
+            .ReadOnly,
+            "what a link reached lists no links: they're its volume's, not the holder's"
+        )
         case _ => testing.fail(t, "what a link reached lists no links: they're its volume's, not the holder's")
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](reached_port))
@@ -132,8 +178,17 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
                 path :: os.items(&into, link.path)
                 expected :: if i == 0 { SHARED_DIRECTORY } else { SHARED_FILE }
                 testing.require_lt(t, i, 2, "the encrypted volume issued two links, so it lists two")?
-                testing.expect(t, same_text(path, expected), "a volume lists the links it issued in the order it issued them, by path")
-                testing.expect_eq(t, link.write, i == 0, "a volume lists whether each link it issued may write: the directory's, not the file's")
+                testing.expect(
+                    t,
+                    same_text(path, expected),
+                    "a volume lists the links it issued in the order it issued them, by path"
+                )
+                testing.expect_eq(
+                    t,
+                    link.write,
+                    i == 0,
+                    "a volume lists whether each link it issued may write: the directory's, not the file's"
+                )
                 if i < numbers.count {
                     numbers[i] = link.number
                 }
@@ -157,7 +212,11 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
         case Failed(error) => testing.expect_eq(t, error, .Revoked, "a link revoked opens nothing")
         case _ => testing.fail(t, "a link revoked opens nothing")
     }
-    testing.expect(t, holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, buffer), "revoking one link leaves the others working")
+    testing.expect(
+        t,
+        holds(system.end, system_port, "linked/note.txt", SHARED_TEXT, buffer),
+        "revoking one link leaves the others working"
+    )
 
     // A grant kept in its own volume, followed as any other
     granted_own :: granted(system.end, system_port, "modules/hello.elf", false)
@@ -182,7 +241,11 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
         case Done => {}
         case _ => testing.fail(t, "a link is removed as a file is")
     }
-    testing.expect(t, holds(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, buffer), "removing a link leaves what it reached")
+    testing.expect(
+        t,
+        holds(sealed.end, sealed_port, SHARED_FILE, SHARED_TEXT, buffer),
+        "removing a link leaves what it reached"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](system_port))
     _ = slop_os.handle_close(cast[slop_os.Handle](sealed_port))
     return .Ok
@@ -196,7 +259,7 @@ links_reach_another_volume_and_grant_nothing_further #test :: fn(t: ptr[mut test
  * @param path Its path beneath end.
  * @return Whether it's there; the connection opened to it is closed.
  */
-made_directory :: fn(end: slop_os.Channel, port: slop_os.Port, path: string) -> bool {
+made_directory :: fn(end : slop_os.Channel, port : slop_os.Port, path : string) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     opening :: os.begin[dir.Request](&out)
@@ -219,7 +282,7 @@ made_directory :: fn(end: slop_os.Channel, port: slop_os.Port, path: string) -> 
  * @param write Whether the grant is to write as well as read.
  * @return The grant, which the caller owns, to keep as a link or close; null if it was refused.
  */
-granted :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, write: bool) -> os.Channel[grant.Grant]? {
+granted :: fn(end : slop_os.Channel, port : slop_os.Port, path : string, write : bool) -> os.Channel[grant.Grant]? {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     granting :: os.begin[dir.Request](&out)
@@ -239,7 +302,12 @@ granted :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, write: boo
  * @param given The grant, which moves to the volume with the request.
  * @return The volume's answer: Done once it's kept; Unsupported if it couldn't be sent or the connection failed.
  */
-linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.Channel[grant.Grant]) -> dir.Response {
+linked :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    path : string,
+    given : os.Channel[grant.Grant]
+) -> dir.Response {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     linking :: os.begin[dir.Request](&out)
@@ -255,7 +323,7 @@ linked :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, given: os.C
  * @param name The name looked for, compared byte for byte with each listed entry's.
  * @return Whether it's among the first 64 entries listed, and is a link; false if the listing fails first.
  */
-lists_link :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> bool {
+lists_link :: fn(end : slop_os.Channel, port : slop_os.Port, name : string) -> bool {
     into := os.Incoming.{}
     cursor : u64 = 0
     for i in 0..<64 {

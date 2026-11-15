@@ -28,7 +28,7 @@ MARKER :: "a sealed volume's own words"
  * @param text The text, whose bytes are viewed, not copied.
  * @return Its bytes, a view of it.
  */
-text_of :: fn(text: string) -> u8[] {
+text_of :: fn(text : string) -> u8[] {
     return string_bytes(text)
 }
 
@@ -48,7 +48,7 @@ passphrase :: fn() -> u8[] {
  * @param bytes The bytes looked for.
  * @return True if they're found; false if not, or if there are none.
  */
-appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
+appears :: fn(disk : ptr[mut Disk], bytes : u8[]) -> bool {
     if bytes.count == 0 || disk.bytes.count < bytes.count {
         return false
     }
@@ -73,10 +73,14 @@ appears :: fn(disk: ptr[mut Disk], bytes: u8[]) -> bool {
  * @param index Which chunk, from 0; its record's key offset is index * CHUNK_BYTES.
  * @return The record; null if the chunk has none, or it couldn't be read.
  */
-chunk_record :: fn(volume: ptr[mut slopfs.Volume], file: u64, index: u64) -> slopfs.ExtentRecord? {
+chunk_record :: fn(volume : ptr[mut slopfs.Volume], file : u64, index : u64) -> slopfs.ExtentRecord? {
     record := slopfs.ExtentRecord.{}
-    match slopfs.tree_get(volume.nodes, &volume.tree, slopfs.key_of(file, .Extent, index * slopfs.CHUNK_BYTES),
-        view_of(cast[ptr[mut u8]](&record), size_of(slopfs.ExtentRecord))) {
+    match slopfs.tree_get(
+        volume.nodes,
+        &volume.tree,
+        slopfs.key_of(file, .Extent, index * slopfs.CHUNK_BYTES),
+        view_of(cast[ptr[mut u8]](&record), size_of(slopfs.ExtentRecord))
+    ) {
         case Ok(found) => {
             found or_return null
             return record
@@ -109,7 +113,7 @@ Sealed :: struct {
  * @return The disk and what's on it, the caller's to free with free_sealed; Error if any of it failed, the failure
  *     recorded and nothing left to free.
  */
-sealed_disk :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> Result[Sealed, testing.Stopped] {
+sealed_disk :: fn(t : ptr[mut testing.T], cipher : slopfs.Cipher) -> Result[Sealed, testing.Stopped] {
     device :: formatted(t, SEALED_BLOCKS, 0x5e)?
     made := Sealed.{device = device, cipher = cipher, data = runtime.new(Data)}
     if seal(t, &made) is_error {
@@ -127,13 +131,21 @@ sealed_disk :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> Result[Sealed
  * @return Ok if it's all done, the container unmounted; Error(Failed), the failure recorded, if not, the container
  *     left mounted.
  */
-seal :: fn(t: ptr[mut testing.T], made: ptr[mut Sealed]) -> testing.Outcome {
+seal :: fn(t : ptr[mut testing.T], made : ptr[mut Sealed]) -> testing.Outcome {
     mounting :: slopfs.mount(made.device)
     container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
     // A volume that isn't encrypted beside it, which stays readable without anyone's keys
     making_plain :: slopfs.create_volume(container, "plain", key_of_volume(), 1)
     require_done(t, making_plain, "a new container has room for a volume")?
-    making :: slopfs.create_sealed_volume(container, "secret", key_of_volume(), 1, made.cipher, passphrase(), TEST_ARGON2)
+    making :: slopfs.create_sealed_volume(
+        container,
+        "secret",
+        key_of_volume(),
+        1,
+        made.cipher,
+        passphrase(),
+        TEST_ARGON2
+    )
     volume :: testing.require_ok(t, making, "a new container has room for an encrypted volume beside it")?
     root :: slopfs.ROOT_OBJECT
     making_small :: slopfs.create(volume, root, "a sealed name.txt", .File)
@@ -155,7 +167,12 @@ seal :: fn(t: ptr[mut testing.T], made: ptr[mut Sealed]) -> testing.Outcome {
     require_done(t, writing_large, "an encrypted volume writes a file across chunks")?
     require_commit(t, container, "an encrypted volume's files commit")?
     first_generation :: testing.require_some(t, chunk_record(volume, made.large, 1), "a chunk written has its record")?
-    testing.expect_eq(t, cast[u32](first_generation.pointer.generation), 1, "what's written is sealed with the volume's first key generation")
+    testing.expect_eq(
+        t,
+        cast[u32](first_generation.pointer.generation),
+        1,
+        "what's written is sealed with the volume's first key generation"
+    )
     slopfs.unmount(container)
     return .Ok
 }
@@ -165,7 +182,7 @@ seal :: fn(t: ptr[mut testing.T], made: ptr[mut Sealed]) -> testing.Outcome {
  *
  * @param made What sealed_disk made, which isn't used after.
  */
-free_sealed :: fn(made: Sealed) {
+free_sealed :: fn(made : Sealed) {
     runtime.free(made.data)
     free_device(made.device)
 }
@@ -189,7 +206,11 @@ Rotated :: struct {
  * @param back A buffer later's bytes are made in, overwritten.
  * @return The file written and the chunks' records; Error if any of it failed, the failure recorded.
  */
-rotated :: fn(t: ptr[mut testing.T], made: ptr[mut Sealed], back: ptr[mut Data]) -> Result[Rotated, testing.Stopped] {
+rotated :: fn(
+    t : ptr[mut testing.T],
+    made : ptr[mut Sealed],
+    back : ptr[mut Data]
+) -> Result[Rotated, testing.Stopped] {
     found := Rotated.{}
     mounting :: slopfs.mount(made.device)
     container := testing.require_ok(t, mounting, "the container mounts")?
@@ -210,40 +231,64 @@ rotated :: fn(t: ptr[mut testing.T], made: ptr[mut Sealed], back: ptr[mut Data])
     defer slopfs.unmount(container)
     opening_again :: slopfs.open_sealed_volume(container, 2, passphrase())
     volume = testing.require_ok(t, opening_again, "an encrypted volume opens again with its passphrase")?
-    found.old_chunk = testing.require_some(t, chunk_record(volume, made.large, 1), "a chunk written before has its record")?
-    found.new_chunk = testing.require_some(t, chunk_record(volume, found.later, 1), "a chunk written after has its record")?
+    found.old_chunk = testing.require_some(
+        t,
+        chunk_record(volume, made.large, 1),
+        "a chunk written before has its record"
+    )?
+    found.new_chunk = testing.require_some(
+        t,
+        chunk_record(volume, found.later, 1),
+        "a chunk written after has its record"
+    )?
     return .Ok(found)
 }
 
-an_encrypted_volume_leaves_nothing_of_its_names_or_bytes_on_the_disk_with_chacha #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_encrypted_volume_leaves_nothing_of_its_names_or_bytes_on_the_disk_with_chacha #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_nothing_on_the_disk(t, .ChaCha20Poly1305)
 }
 
-an_encrypted_volume_leaves_nothing_of_its_names_or_bytes_on_the_disk_with_aes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_encrypted_volume_leaves_nothing_of_its_names_or_bytes_on_the_disk_with_aes #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_nothing_on_the_disk(t, .Aes256Gcm)
 }
 
-an_encrypted_volume_is_locked_refused_and_read_whole_with_its_passphrase_with_chacha #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_encrypted_volume_is_locked_refused_and_read_whole_with_its_passphrase_with_chacha #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_unlocking(t, .ChaCha20Poly1305)
 }
 
-an_encrypted_volume_is_locked_refused_and_read_whole_with_its_passphrase_with_aes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_encrypted_volume_is_locked_refused_and_read_whole_with_its_passphrase_with_aes #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_unlocking(t, .Aes256Gcm)
 }
 
-a_new_key_generation_seals_what_follows_and_what_went_before_still_reads_with_chacha #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_new_key_generation_seals_what_follows_and_what_went_before_still_reads_with_chacha #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_generations(t, .ChaCha20Poly1305)
 }
 
-a_new_key_generation_seals_what_follows_and_what_went_before_still_reads_with_aes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_new_key_generation_seals_what_follows_and_what_went_before_still_reads_with_aes #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_generations(t, .Aes256Gcm)
 }
 
-a_sealed_chunk_changed_or_copied_over_another_is_found_by_its_seal_with_chacha #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_sealed_chunk_changed_or_copied_over_another_is_found_by_its_seal_with_chacha #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_tampering(t, .ChaCha20Poly1305)
 }
 
-a_sealed_chunk_changed_or_copied_over_another_is_found_by_its_seal_with_aes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_sealed_chunk_changed_or_copied_over_another_is_found_by_its_seal_with_aes #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_tampering(t, .Aes256Gcm)
 }
 
@@ -255,7 +300,7 @@ a_sealed_chunk_changed_or_copied_over_another_is_found_by_its_seal_with_aes #tes
  * @param cipher The cipher the volume is made with.
  * @return Ok once it's checked; Error(Failed), the failure recorded, if the disk couldn't be made.
  */
-check_nothing_on_the_disk :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.Outcome {
+check_nothing_on_the_disk :: fn(t : ptr[mut testing.T], cipher : slopfs.Cipher) -> testing.Outcome {
     made := sealed_disk(t, cipher)?
     defer free_sealed(made)
     disk :: cast[ptr[mut Disk]](made.device.context)
@@ -275,7 +320,7 @@ check_nothing_on_the_disk :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) ->
  * @param cipher The cipher the volume is made with.
  * @return Ok once it's checked; Error(Failed), the failure recorded, if what follows couldn't go on.
  */
-check_unlocking :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.Outcome {
+check_unlocking :: fn(t : ptr[mut testing.T], cipher : slopfs.Cipher) -> testing.Outcome {
     made := sealed_disk(t, cipher)?
     defer free_sealed(made)
     mounting :: slopfs.mount(made.device)
@@ -297,7 +342,11 @@ check_unlocking :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.O
     reading :: slopfs.read(volume, made.large, 0, back.bytes[0..<200000])
     got :: testing.require_ok(t, reading, "an encrypted file across chunks reads")?
     testing.expect_eq(t, got, 200000, "an encrypted file reads as long as was written")
-    testing.expect_none(t, difference(back.bytes[0..<200000], made.data.bytes[0..<200000]), "an encrypted file reads as written")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<200000], made.data.bytes[0..<200000]),
+        "an encrypted file reads as written"
+    )
     marker : u8[64]
     reading_marker :: slopfs.read(volume, made.small, 0, marker)
     got_marker :: testing.require_ok(t, reading_marker, "an encrypted inline file reads")?
@@ -306,7 +355,11 @@ check_unlocking :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.O
         testing.fail(t, "a read gives at most the buffer's bytes")
         return .Error(.Failed)
     }
-    testing.expect_none(t, difference(marker[0..<got_marker], text_of(MARKER)), "an encrypted inline file reads as written")
+    testing.expect_none(
+        t,
+        difference(marker[0..<got_marker], text_of(MARKER)),
+        "an encrypted inline file reads as written"
+    )
     // Opened, it's walked whole
     verifying :: slopfs.verify(container)
     report :: testing.require_ok(t, verifying, "a container with its encrypted volume open checks out")?
@@ -322,14 +375,24 @@ check_unlocking :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.O
  * @param cipher The cipher the volume is made with.
  * @return Ok once it's checked; Error(Failed), the failure recorded, if what follows couldn't go on.
  */
-check_generations :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.Outcome {
+check_generations :: fn(t : ptr[mut testing.T], cipher : slopfs.Cipher) -> testing.Outcome {
     made := sealed_disk(t, cipher)?
     defer free_sealed(made)
     back := runtime.new(Data)
     defer runtime.free(back)
     chunks :: rotated(t, &made, back)?
-    testing.expect_eq(t, cast[u32](chunks.old_chunk.pointer.generation), 1, "a chunk written before a new generation keeps the old one")
-    testing.expect_eq(t, cast[u32](chunks.new_chunk.pointer.generation), 2, "a chunk written after a new generation is sealed with it")
+    testing.expect_eq(
+        t,
+        cast[u32](chunks.old_chunk.pointer.generation),
+        1,
+        "a chunk written before a new generation keeps the old one"
+    )
+    testing.expect_eq(
+        t,
+        cast[u32](chunks.new_chunk.pointer.generation),
+        2,
+        "a chunk written after a new generation is sealed with it"
+    )
     mounting :: slopfs.mount(made.device)
     container :: testing.require_ok(t, mounting, "the container mounts")?
     defer slopfs.unmount(container)
@@ -338,13 +401,20 @@ check_generations :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing
     reading :: slopfs.read(volume, made.large, 0, back.bytes[0..<200000])
     got :: testing.require_ok(t, reading, "a file written with the old generation reads")?
     testing.expect_eq(t, got, 200000, "a file written with the old generation reads as long as was written")
-    testing.expect_none(t, difference(back.bytes[0..<200000], made.data.bytes[0..<200000]),
-        "a file written with the old generation reads as written, its key still kept")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<200000], made.data.bytes[0..<200000]),
+        "a file written with the old generation reads as written, its key still kept"
+    )
     pattern(made.data.bytes[0..<100000], 78)
     reading_later :: slopfs.read(volume, chunks.later, 0, back.bytes[0..<100000])
     got_later :: testing.require_ok(t, reading_later, "a file written with the new generation reads")?
     testing.expect_eq(t, got_later, 100000, "a file written with the new generation reads as long as was written")
-    testing.expect_none(t, difference(back.bytes[0..<100000], made.data.bytes[0..<100000]), "a file written with the new generation reads as written")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<100000], made.data.bytes[0..<100000]),
+        "a file written with the new generation reads as written"
+    )
     return .Ok
 }
 
@@ -356,7 +426,7 @@ check_generations :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing
  * @param cipher The cipher the volume is made with.
  * @return Ok once it's checked; Error(Failed), the failure recorded, if what follows couldn't go on.
  */
-check_tampering :: fn(t: ptr[mut testing.T], cipher: slopfs.Cipher) -> testing.Outcome {
+check_tampering :: fn(t : ptr[mut testing.T], cipher : slopfs.Cipher) -> testing.Outcome {
     made := sealed_disk(t, cipher)?
     defer free_sealed(made)
     back := runtime.new(Data)

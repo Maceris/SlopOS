@@ -15,8 +15,8 @@ package symbols
 
 import runtime from "base:runtime"
 import os from "std:os"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 
 /** The most offsets named at once; more are left out. */
 MAX_OFFSETS :: 64
@@ -50,7 +50,14 @@ SYMBOL_SIZE : u64 : 24
  * @return 0 once the names are sent; 1 if the file couldn't be read, 2 if it isn't an ELF64 file with a symbol table,
  *     3 if the reply couldn't be sent.
  */
-main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Channel, offsets: u64[], names: string?, queries: string?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    program : slop_os.Memory,
+    reply : slop_os.Channel,
+    offsets : u64[],
+    names : string?,
+    queries : string?
+) -> int {
     size :: slop_os.memory_size(program) or_return 1
     if size == 0 || size > MAX_FILE {
         return 1
@@ -104,7 +111,7 @@ main :: fn(log: slop_os.DebugLog?, program: slop_os.Memory, reply: slop_os.Chann
  * @param file The whole file.
  * @return The ELF's bytes, a view of file; the file itself unless it starts "HDBG" and holds all of the ELF it says.
  */
-inner_elf :: fn(file: u8[]) -> u8[] {
+inner_elf :: fn(file : u8[]) -> u8[] {
     if file.count < 16 || file[0] != 0x48 || file[1] != 0x44 || file[2] != 0x42 || file[3] != 0x47 {
         return file
     }
@@ -123,7 +130,7 @@ inner_elf :: fn(file: u8[]) -> u8[] {
  * @param queries The queries, each ending in a newline.
  * @param into Where the answers go.
  */
-answer_queries :: fn(elf: u8[], queries: string, into: ptr[mut text_buffer.TextBuffer]) {
+answer_queries :: fn(elf : u8[], queries : string, into : ptr[mut text_buffer.TextBuffer]) {
     found :: find_dwarf(elf)
     bytes :: string_bytes(queries)
     start : usize = 0
@@ -152,7 +159,7 @@ answer_queries :: fn(elf: u8[], queries: string, into: ptr[mut text_buffer.TextB
  * @param query "line <offset>", "where <file>:<line>" or "locals <offset>".
  * @param into Where the answer goes: "?" for a query not known.
  */
-answer_query :: fn(elf: u8[], dwarf: Dwarf, query: string, into: ptr[mut text_buffer.TextBuffer]) {
+answer_query :: fn(elf : u8[], dwarf : Dwarf, query : string, into : ptr[mut text_buffer.TextBuffer]) {
     bytes :: string_bytes(query)
     space : usize = bytes.count
     for byte, i in bytes {
@@ -200,7 +207,7 @@ answer_query :: fn(elf: u8[], dwarf: Dwarf, query: string, into: ptr[mut text_bu
  * @param text The number's text.
  * @return Its value; null if it isn't one, or is empty.
  */
-number_in :: fn(text: string) -> u64? {
+number_in :: fn(text : string) -> u64? {
     bytes :: string_bytes(text)
     hex :: bytes.count > 2 && bytes[0] == 0x30 && (bytes[1] == 0x78 || bytes[1] == 0x58)
     first : usize = if hex { 2 } else { 0 }
@@ -247,8 +254,14 @@ SymbolTable :: struct {
  * @return Where they are; null if it isn't a little-endian ELF64 file, it has no symbol table, or either runs past the
  *     file's end.
  */
-symbol_table :: fn(file: u8[]) -> SymbolTable? {
-    if file.count < 64 || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 || file[4] != 2 || file[5] != 1 {
+symbol_table :: fn(file : u8[]) -> SymbolTable? {
+    if file.count < 64
+        || file[0] != 0x7f
+        || file[1] != 0x45
+        || file[2] != 0x4c
+        || file[3] != 0x46
+        || file[4] != 2
+        || file[5] != 1 {
         return null
     }
     sections :: word(file, 0x28, 8)
@@ -288,7 +301,7 @@ symbol_table :: fn(file: u8[]) -> SymbolTable? {
  * @param offset The offset in the image, which an ELF's symbols' values are, its image based at 0.
  * @param into Where the text's added.
  */
-name_at :: fn(file: u8[], table: SymbolTable, offset: u64, into: ptr[mut text_buffer.TextBuffer]) {
+name_at :: fn(file : u8[], table : SymbolTable, offset : u64, into : ptr[mut text_buffer.TextBuffer]) {
     best : u64 = 0
     best_start : u64 = 0
     found := false
@@ -323,7 +336,7 @@ name_at :: fn(file: u8[], table: SymbolTable, offset: u64, into: ptr[mut text_bu
  * @param name The function's name, as the table has it, compared byte for byte.
  * @return The first function symbol of that name's value, its offset in the image; null if none has it.
  */
-offset_of :: fn(file: u8[], table: SymbolTable, name: string) -> u64? {
+offset_of :: fn(file : u8[], table : SymbolTable, name : string) -> u64? {
     for i in cast[u64](0)..<table.count {
         symbol :: table.symbols + i * SYMBOL_SIZE
         if cast[u8](word(file, symbol + 4, 1)) & 0xf != SYMBOL_FUNCTION {
@@ -344,7 +357,7 @@ offset_of :: fn(file: u8[], table: SymbolTable, name: string) -> u64? {
  * @param at Where the name starts in the string table.
  * @return The name, up to its zero or the table's end; "?" if it starts past the end.
  */
-name_in :: fn(file: u8[], table: SymbolTable, at: u64) -> string {
+name_in :: fn(file : u8[], table : SymbolTable, at : u64) -> string {
     if at >= table.names_size {
         return "?"
     }
@@ -372,7 +385,7 @@ name_in :: fn(file: u8[], table: SymbolTable, at: u64) -> string {
  * @param count How many bytes it has.
  * @return True if all of it is in the file.
  */
-fits :: fn(file: u8[], at: u64, count: u64) -> bool {
+fits :: fn(file : u8[], at : u64, count : u64) -> bool {
     size :: cast[u64](file.count)
     return at <= size && count <= size - at
 }
@@ -385,7 +398,7 @@ fits :: fn(file: u8[], at: u64, count: u64) -> bool {
  * @param count How many bytes it has, 1 to 8.
  * @return Its value; bytes past the end are taken as 0.
  */
-word :: fn(file: u8[], at: u64, count: u64) -> u64 {
+word :: fn(file : u8[], at : u64, count : u64) -> u64 {
     value : u64 = 0
     for i in cast[u64](0)..<count {
         index :: at + i

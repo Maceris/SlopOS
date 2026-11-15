@@ -62,7 +62,7 @@ Event :: struct {
  * @param event The event, as it came.
  * @return Its kind; null for a kind value this version doesn't have, as from a newer driver, which a client skips.
  */
-kind_of :: fn(event: Event) -> EventKind? {
+kind_of :: fn(event : Event) -> EventKind? {
     return match event.kind {
         case 1 => EventKind.Key
         case 2 => EventKind.Motion
@@ -79,7 +79,7 @@ kind_of :: fn(event: Event) -> EventKind? {
  * @param event A Key's or a Button's event; another kind's pressed is 0.
  * @return True if its pressed is any value but 0; false for the kinds that aren't keys or buttons, whose pressed is 0.
  */
-is_pressed :: fn(event: Event) -> bool {
+is_pressed :: fn(event : Event) -> bool {
     return event.pressed != 0
 }
 
@@ -93,8 +93,14 @@ is_pressed :: fn(event: Event) -> bool {
  * @param y What Event's y is for its kind, 0 when it has none.
  * @return The event, its kind kind's value and its pressed 1 or 0.
  */
-event_of :: fn(kind: EventKind, pressed: bool, code: u16, x: i32, y: i32) -> Event {
-    return Event.{kind = cast[u8](kind), pressed = if pressed { cast[u8](1) } else { cast[u8](0) }, code = code, x = x, y = y}
+event_of :: fn(kind : EventKind, pressed : bool, code : u16, x : i32, y : i32) -> Event {
+    return Event.{
+        kind = cast[u8](kind),
+        pressed = if pressed { cast[u8](1) } else { cast[u8](0) },
+        code = code,
+        x = x,
+        y = y,
+    }
 }
 
 /** What a client asks an input device's driver. */
@@ -147,7 +153,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return False for Read, which again would take other events; true for Connect and Describe.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => false
         case Connect(_) => true
@@ -170,7 +176,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Input]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Input]? {
     pair :: os.channel_for[Input](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

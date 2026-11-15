@@ -29,8 +29,11 @@ LIMITED_BROADCAST :: Ipv4.{bytes = u8.[255, 255, 255, 255]}
  * @param stack The stack.
  * @param packet The packet, after the Ethernet header.
  */
-receive_arp :: fn(stack: ptr[mut Stack], packet: u8[]) {
-    if packet.count < ARP_PACKET || u16_at(packet, 0) != 1 || u16_at(packet, 2) != ETHER_IPV4 || byte_at(packet, 4) != 6
+receive_arp :: fn(stack : ptr[mut Stack], packet : u8[]) {
+    if packet.count < ARP_PACKET
+        || u16_at(packet, 0) != 1
+        || u16_at(packet, 2) != ETHER_IPV4
+        || byte_at(packet, 4) != 6
         || byte_at(packet, 5) != 4 {
         return void
     }
@@ -68,7 +71,7 @@ receive_arp :: fn(stack: ptr[mut Stack], packet: u8[]) {
  * @param target_mac The target's MAC address, zeroes for a request.
  * @param target The target's IPv4 address.
  */
-put_arp :: fn(bytes: mut u8[], operation: u16, sender_mac: Mac, sender: Ipv4, target_mac: Mac, target: Ipv4) {
+put_arp :: fn(bytes : mut u8[], operation : u16, sender_mac : Mac, sender : Ipv4, target_mac : Mac, target : Ipv4) {
     put_u16(bytes, 0, 1)
     put_u16(bytes, 2, ETHER_IPV4)
     put_u8(bytes, 4, 6)
@@ -86,7 +89,7 @@ put_arp :: fn(bytes: mut u8[], operation: u16, sender_mac: Mac, sender: Ipv4, ta
  * @param stack The stack.
  * @param target The address asked for.
  */
-send_arp_request :: fn(stack: ptr[mut Stack], target: Ipv4) {
+send_arp_request :: fn(stack : ptr[mut Stack], target : Ipv4) {
     request : u8[ARP_PACKET]
     bytes :: view_of(&request[0], request.count)
     put_arp(bytes, ARP_REQUEST, stack.mac, stack.ipv4, Mac.{}, target)
@@ -100,7 +103,7 @@ send_arp_request :: fn(stack: ptr[mut Stack], target: Ipv4) {
  * @param from_mac Its Ethernet source.
  * @param packet The packet, after the Ethernet header, maybe padded past its total length.
  */
-receive_ipv4 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
+receive_ipv4 :: fn(stack : ptr[mut Stack], from_mac : Mac, packet : u8[]) {
     if packet.count < IPV4_HEADER || byte_at(packet, 0) >> 4 != 4 {
         return void
     }
@@ -124,8 +127,12 @@ receive_ipv4 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
      * A source no host sends from, broadcast, multicast, loopback or the interface's own, is dropped, as an answer to
      * it would go to every host or back to this one (RFC 1122 §3.2.1.3); 0.0.0.0 only comes with UDP, from DHCP
      */
-    if same_ipv4(source, LIMITED_BROADCAST) || source.bytes[0] >= 224 || source.bytes[0] == 127 || is_subnet_broadcast(stack, source)
-        || (!is_zero_ipv4(stack.ipv4) && same_ipv4(source, stack.ipv4)) || (is_zero_ipv4(source) && protocol != PROTOCOL_UDP) {
+    if same_ipv4(source, LIMITED_BROADCAST)
+        || source.bytes[0] >= 224
+        || source.bytes[0] == 127
+        || is_subnet_broadcast(stack, source)
+        || (!is_zero_ipv4(stack.ipv4) && same_ipv4(source, stack.ipv4))
+        || (is_zero_ipv4(source) && protocol != PROTOCOL_UDP) {
         return void
     }
     to_us :: !is_zero_ipv4(stack.ipv4) && same_ipv4(destination, stack.ipv4)
@@ -153,8 +160,10 @@ receive_ipv4 :: fn(stack: ptr[mut Stack], from_mac: Mac, packet: u8[]) {
  * @param address The address.
  * @return True if it's in the network, its host bits all ones; false without an address.
  */
-is_subnet_broadcast :: fn(stack: ptr[Stack], address: Ipv4) -> bool {
-    if is_zero_ipv4(stack.ipv4) || stack.prefix_length >= 31 || !same_prefix_v4(address, stack.ipv4, stack.prefix_length) {
+is_subnet_broadcast :: fn(stack : ptr[Stack], address : Ipv4) -> bool {
+    if is_zero_ipv4(stack.ipv4)
+        || stack.prefix_length >= 31
+        || !same_prefix_v4(address, stack.ipv4, stack.prefix_length) {
         return false
     }
     host_bits :: 32 - cast[u32](stack.prefix_length)
@@ -168,7 +177,7 @@ is_subnet_broadcast :: fn(stack: ptr[Stack], address: Ipv4) -> bool {
  * @param address The address.
  * @return Its value.
  */
-u32_of :: fn(address: Ipv4) -> u32 {
+u32_of :: fn(address : Ipv4) -> u32 {
     return u32_at(view_of(&address.bytes[0], address.bytes.count), 0)
 }
 
@@ -178,7 +187,7 @@ u32_of :: fn(address: Ipv4) -> u32 {
  * @param value The value.
  * @return The address.
  */
-ipv4_of_u32 :: fn(value: u32) -> Ipv4 {
+ipv4_of_u32 :: fn(value : u32) -> Ipv4 {
     address := Ipv4.{}
     put_u32(view_of(&address.bytes[0], address.bytes.count), 0, value)
     return address
@@ -191,14 +200,19 @@ ipv4_of_u32 :: fn(value: u32) -> Ipv4 {
  * @param source Who sent it.
  * @param message The message, after the IP header.
  */
-receive_icmp :: fn(stack: ptr[mut Stack], source: Ipv4, message: u8[]) {
+receive_icmp :: fn(stack : ptr[mut Stack], source : Ipv4, message : u8[]) {
     if message.count < 8 || checksum_finish(checksum_add(0, message)) != 0 {
         return void
     }
     kind :: byte_at(message, 0)
     if kind == ICMP_ECHO_REQUEST {
         reply : u8[MAX_FRAME]
-        length :: if message.count < reply.count - IPV4_HEADER - ETHERNET_HEADER { message.count } else { reply.count - IPV4_HEADER - ETHERNET_HEADER }
+        length :: if message.count < reply.count - IPV4_HEADER - ETHERNET_HEADER {
+            message.count
+        }
+        else {
+            reply.count - IPV4_HEADER - ETHERNET_HEADER
+        }
         bytes :: view_of(&reply[0], length)
         put_bytes(bytes, 0, message)
         put_u8(bytes, 0, ICMP_ECHO_REPLY)
@@ -219,7 +233,7 @@ receive_icmp :: fn(stack: ptr[mut Stack], source: Ipv4, message: u8[]) {
  * @param sequence Its sequence number.
  * @return True once it's queued or waiting for its hop; false without an address or a route.
  */
-send_echo_v4 :: fn(stack: ptr[mut Stack], to: Ipv4, sequence: u16) -> bool {
+send_echo_v4 :: fn(stack : ptr[mut Stack], to : Ipv4, sequence : u16) -> bool {
     request : u8[16]
     bytes :: view_of(&request[0], request.count)
     put_u8(bytes, 0, ICMP_ECHO_REQUEST)
@@ -241,7 +255,7 @@ send_echo_v4 :: fn(stack: ptr[mut Stack], to: Ipv4, sequence: u16) -> bool {
  * @return True once it's queued or waiting for its hop; false if there's no route: no address and not a broadcast, or
  *     off the link without a router.
  */
-send_ipv4 :: fn(stack: ptr[mut Stack], to: Ipv4, protocol: u8, payload: u8[]) -> bool {
+send_ipv4 :: fn(stack : ptr[mut Stack], to : Ipv4, protocol : u8, payload : u8[]) -> bool {
     packet : u8[MAX_FRAME]
     most :: cast[usize](stack.mtu)
     total :: if IPV4_HEADER + payload.count < most { IPV4_HEADER + payload.count } else { most }
@@ -283,7 +297,7 @@ send_ipv4 :: fn(stack: ptr[mut Stack], to: Ipv4, protocol: u8, payload: u8[]) ->
  * @param prefix_length Its network's prefix length, 0 to 32.
  * @param router The default router; 0.0.0.0 for none.
  */
-set_ipv4 :: fn(stack: ptr[mut Stack], address: Ipv4, prefix_length: u8, router: Ipv4) {
+set_ipv4 :: fn(stack : ptr[mut Stack], address : Ipv4, prefix_length : u8, router : Ipv4) {
     stack.dhcp = .Off
     stack.ipv4 = address
     stack.prefix_length = if prefix_length > 32 { cast[u8](32) } else { prefix_length }

@@ -4,11 +4,11 @@ import runtime from "base:runtime"
 import net from "std:net"
 import ntp from "std:ntp"
 import os from "std:os"
-import text_buffer from "std:text_buffer"
-import tls from "std:tls"
 import slop_os from "std:os/slop_os"
 import network from "std:os/slop_os/network"
 import read_only_dir from "std:os/slop_os/read_only_dir"
+import text_buffer from "std:text_buffer"
+import tls from "std:tls"
 import service_kit from "../../libraries/service_kit"
 import clock_setting from "../../protocols/clock_setting"
 
@@ -56,11 +56,11 @@ SLEW_INTERVAL : u64 : 1_000_000_000
 /** What the clock service keeps to synchronize with an NTS server. */
 Synchronizing :: struct {
     /** Whether a Synchronize gave a server. */
-    on : bool,
-    server : u8[clock_setting.SERVER_BYTES],
+    on            : bool,
+    server        : u8[clock_setting.SERVER_BYTES],
     server_length : usize,
-    network : os.Channel[network.Network],
-    trust : os.Channel[read_only_dir.ReadOnlyDir],
+    network       : os.Channel[network.Network],
+    trust         : os.Channel[read_only_dir.ReadOnlyDir],
     /** The trust anchors, loaded from the trust store at the first synchronization; null until then. */
     anchors : ptr[mut net.Anchors]?,
     /** The NTS session: its keys and cookies. */
@@ -84,7 +84,12 @@ Synchronizing :: struct {
  * @param into The message it came in, for the server's name.
  * @return True if it's taken; false, its channels closed, if the name's empty or too long.
  */
-take_synchronize :: fn(service: ptr[mut Clock], port: slop_os.Port, asked: clock_setting.Synchronizing, into: ptr[os.Incoming]) -> bool {
+take_synchronize :: fn(
+    service : ptr[mut Clock],
+    port : slop_os.Port,
+    asked : clock_setting.Synchronizing,
+    into : ptr[os.Incoming]
+) -> bool {
     name :: os.items(into, asked.server)
     syncing :: &service.syncing
     if name.count == 0 || name.count > syncing.server.count {
@@ -118,12 +123,12 @@ take_synchronize :: fn(service: ptr[mut Clock], port: slop_os.Port, asked: clock
 }
 
 /** The server's name, as Synchronize gave it, without a port after it. */
-server_name :: fn(syncing: ptr[Synchronizing]) -> string {
+server_name :: fn(syncing : ptr[Synchronizing]) -> string {
     return string_of(&syncing.server[0], name_length(syncing))
 }
 
 /** How long the server's name is, before a ":<port>" after it. */
-name_length :: fn(syncing: ptr[Synchronizing]) -> usize {
+name_length :: fn(syncing : ptr[Synchronizing]) -> usize {
     for byte, i in tls.range(syncing.server, 0, syncing.server_length) {
         if byte == 0x3a {
             return i
@@ -133,7 +138,7 @@ name_length :: fn(syncing: ptr[Synchronizing]) -> usize {
 }
 
 /** The NTS-KE server's port: the one after the name, or ntp.NTS_KE_PORT. */
-server_port :: fn(syncing: ptr[Synchronizing]) -> u16 {
+server_port :: fn(syncing : ptr[Synchronizing]) -> u16 {
     after :: name_length(syncing) + 1
     if after >= syncing.server_length || after >= syncing.server.count {
         return ntp.NTS_KE_PORT
@@ -149,7 +154,7 @@ server_port :: fn(syncing: ptr[Synchronizing]) -> u16 {
  * @param service The clock service's state.
  * @param port The port the timers wake.
  */
-synchronize_if_due :: fn(service: ptr[mut Clock], port: slop_os.Port) {
+synchronize_if_due :: fn(service : ptr[mut Clock], port : slop_os.Port) {
     syncing :: &service.syncing
     now :: slop_os.clock_monotonic() or_else 0
     if !syncing.on || now < syncing.next {
@@ -176,7 +181,7 @@ synchronize_if_due :: fn(service: ptr[mut Clock], port: slop_os.Port) {
  * @param service The clock service's state.
  * @return True if the clock was stepped or a slew begun; false if something failed, which is logged.
  */
-synchronize :: fn(service: ptr[mut Clock]) -> bool {
+synchronize :: fn(service : ptr[mut Clock]) -> bool {
     syncing :: &service.syncing
     name :: server_name(syncing)
     if syncing.anchors is_none {
@@ -190,7 +195,13 @@ synchronize :: fn(service: ptr[mut Clock]) -> bool {
         }
     }
     if !syncing.session.keyed || syncing.session.cookie_count == 0 {
-        match net.nts_establish(syncing.network, name, net.anchor_bytes(anchors), &syncing.session, server_port(syncing)) {
+        match net.nts_establish(
+            syncing.network,
+            name,
+            net.anchor_bytes(anchors),
+            &syncing.session,
+            server_port(syncing)
+        ) {
             case Some(problem) => {
                 log_problem(name, "NTS-KE", problem)
                 return false
@@ -238,7 +249,7 @@ synchronize :: fn(service: ptr[mut Clock]) -> bool {
  * @param name The server's name, for the log.
  * @param sample The best exchange.
  */
-adjust :: fn(service: ptr[mut Clock], name: string, sample: ntp.Sample) {
+adjust :: fn(service : ptr[mut Clock], name : string, sample : ntp.Sample) {
     syncing :: &service.syncing
     storage : u8[160]
     line := text_buffer.make(storage)
@@ -282,13 +293,16 @@ adjust :: fn(service: ptr[mut Clock], name: string, sample: ntp.Sample) {
  * @param service The clock service's state.
  * @param port The port the timers wake.
  */
-slew_if_due :: fn(service: ptr[mut Clock], port: slop_os.Port) {
+slew_if_due :: fn(service : ptr[mut Clock], port : slop_os.Port) {
     syncing :: &service.syncing
     now :: slop_os.clock_monotonic() or_else 0
     if syncing.slew == 0 || now < syncing.next_slew {
         return void
     }
-    step :: if syncing.slew > SLEW_STEP { SLEW_STEP } else if syncing.slew < -SLEW_STEP { -SLEW_STEP } else { syncing.slew }
+    step :: if syncing.slew > SLEW_STEP {
+        SLEW_STEP
+    }
+    else if syncing.slew < -SLEW_STEP { -SLEW_STEP } else { syncing.slew }
     current :: time_now(service) or_return void
     put_time(service, current + step)
     syncing.slew -= step
@@ -305,11 +319,17 @@ slew_if_due :: fn(service: ptr[mut Clock], port: slop_os.Port) {
  * @param what The step: "NTS-KE" or "NTP".
  * @param problem Why.
  */
-log_problem :: fn(name: string, what: string, problem: net.NtsProblem) {
+log_problem :: fn(name : string, what : string, problem : net.NtsProblem) {
     match problem.why {
         case .Tls => match problem.tls.network {
             case Some(failure) => runtime.log_warn("% with %: %", what, name, failure)
-            case None => runtime.log_warn("% with %: TLS failed, alert %, %", what, name, problem.tls.alert, problem.tls.certificate)
+            case None => runtime.log_warn(
+                "% with %: TLS failed, alert %, %",
+                what,
+                name,
+                problem.tls.alert,
+                problem.tls.certificate
+            )
         }
         case .KeyEstablishment => runtime.log_warn("% with %: %, error %", what, name, problem.ke, problem.error)
         case .Network => runtime.log_warn("% with %: %", what, name, problem.network)
@@ -323,7 +343,7 @@ log_problem :: fn(name: string, what: string, problem: net.NtsProblem) {
  * @param line Where.
  * @param nanoseconds The span.
  */
-append_milliseconds :: fn(line: ptr[mut text_buffer.TextBuffer], nanoseconds: i64) {
+append_milliseconds :: fn(line : ptr[mut text_buffer.TextBuffer], nanoseconds : i64) {
     sign :: if nanoseconds < 0 { "-" } else { "+" }
     magnitude :: if nanoseconds < 0 { cast[u64](0) - cast[u64](nanoseconds) } else { cast[u64](nanoseconds) }
     microseconds :: magnitude / 1000

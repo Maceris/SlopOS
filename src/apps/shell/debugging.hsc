@@ -1,14 +1,14 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
+import lifecycle from "std:os/slop_os/lifecycle"
 import schema from "std:schema"
 import terminal from "std:terminal"
 import text_buffer from "std:text_buffer"
-import slop_os from "std:os/slop_os"
-import lifecycle from "std:os/slop_os/lifecycle"
 import crash_reports from "../../crash_reports"
+import shell_language as language from "../../shell_language"
 
 /*
  * The debugger (decisions/0183, 12b): debug name arguments runs a program as a call would, under an intercept of its
@@ -73,7 +73,7 @@ Debugging :: struct #scoped {
  * @param tree The Call node of debug, its first child the program's name, the rest its arguments.
  * @return Null once the program has ended; an error if there's no program to debug, or it couldn't be made or started.
  */
-debug_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+debug_program :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count == 0 || tree.children[0].kind != .Word {
         return error_at(tree.at, "debug needs a program and its arguments: debug name arguments")
     }
@@ -93,7 +93,8 @@ debug_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result
         case Error(error) => return .Error(error)
     }
     defer end_call(call)
-    port :: slop_os.port_create(slop_os.startup_block().budget) or_return error_at(tree.at, "there's no memory to debug it")
+    port :: slop_os.port_create(slop_os.startup_block().budget)
+        or_return error_at(tree.at, "there's no memory to debug it")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     match start_debugged(shell, call, port) {
         case Some(error) => return .Error(error)
@@ -122,8 +123,13 @@ debug_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result
         say(shell, message("% ended with % before it stopped", inner.text, session.code))
         return .Ok(.Null)
     }
-    say(shell, message("% stopped before it began; break, watch, step, continue, where, registers, threads, print, quit",
-        inner.text))
+    say(
+        shell,
+        message(
+            "% stopped before it began; break, watch, step, continue, where, registers, threads, print, quit",
+            inner.text
+        )
+    )
     editor := terminal.LineEditor.{}
     loop {
         if session.ended {
@@ -153,17 +159,31 @@ debug_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result
  * @param port The debugger's port.
  * @return Null once it's started; why it didn't otherwise.
  */
-start_debugged :: fn(shell: ptr[mut Shell], call: ptr[mut Call], port: slop_os.Port) -> EvalError? {
+start_debugged :: fn(shell : ptr[mut Shell], call : ptr[mut Call], port : slop_os.Port) -> EvalError? {
     tree :: call.tree
-    manager :: shell.manager or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
-    ends :: lifecycle.make(slop_os.startup_block().budget) or_return EvalError.{message = "there's no memory to start it", at = tree.at}
-    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = DEBUG_END_KEY}, lifecycle = ends.b,
-        faults = os.LaunchFaults.{port = port, key = DEBUG_STOP_KEY, debugging = true}}
+    manager :: shell.manager
+        or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
+    ends :: lifecycle.make(slop_os.startup_block().budget)
+        or_return EvalError.{message = "there's no memory to start it", at = tree.at}
+    options := os.LaunchOptions.{
+        watch = os.LaunchWatch.{port = port, key = DEBUG_END_KEY},
+        lifecycle = ends.b,
+        faults = os.LaunchFaults.{port = port, key = DEBUG_STOP_KEY, debugging = true},
+    }
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
     budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
-    match os.launch_named(manager, shell.manager_port, tree.text, call.executable, budget, call.grants, call.values, options) {
+    match os.launch_named(
+        manager,
+        shell.manager_port,
+        tree.text,
+        call.executable,
+        budget,
+        call.grants,
+        call.values,
+        options
+    ) {
         case Ok(made) => {
             call.started = true
             call.launched = made
@@ -188,7 +208,7 @@ start_debugged :: fn(shell: ptr[mut Shell], call: ptr[mut Call], port: slop_os.P
  * @param session The session, whose thread and stop are set at a stop, and ended and code at the end.
  * @return True at a stop; false once it's ended, or the port couldn't be waited on, as if it had.
  */
-wait_debugged :: fn(session: ptr[mut Debugging]) -> bool {
+wait_debugged :: fn(session : ptr[mut Debugging]) -> bool {
     loop {
         stop := slop_os.StopInfo.{}
         if slop_os.intercept_next(session.faults.intercept, &stop) is_ok {
@@ -222,7 +242,7 @@ wait_debugged :: fn(session: ptr[mut Debugging]) -> bool {
  * @param session The session.
  * @param line The line: a command and its words, separated by spaces.
  */
-run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
+run_debug_line :: fn(session : ptr[mut Debugging], line #escaping : string) {
     words : string[4]
     count :: split_words(line, &words)
     if count == 0 {
@@ -231,7 +251,10 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
     command :: words[0]
     shell :: session.shell
     if command == "help" {
-        say(shell, "break function or file:line, watch address [size], delete n, step, continue, where, registers, threads, fibers, print address or local, quit")
+        say(
+            shell,
+            "break function or file:line, watch address [size], delete n, step, continue, where, registers, threads, fibers, print address or local, quit"
+        )
     }
     else if command == "break" && count == 2 {
         set_breakpoint(session, words[1])
@@ -295,7 +318,7 @@ run_debug_line :: fn(session: ptr[mut Debugging], line #escaping : string) {
  * @param step Whether it runs only one instruction.
  * @return True at its next stop; false once it's ended, or with nothing stopped to go on.
  */
-go_on :: fn(session: ptr[mut Debugging], step: bool) -> bool {
+go_on :: fn(session : ptr[mut Debugging], step : bool) -> bool {
     if session.thread == 0 {
         say(session.shell, "nothing's stopped")
         return false
@@ -326,7 +349,8 @@ go_on :: fn(session: ptr[mut Debugging], step: bool) -> bool {
     if session.suspended && !step {
         resume_all(session)
     }
-    at_slot :: session.stop.point == .Fault && (session.stop.number == slop_os.FAULT_BREAKPOINT || session.stop.number == slop_os.FAULT_WATCHPOINT)
+    at_slot :: session.stop.point == .Fault
+        && (session.stop.number == slop_os.FAULT_BREAKPOINT || session.stop.number == slop_os.FAULT_WATCHPOINT)
     // Its own state is only for stepping: while it steps, the process's slots are off for it
     not_stepping := slop_os.ThreadDebug.{}
     if at_slot || step {
@@ -354,7 +378,7 @@ go_on :: fn(session: ptr[mut Debugging], step: bool) -> bool {
  *
  * @param session The session, stopped.
  */
-say_stop :: fn(session: ptr[mut Debugging]) {
+say_stop :: fn(session : ptr[mut Debugging]) {
     registers : u64[slop_os.THREAD_REGISTERS]
     _ = slop_os.thread_read_registers(session.call.launched.process, session.thread, registers)
     at :: name_of_address(session, registers[crash_reports.PC_REGISTER])
@@ -380,7 +404,7 @@ say_stop :: fn(session: ptr[mut Debugging]) {
  * @param address The address.
  * @return "name+0x1c", on the heap, never freed; the address in hex if it's not in a function.
  */
-name_of_address :: fn(session: ptr[mut Debugging], address: u64) -> string {
+name_of_address :: fn(session : ptr[mut Debugging], address : u64) -> string {
     image :: session.call.launched.image
     if address >= image {
         offsets :: u64.[address - image]
@@ -401,9 +425,12 @@ name_of_address :: fn(session: ptr[mut Debugging], address: u64) -> string {
  * @param session The session, whose debug state takes it.
  * @param name The function's name, as the program's symbol table has it, like "program.main".
  */
-set_breakpoint :: fn(session: ptr[mut Debugging], name: string) {
+set_breakpoint :: fn(session : ptr[mut Debugging], name : string) {
     offsets : u64[1]
-    // A file and line, from the debug file; or a function, by name, with its newline, as the symbols program takes names
+    /*
+     * A file and line, from the debug file; or a function, by name, with its newline, as the symbols program takes
+     * names
+     */
     by_line :: contains_colon(name)
     if by_line && session.file == null {
         say(session.shell, "there's no debug file for the program, so no lines; break takes a function")
@@ -417,7 +444,10 @@ set_breakpoint :: fn(session: ptr[mut Debugging], name: string) {
     line :: next_line(answer, count, &at)
     found :: number_of(line) or_else 0
     if found == 0 {
-        say(session.shell, if by_line { message("there's no code on %", name) } else { message("there's no function named %", name) })
+        say(
+            session.shell,
+            if by_line { message("there's no code on %", name) } else { message("there's no function named %", name) }
+        )
         return void
     }
     slot :: free_slot(session) or_return void
@@ -436,7 +466,7 @@ set_breakpoint :: fn(session: ptr[mut Debugging], name: string) {
  * @param address The address, a multiple of size.
  * @param size How many bytes: 1, 2, 4 or 8.
  */
-set_watchpoint :: fn(session: ptr[mut Debugging], address: u64, size: u64) {
+set_watchpoint :: fn(session : ptr[mut Debugging], address : u64, size : u64) {
     if address == 0 || (size != 1 && size != 2 && size != 4 && size != 8) || address % size != 0 {
         say(session.shell, "watch takes an address, and a size of 1, 2, 4 or 8 bytes it's a multiple of")
         return void
@@ -456,13 +486,16 @@ set_watchpoint :: fn(session: ptr[mut Debugging], address: u64, size: u64) {
  * @param session The session; saying so when there's none.
  * @return Its index; null when every slot's used.
  */
-free_slot :: fn(session: ptr[mut Debugging]) -> usize? {
+free_slot :: fn(session : ptr[mut Debugging]) -> usize? {
     for slot, i in session.debug.slots {
         if slot.kind == .Off {
             return i
         }
     }
-    say(session.shell, message("every one of the % breakpoints and watchpoints is set; delete one first", slop_os.DEBUG_SLOTS))
+    say(
+        session.shell,
+        message("every one of the % breakpoints and watchpoints is set; delete one first", slop_os.DEBUG_SLOTS)
+    )
     return null
 }
 
@@ -471,13 +504,19 @@ free_slot :: fn(session: ptr[mut Debugging]) -> usize? {
  *
  * @param session The session, stopped.
  */
-say_where :: fn(session: ptr[mut Debugging]) {
+say_where :: fn(session : ptr[mut Debugging]) {
     if session.thread == 0 {
         say(session.shell, "nothing's stopped")
         return void
     }
     launched :: session.call.launched
-    report :: crash_reports.make(launched.process, session.faults.space, launched.image, session.call.tree.text, session.stop)
+    report :: crash_reports.make(
+        launched.process,
+        session.faults.space,
+        launched.image,
+        session.call.tree.text,
+        session.stop
+    )
     count :: if report.frame_count <= crash_reports.MAX_FRAMES { report.frame_count } else { crash_reports.MAX_FRAMES }
     // The frames' lines, from the debug file, after their names
     offsets : u64[crash_reports.MAX_FRAMES]
@@ -488,7 +527,14 @@ say_where :: fn(session: ptr[mut Debugging]) {
     }
     answer : u8[DEBUG_ANSWER_BYTES]
     queries : string? = if session.file != null { line_queries(view_of(&offsets[0], cast[usize](count))) } else { null }
-    named :: ask_symbols(session.shell, symbols_source(session), view_of(&offsets[0], cast[usize](count)), null, queries, answer)
+    named :: ask_symbols(
+        session.shell,
+        symbols_source(session),
+        view_of(&offsets[0], cast[usize](count)),
+        null,
+        queries,
+        answer
+    )
     at : usize = 0
     lines_at := at
     for i in cast[u32](0)..<count {
@@ -500,7 +546,12 @@ say_where :: fn(session: ptr[mut Debugging]) {
         }
         name :: next_line(answer, named, &at)
         source :: if queries != null { next_line(answer, named, &lines_at) } else { "" }
-        shown :: if name == "" || name == "?" { message("%{#x}", report.frames[cast[usize](i)]) } else { message("%", name) }
+        shown :: if name == "" || name == "?" {
+            message("%{#x}", report.frames[cast[usize](i)])
+        }
+        else {
+            message("%", name)
+        }
         if source != "" && source != "?" {
             say(session.shell, message("  #% % at %", i, shown, source))
         }
@@ -515,14 +566,22 @@ say_where :: fn(session: ptr[mut Debugging]) {
  *
  * @param session The session, stopped.
  */
-say_registers :: fn(session: ptr[mut Debugging]) {
+say_registers :: fn(session : ptr[mut Debugging]) {
     registers : u64[slop_os.THREAD_REGISTERS]
-    if session.thread == 0 || !(slop_os.thread_read_registers(session.call.launched.process, session.thread, registers) is_ok) {
+    if session.thread == 0
+        || !(slop_os.thread_read_registers(session.call.launched.process, session.thread, registers) is_ok) {
         say(session.shell, "nothing's stopped")
         return void
     }
-    say(session.shell, message("pc %{#x}, sp %{#x}, fp %{#x}", registers[crash_reports.PC_REGISTER],
-        registers[crash_reports.STACK_REGISTER], registers[crash_reports.FRAME_REGISTER]))
+    say(
+        session.shell,
+        message(
+            "pc %{#x}, sp %{#x}, fp %{#x}",
+            registers[crash_reports.PC_REGISTER],
+            registers[crash_reports.STACK_REGISTER],
+            registers[crash_reports.FRAME_REGISTER]
+        )
+    )
 }
 
 /**
@@ -530,14 +589,17 @@ say_registers :: fn(session: ptr[mut Debugging]) {
  *
  * @param session The session.
  */
-say_threads :: fn(session: ptr[mut Debugging]) {
+say_threads :: fn(session : ptr[mut Debugging]) {
     ids : u64[16]
     count :: slop_os.process_threads(session.call.launched.process, ids) or_else 0
     for id, i in ids {
         if cast[u32](i) >= count {
             break
         }
-        say(session.shell, if id == session.thread { message("thread %, stopped", id) } else { message("thread %", id) })
+        say(
+            session.shell,
+            if id == session.thread { message("thread %, stopped", id) } else { message("thread %", id) }
+        )
     }
 }
 
@@ -547,7 +609,7 @@ say_threads :: fn(session: ptr[mut Debugging]) {
  * @param session The session.
  * @param address The address.
  */
-say_memory :: fn(session: ptr[mut Debugging], address: u64) {
+say_memory :: fn(session : ptr[mut Debugging], address : u64) {
     bytes : u8[8]
     if !(slop_os.process_read_memory(session.call.launched.process, session.faults.space, address, bytes) is_ok) {
         say(session.shell, message("%{#x} can't be read", address))
@@ -561,7 +623,7 @@ say_memory :: fn(session: ptr[mut Debugging], address: u64) {
  *
  * @param session The session, ended after.
  */
-end_debugged :: fn(session: ptr[mut Debugging]) {
+end_debugged :: fn(session : ptr[mut Debugging]) {
     if session.ended {
         return void
     }
@@ -587,7 +649,7 @@ end_debugged :: fn(session: ptr[mut Debugging]) {
  * @param words Where the words go, views of line, as many as fit.
  * @return How many words were found, at most words' count.
  */
-split_words :: fn(line #escaping : string, words: ptr[mut string[4]]) -> usize {
+split_words :: fn(line #escaping : string, words : ptr[mut string[4]]) -> usize {
     bytes :: string_bytes(line)
     count : usize = 0
     start : usize = 0
@@ -611,7 +673,7 @@ split_words :: fn(line #escaping : string, words: ptr[mut string[4]]) -> usize {
  * @param text The text.
  * @return Its value; null if it isn't a number, or doesn't fit 64 bits.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     bytes :: string_bytes(text)
     hex :: bytes.count > 2 && bytes[0] == 0x30 && (bytes[1] == 0x78 || bytes[1] == 0x58)
     base : u64 = if hex { 16 } else { 10 }
@@ -650,7 +712,7 @@ number_of :: fn(text: string) -> u64? {
  * @param session The session.
  * @return The file's handle, still the session's.
  */
-symbols_source :: fn(session: ptr[Debugging]) -> slop_os.Memory {
+symbols_source :: fn(session : ptr[Debugging]) -> slop_os.Memory {
     match session.file {
         case Some(file) => return file.memory
         case None => return session.call.executable
@@ -663,7 +725,7 @@ symbols_source :: fn(session: ptr[Debugging]) -> slop_os.Memory {
  * @param text The text.
  * @return True if it has one.
  */
-contains_colon :: fn(text: string) -> bool {
+contains_colon :: fn(text : string) -> bool {
     for byte in string_bytes(text) {
         if byte == 0x3a {
             return true
@@ -680,11 +742,13 @@ contains_colon :: fn(text: string) -> bool {
  * @param session The session, stopped.
  * @param name The local's name.
  */
-say_local :: fn(session: ptr[mut Debugging], name: string) {
+say_local :: fn(session : ptr[mut Debugging], name : string) {
     shell :: session.shell
-    file :: session.file or_return say(shell, "there's no debug file for the program, so no locals; print takes an address")
+    file :: session.file
+        or_return say(shell, "there's no debug file for the program, so no locals; print takes an address")
     registers : u64[slop_os.THREAD_REGISTERS]
-    if session.thread == 0 || !(slop_os.thread_read_registers(session.call.launched.process, session.thread, registers) is_ok) {
+    if session.thread == 0
+        || !(slop_os.thread_read_registers(session.call.launched.process, session.thread, registers) is_ok) {
         say(shell, "nothing's stopped")
         return void
     }
@@ -728,7 +792,8 @@ say_local :: fn(session: ptr[mut Debugging], name: string) {
         return void
     }
     line :: number_of(found[2]) or_else 0
-    bytes :: local_schema(file, function, name, line) or_return say(shell, message("there's no type for % in the debug file", name))
+    bytes :: local_schema(file, function, name, line)
+        or_return say(shell, message("there's no type for % in the debug file", name))
     types := schema.parse(bytes) or_return say(shell, message("%'s type doesn't read", name))
     defer schema.free(&types)
     if types.types.count == 0 {
@@ -742,7 +807,12 @@ say_local :: fn(session: ptr[mut Debugging], name: string) {
     // Where it is, as the symbols program says it: one place, or pieces
     held : u8[..]
     defer runtime.array_free(&held)
-    place := ValuePlace.{showing = &showing, registers = registers[0..<registers.count], frame = frame_register, image = image}
+    place := ValuePlace.{
+        showing = &showing,
+        registers = registers[0..<registers.count],
+        frame = frame_register,
+        image = image,
+    }
     where :: found[3]
     where_bytes :: string_bytes(where)
     gathered := false
@@ -769,7 +839,7 @@ say_local :: fn(session: ptr[mut Debugging], name: string) {
  *     AArch64's x0 to x30, then sp.
  * @return Its value; null for a number not known.
  */
-register_value :: fn(registers: u64[], dwarf: u64) -> u64? {
+register_value :: fn(registers : u64[], dwarf : u64) -> u64? {
     // x86-64's order differs from DWARF's in rdx and rbx; AArch64's is the same
     index : u64 = dwarf
     if crash_reports.PC_REGISTER != 32 {
@@ -798,7 +868,7 @@ register_value :: fn(registers: u64[], dwarf: u64) -> u64? {
  * @param text The number, like "-24".
  * @return Its value; 0 if it isn't one.
  */
-signed_number :: fn(text: string) -> i64 {
+signed_number :: fn(text : string) -> i64 {
     bytes :: string_bytes(text)
     if bytes.count > 1 && bytes[0] == 0x2d {
         return 0 - cast[i64](number_of(string_of(&bytes[1], bytes.count - 1)) or_else 0)
@@ -813,7 +883,7 @@ signed_number :: fn(text: string) -> i64 {
  * @param words Where the words go, views of the line.
  * @return How many there are, at most six.
  */
-split_all :: fn(line #escaping : string, words: ptr[mut string[6]]) -> usize {
+split_all :: fn(line #escaping : string, words : ptr[mut string[6]]) -> usize {
     bytes :: string_bytes(line)
     count : usize = 0
     start : usize = 0
@@ -847,7 +917,7 @@ ValuePlace :: struct #scoped {
  * @param into Where the value's bytes go.
  * @return True once every piece is read; false if one isn't kept, or can't be read.
  */
-gather_pieces :: fn(place: ptr[mut ValuePlace], pieces: string, into: ptr[mut u8[..]]) -> bool {
+gather_pieces :: fn(place : ptr[mut ValuePlace], pieces : string, into : ptr[mut u8[..]]) -> bool {
     bytes :: string_bytes(pieces)
     start : usize = 0
     for i in cast[usize](0)..<(bytes.count + 1) {
@@ -883,7 +953,7 @@ gather_pieces :: fn(place: ptr[mut ValuePlace], pieces: string, into: ptr[mut u8
  * @param into Where they go, after what's there.
  * @return True once they're read.
  */
-gather_place :: fn(place: ptr[mut ValuePlace], where: string, count: u64, into: ptr[mut u8[..]]) -> bool {
+gather_place :: fn(place : ptr[mut ValuePlace], where : string, count : u64, into : ptr[mut u8[..]]) -> bool {
     parts : string[3]
     taken :: split_at_colons(message("%", where), &parts)
     if taken == 0 {
@@ -941,7 +1011,7 @@ gather_place :: fn(place: ptr[mut ValuePlace], where: string, count: u64, into: 
  * @param value The number.
  * @param count How many bytes.
  */
-add_low_bytes :: fn(into: ptr[mut u8[..]], value: u64, count: u64) {
+add_low_bytes :: fn(into : ptr[mut u8[..]], value : u64, count : u64) {
     for i in cast[u64](0)..<count {
         runtime.array_add(into, if i < 8 { cast[u8]((value >> (8 * i)) & 0xff) } else { cast[u8](0) })
     }
@@ -954,7 +1024,7 @@ add_low_bytes :: fn(into: ptr[mut u8[..]], value: u64, count: u64) {
  * @param parts Where the parts go, views of the text.
  * @return How many parts there are; 0 if there are more than three.
  */
-split_at_colons :: fn(text #escaping : string, parts: ptr[mut string[3]]) -> usize {
+split_at_colons :: fn(text #escaping : string, parts : ptr[mut string[3]]) -> usize {
     bytes :: string_bytes(text)
     count : usize = 0
     start : usize = 0
@@ -979,7 +1049,7 @@ split_at_colons :: fn(text #escaping : string, parts: ptr[mut string[3]]) -> usi
  * @param byte The byte.
  * @return Where it first is; null if it isn't there.
  */
-index_of_byte :: fn(text: string, byte: u8) -> usize? {
+index_of_byte :: fn(text : string, byte : u8) -> usize? {
     for each, i in string_bytes(text) {
         if each == byte {
             return i
@@ -993,7 +1063,7 @@ index_of_byte :: fn(text: string, byte: u8) -> usize? {
  *
  * @param session The session, whose debug state is set.
  */
-set_slots :: fn(session: ptr[mut Debugging]) {
+set_slots :: fn(session : ptr[mut Debugging]) {
     if slop_os.process_set_debug(session.call.launched.process, &session.debug) is_error {
         say(session.shell, "the breakpoints and watchpoints couldn't be set")
     }
@@ -1012,7 +1082,7 @@ FIBER_FRAMES :: 4
  *
  * @param session The session, stopped.
  */
-say_fibers :: fn(session: ptr[mut Debugging]) {
+say_fibers :: fn(session : ptr[mut Debugging]) {
     shell :: session.shell
     file :: session.file or_return say(shell, "there's no debug file for the program, so its fibers can't be found")
     registers : u64[slop_os.THREAD_REGISTERS]
@@ -1023,11 +1093,13 @@ say_fibers :: fn(session: ptr[mut Debugging]) {
     }
     carrier_index : usize = if crash_reports.PC_REGISTER == 32 { 28 } else { 14 }
     carrier :: if carrier_index < registers.count { registers[carrier_index] } else { 0 }
-    scheduler_at :: member_offset(file, "runtime.CarrierBlock", "scheduler_data") or_return say(shell, "the debug file hasn't the carrier block's type")
+    scheduler_at :: member_offset(file, "runtime.CarrierBlock", "scheduler_data")
+        or_return say(shell, "the debug file hasn't the carrier block's type")
     current_at :: member_offset(file, "runtime.CarrierBlock", "current_fiber") or_else 0
     pool_at :: member_offset(file, "fiber.PoolCarrier", "pool") or_return say(shell, "the program has no fiber pool")
     all_at :: member_offset(file, "fiber.FiberPool", "all") or_return say(shell, "the program has no fiber pool")
-    next_at :: member_offset(file, "runtime.Fiber", "all_next") or_return say(shell, "the debug file hasn't the fiber's type")
+    next_at :: member_offset(file, "runtime.Fiber", "all_next")
+        or_return say(shell, "the debug file hasn't the fiber's type")
     state_at :: member_offset(file, "runtime.Fiber", "state") or_else 0
     resume_at :: member_offset(file, "runtime.Fiber", "resume") or_else 0
     part :: remote_word(session, carrier + scheduler_at) or_else 0
@@ -1100,14 +1172,24 @@ say_fibers :: fn(session: ptr[mut Debugging]) {
         }
     }
     answer : u8[DEBUG_ANSWER_BYTES]
-    named :: if asked_count > 0 { ask_symbols(shell, symbols_source(session), view_of(&asked[0], asked_count), null, null, answer) } else { 0 }
+    named :: if asked_count > 0 {
+        ask_symbols(shell, symbols_source(session), view_of(&asked[0], asked_count), null, null, answer)
+    }
+    else {
+        0
+    }
     at : usize = 0
     say(shell, message("% fibers", shown + more))
     for i in cast[usize](0)..<shown {
         state :: states[i % states.count]
         address :: fibers[i % fibers.count]
-        what :: if address == current { "running on this thread" } else if state == 0 { "not started" } else if state == 1 { "running" }
-            else if state == 2 { "suspended" } else { "finished" }
+        what :: if address == current {
+            "running on this thread"
+        }
+        else if state == 0 {
+            "not started"
+        }
+        else if state == 1 { "running" } else if state == 2 { "suspended" } else { "finished" }
         say(shell, message("  fiber %{#x}: %", address, what))
         for j in cast[usize](0)..<counts[i % counts.count] {
             name :: next_line(answer, named, &at)
@@ -1126,9 +1208,10 @@ say_fibers :: fn(session: ptr[mut Debugging]) {
  * @param address Where.
  * @return The word; null if it can't be read.
  */
-remote_word :: fn(session: ptr[Debugging], address: u64) -> u64? {
+remote_word :: fn(session : ptr[Debugging], address : u64) -> u64? {
     bytes : u8[8]
-    if address == 0 || !(slop_os.process_read_memory(session.call.launched.process, session.faults.space, address, bytes) is_ok) {
+    if address == 0
+        || !(slop_os.process_read_memory(session.call.launched.process, session.faults.space, address, bytes) is_ok) {
         return null
     }
     return crash_reports.word_at(bytes, 0)

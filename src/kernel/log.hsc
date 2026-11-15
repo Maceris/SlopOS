@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import text_buffer from "std:text_buffer"
-import console from "console"
 import concurrency from "std:concurrency"
+import text_buffer from "std:text_buffer"
 import boot_info from "../boot_info"
+import console from "console"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -39,7 +39,7 @@ KERNEL_LOGGER :: runtime.Logger.{
  * @param params The values that replace the message's %, in order.
  * @param location Where the call was made from, not written for this level.
  */
-log_trace : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+log_trace : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     write_log_line("trace", null, format_string, params)
 }
 
@@ -50,7 +50,7 @@ log_trace : runtime.LogFunction : fn(format_string: string, params: any..., loca
  * @param params The values that replace the message's %, in order.
  * @param location Where the call was made from, not written for this level.
  */
-log_debug : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+log_debug : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     write_log_line("debug", null, format_string, params)
 }
 
@@ -61,7 +61,7 @@ log_debug : runtime.LogFunction : fn(format_string: string, params: any..., loca
  * @param params The values that replace the message's %, in order.
  * @param location Where the call was made from, not written for this level.
  */
-log_info : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+log_info : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     write_log_line("info", null, format_string, params)
 }
 
@@ -72,7 +72,7 @@ log_info : runtime.LogFunction : fn(format_string: string, params: any..., locat
  * @param params The values that replace the message's %, in order.
  * @param location Where the call was made from, written after the message.
  */
-log_warn : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+log_warn : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     write_log_line("warn", location, format_string, params)
 }
 
@@ -83,7 +83,7 @@ log_warn : runtime.LogFunction : fn(format_string: string, params: any..., locat
  * @param params The values that replace the message's %, in order.
  * @param location Where the call was made from, written after the message.
  */
-log_error : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+log_error : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     write_log_line("error", location, format_string, params)
 }
 
@@ -95,7 +95,7 @@ log_error : runtime.LogFunction : fn(format_string: string, params: any..., loca
  * @param params The values that replace the message's %, in order.
  * @param location Where the call was made from, written after the message.
  */
-log_fatal : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+log_fatal : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     write_log_line("fatal", location, format_string, params)
 }
 
@@ -110,7 +110,7 @@ log_fatal : runtime.LogFunction : fn(format_string: string, params: any..., loca
  * @param format_string The message, each % in it replaced by the next parameter (text_buffer.append_format).
  * @param params The values that replace the message's %, in order.
  */
-write_log_line :: fn(level: string, location: runtime.SourceCodeLocation?, format_string: string, params: any...) {
+write_log_line :: fn(level : string, location : runtime.SourceCodeLocation?, format_string : string, params : any...) {
     storage : u8[256]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "[")
@@ -139,7 +139,7 @@ write_log_line :: fn(level: string, location: runtime.SourceCodeLocation?, forma
  *
  * @param text The line, as much of it kept as the record has room for.
  */
-keep_in_panic_record :: fn(text: string) {
+keep_in_panic_record :: fn(text : string) {
     if intrinsics.carrier().program_data == null {
         return void
     }
@@ -157,7 +157,7 @@ keep_in_panic_record :: fn(text: string) {
  * @param line The line being built; truncated, as a text buffer is, if it's full.
  * @param location The source location written.
  */
-append_location :: fn(line: ptr[mut text_buffer.TextBuffer], location: runtime.SourceCodeLocation) {
+append_location :: fn(line : ptr[mut text_buffer.TextBuffer], location : runtime.SourceCodeLocation) {
     text_buffer.append(line, " at ")
     text_buffer.append(line, location.file_path)
     text_buffer.append(line, ":")
@@ -173,7 +173,7 @@ append_location :: fn(line: ptr[mut text_buffer.TextBuffer], location: runtime.S
  *
  * @param text The text, UTF-8, written as it is; line feeds start new lines.
  */
-write_console :: fn(text: string) {
+write_console :: fn(text : string) {
     if intrinsics.carrier().program_data == null {
         arch.early_console_write(text)
         return void
@@ -196,7 +196,10 @@ write_console :: fn(text: string) {
  * @param location Where the assertion failed.
  * @param message What the assertion says, logged after "assertion failed: ".
  */
-kernel_assertion_handler : runtime.AssertionHandler : fn(location: runtime.SourceCodeLocation, message: string) #never_returns {
+kernel_assertion_handler : runtime.AssertionHandler : fn(
+    location : runtime.SourceCodeLocation,
+    message : string
+) #never_returns {
     write_log_line("fatal", location, "assertion failed: %", message)
     // From where the assertion failed (runtime.assert, or the function it was inlined into)
     log_stack_trace()

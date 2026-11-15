@@ -22,7 +22,7 @@ HISTORY_FILE :: "history"
  * @param editor The editor, whose history, empty to start with, gets each line, a copy with context.allocator, as the
  *     editor's own lines are.
  */
-load_history :: fn(shell: ptr[mut Shell], editor: ptr[mut terminal.LineEditor]) {
+load_history :: fn(shell : ptr[mut Shell], editor : ptr[mut terminal.LineEditor]) {
     directory :: shell.data or_return void
     read :: match os.read_entire_file_in(directory, HISTORY_FILE) {
         case Ok(contents) => contents
@@ -59,7 +59,7 @@ load_history :: fn(shell: ptr[mut Shell], editor: ptr[mut terminal.LineEditor]) 
  * @param shell The shell, whose data directory is written; nothing's written without one.
  * @param editor The editor, whose history is written; it isn't changed.
  */
-save_history :: fn(shell: ptr[mut Shell], editor: ptr[terminal.LineEditor]) {
+save_history :: fn(shell : ptr[mut Shell], editor : ptr[terminal.LineEditor]) {
     directory :: shell.data or_return void
     contents : u8[..]
     defer runtime.array_free(&contents)
@@ -69,5 +69,9 @@ save_history :: fn(shell: ptr[mut Shell], editor: ptr[terminal.LineEditor]) {
         }
         runtime.array_add(&contents, cast[u8](10))
     }
-    _ = os.write_entire_file_in(directory, HISTORY_FILE, if contents.count > 0 { string_of(&contents[0], contents.count) } else { "" })
+    _ = os.write_entire_file_in(
+        directory,
+        HISTORY_FILE,
+        if contents.count > 0 { string_of(&contents[0], contents.count) } else { "" }
+    )
 }

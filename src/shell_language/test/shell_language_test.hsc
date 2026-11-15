@@ -8,9 +8,9 @@ package shell_language_test
 import runtime from "base:runtime"
 import memory from "std:memory"
 import schema from "std:schema"
-import time from "std:time"
 import testing from "std:testing"
 import text_buffer from "std:text_buffer"
+import time from "std:time"
 import shell_language as language from ".."
 
 /**
@@ -19,7 +19,7 @@ import shell_language as language from ".."
  * @param tree The line's Statements node.
  * @return Its first child; null for a line without statements.
  */
-first_of :: fn(tree: ptr[language.Node]) -> ptr[language.Node]? {
+first_of :: fn(tree : ptr[language.Node]) -> ptr[language.Node]? {
     for statement in tree.children {
         return statement
     }
@@ -32,10 +32,66 @@ first_of :: fn(tree: ptr[language.Node]) -> ptr[language.Node]? {
  * The pieces lines are drawn from: what the language gives meaning to, with words, numbers, units and text that isn't
  * ASCII among them, so drawn lines reach every part of the parser.
  */
-LINE_PIECES :: string.[" ", "a", "x-y", "let ", "fn ", "or ", "try ", "catch ", "return ", "not ", "and ", "true", "null", "1", "42",
-    "9223372036854775807", "99999999999999999999", "4MiB", "250ms", "s", "$", "$a", "\"", "\"$a\"", "\\", "(", ")", "[", "]", "{", "}", "|", ";",
-    "?", ",", ":", "=", "==", "+", "-", "*", "/", "<", ">=", ".", ".n", "#", "--", "--a", "\n", "where ", "take ", "group ", "sort ", "map ", "&",
-    "日本", "é"]
+LINE_PIECES :: string.[
+    " ",
+    "a",
+    "x-y",
+    "let ",
+    "fn ",
+    "or ",
+    "try ",
+    "catch ",
+    "return ",
+    "not ",
+    "and ",
+    "true",
+    "null",
+    "1",
+    "42",
+    "9223372036854775807",
+    "99999999999999999999",
+    "4MiB",
+    "250ms",
+    "s",
+    "$",
+    "$a",
+    "\"",
+    "\"$a\"",
+    "\\",
+    "(",
+    ")",
+    "[",
+    "]",
+    "{",
+    "}",
+    "|",
+    ";",
+    "?",
+    ",",
+    ":",
+    "=",
+    "==",
+    "+",
+    "-",
+    "*",
+    "/",
+    "<",
+    ">=",
+    ".",
+    ".n",
+    "#",
+    "--",
+    "--a",
+    "\n",
+    "where ",
+    "take ",
+    "group ",
+    "sort ",
+    "map ",
+    "&",
+    "日本",
+    "é"
+]
 
 /**
  * Draw a line: up to most pieces of LINE_PIECES, one after another.
@@ -44,7 +100,7 @@ LINE_PIECES :: string.[" ", "a", "x-y", "let ", "fn ", "or ", "try ", "catch ", 
  * @param most The most pieces.
  * @return The line, on the heap, never freed; "" for no pieces.
  */
-draw_line :: fn(source: ptr[mut testing.Source], most: usize) -> string {
+draw_line :: fn(source : ptr[mut testing.Source], most : usize) -> string {
     made : u8[..]
     for i in 0..<testing.draw_count(source, most) {
         piece :: LINE_PIECES[cast[usize](testing.draw_below(source, cast[u64](LINE_PIECES.count))) % LINE_PIECES.count]
@@ -67,7 +123,7 @@ TEXT_PIECES :: string.["a", "b", " ", "日", "é", "\"", "-"]
  * @param most The most pieces.
  * @return The text, on the heap, never freed; "" for no pieces.
  */
-draw_text :: fn(source: ptr[mut testing.Source], most: usize) -> string {
+draw_text :: fn(source : ptr[mut testing.Source], most : usize) -> string {
     made : u8[..]
     for i in 0..<testing.draw_count(source, most) {
         piece :: TEXT_PIECES[cast[usize](testing.draw_below(source, cast[u64](TEXT_PIECES.count))) % TEXT_PIECES.count]
@@ -84,7 +140,7 @@ draw_text :: fn(source: ptr[mut testing.Source], most: usize) -> string {
  * @param value The value.
  * @return The text, on the heap, never freed; cut at 4 KiB.
  */
-rendered :: fn(value: language.Value, nested: bool = true) -> string {
+rendered :: fn(value : language.Value, nested : bool = true) -> string {
     storage : u8[4096]
     out := text_buffer.make(storage)
     language.render(&out, value, nested)
@@ -94,17 +150,25 @@ rendered :: fn(value: language.Value, nested: bool = true) -> string {
 // ---- Parsing and evaluating
 
 /** Drawn lines either parse or fail at a place in them; none hangs or faults the parser. */
-any_line_parses_or_fails_inside_it #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+any_line_parses_or_fails_inside_it #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     line :: draw_line(source, 24)
     match language.parse(line) {
         case Ok(tree) => testing.expect_le(t, tree.at, line.count, "the tree starts inside the line")
-        case Error(error) => testing.expect_le(t, error.at, line.count, "the syntax error is at or before the line's end")
+        case Error(
+            error
+        ) => testing.expect_le(t, error.at, line.count, "the syntax error is at or before the line's end")
     }
     return .Ok
 }
 
 /** A whole number's digits parse to it up to 2^63 - 1, and past it are an error, not a number wrapped. */
-numbers_parse_to_themselves_or_are_too_big #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+numbers_parse_to_themselves_or_are_too_big #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     number :: testing.draw[u64](source)
     storage : u8[32]
     out := text_buffer.make(storage)
@@ -123,7 +187,7 @@ numbers_parse_to_themselves_or_are_too_big #test :: fn(t: ptr[mut testing.T], so
 }
 
 /** The shell's size and duration units scale, and a scaled number past its value's range is an error. */
-units_scale_or_are_too_big #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+units_scale_or_are_too_big #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     tree :: testing.require_ok(t, language.parse("2KiB"), "a size parses")?
     literal :: testing.require_some(t, first_of(tree), "the line has its size")?
     testing.expect_eq(t, rendered(literal.value), "2 KiB", "2KiB is 2048 bytes")
@@ -133,11 +197,16 @@ units_scale_or_are_too_big #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome
 }
 
 /** A string's $name runs over - as a name in the language does, and one not bound is left as written. */
-interpolation_takes_names_with_hyphens #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+interpolation_takes_names_with_hyphens #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     scope :: runtime.new(language.Scope)
     language.bind(scope, "file-name", .Text("notes"))
     testing.expect_eq(t, language.interpolate(scope, "open $file-name now"), "open notes now", "file-name is filled in")
-    testing.expect_eq(t, language.interpolate(scope, "$missing-one"), "$missing-one", "a name not bound is kept as written")
+    testing.expect_eq(
+        t,
+        language.interpolate(scope, "$missing-one"),
+        "$missing-one",
+        "a name not bound is kept as written"
+    )
     return .Ok
 }
 
@@ -147,7 +216,7 @@ interpolation_takes_names_with_hyphens #test :: fn(t: ptr[mut testing.T]) -> tes
 LARGEST :: cast[i64](cast[u64](language.SMALLEST) - 1)
 
 /** A sum is the shell's when it's in an i64's range, and an overflow otherwise, by a reference that can't overflow. */
-sums_are_checked #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+sums_are_checked #test :: fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     a :: testing.draw[i64](source)
     b :: testing.draw[i64](source)
     overflows :: (b > 0 && a > LARGEST - b) || (b < 0 && a < language.SMALLEST - b)
@@ -162,7 +231,7 @@ sums_are_checked #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Sour
 }
 
 /** A difference is the shell's when it's in an i64's range, and an overflow otherwise. */
-differences_are_checked #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+differences_are_checked #test :: fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     a :: testing.draw[i64](source)
     b :: testing.draw[i64](source)
     overflows :: (b < 0 && a > LARGEST + b) || (b > 0 && a < language.SMALLEST + b)
@@ -177,7 +246,7 @@ differences_are_checked #test :: fn(t: ptr[mut testing.T], source: ptr[mut testi
 }
 
 /** A product is the shell's when it's in an i64's range, so dividing it gives a back; an overflow otherwise. */
-products_are_checked #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+products_are_checked #test :: fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     a :: testing.draw[i64](source)
     b :: testing.draw[i64](source)
     // The magnitudes' product fits below the limit of the result's sign, 2^63 - 1 or 2^63
@@ -204,7 +273,7 @@ products_are_checked #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.
  * @param tree The expression's node: a Literal, a Unary - or a Binary of + - * /.
  * @return Its value; why it can't be worked out otherwise, as calculate says it, or "not arithmetic" for another node.
  */
-worked_out :: fn(tree: ptr[language.Node]) -> Result[language.Value, string] {
+worked_out :: fn(tree : ptr[language.Node]) -> Result[language.Value, string] {
     if tree.kind == .Literal {
         return .Ok(tree.value)
     }
@@ -229,7 +298,7 @@ worked_out :: fn(tree: ptr[language.Node]) -> Result[language.Value, string] {
  * @param line The line, parsed.
  * @return The value, rendered; why it couldn't be worked out, or "doesn't parse".
  */
-worked_out_text :: fn(line: string) -> string {
+worked_out_text :: fn(line : string) -> string {
     tree :: match language.parse(line) {
         case Ok(made) => made
         case Error(error) => return "doesn't parse"
@@ -244,9 +313,14 @@ worked_out_text :: fn(line: string) -> string {
 }
 
 /** Arithmetic past an i64 is an error, and the smallest i64 is shown as itself. */
-overflowing_arithmetic_is_an_error #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
-    for line in string.["9223372036854775807 + 1", "-(9223372036854775807) - 2", "4611686018427387904 * 2", "9223372036854775807ns * 2",
-        "18446744073709551615B + 1B"] {
+overflowing_arithmetic_is_an_error #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    for line in string.[
+        "9223372036854775807 + 1",
+        "-(9223372036854775807) - 2",
+        "4611686018427387904 * 2",
+        "9223372036854775807ns * 2",
+        "18446744073709551615B + 1B"
+    ] {
         tree :: testing.require_ok(t, language.parse(line), "the line parses")?
         testing.require_eq(t, tree.children.count, 1, "the line has a statement")?
         for statement in tree.children {
@@ -254,7 +328,12 @@ overflowing_arithmetic_is_an_error #test :: fn(t: ptr[mut testing.T]) -> testing
         }
     }
     testing.expect_eq(t, worked_out_text("6 * 7 - 2"), "40", "arithmetic in range is worked out")
-    testing.expect_eq(t, rendered(.Int(language.SMALLEST)), "-9223372036854775808", "the smallest i64 is shown as itself")
+    testing.expect_eq(
+        t,
+        rendered(.Int(language.SMALLEST)),
+        "-9223372036854775808",
+        "the smallest i64 is shown as itself"
+    )
     return .Ok
 }
 
@@ -292,7 +371,7 @@ Row :: struct {
  * A record of Row's fields, written by the shell as Row is laid out, reads back the same: its numbers, text, lists and
  * choice.
  */
-records_read_back_as_written #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+records_read_back_as_written #test :: fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     written : u8[..]
     defer runtime.array_free(&written)
     schema.write(type_info_of(Row), &written)
@@ -349,19 +428,23 @@ record_of :: fn(name #escaping : string, value #escaping : language.Value) -> la
 }
 
 /** Grouped by a field named count, the groups name its value key, and their own count and items stay theirs. */
-grouping_by_count_keeps_the_groups_own_fields #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+grouping_by_count_keeps_the_groups_own_fields #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     items :: language.new_list()
     for count in i64.[1, 1, 2] {
         runtime.array_add(&items.items, record_of("count", .Int(count)))
     }
     groups :: language.group_items(items.items[0..<items.items.count], "count")
-    testing.expect_eq(t, rendered(.List(groups)), "[{key: 1, count: 2, items: [{count: 1}, {count: 1}]}, {key: 2, count: 1, items: [{count: 2}]}]",
-        "each group has its value as key, its count and its items")
+    testing.expect_eq(
+        t,
+        rendered(.List(groups)),
+        "[{key: 1, count: 2, items: [{count: 1}, {count: 1}]}, {key: 2, count: 1, items: [{count: 2}]}]",
+        "each group has its value as key, its count and its items"
+    )
     return .Ok
 }
 
 /** A table's columns line up by the columns their text takes, wide characters two and accents none. */
-tables_line_up_by_columns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+tables_line_up_by_columns #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     rows :: language.new_list()
     for name, i in string.["日本", "ab", "é"] {
         row :: language.new_record()
@@ -369,23 +452,33 @@ tables_line_up_by_columns #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
         language.set_field(row, "n", .Int(cast[i64](i)))
         runtime.array_add(&rows.items, language.Value.Record(row))
     }
-    testing.expect_eq(t, rendered(.List(rows), false), "name  n\n日本  0\nab    1\né     2", "the n column starts at column 6 on every line")
+    testing.expect_eq(
+        t,
+        rendered(.List(rows), false),
+        "name  n\n日本  0\nab    1\né     2",
+        "the n column starts at column 6 on every line"
+    )
     return .Ok
 }
 
 // ---- Types shown by their types (decisions/0181, F1)
 
 /** An instant is shown as its date and time in UTC, to the second, before the epoch and on a leap day too. */
-instants_show_as_utc_dates #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+instants_show_as_utc_dates #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     testing.expect_eq(t, rendered(.Instant(0)), "1970-01-01T00:00:00Z", "the epoch")
     testing.expect_eq(t, rendered(.Instant(-1)), "1969-12-31T23:59:59Z", "a nanosecond before it is the second before")
     testing.expect_eq(t, rendered(.Instant(951782400 * 1000000000)), "2000-02-29T00:00:00Z", "a leap day")
-    testing.expect_eq(t, rendered(.Instant(1794018183403018064)), "2026-11-07T02:23:03Z", "a time of day, its nanoseconds cut")
+    testing.expect_eq(
+        t,
+        rendered(.Instant(1794018183403018064)),
+        "2026-11-07T02:23:03Z",
+        "a time of day, its nanoseconds cut"
+    )
     return .Ok
 }
 
 /** A table wider than the terminal has its widest column narrowed, and what doesn't fit cut, ending in …. */
-tables_fit_the_terminal #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+tables_fit_the_terminal #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     rows :: language.new_list()
     for name, i in string.["abcdefghijkl", "ab"] {
         row :: language.new_record()
@@ -396,12 +489,20 @@ tables_fit_the_terminal #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     storage : u8[512]
     out := text_buffer.make(storage)
     language.render(&out, .List(rows), false, 10)
-    testing.expect_eq(t, language.joined(text_buffer.as_string(&out), ""), "name     n\nabcdef…  0\nab       1",
-        "the name column narrowed to 7, so each line is 10 columns at most")
+    testing.expect_eq(
+        t,
+        language.joined(text_buffer.as_string(&out), ""),
+        "name     n\nabcdef…  0\nab       1",
+        "the name column narrowed to 7, so each line is 10 columns at most"
+    )
     wide := text_buffer.make(storage)
     language.render(&wide, .List(rows), false, 80)
-    testing.expect_eq(t, language.joined(text_buffer.as_string(&wide), ""), "name          n\nabcdefghijkl  0\nab            1",
-        "a table that fits is as it was")
+    testing.expect_eq(
+        t,
+        language.joined(text_buffer.as_string(&wide), ""),
+        "name          n\nabcdefghijkl  0\nab            1",
+        "a table that fits is as it was"
+    )
     return .Ok
 }
 
@@ -414,7 +515,7 @@ Stamped :: struct {
 }
 
 /** A ByteCount reads as a size and an Instant as an instant, and both write back as they read. */
-byte_counts_and_instants_read_by_their_types #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+byte_counts_and_instants_read_by_their_types #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     written : u8[..]
     defer runtime.array_free(&written)
     schema.write(type_info_of(Stamped), &written)
@@ -431,6 +532,11 @@ byte_counts_and_instants_read_by_their_types #test :: fn(t: ptr[mut testing.T]) 
         case None => {}
     }
     back :: language.decode(&manifest, 0, bytes[0..<bytes.count], 0, 0)
-    testing.expect_eq(t, rendered(back), "{size: 2 KiB, taken: 2000-02-29T00:00:00Z}", "a size and an instant, shown as such")
+    testing.expect_eq(
+        t,
+        rendered(back),
+        "{size: 2 KiB, taken: 2000-02-29T00:00:00Z}",
+        "a size and an instant, shown as such"
+    )
     return .Ok
 }

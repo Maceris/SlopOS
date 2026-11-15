@@ -151,7 +151,7 @@ CROCKFORD :: "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
  * @param name The name to check, as bytes, not assumed to be UTF-8; only read.
  * @return True for 1 to 32 bytes, a lowercase ASCII letter, then lowercase letters, digits, - or _; false otherwise.
  */
-valid_name :: fn(name: u8[]) -> bool {
+valid_name :: fn(name : u8[]) -> bool {
     if name.count == 0 || name.count > MAX_NAME_BYTES {
         return false
     }
@@ -175,7 +175,7 @@ valid_name :: fn(name: u8[]) -> bool {
  * @param password The password, as typed; not kept, and the lowercased copy made of it is wiped before it returns.
  * @return The problem, or null if the password is fine.
  */
-password_problem :: fn(name: u8[], password: u8[]) -> PasswordProblem? {
+password_problem :: fn(name : u8[], password : u8[]) -> PasswordProblem? {
     if password.count > MAX_PASSWORD_BYTES {
         return .TooLong
     }
@@ -223,7 +223,7 @@ password_problem :: fn(name: u8[], password: u8[]) -> PasswordProblem? {
  * @param byte Any byte; only ASCII's A to Z are changed, so UTF-8's multibyte sequences pass through whole.
  * @return The byte, A to Z made a to z; any other byte as it was.
  */
-ascii_lower :: fn(byte: u8) -> u8 {
+ascii_lower :: fn(byte : u8) -> u8 {
     return if byte >= cast[u8]('A') && byte <= cast[u8]('Z') { byte + 32 } else { byte }
 }
 
@@ -233,7 +233,7 @@ ascii_lower :: fn(byte: u8) -> u8 {
  * @param lowered The password, its ASCII letters lowercased already, as the list is.
  * @return True if it's in the list, which holds only passwords of 8 characters or more.
  */
-is_common :: fn(lowered: u8[]) -> bool {
+is_common :: fn(lowered : u8[]) -> bool {
     low : usize = 0
     high : usize = COMMON_PASSWORDS.count
     loop {
@@ -265,7 +265,7 @@ is_common :: fn(lowered: u8[]) -> bool {
  * @param b The byte string a is ordered against, read only; may be empty.
  * @return -1 if a comes before b, 0 if they're the same, 1 if a comes after.
  */
-compare :: fn(a: u8[], b: u8[]) -> int {
+compare :: fn(a : u8[], b : u8[]) -> int {
     for byte, i in a {
         if i >= b.count {
             return 1
@@ -293,14 +293,24 @@ compare :: fn(a: u8[], b: u8[]) -> int {
  * @param code The recovery code, read only; the caller shows it once and wipes it.
  * @return The record; null if the name isn't valid, Argon2id couldn't have its memory, or a seal failed.
  */
-new_record #constant_time :: fn(name: u8[], administrator: bool, created: u64, password: u8[], parameters: crypto.Argon2Parameters,
-    home: ptr[crypto.Key256], code: ptr[RecoveryCode]) -> AccountRecord? {
-
+new_record #constant_time :: fn(
+    name : u8[],
+    administrator : bool,
+    created : u64,
+    password : u8[],
+    parameters : crypto.Argon2Parameters,
+    home : ptr[crypto.Key256],
+    code : ptr[RecoveryCode]
+) -> AccountRecord? {
     if !valid_name(name) {
         return null
     }
-    record := AccountRecord.{version = cast[u32le](RECORD_VERSION), flags = cast[u32le](if administrator { ADMINISTRATOR } else { 0 }),
-        name_bytes = cast[u32le](cast[u32](name.count)), created = cast[u64le](created)}
+    record := AccountRecord.{
+        version = cast[u32le](RECORD_VERSION),
+        flags = cast[u32le](if administrator { ADMINISTRATOR } else { 0 }),
+        name_bytes = cast[u32le](cast[u32](name.count)),
+        created = cast[u64le](created),
+    }
     for byte, i in name {
         if i < record.name.count {
             record.name[i] = byte
@@ -325,7 +335,7 @@ new_record #constant_time :: fn(name: u8[], administrator: bool, created: u64, p
  * @param record The account's record, read only; its public_key alone is looked at.
  * @return True if its public key isn't all zeros.
  */
-has_keys :: fn(record: ptr[AccountRecord]) -> bool {
+has_keys :: fn(record : ptr[AccountRecord]) -> bool {
     for byte in record.public_key {
         if byte != 0 {
             return true
@@ -346,7 +356,7 @@ has_keys :: fn(record: ptr[AccountRecord]) -> bool {
  * @param home The home volume's secret, the seal's key, read only.
  * @return True once the pair is in the record; false if the seal failed.
  */
-set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.Key256]) -> bool {
+set_keys #constant_time :: fn(record : ptr[mut AccountRecord], home : ptr[crypto.Key256]) -> bool {
     secret := random_key()
     defer zero_key(&secret)
     key : crypto.X25519SecretKey
@@ -376,11 +386,19 @@ set_keys #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.K
  * @return The secret key, which the caller wipes once it's done with it; null if the record has none, or home isn't
  *     its secret.
  */
-secret_key #constant_time :: fn(record: ptr[AccountRecord], home: ptr[crypto.Key256]) -> crypto.X25519SecretKey? {
+secret_key #constant_time :: fn(record : ptr[AccountRecord], home : ptr[crypto.Key256]) -> crypto.X25519SecretKey? {
     zero_nonce : crypto.Nonce96
-    opened := match open_home(home, record.private_wrapped, record.private_tag, record, "key pair", key_pair_nonce(record)) {
+    opened := match open_home(
+        home,
+        record.private_wrapped,
+        record.private_tag,
+        record,
+        "key pair",
+        key_pair_nonce(record)
+    ) {
         case Some(found) => found
-        case None => open_home(home, record.private_wrapped, record.private_tag, record, "key pair", zero_nonce) or_return null
+        case None => open_home(home, record.private_wrapped, record.private_tag, record, "key pair", zero_nonce)
+            or_return null
     }
     defer zero_key(&opened)
     key : crypto.X25519SecretKey
@@ -402,7 +420,7 @@ secret_key #constant_time :: fn(record: ptr[AccountRecord], home: ptr[crypto.Key
  * @return The sealed secret, public by design, for the member's entry in the share's record; null if their key's no
  *     good (a low-order point, which X25519 refuses) or the seal failed.
  */
-seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], share: u8[]) -> SealedShare? {
+seal_share #constant_time :: fn(secret : ptr[crypto.Key256], public : u8[32], share : u8[]) -> SealedShare? {
     random_secret := random_key()
     defer zero_key(&random_secret)
     ephemeral : crypto.X25519SecretKey
@@ -456,7 +474,12 @@ seal_share #constant_time :: fn(secret: ptr[crypto.Key256], public: u8[32], shar
  * @return The share's secret, which the caller wipes once it's done with it; null if it isn't theirs, or isn't this
  *     share's, or was changed.
  */
-open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32], sealed: ptr[SealedShare], share: u8[]) -> crypto.Key256? {
+open_share #constant_time :: fn(
+    key : ptr[crypto.X25519SecretKey],
+    public : u8[32],
+    sealed : ptr[SealedShare],
+    share : u8[]
+) -> crypto.Key256? {
     theirs : crypto.X25519PublicKey
     for i in cast[usize](0)..<32 {
         theirs[i] = sealed.ephemeral[i]
@@ -494,7 +517,11 @@ open_share #constant_time :: fn(key: ptr[crypto.X25519SecretKey], public: u8[32]
  * @param public The member's public key.
  * @return The key, which the caller zeroes once it's used.
  */
-share_key #constant_time :: fn(agreed: ptr[crypto.SecretByte[32]], ephemeral: u8[32], public: u8[32]) -> crypto.Key256 {
+share_key #constant_time :: fn(
+    agreed : ptr[crypto.SecretByte[32]],
+    ephemeral : u8[32],
+    public : u8[32]
+) -> crypto.Key256 {
     hasher := crypto.blake3_start()
     crypto.blake3_update(&hasher, string_bytes("SlopOS shared volume"))
     crypto.blake3_update_secret(&hasher, agreed^)
@@ -516,7 +543,7 @@ share_key #constant_time :: fn(agreed: ptr[crypto.SecretByte[32]], ephemeral: u8
  * @param share The share's name; at most 32 bytes of it are used.
  * @return "share" padded with zeros to 16 bytes, then the name, padded with zeros.
  */
-share_associated :: fn(share: u8[]) -> u8[48] {
+share_associated :: fn(share : u8[]) -> u8[48] {
     associated : u8[48]
     for character, i in "share" {
         if i < associated.count {
@@ -537,7 +564,7 @@ share_associated :: fn(share: u8[]) -> u8[48] {
  * @param record The share's record, read only; the name returned is a view of it.
  * @return The name, a view of the record's bytes, good as long as it is; empty if name_bytes is past the room for it.
  */
-share_name :: fn(record: ptr[ShareRecord]) -> u8[] {
+share_name :: fn(record : ptr[ShareRecord]) -> u8[] {
     count :: cast[usize](cast[u32](record.name_bytes))
     return if count <= record.name.count { record.name[0..<count] } else { record.name[0..<0] }
 }
@@ -548,7 +575,7 @@ share_name :: fn(record: ptr[ShareRecord]) -> u8[] {
  * @param member The member's entry in a share's record, read only; the name returned is a view of it.
  * @return The name, a view of the member's bytes, good as long as it is; empty if name_bytes is past the room for it.
  */
-member_name :: fn(member: ptr[ShareMember]) -> u8[] {
+member_name :: fn(member : ptr[ShareMember]) -> u8[] {
     count :: cast[usize](cast[u32](member.name_bytes))
     return if count <= member.name.count { member.name[0..<count] } else { member.name[0..<0] }
 }
@@ -566,7 +593,12 @@ member_name :: fn(member: ptr[ShareMember]) -> u8[] {
  * @param parameters Argon2id's parameters for it.
  * @return True once it's sealed; false if Argon2id couldn't have its memory or the seal failed.
  */
-set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[crypto.Key256], password: u8[], parameters: crypto.Argon2Parameters) -> bool {
+set_password #constant_time :: fn(
+    record : ptr[mut AccountRecord],
+    home : ptr[crypto.Key256],
+    password : u8[],
+    parameters : crypto.Argon2Parameters
+) -> bool {
     record.memory_kib = cast[u32le](parameters.memory_kib)
     record.passes = cast[u32le](parameters.passes)
     record.lanes = cast[u32le](parameters.lanes)
@@ -592,7 +624,7 @@ set_password #constant_time :: fn(record: ptr[mut AccountRecord], home: ptr[cryp
  * @return The home volume's secret, which the caller wipes once it's done with it; null if it's the wrong password,
  *     or Argon2id couldn't have its memory.
  */
-unlock_home #constant_time :: fn(record: ptr[AccountRecord], password: u8[]) -> crypto.Key256? {
+unlock_home #constant_time :: fn(record : ptr[AccountRecord], password : u8[]) -> crypto.Key256? {
     key := password_key(password, record) or_return null
     defer zero_key(&key)
     zero_nonce : crypto.Nonce96
@@ -607,7 +639,7 @@ unlock_home #constant_time :: fn(record: ptr[AccountRecord], password: u8[]) -> 
  * @param code The recovery code, as parse_recovery read it, read only.
  * @return The home volume's secret, which the caller wipes once it's done with it; null if it's the wrong code.
  */
-recover_home #constant_time :: fn(record: ptr[AccountRecord], code: ptr[RecoveryCode]) -> crypto.Key256? {
+recover_home #constant_time :: fn(record : ptr[AccountRecord], code : ptr[RecoveryCode]) -> crypto.Key256? {
     key := recovery_key(code, record) or_return null
     defer zero_key(&key)
     zero_nonce : crypto.Nonce96
@@ -620,7 +652,7 @@ recover_home #constant_time :: fn(record: ptr[AccountRecord], code: ptr[Recovery
  * @param record The account's record, read only; the name returned is a view of it.
  * @return The name, a view of the record's bytes, good as long as it is; empty if name_bytes is past the room for it.
  */
-name_of :: fn(record: ptr[AccountRecord]) -> u8[] {
+name_of :: fn(record : ptr[AccountRecord]) -> u8[] {
     count :: cast[usize](cast[u32](record.name_bytes))
     return if count <= record.name.count { record.name[0..<count] } else { record.name[0..<0] }
 }
@@ -631,7 +663,7 @@ name_of :: fn(record: ptr[AccountRecord]) -> u8[] {
  * @param record The account's record, read only; its flags alone are looked at.
  * @return True if its flags have ADMINISTRATOR.
  */
-is_administrator :: fn(record: ptr[AccountRecord]) -> bool {
+is_administrator :: fn(record : ptr[AccountRecord]) -> bool {
     return (cast[u32](record.flags) & ADMINISTRATOR) != 0
 }
 
@@ -651,7 +683,7 @@ Sealed :: struct {
  * @param record The record, whose whole name field, padding included, is used.
  * @return what padded with zeros to 16 bytes, then the name field.
  */
-associated_of :: fn(what: string, record: ptr[AccountRecord]) -> u8[48] {
+associated_of :: fn(what : string, record : ptr[AccountRecord]) -> u8[48] {
     associated : u8[48]
     for character, i in what {
         if i < 16 {
@@ -678,9 +710,13 @@ associated_of :: fn(what: string, record: ptr[AccountRecord]) -> u8[48] {
  *     volume's secret, which may seal more than one.
  * @return The sealed secret, declassified, as it's public by design; null if the seal failed.
  */
-seal_home #constant_time :: fn(key: ptr[crypto.Key256], home: ptr[crypto.Key256], record: ptr[AccountRecord], what: string,
-    nonce: crypto.Nonce96) -> Sealed? {
-
+seal_home #constant_time :: fn(
+    key : ptr[crypto.Key256],
+    home : ptr[crypto.Key256],
+    record : ptr[AccountRecord],
+    what : string,
+    nonce : crypto.Nonce96
+) -> Sealed? {
     associated :: associated_of(what, record)
     plain : crypto.SecretByte[32]
     defer zero_secret(plain)
@@ -712,9 +748,14 @@ seal_home #constant_time :: fn(key: ptr[crypto.Key256], home: ptr[crypto.Key256]
  * @return The secret, which the caller wipes once it's done with it; null if the key's wrong or anything it's bound
  *     to differs. The plaintext copy made while opening is wiped.
  */
-open_home #constant_time :: fn(key: ptr[crypto.Key256], wrapped: u8[32], stored_tag: u8[16], record: ptr[AccountRecord], what: string,
-    nonce: crypto.Nonce96) -> crypto.Key256? {
-
+open_home #constant_time :: fn(
+    key : ptr[crypto.Key256],
+    wrapped : u8[32],
+    stored_tag : u8[16],
+    record : ptr[AccountRecord],
+    what : string,
+    nonce : crypto.Nonce96
+) -> crypto.Key256? {
     associated :: associated_of(what, record)
     tag : crypto.Tag128
     for i in cast[usize](0)..<16 {
@@ -742,9 +783,12 @@ open_home #constant_time :: fn(key: ptr[crypto.Key256], wrapped: u8[32], stored_
  * @return The key, which the caller zeroes once it's used; null if the parameters need no memory or more than could
  *     be had, or Argon2id failed.
  */
-password_key #constant_time :: fn(password: u8[], record: ptr[AccountRecord]) -> crypto.Key256? {
-    parameters :: crypto.Argon2Parameters.{memory_kib = cast[u32](record.memory_kib), passes = cast[u32](record.passes),
-        lanes = cast[u32](record.lanes)}
+password_key #constant_time :: fn(password : u8[], record : ptr[AccountRecord]) -> crypto.Key256? {
+    parameters :: crypto.Argon2Parameters.{
+        memory_kib = cast[u32](record.memory_kib),
+        passes = cast[u32](record.passes),
+        lanes = cast[u32](record.lanes),
+    }
     count :: crypto.argon2_blocks_needed(parameters)
     if count == 0 {
         return null
@@ -773,7 +817,7 @@ password_key #constant_time :: fn(password: u8[], record: ptr[AccountRecord]) ->
  * @param record The record, whose recovery salt is used.
  * @return The key, which the caller zeroes once it's used; never null.
  */
-recovery_key #constant_time :: fn(code: ptr[RecoveryCode], record: ptr[AccountRecord]) -> crypto.Key256? {
+recovery_key #constant_time :: fn(code : ptr[RecoveryCode], record : ptr[AccountRecord]) -> crypto.Key256? {
     hasher := crypto.blake3_start()
     crypto.blake3_update(&hasher, string_bytes("SlopOS account recovery"))
     crypto.blake3_update(&hasher, record.recovery_salt)
@@ -798,7 +842,7 @@ recovery_key #constant_time :: fn(code: ptr[RecoveryCode], record: ptr[AccountRe
  *
  * @param key The key, all 32 bytes overwritten with zeros in place.
  */
-zero_key #constant_time :: fn(key: ptr[mut crypto.Key256]) {
+zero_key #constant_time :: fn(key : ptr[mut crypto.Key256]) {
     for i in cast[usize](0)..<32 {
         key[i] = 0
     }
@@ -809,7 +853,7 @@ zero_key #constant_time :: fn(key: ptr[mut crypto.Key256]) {
  *
  * @param bytes The bytes, every one overwritten with zero in place; empty wipes nothing.
  */
-zero_secret #constant_time :: fn(bytes: mut crypto.SecretByte[]) {
+zero_secret #constant_time :: fn(bytes : mut crypto.SecretByte[]) {
     for i in 0..<bytes.count {
         bytes[i] = cast[crypto.SecretByte](0)
     }
@@ -820,7 +864,7 @@ zero_secret #constant_time :: fn(bytes: mut crypto.SecretByte[]) {
  *
  * @param bytes The bytes, every one overwritten with zero in place; empty wipes nothing.
  */
-zero_bytes :: fn(bytes: mut u8[]) {
+zero_bytes :: fn(bytes : mut u8[]) {
     for i in 0..<bytes.count {
         bytes[i] = 0
     }
@@ -833,7 +877,7 @@ zero_bytes :: fn(bytes: mut u8[]) {
  * @param record The record, whose public_key, written before the seal, is all that's read.
  * @return The nonce, public, as the public key is.
  */
-key_pair_nonce :: fn(record: ptr[AccountRecord]) -> crypto.Nonce96 {
+key_pair_nonce :: fn(record : ptr[AccountRecord]) -> crypto.Nonce96 {
     hasher := crypto.blake3_start()
     crypto.blake3_update(&hasher, string_bytes("SlopOS key pair nonce"))
     crypto.blake3_update(&hasher, record.public_key)
@@ -852,7 +896,7 @@ key_pair_nonce :: fn(record: ptr[AccountRecord]) -> crypto.Nonce96 {
  * @param blocks Argon2id's working memory, every block's 128 words overwritten with zeros in place; the caller frees
  *     it after.
  */
-zero_argon2 #constant_time :: fn(blocks: mut crypto.Argon2Block[]) {
+zero_argon2 #constant_time :: fn(blocks : mut crypto.Argon2Block[]) {
     for i in 0..<blocks.count {
         for j in cast[usize](0)..<128 {
             blocks[i][j] = 0
@@ -901,7 +945,7 @@ new_recovery_code #constant_time :: fn() -> RecoveryCode {
  * @return The text, 25 Crockford base32 symbols, uppercase, in five groups of five with hyphens: declassified, as
  *     showing it to its owner is what it's for, so the caller wipes it once it's shown.
  */
-recovery_text #constant_time :: fn(code: ptr[RecoveryCode]) -> u8[RECOVERY_TEXT_BYTES] {
+recovery_text #constant_time :: fn(code : ptr[RecoveryCode]) -> u8[RECOVERY_TEXT_BYTES] {
     // Shown to its owner, which is what it's for
     shown :: compiler.declassify(code^)
     text : u8[RECOVERY_TEXT_BYTES]
@@ -936,7 +980,7 @@ recovery_text #constant_time :: fn(code: ptr[RecoveryCode]) -> u8[RECOVERY_TEXT_
  * @return The code, which the caller wipes once it's used; null for any other character, U among them, or more or
  *     fewer than 25 symbols.
  */
-parse_recovery :: fn(text: u8[]) -> RecoveryCode? {
+parse_recovery :: fn(text : u8[]) -> RecoveryCode? {
     code : RecoveryCode
     symbols : usize = 0
     for byte in text {
@@ -968,7 +1012,7 @@ parse_recovery :: fn(text: u8[]) -> RecoveryCode? {
  * @param byte The symbol, in any case; I and L are read as 1, and O as 0.
  * @return Its value, 0 to 31; null for a byte that isn't a symbol.
  */
-symbol_value :: fn(byte: u8) -> u8? {
+symbol_value :: fn(byte : u8) -> u8? {
     upper :: if byte >= cast[u8]('a') && byte <= cast[u8]('z') { byte - 32 } else { byte }
     if upper == cast[u8]('O') {
         return 0

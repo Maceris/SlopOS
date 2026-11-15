@@ -71,7 +71,7 @@ RecoverError :: union {
  * @error NoSnapshots The volume's snapshots couldn't be read, or it has none.
  * @error Failed It couldn't be written back.
  */
-main :: fn(here: os.Channel[dir.Dir], name: string?, output: os.Sink[Gone]?) -> Result[Recovered, RecoverError] {
+main :: fn(here : os.Channel[dir.Dir], name : string?, output : os.Sink[Gone]?) -> Result[Recovered, RecoverError] {
     asked :: if name is_some { "name" } else { "here" }
     problem :: Problem.{parameter = os.ParameterName.{name = asked}}
     budget :: slop_os.startup_block().budget
@@ -105,8 +105,14 @@ main :: fn(here: os.Channel[dir.Dir], name: string?, output: os.Sink[Gone]?) -> 
  * @param problem The parameter, name.
  * @return What it brought back; NotFound, AlreadyThere or Failed.
  */
-brought_back :: fn(end: slop_os.Channel, directory: os.Directory, now: file_tools.Source, seen: file_tools.Seen[..], wanted: string,
-    problem: Problem) -> Result[Recovered, RecoverError] {
+brought_back :: fn(
+    end : slop_os.Channel,
+    directory : os.Directory,
+    now : file_tools.Source,
+    seen : file_tools.Seen[..],
+    wanted : string,
+    problem : Problem
+) -> Result[Recovered, RecoverError] {
     if file_tools.kind_at(now, wanted) != .Missing {
         return .Error(.AlreadyThere(problem))
     }
@@ -120,7 +126,14 @@ brought_back :: fn(end: slop_os.Channel, directory: os.Directory, now: file_tool
             continue
         }
         copied := file_tools.Copied.{}
-        if file_tools.copy_tree(past, wanted, directory, wanted, file_tools.count_files(past, wanted), &copied) is_some {
+        if file_tools.copy_tree(
+            past,
+            wanted,
+            directory,
+            wanted,
+            file_tools.count_files(past, wanted),
+            &copied
+        ) is_some {
             return .Error(.Failed(problem))
         }
         return .Ok(Recovered.{name = wanted, snapshot = each.name, files = copied.files, bytes = copied.bytes})
@@ -139,8 +152,13 @@ brought_back :: fn(end: slop_os.Channel, directory: os.Directory, now: file_tool
  * @param problem The parameter, here.
  * @return How many it found, as a Recovered's name; Failed if they couldn't be written.
  */
-listed :: fn(end: slop_os.Channel, now: file_tools.Source, seen: file_tools.Seen[..], output: os.Sink[Gone]?, problem: Problem)
-    -> Result[Recovered, RecoverError] {
+listed :: fn(
+    end : slop_os.Channel,
+    now : file_tools.Source,
+    seen : file_tools.Seen[..],
+    output : os.Sink[Gone]?,
+    problem : Problem
+) -> Result[Recovered, RecoverError] {
     writer := stream.Writer[Gone].{}
     writing := false
     match output {
@@ -168,7 +186,11 @@ listed :: fn(end: slop_os.Channel, now: file_tools.Source, seen: file_tools.Seen
             }
             kept :: file_tools.copy_of(string_bytes(entry.name)) or_continue
             runtime.array_add(&found, kept)
-            if writing && (stream.write(&writer, Gone.{name = kept, directory = entry.is_directory, snapshot = each.name}) is_some) {
+            if writing
+                && (stream.write(
+                    &writer,
+                    Gone.{name = kept, directory = entry.is_directory, snapshot = each.name}
+                ) is_some) {
                 return .Error(.Failed(problem))
             }
         }
@@ -186,7 +208,7 @@ listed :: fn(end: slop_os.Channel, now: file_tools.Source, seen: file_tools.Seen
  * @param name The name.
  * @return Whether it's there.
  */
-already :: fn(found: string[..], name: string) -> bool {
+already :: fn(found : string[..], name : string) -> bool {
     for each in found {
         if each == name {
             return true

@@ -15,8 +15,8 @@
 package crash_reports
 
 import runtime from "base:runtime"
-import slop_os from "std:os/slop_os"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
 import lifecycle from "std:os/slop_os/lifecycle"
 import text_buffer from "std:text_buffer"
 
@@ -92,8 +92,13 @@ Storage :: struct {
  * @param storage Where the reports are made, which the result is a view of; what it held before is overwritten.
  * @return The reports made, at most MAX_STOPS; empty when there was no fault stop waiting.
  */
-take :: fn(process: slop_os.Process, faults: os.LaunchedFaults, image: u64, program #escaping : string, storage: ptr[mut Storage])
-    -> CrashReport[] {
+take :: fn(
+    process : slop_os.Process,
+    faults : os.LaunchedFaults,
+    image : u64,
+    program #escaping : string,
+    storage : ptr[mut Storage]
+) -> CrashReport[] {
     count : usize = 0
     for round in cast[usize](0)..<MAX_STOPS {
         stop := slop_os.StopInfo.{}
@@ -119,7 +124,7 @@ take :: fn(process: slop_os.Process, faults: os.LaunchedFaults, image: u64, prog
  * @param address The address as the frame holds it.
  * @return The address of the code it returns to.
  */
-without_authentication :: fn(address: u64) -> u64 {
+without_authentication :: fn(address : u64) -> u64 {
     return address & 0x0000ffffffffffff
 }
 
@@ -134,13 +139,31 @@ without_authentication :: fn(address: u64) -> u64 {
  * @return The report: registers all 0 and no frames when they couldn't be read; the stack cut at the first frame
  *     pointer that's 0, unaligned, can't be read, or isn't above the one before it by at most MAX_FRAME_SIZE.
  */
-make :: fn(process: slop_os.Process, space: slop_os.AddressSpace, image: u64, program #escaping : string, stop: slop_os.StopInfo)
-    -> CrashReport {
-    report := CrashReport.{program = program, thread = stop.thread, fault = stop.number, address = stop.address, image = image}
+make :: fn(
+    process : slop_os.Process,
+    space : slop_os.AddressSpace,
+    image : u64,
+    program #escaping : string,
+    stop : slop_os.StopInfo
+) -> CrashReport {
+    report := CrashReport.{
+        program = program,
+        thread = stop.thread,
+        fault = stop.number,
+        address = stop.address,
+        image = image,
+    }
     match slop_os.thread_read_registers(process, stop.thread, report.registers) {
         case Ok => {}
-        case Error(error) => return CrashReport.{program = program, thread = stop.thread, fault = stop.number,
-            address = stop.address, image = image}
+        case Error(
+            error
+        ) => return CrashReport.{
+            program = program,
+            thread = stop.thread,
+            fault = stop.number,
+            address = stop.address,
+            image = image,
+        }
     }
     report.frames[0] = report.registers[PC_REGISTER]
     report.frame_count = 1
@@ -177,7 +200,7 @@ make :: fn(process: slop_os.Process, space: slop_os.AddressSpace, image: u64, pr
  * @param at Where it starts.
  * @return Its value.
  */
-word_at :: fn(bytes: u8[], at: usize) -> u64 {
+word_at :: fn(bytes : u8[], at : usize) -> u64 {
     value : u64 = 0
     for i in cast[usize](0)..<8 {
         if at + i < bytes.count {
@@ -193,7 +216,7 @@ word_at :: fn(bytes: u8[], at: usize) -> u64 {
  *
  * @param report The report.
  */
-log :: fn(report: CrashReport) {
+log :: fn(report : CrashReport) {
     runtime.log_error("crash: %", report)
 }
 
@@ -206,7 +229,7 @@ log :: fn(report: CrashReport) {
  *     it's full.
  * @param frames Whether its frames are written, a line each; otherwise only the program, the fault and the thread.
  */
-describe :: fn(report: ptr[CrashReport], into: ptr[mut text_buffer.TextBuffer], frames: bool = true) {
+describe :: fn(report : ptr[CrashReport], into : ptr[mut text_buffer.TextBuffer], frames : bool = true) {
     text_buffer.append_format(into, "%: %", report.program, slop_os.fault_name(report.fault))
     if report.fault <= slop_os.FAULT_EXECUTE {
         text_buffer.append_format(into, " at %{#x}", report.address)
@@ -246,7 +269,7 @@ CRASH_ATTEMPTS :: 100
  * @return Ok once it's been sent to its stack; the error otherwise, when it's resumed as it was: NoSuchThread if it
  *     has none, NotStopped if it wasn't suspended within CRASH_ATTEMPTS milliseconds, or what the calls gave.
  */
-make_crash :: fn(process: slop_os.Process, ping: slop_os.Channel?) -> Result[void, slop_os.ControlError] {
+make_crash :: fn(process : slop_os.Process, ping : slop_os.Channel?) -> Result[void, slop_os.ControlError] {
     ids : u64[1]
     if (slop_os.process_threads(process, ids)?) == 0 {
         return .Error(.NoSuchThread)

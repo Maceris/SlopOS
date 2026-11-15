@@ -17,14 +17,14 @@ package input_service
 
 import runtime from "base:runtime"
 import os from "std:os"
-import random from "std:random"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
+import random from "std:random"
+import keymaps from "../../keymaps"
+import service_kit from "../../libraries/service_kit"
 import connector from "../../protocols/connector"
 import input from "../../protocols/input"
 import seat from "../../protocols/seat"
-import keymaps from "../../keymaps"
-import service_kit from "../../libraries/service_kit"
 
 /** The most keyboards the seat has: one for each of the keyboard0 to keyboard3 grants. */
 MAX_KEYBOARDS :: 4
@@ -139,9 +139,15 @@ Service :: struct {
  * @return 2 if its port couldn't be made; 3 if the clients' listener couldn't be bound to it. It doesn't return
  *     otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, keyboard0: os.Channel[connector.Connector]?, keyboard1: os.Channel[connector.Connector]?,
-    keyboard2: os.Channel[connector.Connector]?, keyboard3: os.Channel[connector.Connector]?, clients: os.Listener[seat.Seat],
-    command_line: slop_os.Memory?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    keyboard0 : os.Channel[connector.Connector]?,
+    keyboard1 : os.Channel[connector.Connector]?,
+    keyboard2 : os.Channel[connector.Connector]?,
+    keyboard3 : os.Channel[connector.Connector]?,
+    clients : os.Listener[seat.Seat],
+    command_line : slop_os.Memory?
+) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.keymap = keymaps.US
@@ -153,7 +159,9 @@ main :: fn(log: slop_os.DebugLog?, keyboard0: os.Channel[connector.Connector]?, 
     }
     all_new := false
     match command_line {
-        case Some(memory) => all_new = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_new_keyboards")
+        case Some(
+            memory
+        ) => all_new = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_new_keyboards")
         case None => {}
     }
     adopt(service, 0, keyboard0, all_new)
@@ -193,7 +201,7 @@ main :: fn(log: slop_os.DebugLog?, keyboard0: os.Channel[connector.Connector]?, 
  * @param found The keyboard's connector, which the keyboard keeps; null for no keyboard at index.
  * @param all_new Whether test_new_keyboards treats every keyboard as new, so it has to have its code typed.
  */
-adopt :: fn(service: ptr[mut Service], index: usize, found: os.Channel[connector.Connector]?, all_new: bool) {
+adopt :: fn(service : ptr[mut Service], index : usize, found : os.Channel[connector.Connector]?, all_new : bool) {
     if index >= service.keyboards.count {
         return void
     }
@@ -216,7 +224,7 @@ adopt :: fn(service: ptr[mut Service], index: usize, found: os.Channel[connector
  *     keyboards[index].
  * @param index The keyboard's index; one past MAX_KEYBOARDS, or without a connector, isn't dialed.
  */
-dial :: fn(service: ptr[mut Service], index: usize) {
+dial :: fn(service : ptr[mut Service], index : usize) {
     if index >= service.keyboards.count {
         return void
     }
@@ -227,7 +235,13 @@ dial :: fn(service: ptr[mut Service], index: usize) {
     port :: os.port_for(slop_os.startup_block().budget, keyboard.connector) or_return void
     keys :: connector.dial[input.Input](keyboard.connector, port) or_return void
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(service.port, cast[slop_os.Handle](keys.end), signals, KEYBOARD_KEY + cast[u64](index), .Persistent) {
+    match slop_os.port_bind(
+        service.port,
+        cast[slop_os.Handle](keys.end),
+        signals,
+        KEYBOARD_KEY + cast[u64](index),
+        .Persistent
+    ) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](keys.end))
@@ -250,7 +264,7 @@ dial :: fn(service: ptr[mut Service], index: usize) {
  * @param service The service, whose port the answer comes to.
  * @param keyboard The keyboard, connected.
  */
-read_keys :: fn(service: ptr[Service], keyboard: ptr[Keyboard]) {
+read_keys :: fn(service : ptr[Service], keyboard : ptr[Keyboard]) {
     out := os.Outgoing.{}
     request :: os.begin[input.Request](&out)
     request^ = .Read(input.MAX_EVENTS)
@@ -270,7 +284,12 @@ read_keys :: fn(service: ptr[Service], keyboard: ptr[Keyboard]) {
  * @param index The client's index among them; past them, or a client that's gone, nothing's done.
  * @param into Where each request is received, reused.
  */
-serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(
+    service : ptr[mut Service],
+    connected : ptr[mut service_kit.Clients],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= connected.ends.count {
         return void
     }
@@ -365,7 +384,7 @@ serve :: fn(service: ptr[mut Service], connected: ptr[mut service_kit.Clients], 
  * @param index The keyboard's index; past MAX_KEYBOARDS, or a keyboard not connected, nothing's done.
  * @param into Where each answer is received, reused.
  */
-take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming]) {
+take_keys :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incoming]) {
     if index >= service.keyboards.count {
         return void
     }
@@ -418,7 +437,7 @@ take_keys :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incomi
  * @param usage The key's HID usage.
  * @param pressed True when it goes down, false when it comes up; only a modifier coming up does anything.
  */
-press :: fn(service: ptr[mut Service], index: usize, usage: u16, pressed: bool) {
+press :: fn(service : ptr[mut Service], index : usize, usage : u16, pressed : bool) {
     keyboard :: &service.keyboards[index % MAX_KEYBOARDS]
     bit :: modifier_of(usage)
     if bit != 0 {
@@ -429,7 +448,8 @@ press :: fn(service: ptr[mut Service], index: usize, usage: u16, pressed: bool) 
         return void
     }
     which :: cast[u8](index)
-    if usage == USAGE_DELETE && keyboard.modifiers & (terminal.CONTROL | terminal.ALT) == terminal.CONTROL | terminal.ALT {
+    if usage == USAGE_DELETE
+        && keyboard.modifiers & (terminal.CONTROL | terminal.ALT) == terminal.CONTROL | terminal.ALT {
         add(service, seat.event_of(.SecureAttention, which), "")
         return void
     }
@@ -439,7 +459,12 @@ press :: fn(service: ptr[mut Service], index: usize, usage: u16, pressed: bool) 
     }
     shifted :: keyboard.modifiers & terminal.SHIFT != 0
     // With Ctrl or Alt a key types nothing; it's known by its usage and modifiers
-    text :: if keyboard.modifiers & (terminal.CONTROL | terminal.ALT | terminal.META) != 0 { "" } else { keymaps.typed(service.keymap, usage, shifted) }
+    text :: if keyboard.modifiers & (terminal.CONTROL | terminal.ALT | terminal.META) != 0 {
+        ""
+    }
+    else {
+        keymaps.typed(service.keymap, usage, shifted)
+    }
     made := seat.event_of(.Key, which)
     made.code = usage
     made.modifiers = keyboard.modifiers
@@ -454,7 +479,7 @@ press :: fn(service: ptr[mut Service], index: usize, usage: u16, pressed: bool) 
  * @param kind The input protocol's kind: Motion, Position, Button or Wheel; a Key isn't one.
  * @param event The device's event: a Position's x and y spread from its axes' range to 0 to seat.POSITION_MAX.
  */
-point :: fn(service: ptr[mut Service], index: usize, kind: input.EventKind, event: input.Event) {
+point :: fn(service : ptr[mut Service], index : usize, kind : input.EventKind, event : input.Event) {
     keyboard :: &service.keyboards[index % MAX_KEYBOARDS]
     if !keyboard.accepted || !service.lent || (service.borrower is_none) {
         return void
@@ -482,12 +507,14 @@ point :: fn(service: ptr[mut Service], index: usize, kind: input.EventKind, even
 }
 
 /** An absolute axis's value spread from its range to 0 to seat.POSITION_MAX; taken as that range itself without one. */
-spread :: fn(value: i32, low: i32, high: i32) -> i32 {
+spread :: fn(value : i32, low : i32, high : i32) -> i32 {
     if high <= low {
         return if value < 0 { 0 } else if value > seat.POSITION_MAX { seat.POSITION_MAX } else { value }
     }
     clamped :: if value < low { low } else if value > high { high } else { value }
-    return cast[i32]((cast[i64](clamped) - cast[i64](low)) * cast[i64](seat.POSITION_MAX) / (cast[i64](high) - cast[i64](low)))
+    return cast[i32]((cast[i64](clamped) - cast[i64](low))
+        * cast[i64](seat.POSITION_MAX)
+        / (cast[i64](high) - cast[i64](low)))
 }
 
 /**
@@ -496,11 +523,17 @@ spread :: fn(value: i32, low: i32, high: i32) -> i32 {
  * @param usage The key's HID usage.
  * @return terminal.SHIFT, CONTROL, ALT or META for either side's key; 0 for a key that isn't a modifier.
  */
-modifier_of :: fn(usage: u16) -> u8 {
-    return if usage == USAGE_LEFT_SHIFT || usage == USAGE_RIGHT_SHIFT { terminal.SHIFT }
-        else if usage == USAGE_LEFT_CONTROL || usage == USAGE_RIGHT_CONTROL { terminal.CONTROL }
-        else if usage == USAGE_LEFT_ALT || usage == USAGE_RIGHT_ALT { terminal.ALT }
-        else if usage == USAGE_LEFT_META || usage == USAGE_RIGHT_META { terminal.META } else { cast[u8](0) }
+modifier_of :: fn(usage : u16) -> u8 {
+    return if usage == USAGE_LEFT_SHIFT || usage == USAGE_RIGHT_SHIFT {
+        terminal.SHIFT
+    }
+    else if usage == USAGE_LEFT_CONTROL || usage == USAGE_RIGHT_CONTROL {
+        terminal.CONTROL
+    }
+    else if usage == USAGE_LEFT_ALT || usage == USAGE_RIGHT_ALT {
+        terminal.ALT
+    }
+    else if usage == USAGE_LEFT_META || usage == USAGE_RIGHT_META { terminal.META } else { cast[u8](0) }
 }
 
 /**
@@ -516,7 +549,7 @@ modifier_of :: fn(usage: u16) -> u8 {
  * @param index The keyboard's index, below MAX_KEYBOARDS; larger ones wrap around it.
  * @param usage The key's HID usage, read as a digit through the layout.
  */
-type_code :: fn(service: ptr[mut Service], index: usize, usage: u16) {
+type_code :: fn(service : ptr[mut Service], index : usize, usage : u16) {
     keyboard :: &service.keyboards[index % MAX_KEYBOARDS]
     which :: cast[u8](index)
     if keyboard.code == 0 {
@@ -559,9 +592,10 @@ type_code :: fn(service: ptr[mut Service], index: usize, usage: u16) {
  * @param made The event; its text_start and text_bytes are set here.
  * @param text Its text, copied. The event is dropped if it or its text has no room in the queue.
  */
-add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
+add :: fn(service : ptr[mut Service], made : seat.Event, text : string) {
     // The secure attention key and a new keyboard's code are the trusted path's: the seat comes back for them
-    if service.lent && (made.kind == cast[u8](seat.EventKind.SecureAttention) || made.kind == cast[u8](seat.EventKind.Waiting)) {
+    if service.lent
+        && (made.kind == cast[u8](seat.EventKind.SecureAttention) || made.kind == cast[u8](seat.EventKind.Waiting)) {
         service.lent = false
         service.count = 0
         service.text_count = 0
@@ -595,7 +629,7 @@ add :: fn(service: ptr[mut Service], made: seat.Event, text: string) {
  * @param service The service, whose queue loses the events given.
  * @param connected The clients, to find the reader's channel.
  */
-deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
+deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) {
     borrowing :: service.lent && (service.borrower is_some)
     held :: if borrowing { service.borrower_held } else { service.held }
     if service.count == 0 || held == 0 {
@@ -623,7 +657,12 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
     }
     out := os.Outgoing.{}
     response :: os.begin[seat.Response](&out)
-    response^ = .Input(seat.Events.{events = os.append(&out, service.events[0..<count]), text = os.append(&out, service.text[0..<text_end])})
+    response^ = .Input(
+        seat.Events.{
+            events = os.append(&out, service.events[0..<count]),
+            text = os.append(&out, service.text[0..<text_end]),
+        }
+    )
     if seat.send_response(end, service.port, &out) != null {
         return void
     }
@@ -639,7 +678,12 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
         from :: i + count
         if from < service.events.count && i < service.events.count {
             moved := service.events[from]
-            moved.text_start = if cast[usize](moved.text_start) >= text_end { moved.text_start - cast[u32](text_end) } else { 0 }
+            moved.text_start = if cast[usize](moved.text_start) >= text_end {
+                moved.text_start - cast[u32](text_end)
+            }
+            else {
+                0
+            }
             service.events[i] = moved
         }
     }
@@ -661,10 +705,9 @@ deliver :: fn(service: ptr[mut Service], connected: ptr[service_kit.Clients]) {
  * @param count How many of the queued events are before.
  * @return The offset in the queue's text: text_count, all of it, if there are none after.
  */
-text_before :: fn(service: ptr[Service], count: usize) -> usize {
+text_before :: fn(service : ptr[Service], count : usize) -> usize {
     if count < service.count && count < service.events.count {
         return cast[usize](service.events[count].text_start)
     }
     return service.text_count
 }
-

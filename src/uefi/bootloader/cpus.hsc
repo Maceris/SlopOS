@@ -68,7 +68,7 @@ import boot_protocol from "../../boot_protocol"
         // 0x65: mov rax, [rsi]; test rax, rax; jnz +4; pause; jmp -12
         0x48, 0x8b, 0x06, 0x48, 0x85, 0xc0, 0x75, 0x04, 0xf3, 0x90, 0xeb, 0xf4,
         // 0x71: mov rdi, [rsi + 16]; push 0; jmp rax
-        0x48, 0x8b, 0x7e, 0x10, 0x6a, 0x00, 0xff, 0xe0,
+        0x48, 0x8b, 0x7e, 0x10, 0x6a, 0x00, 0xff, 0xe0
     ]
 
     /**
@@ -119,7 +119,11 @@ import boot_protocol from "../../boot_protocol"
      * @return What start_cpus needs; null if boot services are gone, a stack couldn't be had, or there's no room for
      *     the trampoline below 1 MiB.
      */
-    prepare_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], tables: ptr[PageTables], direct_map_offset: u64) -> Starting? {
+    prepare_cpus :: fn(
+        handoff : ptr[mut boot_protocol.Handoff],
+        tables : ptr[PageTables],
+        direct_map_offset : u64
+    ) -> Starting? {
         page_table :: tables.root
         services :: uefi.boot_services() or_return null
         handoff.cpu_count = 1
@@ -131,15 +135,19 @@ import boot_protocol from "../../boot_protocol"
                 if mp.get_number_of_processors(mp, &count, &enabled) == uefi.SUCCESS {
                     for i in cast[usize](0)..<count {
                         info := uefi.ProcessorInfo.{}
-                        if mp.get_processor_info(mp, i, &info) != uefi.SUCCESS || info.status & uefi.PROCESSOR_ENABLED == 0
-                            || info.status & uefi.PROCESSOR_BOOT != 0 || handoff.cpu_count >= cast[u64](handoff.cpus.count) {
+                        if mp.get_processor_info(mp, i, &info) != uefi.SUCCESS
+                            || info.status & uefi.PROCESSOR_ENABLED == 0
+                            || info.status & uefi.PROCESSOR_BOOT != 0
+                            || handoff.cpu_count >= cast[u64](handoff.cpus.count) {
                             continue
                         }
                         stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE) or_return null
                         at :: cast[usize](handoff.cpu_count)
                         if at < handoff.cpus.count {
-                            handoff.cpus[at] = boot_protocol.Cpu.{hardware_id = info.id,
-                                stack_top = direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE}
+                            handoff.cpus[at] = boot_protocol.Cpu.{
+                                hardware_id = info.id,
+                                stack_top = direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+                            }
                             handoff.cpu_count += 1
                         }
                     }
@@ -148,7 +156,8 @@ import boot_protocol from "../../boot_protocol"
             case None => {}
         }
         trampoline : u64 = 0x9f000
-        if services.allocate_pages(cast[u32](uefi.AllocateKind.MaxAddress), LOADER_DATA, 1, &trampoline) != uefi.SUCCESS {
+        if services.allocate_pages(cast[u32](uefi.AllocateKind.MaxAddress), LOADER_DATA, 1, &trampoline)
+            != uefi.SUCCESS {
             return null
         }
         // The code, its GDT and pointer, and the addresses it needs
@@ -168,7 +177,10 @@ import boot_protocol from "../../boot_protocol"
         before :: x86_64.rdtsc()
         _ = services.stall(10000)
         ticks :: (x86_64.rdtsc() - before) / 10000
-        return Starting.{trampoline = trampoline, ticks_per_microsecond = if ticks == 0 { cast[u64](1000) } else { ticks }}
+        return Starting.{
+            trampoline = trampoline,
+            ticks_per_microsecond = if ticks == 0 { cast[u64](1000) } else { ticks },
+        }
     }
 
     /**
@@ -183,7 +195,7 @@ import boot_protocol from "../../boot_protocol"
      *     the boot CPU included.
      * @param starting What prepare_cpus made.
      */
-    start_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], starting: Starting) {
+    start_cpus :: fn(handoff : ptr[mut boot_protocol.Handoff], starting : Starting) {
         started := cast[u64](1)
         for i in cast[u64](1)..<handoff.cpu_count {
             if i >= cast[u64](handoff.cpus.count) {
@@ -224,7 +236,7 @@ import boot_protocol from "../../boot_protocol"
      * @param address The word's address, identity-mapped.
      * @return The word as it is in memory now.
      */
-    intrinsics_load :: fn(address: ptr[u32]) -> u32 {
+    intrinsics_load :: fn(address : ptr[u32]) -> u32 {
         return intrinsics.volatile_load_u32(address)
     }
 
@@ -237,7 +249,7 @@ import boot_protocol from "../../boot_protocol"
      * @param apic_id The destination CPU's local APIC ID; in xAPIC mode only its low 8 bits count.
      * @param command The ICR's low 32 bits: INIT_ASSERT, or STARTUP with the trampoline's page number.
      */
-    send_ipi :: fn(apic_id: u64, command: u32) {
+    send_ipi :: fn(apic_id : u64, command : u32) {
         base :: x86_64.rdmsr(APIC_BASE_MSR)
         if base & X2APIC_ENABLED != 0 {
             x86_64.wrmsr(X2APIC_ICR, (apic_id << 32) | cast[u64](command))
@@ -259,7 +271,7 @@ import boot_protocol from "../../boot_protocol"
      * @param starting What prepare_cpus made, with the TSC's speed.
      * @param microseconds How long to wait, in microseconds, as near as the measured speed allows.
      */
-    wait_microseconds :: fn(starting: Starting, microseconds: u64) {
+    wait_microseconds :: fn(starting : Starting, microseconds : u64) {
         until :: x86_64.rdtsc() + microseconds * starting.ticks_per_microsecond
         loop {
             if x86_64.rdtsc() >= until {
@@ -317,7 +329,7 @@ import boot_protocol from "../../boot_protocol"
         0xaa0103e0, // mov x0, x1
         0xaa1f03fd, // mov x29, xzr
         0xaa1f03fe, // mov x30, xzr
-        0xd61f00e0, // br x7
+        0xd61f00e0 // br x7
     ]
 
     /** What starting the other CPUs needs, made before the boot services are left. */
@@ -343,7 +355,11 @@ import boot_protocol from "../../boot_protocol"
      * @param direct_map_offset The direct map's offset, which each stack_top is a virtual address in.
      * @return What start_cpus needs; null if a page for the trampoline or a stack couldn't be had.
      */
-    prepare_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], tables: ptr[PageTables], direct_map_offset: u64) -> Starting? {
+    prepare_cpus :: fn(
+        handoff : ptr[mut boot_protocol.Handoff],
+        tables : ptr[PageTables],
+        direct_map_offset : u64
+    ) -> Starting? {
         handoff.cpu_count = 1
         handoff.cpus[0] = boot_protocol.Cpu.{hardware_id = boot_cpu_id()}
         trampoline :: allocate_pages(LOADER_DATA, 4096) or_return null
@@ -386,7 +402,10 @@ import boot_protocol from "../../boot_protocol"
             stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE) or_return null
             at :: cast[usize](handoff.cpu_count)
             if at < handoff.cpus.count {
-                handoff.cpus[at] = boot_protocol.Cpu.{hardware_id = id, stack_top = direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE}
+                handoff.cpus[at] = boot_protocol.Cpu.{
+                    hardware_id = id,
+                    stack_top = direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+                }
                 handoff.cpu_count += 1
             }
         }
@@ -404,7 +423,7 @@ import boot_protocol from "../../boot_protocol"
      *     the boot CPU included.
      * @param starting What prepare_cpus made.
      */
-    start_cpus :: fn(handoff: ptr[mut boot_protocol.Handoff], starting: Starting) {
+    start_cpus :: fn(handoff : ptr[mut boot_protocol.Handoff], starting : Starting) {
         clean(starting.trampoline, 4096)
         started := cast[u64](1)
         for i in cast[u64](1)..<handoff.cpu_count {
@@ -419,8 +438,12 @@ import boot_protocol from "../../boot_protocol"
             handoff.cpus[slot] = cpu
             mailbox :: cast[u64](cast[rawptr](&handoff.cpus[slot]))
             clean(mailbox, cast[u64](size_of(boot_protocol.Cpu)))
-            result :: if starting.smc { aarch64.smc(PSCI_CPU_ON, cpu.hardware_id, starting.trampoline, mailbox) }
-                else { aarch64.hvc(PSCI_CPU_ON, cpu.hardware_id, starting.trampoline, mailbox) }
+            result :: if starting.smc {
+                aarch64.smc(PSCI_CPU_ON, cpu.hardware_id, starting.trampoline, mailbox)
+            }
+            else {
+                aarch64.hvc(PSCI_CPU_ON, cpu.hardware_id, starting.trampoline, mailbox)
+            }
             if result == 0 {
                 started += 1
             }
@@ -435,7 +458,7 @@ import boot_protocol from "../../boot_protocol"
      * @param address The memory's address, identity-mapped; it needn't be line-aligned.
      * @param size How many bytes, each line they touch cleaned.
      */
-    clean :: fn(address: u64, size: u64) {
+    clean :: fn(address : u64, size : u64) {
         line := address & ~cast[u64](63)
         loop {
             if line >= address + size {

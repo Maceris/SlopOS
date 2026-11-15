@@ -21,11 +21,11 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import gpt from "../../gpt"
+import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import partitions from "../../protocols/partitions"
 import robustness from "../../robustness"
-import service_kit from "../../libraries/service_kit"
 
 /**
  * The most narrowed connections made in the server's life; a slot isn't used again once its connection closes, so one
@@ -136,8 +136,12 @@ Server :: struct {
  *     6 if clients couldn't be added, and DRIVER_GONE, 7, once the disk's other end has closed. It doesn't return
  *     otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Listener[partitions.Partitions], command_line: slop_os.Memory?)
-    -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    disk : os.Channel[block.Block],
+    clients : os.Listener[partitions.Partitions],
+    command_line : slop_os.Memory?
+) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
@@ -151,7 +155,11 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     server.port = slop_os.port_create(startup.budget) or_return 1
     #if robustness.ON {
         match command_line {
-            case Some(memory) => server.faulty = faulty_of(service_kit.word_after(service_kit.text_of(startup, memory) or_else "", "faulty_block=") or_else "")
+            case Some(
+                memory
+            ) => server.faulty = faulty_of(
+                service_kit.word_after(service_kit.text_of(startup, memory) or_else "", "faulty_block=") or_else ""
+            )
             case None => {}
         }
     }
@@ -176,10 +184,17 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
     match gpt.read_table(&reader, entries) {
         case Ok(table) => {
             server.table = table
-            log_line.write(server.log, "partition_server: % partitions on a disk of % blocks%", table.count, info.block_count,
-                if table.from_backup { ", from the backup GPT" } else { "" })
+            log_line.write(
+                server.log,
+                "partition_server: % partitions on a disk of % blocks%",
+                table.count,
+                info.block_count,
+                if table.from_backup { ", from the backup GPT" } else { "" }
+            )
         }
-        case Error(failure) => log_line.write(server.log, "partition_server: no GPT on a disk of % blocks: %", info.block_count, failure)
+        case Error(
+            failure
+        ) => log_line.write(server.log, "partition_server: no GPT on a disk of % blocks: %", info.block_count, failure)
     }
     runtime.free_array(entries)
 
@@ -190,12 +205,21 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
      * Its driver ending ends it (DRIVER_GONE): it can't dial the driver again, and its narrowed connections are dead,
      * so the storage manager starts another on the new driver, and what was served from the disk again on it.
      */
-    if slop_os.port_bind(server.port, cast[slop_os.Handle](server.disk), slop_os.SIGNAL_PEER_CLOSED, DISK_KEY, .Once) is_error {
+    if slop_os.port_bind(
+        server.port,
+        cast[slop_os.Handle](server.disk),
+        slop_os.SIGNAL_PEER_CLOSED,
+        DISK_KEY,
+        .Once
+    ) is_error {
         return 1
     }
     into := os.Incoming.{}
     loop {
-        // Clients that connect meanwhile are read in the same pass, as a channel wakes its reader only once it's found empty
+        /*
+         * Clients that connect meanwhile are read in the same pass, as a channel wakes its reader only once it's found
+         * empty
+         */
         with {
             i : usize = 0
         }
@@ -230,7 +254,7 @@ main :: fn(log: slop_os.DebugLog?, disk: os.Channel[block.Block], clients: os.Li
  * @return Whether they were all read; false if into is too short, the buffer holds no block, a read failed, or the
  *     buffer couldn't be read, its driver gone.
  */
-read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+read_blocks :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     server :: cast[ptr[mut Server]](context)
     per_read :: server.buffer_bytes / block.BLOCK_BYTES
     if per_read == 0 || count * block.BLOCK_BYTES > cast[u64](into.count) {
@@ -276,7 +300,7 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
  * @param index The client's index in server.clients; one past them, or one dropped, is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_client :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_client :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.clients.ends.count {
         return void
     }
@@ -333,9 +357,14 @@ serve_client :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incom
  * @param partition The partition, as the GPT says.
  * @return Its first block, its size in blocks, its type and unique GUIDs, and its name, cut to fit.
  */
-info_of :: fn(partition: ptr[gpt.Partition]) -> partitions.PartitionInfo {
-    info := partitions.PartitionInfo.{first = partition.first, count = partition.count, type_guid = partition.type_guid,
-        unique_guid = partition.unique_guid, name_length = partition.name_length}
+info_of :: fn(partition : ptr[gpt.Partition]) -> partitions.PartitionInfo {
+    info := partitions.PartitionInfo.{
+        first = partition.first,
+        count = partition.count,
+        type_guid = partition.type_guid,
+        unique_guid = partition.unique_guid,
+        name_length = partition.name_length,
+    }
     for byte, i in partition.name {
         if i < info.name.count {
             info.name[i] = byte
@@ -359,7 +388,7 @@ info_of :: fn(partition: ptr[gpt.Partition]) -> partitions.PartitionInfo {
  *     Null if it can't be made: MAX_NARROWED made already, or the driver, a port, a channel or a binding couldn't be
  *     had. An end given isn't closed then; the caller closes it.
  */
-open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Channel) -> slop_os.Channel? {
+open :: fn(server : ptr[mut Server], first : u64, count : u64, client : slop_os.Channel) -> slop_os.Channel? {
     slot :: server.narrowed_count
     if slot >= server.narrowed.count {
         return null
@@ -396,8 +425,20 @@ open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Chan
     }
     // Unwatched, a connection's requests would never be read: without both, there's no connection
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if (slop_os.port_bind(server.port, cast[slop_os.Handle](ours), signals, CLIENT_KEY + cast[u64](slot), .Persistent) is_error)
-        || (slop_os.port_bind(server.port, cast[slop_os.Handle](driver.end), signals, DRIVER_KEY + cast[u64](slot), .Persistent) is_error) {
+    if (slop_os.port_bind(
+        server.port,
+        cast[slop_os.Handle](ours),
+        signals,
+        CLIENT_KEY + cast[u64](slot),
+        .Persistent
+    ) is_error)
+        || (slop_os.port_bind(
+            server.port,
+            cast[slop_os.Handle](driver.end),
+            signals,
+            DRIVER_KEY + cast[u64](slot),
+            .Persistent
+        ) is_error) {
         _ = slop_os.port_unbind(server.port, CLIENT_KEY + cast[u64](slot))
         _ = slop_os.handle_close(cast[slop_os.Handle](driver.end))
         if cast[slop_os.Handle](theirs) != slop_os.NO_HANDLE {
@@ -429,7 +470,7 @@ open :: fn(server: ptr[mut Server], first: u64, count: u64, client: slop_os.Chan
  * @param index The narrowed connection's slot; a closed one is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_narrowed :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.narrowed.count {
         return void
     }
@@ -455,11 +496,19 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
         match request {
             case Read(transfer) => {
                 if !inside(narrowed, transfer) {
-                    answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange}))
+                    answer(
+                        narrowed.client,
+                        server.port,
+                        .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange})
+                    )
                     continue
                 }
                 if faulty_read(server) {
-                    answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .DeviceError}))
+                    answer(
+                        narrowed.client,
+                        server.port,
+                        .Finished(block.Completion.{tag = transfer.tag, status = .DeviceError})
+                    )
                     continue
                 }
                 moved := transfer
@@ -468,13 +517,21 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
             }
             case Write(transfer) => {
                 if !inside(narrowed, transfer) {
-                    answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange}))
+                    answer(
+                        narrowed.client,
+                        server.port,
+                        .Finished(block.Completion.{tag = transfer.tag, status = .OutOfRange})
+                    )
                     continue
                 }
                 moved := transfer
                 match faulty_write(server) {
                     case .Write => {
-                        answer(narrowed.client, server.port, .Finished(block.Completion.{tag = transfer.tag, status = .DeviceError}))
+                        answer(
+                            narrowed.client,
+                            server.port,
+                            .Finished(block.Completion.{tag = transfer.tag, status = .DeviceError})
+                        )
                         continue
                     }
                     // Its first half written, and its answer a failure
@@ -517,7 +574,7 @@ serve_narrowed :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
  * @param index The narrowed connection's slot; it's closed if its driver's connection fails.
  * @param into Where each answer is read into, reused.
  */
-pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+pass_back :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.narrowed.count {
         return void
     }
@@ -552,7 +609,7 @@ pass_back :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
  * @param text The value: read:<n>, write:<n> or tear:<n>, n from 1.
  * @return Which request fails, and how; one where nothing fails for anything else.
  */
-faulty_of :: fn(text: string) -> FaultyBlock {
+faulty_of :: fn(text : string) -> FaultyBlock {
     for kind in FaultKind.[.Read, .Write, .Tear] {
         prefix :: prefix_of(kind)
         if text.count > prefix.count && text[0..<prefix.count] == prefix {
@@ -569,7 +626,7 @@ faulty_of :: fn(text: string) -> FaultyBlock {
  * @param kind Read, Write or Tear.
  * @return "read:", "write:", or "tear:" for any other kind.
  */
-prefix_of :: fn(kind: FaultKind) -> string {
+prefix_of :: fn(kind : FaultKind) -> string {
     return if kind == .Read { "read:" } else if kind == .Write { "write:" } else { "tear:" }
 }
 
@@ -579,7 +636,7 @@ prefix_of :: fn(kind: FaultKind) -> string {
  * @param server The server, whose faulty.reads is counted up.
  * @return Whether it fails; always false without robustness=on.
  */
-faulty_read :: fn(server: ptr[mut Server]) -> bool {
+faulty_read :: fn(server : ptr[mut Server]) -> bool {
     #if robustness.ON {
         server.faulty.reads += 1
         if server.faulty.kind == .Read && server.faulty.reads == server.faulty.nth {
@@ -596,12 +653,16 @@ faulty_read :: fn(server: ptr[mut Server]) -> bool {
  * @param server The server, whose faulty.writes is counted up.
  * @return Write or Tear for the write that fails; None otherwise, and always without robustness=on.
  */
-faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
+faulty_write :: fn(server : ptr[mut Server]) -> FaultKind {
     #if robustness.ON {
         server.faulty.writes += 1
         if (server.faulty.kind == .Write || server.faulty.kind == .Tear) && server.faulty.writes == server.faulty.nth {
-            log_line.write(server.log, "partition_server: faulty_block: % write %", if server.faulty.kind == .Tear { "tore" } else { "failed" },
-                server.faulty.nth)
+            log_line.write(
+                server.log,
+                "partition_server: faulty_block: % write %",
+                if server.faulty.kind == .Tear { "tore" } else { "failed" },
+                server.faulty.nth
+            )
             return server.faulty.kind
         }
     }
@@ -615,7 +676,7 @@ faulty_write :: fn(server: ptr[mut Server]) -> FaultKind {
  * @param transfer The transfer, its blocks counted from the partition's start.
  * @return Whether its first block is inside the partition and its count reaches no further than the partition's end.
  */
-inside :: fn(narrowed: ptr[Narrowed], transfer: block.Transfer) -> bool {
+inside :: fn(narrowed : ptr[Narrowed], transfer : block.Transfer) -> bool {
     return transfer.first < narrowed.count && cast[u64](transfer.count) <= narrowed.count - transfer.first
 }
 
@@ -625,7 +686,7 @@ inside :: fn(narrowed: ptr[Narrowed], transfer: block.Transfer) -> bool {
  * @param narrowed The narrowed connection, whose client and driver ends are closed and set to NO_HANDLE; an end that's
  *     NO_HANDLE already is left alone.
  */
-close_narrowed :: fn(narrowed: ptr[mut Narrowed]) {
+close_narrowed :: fn(narrowed : ptr[mut Narrowed]) {
     for end in slop_os.Channel.[narrowed.client, narrowed.driver] {
         if cast[slop_os.Handle](end) != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -642,7 +703,7 @@ close_narrowed :: fn(narrowed: ptr[mut Narrowed]) {
  * @param port The server's port, waited on while the ring is full.
  * @param response The answer, sent as it is, with any handle it carries; whether it could be sent isn't told.
  */
-answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response) {
+answer :: fn(end : slop_os.Channel, port : slop_os.Port, response : block.Response) {
     out := os.Outgoing.{}
     made :: os.begin[block.Response](&out)
     made^ = response
@@ -658,7 +719,7 @@ answer :: fn(end: slop_os.Channel, port: slop_os.Port, response: block.Response)
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection's
  *     gone.
  */
-call :: fn(end: slop_os.Channel, port: slop_os.Port, request: block.Request) -> block.Response {
+call :: fn(end : slop_os.Channel, port : slop_os.Port, request : block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
     made^ = request

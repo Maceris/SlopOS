@@ -10,10 +10,10 @@ package terminal_service
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import text_buffer from "std:text_buffer"
-import terminal from "std:os/slop_os/terminal"
 import dir from "std:os/slop_os/dir"
 import grant from "std:os/slop_os/grant"
+import terminal from "std:os/slop_os/terminal"
+import text_buffer from "std:text_buffer"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
 import screen from "../../screen"
@@ -32,8 +32,11 @@ USAGE_H : u16 : 0x0b
  *
  * @param service The service, its secure attention key's screen up.
  */
-enter_share_form :: fn(service: ptr[mut Service]) {
-    if service.accounts_end == NONE || view(service).home_end == NONE || !view(service).logged_in || view(service).user_count == 0 {
+enter_share_form :: fn(service : ptr[mut Service]) {
+    if service.accounts_end == NONE
+        || view(service).home_end == NONE
+        || !view(service).logged_in
+        || view(service).user_count == 0 {
         return void
     }
     service.attention = false
@@ -51,7 +54,7 @@ enter_share_form :: fn(service: ptr[mut Service]) {
  *
  * @param service The service, its share form up.
  */
-end_share_form :: fn(service: ptr[mut Service]) {
+end_share_form :: fn(service : ptr[mut Service]) {
     service.sharing = false
     service.setup = .Off
     wipe(service.field[0..<service.field.count])
@@ -74,7 +77,7 @@ end_share_form :: fn(service: ptr[mut Service]) {
  * @param unshare Whether to take the member out of the volume (Delete), which revokes every link into it, rather than
  *     share it with them (Enter).
  */
-send_share :: fn(service: ptr[mut Service], unshare: bool) {
+send_share :: fn(service : ptr[mut Service], unshare : bool) {
     member :: field_bytes(service)
     if member.count == 0 || service.share_name_count > service.share_name.count {
         return void
@@ -82,8 +85,11 @@ send_share :: fn(service: ptr[mut Service], unshare: bool) {
     owner :: first_of(view(service).user[0..<view(service).user.count], view(service).user_count)
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    asked :: accounts.ShareOf.{owner = os.append(&out, owner), name = os.append(&out, first_of(service.share_name[0..<service.share_name.count], service.share_name_count)),
-        member = os.append(&out, member)}
+    asked :: accounts.ShareOf.{
+        owner = os.append(&out, owner),
+        name = os.append(&out, first_of(service.share_name[0..<service.share_name.count], service.share_name_count)),
+        member = os.append(&out, member),
+    }
     request^ = if unshare { accounts.Request.Unshare(asked) } else { accounts.Request.Share(asked) }
     if accounts.send_request(service.accounts_end, service.port, &out) != null {
         say(service, "The account service isn't there.")
@@ -106,7 +112,7 @@ send_share :: fn(service: ptr[mut Service], unshare: bool) {
  * @param given The grant of the volume's root, which moves here: it goes to the home in the Link request, or is closed
  *     if the home can't be reached.
  */
-shared :: fn(service: ptr[mut Service], given: os.Channel[grant.Grant]) {
+shared :: fn(service : ptr[mut Service], given : os.Channel[grant.Grant]) {
     home :: view(service).home_end
     name :: first_of(service.share_name[0..<service.share_name.count], service.share_name_count)
     linked := false
@@ -141,8 +147,13 @@ shared :: fn(service: ptr[mut Service], given: os.Channel[grant.Grant]) {
     else {
         _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
     }
-    runtime.log_info("% %, % shared/% in the owner's home", if service.unsharing { "took a member out of" } else { "shared" }, bytes_text(name),
-        if linked { "linked" } else { "couldn't link" }, bytes_text(name))
+    runtime.log_info(
+        "% %, % shared/% in the owner's home",
+        if service.unsharing { "took a member out of" } else { "shared" },
+        bytes_text(name),
+        if linked { "linked" } else { "couldn't link" },
+        bytes_text(name)
+    )
     end_share_form(service)
 }
 
@@ -155,7 +166,7 @@ shared :: fn(service: ptr[mut Service], given: os.Channel[grant.Grant]) {
  *
  * @param service The service, its share form up.
  */
-share_enter :: fn(service: ptr[mut Service]) {
+share_enter :: fn(service : ptr[mut Service]) {
     typed :: field_bytes(service)
     if service.setup == .ShareName {
         if !account_records.valid_name(typed) {
@@ -180,7 +191,7 @@ share_enter :: fn(service: ptr[mut Service]) {
  * @param whole Whether to show the panel and draw every row of it; false clears and draws only the rows of the fields
  *     and the message, which is all a key changes.
  */
-draw_share_form :: fn(service: ptr[mut Service], whole: bool) {
+draw_share_form :: fn(service : ptr[mut Service], whole : bool) {
     panel :: &view(service).screen.panel
     rows : u16 = 7
     if whole {
@@ -191,7 +202,13 @@ draw_share_form :: fn(service: ptr[mut Service], whole: bool) {
     }
     plain :: terminal.Style.{}
     screen.write_at(panel, 1, 2, "Share a volume", terminal.Style.{attributes = terminal.BOLD})
-    screen.write_at(panel, 3, 2, "A volume of yours, made the first time you name it, shared with another user, who", plain)
+    screen.write_at(
+        panel,
+        3,
+        2,
+        "A volume of yours, made the first time you name it, shared with another user, who",
+        plain
+    )
     screen.write_at(panel, 4, 2, "finds it in shared/ in their home once they next log in.", plain)
     top :: SETUP_FIELDS_ROW
     column : u16 = 13

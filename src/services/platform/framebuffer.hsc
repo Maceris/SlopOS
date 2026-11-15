@@ -2,9 +2,9 @@ package platform
 
 import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
-import platform as protocol from "../../protocols/platform"
-import pci from "../../pci"
 import log_line from "../../log_line"
+import pci from "../../pci"
+import platform as protocol from "../../protocols/platform"
 
 /*
  * The first framebuffer (decisions/0138), from the kernel's "FB  " table: given to the client that claims it, the
@@ -28,16 +28,23 @@ Framebuffer :: struct {
  * @return The first "FB  " table's framebuffer, or null if the tables are too small or malformed, or have no "FB  "
  *     table big enough for a layout.
  */
-find_framebuffer :: fn(tables: u64, size: u64) -> Framebuffer? {
+find_framebuffer :: fn(tables : u64, size : u64) -> Framebuffer? {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
         return null
     }
-    entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
+    entries :: view_of(
+        cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))),
+        cast[usize](header.count)
+    )
     for &entry in entries {
-        if pci.signature_of(entry) == "FB  " && entry.size >= cast[u32](size_of(slop_os.FramebufferLayout))
+        if pci.signature_of(entry) == "FB  "
+            && entry.size >= cast[u32](size_of(slop_os.FramebufferLayout))
             && entry.offset + cast[u64](entry.size) <= size {
-            return Framebuffer.{physical = entry.physical, layout = cast[ptr[slop_os.FramebufferLayout]](tables + entry.offset)^}
+            return Framebuffer.{
+                physical = entry.physical,
+                layout = cast[ptr[slop_os.FramebufferLayout]](tables + entry.offset)^,
+            }
         }
     }
     return null
@@ -60,7 +67,12 @@ find_framebuffer :: fn(tables: u64, size: u64) -> Framebuffer? {
  *     holding a slop_os.FramebufferLayout, both moving to the client with the response; or NoDevice if there's no
  *     framebuffer, another client claimed it, or its memory couldn't be made or mapped.
  */
-claim_framebuffer :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize) -> protocol.Response {
+claim_framebuffer :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    client : usize
+) -> protocol.Response {
     framebuffer :: state.framebuffer or_return .NoDevice
     if state.framebuffer_claimed && state.framebuffer_claimer != client {
         return .NoDevice
@@ -68,10 +80,21 @@ claim_framebuffer :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state:
     block :: slop_os.startup_block()
     layout :: framebuffer.layout
     bytes :: (cast[u64](layout.pitch) * cast[u64](layout.height) + PAGE - 1) & ~(PAGE - 1)
-    pixels :: match slop_os.memory_create_physical(platform, block.budget, framebuffer.physical, bytes, .WriteCombining) {
+    pixels :: match slop_os.memory_create_physical(
+        platform,
+        block.budget,
+        framebuffer.physical,
+        bytes,
+        .WriteCombining
+    ) {
         case Ok(made) => made
         case Error(error) => {
-            log_line.write(to, "platform: the framebuffer at %{#018x} can't be given out: %", framebuffer.physical, error)
+            log_line.write(
+                to,
+                "platform: the framebuffer at %{#018x} can't be given out: %",
+                framebuffer.physical,
+                error
+            )
             return .NoDevice
         }
     }

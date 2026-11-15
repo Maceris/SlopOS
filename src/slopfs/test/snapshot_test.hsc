@@ -26,7 +26,7 @@ SECOND_TEXT :: "what it holds now"
  * @param text The text, whose bytes are viewed, not copied.
  * @return Its bytes, a view of it.
  */
-name_bytes :: fn(text: string) -> u8[] {
+name_bytes :: fn(text : string) -> u8[] {
     return string_bytes(text)
 }
 
@@ -38,7 +38,7 @@ name_bytes :: fn(text: string) -> u8[] {
  * @param text The text, at most 256 bytes.
  * @return True if the file is there and its bytes are text's; false otherwise, or on any error.
  */
-file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bool {
+file_holds :: fn(volume : ptr[mut slopfs.Volume], name : string, text : u8[]) -> bool {
     file :: match slopfs.lookup(volume, slopfs.ROOT_OBJECT, name) {
         case Ok(found) => found or_return false
         case Error(error) => return false
@@ -59,7 +59,14 @@ file_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, text: u8[]) -> bo
  * @param back Where the file is read to, overwritten.
  * @return True if the file is there and its first size bytes are the pattern's; false otherwise, or on any error.
  */
-large_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, seed: u64, size: usize, data: ptr[mut Data], back: ptr[mut Data]) -> bool {
+large_holds :: fn(
+    volume : ptr[mut slopfs.Volume],
+    name : string,
+    seed : u64,
+    size : usize,
+    data : ptr[mut Data],
+    back : ptr[mut Data]
+) -> bool {
     file :: match slopfs.lookup(volume, slopfs.ROOT_OBJECT, name) {
         case Ok(found) => found or_return false
         case Error(error) => return false
@@ -79,7 +86,7 @@ large_holds :: fn(volume: ptr[mut slopfs.Volume], name: string, seed: u64, size:
  * @param id The volume whose dead list is read; one that isn't there has none, giving 0.
  * @return How many there are; 0xffffffff if the list couldn't be read.
  */
-dead_count :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
+dead_count :: fn(container : ptr[mut slopfs.Container], id : u64) -> u64 {
     dead : slopfs.DeadExtent[..]
     defer runtime.array_free(&dead)
     match slopfs.dead_extents(container, id, &dead) {
@@ -88,11 +95,15 @@ dead_count :: fn(container: ptr[mut slopfs.Container], id: u64) -> u64 {
     }
 }
 
-snapshots_and_clones_read_as_taken_and_free_only_what_nothing_holds #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+snapshots_and_clones_read_as_taken_and_free_only_what_nothing_holds #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_snapshots_of(t, false)
 }
 
-an_encrypted_volumes_snapshots_and_clones_read_as_taken_and_share_its_keys #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_encrypted_volumes_snapshots_and_clones_read_as_taken_and_share_its_keys #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_snapshots_of(t, true)
 }
 
@@ -100,7 +111,7 @@ an_encrypted_volumes_snapshots_and_clones_read_as_taken_and_share_its_keys #test
  * A snapshot taken while the volume has changes not yet committed holds the volume as it was committed: what the
  * changes gave back earlier in the transaction, which the snapshot's root still names, isn't freed at the commit.
  */
-holds_what_the_transaction_freed_before_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+holds_what_the_transaction_freed_before_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     device :: formatted(t, SNAPSHOT_BLOCKS, 0x51)?
     defer free_device(device)
     mounting :: slopfs.mount(device)
@@ -125,7 +136,11 @@ holds_what_the_transaction_freed_before_it #test :: fn(t: ptr[mut testing.T]) ->
     testing.expect_ok(t, verifying, "no block is both free and named by the snapshot")
     opening :: slopfs.open_snapshot(container, volume.id, name_bytes("midway"), null)
     midway :: testing.require_ok(t, opening, "the snapshot opens")?
-    testing.expect(t, file_holds(midway, "kept.txt", name_bytes(FIRST_TEXT)), "the snapshot reads the file as committed before it")
+    testing.expect(
+        t,
+        file_holds(midway, "kept.txt", name_bytes(FIRST_TEXT)),
+        "the snapshot reads the file as committed before it"
+    )
     looking :: slopfs.lookup(midway, root, "more.txt")
     more_in_midway :: testing.require_ok(t, looking, "the snapshot looks up a name")?
     testing.expect_none(t, more_in_midway, "a file made in the transaction, not yet committed, isn't in the snapshot")
@@ -145,7 +160,7 @@ holds_what_the_transaction_freed_before_it #test :: fn(t: ptr[mut testing.T]) ->
  * @return Ok once it's all checked, whatever was found; Error(Failed), the failure recorded, if what follows couldn't
  *     go on.
  */
-check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+check_snapshots_of :: fn(t : ptr[mut testing.T], sealed : bool) -> testing.Outcome {
     device :: formatted(t, SNAPSHOT_BLOCKS, 0x50)?
     defer free_device(device)
     mounting :: slopfs.mount(device)
@@ -189,22 +204,45 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
     dead :: dead_count(container, origin_id)
     testing.expect_ne(t, dead, 0xffffffff, "the volume's dead list reads")
     testing.expect_ne(t, dead, 0, "what the volume gave back that the snapshot holds goes on its dead list")
-    testing.expect(t, slopfs.free_blocks(container) < before_changes,
-        "nothing the snapshot holds was freed: the rewrite took more space, it didn't swap it")
+    testing.expect(
+        t,
+        slopfs.free_blocks(container) < before_changes,
+        "nothing the snapshot holds was freed: the rewrite took more space, it didn't swap it"
+    )
 
     // The snapshot reads as the volume did
     keys :: if sealed { unlocked_keys(container, origin_id) } else { null }
-    testing.require(t, !sealed || (keys is_some), "an encrypted volume's keys unlock with its passphrase, for its snapshot")?
+    testing.require(
+        t,
+        !sealed || (keys is_some),
+        "an encrypted volume's keys unlock with its passphrase, for its snapshot"
+    )?
     opening_one :: slopfs.open_snapshot(container, origin_id, name_bytes("one"), keys)
     one :: testing.require_ok(t, opening_one, "a snapshot opens")?
-    testing.expect(t, file_holds(one, "small.txt", name_bytes(FIRST_TEXT)), "a snapshot reads a file as it was when taken")
-    testing.expect(t, large_holds(one, "large.bin", 11, 200000, data, back), "a snapshot reads a file across chunks as it was when taken")
+    testing.expect(
+        t,
+        file_holds(one, "small.txt", name_bytes(FIRST_TEXT)),
+        "a snapshot reads a file as it was when taken"
+    )
+    testing.expect(
+        t,
+        large_holds(one, "large.bin", 11, 200000, data, back),
+        "a snapshot reads a file across chunks as it was when taken"
+    )
     looking_later :: slopfs.lookup(one, root, "later.txt")
     later_in_one :: testing.require_ok(t, looking_later, "a snapshot looks up a name")?
     testing.expect_none(t, later_in_one, "a file made after a snapshot isn't in it")
     slopfs.free_volume(one)
-    testing.expect(t, file_holds(volume, "small.txt", name_bytes(SECOND_TEXT)), "the volume reads a file as changed after the snapshot")
-    testing.expect(t, large_holds(volume, "large.bin", 12, 200000, data, back), "the volume reads a file across chunks as changed after the snapshot")
+    testing.expect(
+        t,
+        file_holds(volume, "small.txt", name_bytes(SECOND_TEXT)),
+        "the volume reads a file as changed after the snapshot"
+    )
+    testing.expect(
+        t,
+        large_holds(volume, "large.bin", 12, 200000, data, back),
+        "the volume reads a file across chunks as changed after the snapshot"
+    )
 
     // A second snapshot and a clone of it, changed apart
     taking_two :: slopfs.take_snapshot(container, origin_id, name_bytes("two"), 20)
@@ -216,7 +254,11 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
     opening_copy :: open_test_volume_id(container, clone_id, sealed)
     copy := testing.require_ok(t, opening_copy, "a clone opens, an encrypted one with its origin's passphrase")?
     testing.expect(t, file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)), "a clone starts as the snapshot it's of")
-    testing.expect(t, large_holds(copy, "large.bin", 12, 200000, data, back), "a clone starts as the snapshot it's of, across chunks")
+    testing.expect(
+        t,
+        large_holds(copy, "large.bin", 12, 200000, data, back),
+        "a clone starts as the snapshot it's of, across chunks"
+    )
     // Its own writes, and one of its origin's files given back, which stays its origin's
     making_own :: slopfs.create(copy, root, "own.txt", .File)
     own :: testing.require_ok(t, making_own, "a clone makes a file of its own")?
@@ -229,8 +271,16 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
     rewriting_copy :: slopfs.write(copy, copy_large, 0, data.bytes[0..<100000])
     require_done(t, rewriting_copy, "a clone overwrites a file it shares with its origin")?
     require_commit(t, container, "the clone's changes commit")?
-    testing.expect(t, file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)), "a file a clone removed is still its origin's")
-    testing.expect(t, large_holds(volume, "large.bin", 12, 200000, data, back), "a file a clone overwrote is as it was in its origin")
+    testing.expect(
+        t,
+        file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)),
+        "a file a clone removed is still its origin's"
+    )
+    testing.expect(
+        t,
+        large_holds(volume, "large.bin", 12, 200000, data, back),
+        "a file a clone overwrote is as it was in its origin"
+    )
     looking_own :: slopfs.lookup(volume, root, "own.txt")
     own_in_origin :: testing.require_ok(t, looking_own, "the origin looks up a name")?
     testing.expect_none(t, own_in_origin, "a clone's own file isn't its origin's")
@@ -255,8 +305,16 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
     reopening_copy :: open_test_volume_id(container, clone_id, sealed)
     copy = testing.require_ok(t, reopening_copy, "the clone opens after a mount")?
     testing.expect(t, file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)), "a clone's own file is kept across a mount")
-    testing.expect(t, large_holds(copy, "large.bin", 13, 100000, data, back), "a clone's overwrite is kept across a mount")
-    testing.expect(t, file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)), "the origin's file the clone removed is kept across a mount")
+    testing.expect(
+        t,
+        large_holds(copy, "large.bin", 13, 100000, data, back),
+        "a clone's overwrite is kept across a mount"
+    )
+    testing.expect(
+        t,
+        file_holds(volume, "later.txt", name_bytes(SECOND_TEXT)),
+        "the origin's file the clone removed is kept across a mount"
+    )
     gone :: slopfs.open_snapshot(container, origin_id, name_bytes("one"), null)
     testing.expect(t, gone is_error, "a deleted snapshot is gone after a mount")
     // Still holding what its clone shares: a change to the origin now, and the clone reads as it did
@@ -267,8 +325,16 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
     removing_small :: slopfs.remove(volume, root, "small.txt")
     require_done(t, removing_small, "the origin removes a file its clone shares")?
     require_commit(t, container, "the origin's changes commit")?
-    testing.expect(t, file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)), "a file its origin removed is still the clone's")
-    testing.expect(t, large_holds(copy, "large.bin", 13, 100000, data, back), "a file its origin overwrote is as the clone had it")
+    testing.expect(
+        t,
+        file_holds(copy, "small.txt", name_bytes(SECOND_TEXT)),
+        "a file its origin removed is still the clone's"
+    )
+    testing.expect(
+        t,
+        large_holds(copy, "large.bin", 13, 100000, data, back),
+        "a file its origin overwrote is as the clone had it"
+    )
     if sealed {
         // A clone's generations are its origin's key records'
         rotating :: slopfs.rotate(container, copy)
@@ -284,8 +350,16 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
         container = testing.require_ok(t, mounting_last, "the container mounts again")?
         reopening_last :: open_test_volume_id(container, clone_id, sealed)
         copy = testing.require_ok(t, reopening_last, "the clone opens again with its origin's passphrase")?
-        testing.expect(t, file_holds(copy, "after.txt", name_bytes(SECOND_TEXT)), "a file sealed with a clone's new generation reads after a mount")
-        testing.expect(t, file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)), "a file sealed with the first generation still reads")
+        testing.expect(
+            t,
+            file_holds(copy, "after.txt", name_bytes(SECOND_TEXT)),
+            "a file sealed with a clone's new generation reads after a mount"
+        )
+        testing.expect(
+            t,
+            file_holds(copy, "own.txt", name_bytes(FIRST_TEXT)),
+            "a file sealed with the first generation still reads"
+        )
         reading_newest :: slopfs.newest_generation(container, origin_id)
         newest :: testing.require_ok(t, reading_newest, "the origin's key records read")?
         testing.expect_eq(t, newest, 2, "a clone's new generation is in its origin's key records, which it shares")
@@ -302,7 +376,11 @@ check_snapshots_of :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome
  * @param sealed Whether the volume is encrypted.
  * @return The volume, or why it couldn't be opened, as open_volume or open_sealed_volume says.
  */
-open_test_volume_id :: fn(container #escaping : ptr[mut slopfs.Container], id: u64, sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
+open_test_volume_id :: fn(
+    container #escaping : ptr[mut slopfs.Container],
+    id : u64,
+    sealed : bool
+) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
         return slopfs.open_sealed_volume(container, id, passphrase())
     }
@@ -316,7 +394,7 @@ open_test_volume_id :: fn(container #escaping : ptr[mut slopfs.Container], id: u
  * @param id The volume's ID, whose own key records are used.
  * @return The keys, the caller's (open_snapshot takes them); null if they couldn't be read or unlocked.
  */
-unlocked_keys :: fn(container: ptr[mut slopfs.Container], id: u64) -> ptr[mut slopfs.Keys]? {
+unlocked_keys :: fn(container : ptr[mut slopfs.Container], id : u64) -> ptr[mut slopfs.Keys]? {
     record :: slopfs.volume_record(container, id) or_return null
     wraps : slopfs.WrapRecord[..]
     defer runtime.array_free(&wraps)

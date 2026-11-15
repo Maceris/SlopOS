@@ -2,6 +2,7 @@
  * sftp's tests, a test program (tools/unit_tests.py): paths made relative to the home, never above it; INIT answered
  * with version 3; a packet whose length can't be one refused.
  */
+
 package sftp_test
 
 import runtime from "base:runtime"
@@ -11,12 +12,12 @@ import testing from "std:testing"
 import sftp from ".."
 
 /** A path normalized, as text; "!" if it's refused. */
-normal :: fn(path: string, into: mut u8[]) -> string {
+normal :: fn(path : string, into : mut u8[]) -> string {
     count :: sftp.normalize(string_bytes(path), into) or_return "!"
     return if count > 0 && count <= into.count { string_of(&into[0], count) } else { "" }
 }
 
-keeps_paths_beneath_the_home #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+keeps_paths_beneath_the_home #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     storage : u8[64]
     testing.expect_eq(t, normal("/", storage[0..<64]), "", "/ is the home")
     testing.expect_eq(t, normal(".", storage[0..<64]), "", ". is the home")
@@ -32,7 +33,7 @@ keeps_paths_beneath_the_home #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
     return .Ok
 }
 
-answers_init_and_refuses_a_bad_length #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+answers_init_and_refuses_a_bad_length #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     state :: sftp.start_sftp(os.Directory.{})
     defer runtime.free(state)
     // INIT, version 3: length 5, type 1, version

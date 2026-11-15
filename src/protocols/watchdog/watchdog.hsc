@@ -58,7 +58,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for each: arming, resetting and stopping again change nothing more.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Arm(_) => true
         case Pet => true
@@ -77,7 +77,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @param budget The budget the new channel is charged to.
  * @return The caller's end of the new connection; null if the channel couldn't be made or Connect couldn't be sent.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Watchdog]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Watchdog]? {
     pair :: os.channel_for[Watchdog](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

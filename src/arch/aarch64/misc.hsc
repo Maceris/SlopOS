@@ -15,7 +15,7 @@ import devicetree from "../../devicetree"
  * L1 keeps no global state, so where the registers are is in TPIDR_EL1: until init_cpu, the address itself
  * with bit 0 set; after, in the ArchCpu it points at, which is 64-byte aligned.
  */
-//SPEC: Arm PrimeCell UART (PL011) TRM (DDI 0183): UARTDR, UARTFR, UARTIBRD/FBRD, UARTLCR_H, UARTCR
+// SPEC: Arm PrimeCell UART (PL011) TRM (DDI 0183): UARTDR, UARTFR, UARTIBRD/FBRD, UARTLCR_H, UARTCR
 /** UARTDR's offset: the data register; writing its low byte transmits it. */
 UART_DATA : u64 : 0x00
 /** UARTFR's offset: the flag register. */
@@ -59,7 +59,7 @@ APPLICATION_EXIT : u64 : 0x20026
  * @param direct_map_offset Where physical address 0 is in the bootloader's direct map; 0 means there's none.
  * @param firmware The firmware's tables, which say where the device tree is.
  */
-early_console_init :: fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) {
+early_console_init :: fn(direct_map_offset : u64, firmware : ptr[boot_info.FirmwareTables]) {
     if direct_map_offset == 0 {
         return void
     }
@@ -86,7 +86,7 @@ early_console_init :: fn(direct_map_offset: u64, firmware: ptr[boot_info.Firmwar
  *
  * @param text The bytes to write; each line feed is preceded by a carriage return, as a terminal needs.
  */
-early_console_write :: fn(text: string) {
+early_console_write :: fn(text : string) {
     base :: console_address()
     if base == 0 {
         return void
@@ -123,7 +123,7 @@ console_address :: fn() -> u64 {
  * @param base The UART's registers' virtual address.
  * @param byte The byte to transmit.
  */
-write_byte :: fn(base: u64, byte: u8) {
+write_byte :: fn(base : u64, byte : u8) {
     loop {
         aarch64.dmb(.SY)
     }
@@ -139,7 +139,7 @@ write_byte :: fn(base: u64, byte: u8) {
  * @return The 32 bits the register reads as now (such as UART_FLAGS' busy and full bits); each call loads afresh, so a
  *     polling loop sees changes.
  */
-read_register :: fn(base: u64, offset: u64) -> u32 {
+read_register :: fn(base : u64, offset : u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset))
 }
 
@@ -150,7 +150,7 @@ read_register :: fn(base: u64, offset: u64) -> u32 {
  * @param offset The register's offset in bytes.
  * @param value What to write.
  */
-write_register :: fn(base: u64, offset: u64, value: u32) {
+write_register :: fn(base : u64, offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), value)
 }
 
@@ -163,7 +163,7 @@ write_register :: fn(base: u64, offset: u64, value: u32) {
  *
  * @param code The test's result, below 2^31 so the shifted code fits.
  */
-test_exit :: fn(code: u32) {
+test_exit :: fn(code : u32) {
     block : u64[2] = u64.[APPLICATION_EXIT, (cast[u64](code) << 1) | 1]
     aarch64.semihosting(SEMIHOSTING_EXIT, cast[rawptr](&block))
 }
@@ -181,7 +181,7 @@ PSCI_SYSTEM_RESET : u64 : 0x84000009
  * @return 2 for SMC, if the node's method lists "smc"; 1 for HVC, for any other method; 0 without a direct map, a
  *     device tree, a PSCI 1.0 or 0.2 node, or its method.
  */
-reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 {
+reset_method :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> u8 {
     if direct_map_offset == 0 {
         return 0
     }
@@ -201,7 +201,7 @@ reset_method :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u
  * @param method The conduit, as reset_method gives it: 1 for HVC, 2 for SMC; any other value does nothing. Returns
  *     only if the reset didn't happen.
  */
-reset :: fn(method: u8) {
+reset :: fn(method : u8) {
     if method == 1 {
         _ = aarch64.hvc(PSCI_SYSTEM_RESET)
     }
@@ -216,7 +216,7 @@ reset :: fn(method: u8) {
  * @param method The conduit, as reset_method gives it.
  * @return True for HVC or SMC (1 or 2): PSCI turns it off; false without PSCI.
  */
-can_power_off :: fn(method: u8) -> bool {
+can_power_off :: fn(method : u8) -> bool {
     return method == 1 || method == 2
 }
 
@@ -226,7 +226,7 @@ can_power_off :: fn(method: u8) -> bool {
  * @param method The conduit, as reset_method gives it: 1 for HVC, 2 for SMC; any other value does nothing. Returns
  *     only if the machine didn't turn off.
  */
-power_off :: fn(method: u8) {
+power_off :: fn(method : u8) {
     if method == 1 {
         _ = aarch64.hvc(PSCI_SYSTEM_OFF)
     }
@@ -242,7 +242,8 @@ power_off :: fn(method: u8) {
  *     at. The kernel's mask, which lets only the pseudo-NMI through, is taken as interrupts off.
  */
 interrupts_enabled :: fn() -> bool {
-    return aarch64.read_system_register(.DAIF) & 0x80 == 0 && aarch64.read_system_register(.ICC_PMR_EL1) == PRIORITY_MASK
+    return aarch64.read_system_register(.DAIF) & 0x80 == 0
+        && aarch64.read_system_register(.ICC_PMR_EL1) == PRIORITY_MASK
 }
 
 /** Stop the calling CPU for good, with IRQs, FIQs and SErrors masked, waiting for interrupts forever. */
@@ -268,7 +269,8 @@ mask_interrupts :: fn() {
 }
 
 /**
- * Let the calling CPU take every interrupt again (arch_interface.unmask_interrupts): the priority mask at PRIORITY_MASK,
+ * Let the calling CPU take every interrupt again (arch_interface.unmask_interrupts): the priority mask at
+ * PRIORITY_MASK,
  * and DAIF's I and F clear.
  */
 unmask_interrupts :: fn() {
@@ -305,13 +307,19 @@ idle :: fn() #never_returns {
     // The kernel's key, with pointer authentication on from the first idle
     key :: current_system().kernel_key
     if has_pointer_authentication() {
-        // APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1), then SCTLR_EL1.EnIA, here, where no frame below returns
+        /*
+         * APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1), then SCTLR_EL1.EnIA, here, where no frame
+         * below returns
+         */
         aarch64.write_system_register_encoded(3, 0, 2, 1, 0, key[0])
         aarch64.write_system_register_encoded(3, 0, 2, 1, 1, key[1])
         aarch64.write_system_register(.SCTLR_EL1, aarch64.read_system_register(.SCTLR_EL1) | SCTLR_ENABLE_IA)
         aarch64.isb()
     }
-    // The kernel's Guarded Control Stack from its top, as SP_EL1 is, and on (decisions/0186, Hd): GCSPR_EL1 (S3_0_C2_C5_1), GCSCR_EL1 (S3_0_C2_C5_0)
+    /*
+     * The kernel's Guarded Control Stack from its top, as SP_EL1 is, and on (decisions/0186, Hd): GCSPR_EL1
+     * (S3_0_C2_C5_1), GCSCR_EL1 (S3_0_C2_C5_0)
+     */
     if cpu.kernel_shadow_top != 0 {
         aarch64.write_system_register_encoded(3, 0, 2, 5, 1, cpu.kernel_shadow_top)
         aarch64.write_system_register_encoded(3, 0, 2, 5, 0, GCSCR_ON)
@@ -350,7 +358,7 @@ has_io_ports :: fn() -> bool {
  * @param width Ignored.
  * @return Null, always.
  */
-port_read :: fn(port: u16, width: u32) -> u32? {
+port_read :: fn(port : u16, width : u32) -> u32? {
     return null
 }
 
@@ -362,6 +370,6 @@ port_read :: fn(port: u16, width: u32) -> u32? {
  * @param value Ignored.
  * @return False, always.
  */
-port_write :: fn(port: u16, width: u32, value: u32) -> bool {
+port_write :: fn(port : u16, width : u32, value : u32) -> bool {
     return false
 }

@@ -36,7 +36,12 @@ GuiGrants :: struct {
  * @param programs Its programs connection.
  * @return Never run; 0.
  */
-shape :: fn(log: slop_os.DebugLog?, surface: os.Channel[surface.Surface]?, home: os.Channel[dir.Dir]?,
-    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[programs.Programs]?) -> int {
+shape :: fn(
+    log : slop_os.DebugLog?,
+    surface : os.Channel[surface.Surface]?,
+    home : os.Channel[dir.Dir]?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    programs : os.Channel[programs.Programs]?
+) -> int {
     return 0
 }

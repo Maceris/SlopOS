@@ -45,7 +45,7 @@ Shootdown :: struct {
  * @param kernel The kernel, whose shootdown state and online CPUs are used.
  * @param batch The TLB entries to flush, copied before the IPIs go, so it needn't outlive the call.
  */
-shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
+shootdown :: fn(kernel : ptr[mut Kernel], batch : ptr[arch_interface.TlbBatch]) {
     cpu :: per_cpu()
     loop {
         flush_for_shootdown(cpu)
@@ -88,7 +88,7 @@ shootdown :: fn(kernel: ptr[mut Kernel], batch: ptr[arch_interface.TlbBatch]) {
  *
  * @param cpu The calling CPU's PerCpu, whose flush_requested is cleared once it has flushed.
  */
-flush_for_shootdown :: fn(cpu: ptr[mut PerCpu]) {
+flush_for_shootdown :: fn(cpu : ptr[mut PerCpu]) {
     if !shootdowns.is_requested(&cpu.flush_requested) {
         return void
     }

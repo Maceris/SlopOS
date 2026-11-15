@@ -28,8 +28,8 @@ package slab
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
 import boot_info from "../../boot_info"
-import frames from "../frames"
 import robustness from "../../robustness"
+import frames from "../frames"
 
 /** Objects are at least this big, and their sizes a multiple of it: room for the free list's link. */
 OBJECT_GRANULE : u64 : 16
@@ -137,9 +137,11 @@ Magazine :: struct {
  * @return The cache, empty. Its lock and lists are used in place, so it's put where it lives before it's used, and not
  *     copied after.
  */
-make_cache :: fn(object_size: u64, alignment: u64) -> SlabCache {
-    runtime.assert(alignment > 0 && alignment & (alignment - 1) == 0 && alignment <= frames.FRAME_SIZE,
-        "a cache's alignment is a power of two up to a frame")
+make_cache :: fn(object_size : u64, alignment : u64) -> SlabCache {
+    runtime.assert(
+        alignment > 0 && alignment & (alignment - 1) == 0 && alignment <= frames.FRAME_SIZE,
+        "a cache's alignment is a power of two up to a frame"
+    )
     granule :: if alignment > OBJECT_GRANULE { alignment } else { OBJECT_GRANULE }
     size :: frames.round_up(if object_size > 0 { object_size } else { 1 }, granule)
     cache : SlabCache
@@ -161,7 +163,7 @@ make_cache :: fn(object_size: u64, alignment: u64) -> SlabCache {
  * @param size An object's size in bytes, more than 0.
  * @return How many whole objects fit before the header, 0 if none does.
  */
-objects_in :: fn(order: u64, size: u64) -> u64 {
+objects_in :: fn(order : u64, size : u64) -> u64 {
     return ((frames.FRAME_SIZE << order) - cast[u64](size_of(SlabHeader))) / size
 }
 
@@ -178,7 +180,10 @@ objects_in :: fn(order: u64, size: u64) -> u64 {
  * @error OutOfMemory No slab had a free object and the frame allocator had no block for a new one, or fault injection
  *     failed the Slab or Frame point.
  */
-allocate :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
+allocate :: fn(
+    cache : ptr[mut SlabCache],
+    allocator : ptr[mut frames.FrameAllocator]
+) -> Result[u64, frames.FrameError] {
     if robustness.fails(&allocator.faults, .Slab) {
         return .Error(.OutOfMemory)
     }
@@ -196,7 +201,7 @@ allocate :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocat
  * @param cache The cache it came from.
  * @param object The object's direct-map address. It's not looked at; only the cache's counts change.
  */
-retire :: fn(cache: ptr[mut SlabCache], object: u64) {
+retire :: fn(cache : ptr[mut SlabCache], object : u64) {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     cache.allocated -= 1
@@ -216,7 +221,7 @@ retire :: fn(cache: ptr[mut SlabCache], object: u64) {
  *     are overwritten with the free list's link. One that isn't an object of a slab's handed-out part stops the kernel
  *     with an assertion; one given back twice isn't caught.
  */
-free :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
+free :: fn(cache : ptr[mut SlabCache], allocator : ptr[mut frames.FrameAllocator], object : u64) {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     give_object(cache, allocator, object)
@@ -233,7 +238,7 @@ free :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator],
  * @return How many objects were written: out's count, or fewer only when the frame allocator ran out, so 0 means none
  *     could be had.
  */
-allocate_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], out: mut u64[]) -> usize {
+allocate_batch :: fn(cache : ptr[mut SlabCache], allocator : ptr[mut frames.FrameAllocator], out : mut u64[]) -> usize {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     for i in 0..<out.count {
@@ -252,7 +257,7 @@ allocate_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameA
  * @param allocator The frame allocator the cache's slabs come from.
  * @param objects The objects' direct-map addresses, each handed out by this cache and not given back since.
  */
-free_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], objects: u64[]) {
+free_batch :: fn(cache : ptr[mut SlabCache], allocator : ptr[mut frames.FrameAllocator], objects : u64[]) {
     concurrency.lock(&cache.lock)
     defer concurrency.unlock(&cache.lock)
     for object in objects {
@@ -275,7 +280,11 @@ free_batch :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAlloc
  * @error OutOfMemory The magazine was empty and the cache could get no object, or fault injection failed the Slab or
  *     Frame point.
  */
-take :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
+take :: fn(
+    magazine : ptr[mut Magazine],
+    cache : ptr[mut SlabCache],
+    allocator : ptr[mut frames.FrameAllocator]
+) -> Result[u64, frames.FrameError] {
     if robustness.fails(&allocator.faults, .Slab) {
         return .Error(.OutOfMemory)
     }
@@ -304,7 +313,12 @@ take :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: pt
  * @param object The object's direct-map address, handed out by this cache and not given back since; the caller gives
  *     it up.
  */
-give_back :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
+give_back :: fn(
+    magazine : ptr[mut Magazine],
+    cache : ptr[mut SlabCache],
+    allocator : ptr[mut frames.FrameAllocator],
+    object : u64
+) {
     if magazine.count == MAGAZINE_SIZE {
         free_batch(cache, allocator, magazine.objects[MAGAZINE_SIZE - MAGAZINE_BATCH..<MAGAZINE_SIZE])
         magazine.count = MAGAZINE_SIZE - MAGAZINE_BATCH
@@ -324,7 +338,7 @@ give_back :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocato
  * @param cache The cache its objects came from.
  * @param allocator The frame allocator the cache's slabs come from.
  */
-drain :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) {
+drain :: fn(magazine : ptr[mut Magazine], cache : ptr[mut SlabCache], allocator : ptr[mut frames.FrameAllocator]) {
     count :: magazine.count
     runtime.assert(count <= MAGAZINE_SIZE, "a magazine holds up to MAGAZINE_SIZE objects")
     free_batch(cache, allocator, magazine.objects[0..<count])
@@ -337,7 +351,7 @@ drain :: fn(magazine: ptr[mut Magazine], cache: ptr[mut SlabCache], allocator: p
  * @param cache A cache from make_cache; only its slab_order, fixed once it's made, is read, without the lock.
  * @return Each slab's size in bytes, FRAME_SIZE times 2^slab_order.
  */
-slab_bytes :: fn(cache: ptr[SlabCache]) -> u64 {
+slab_bytes :: fn(cache : ptr[SlabCache]) -> u64 {
     return frames.FRAME_SIZE << cache.slab_order
 }
 
@@ -348,7 +362,7 @@ slab_bytes :: fn(cache: ptr[SlabCache]) -> u64 {
  * @param base The slab's base, a direct-map address.
  * @return A pointer to the header, good while the slab is the cache's.
  */
-header_of :: fn(cache: ptr[SlabCache], base: u64) -> ptr[mut SlabHeader] {
+header_of :: fn(cache : ptr[SlabCache], base : u64) -> ptr[mut SlabHeader] {
     return cast[ptr[mut SlabHeader]](base + slab_bytes(cache) - cast[u64](size_of(SlabHeader)))
 }
 
@@ -360,7 +374,10 @@ header_of :: fn(cache: ptr[SlabCache], base: u64) -> ptr[mut SlabHeader] {
  * @return The object's direct-map address, which the caller owns; its contents are as allocate's are.
  * @error OutOfMemory No slab had a free object and the frame allocator had no block for a new one.
  */
-take_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
+take_object :: fn(
+    cache : ptr[mut SlabCache],
+    allocator : ptr[mut frames.FrameAllocator]
+) -> Result[u64, frames.FrameError] {
     if cache.partial.count == 0 {
         base := cache.empty.first
         if base != 0 {
@@ -397,14 +414,16 @@ take_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllo
  * @param allocator The frame allocator the cache's slabs come from; an emptied slab may go back to it.
  * @param object The object's direct-map address, handed out by this cache and not given back since.
  */
-give_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator], object: u64) {
+give_object :: fn(cache : ptr[mut SlabCache], allocator : ptr[mut frames.FrameAllocator], object : u64) {
     // Slabs are aligned physically, to their size
     offset_to_physical :: allocator.direct_map_offset
     base :: ((object - offset_to_physical) & ~(slab_bytes(cache) - 1)) + offset_to_physical
     header :: header_of(cache, base)
     offset :: object - base
-    runtime.assert(offset % cache.object_size == 0 && offset < cast[u64](header.fresh) * cache.object_size && header.in_use > 0,
-        "free takes an object its cache handed out")
+    runtime.assert(
+        offset % cache.object_size == 0 && offset < cast[u64](header.fresh) * cache.object_size && header.in_use > 0,
+        "free takes an object its cache handed out"
+    )
     cast[ptr[mut u64]](object)^ = header.free
     header.free = object
     header.in_use -= 1
@@ -435,7 +454,10 @@ give_object :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllo
  * @return The slab's base, a direct-map address aligned to the slab's size.
  * @error OutOfMemory The frame allocator had no block of the slab's order, or fault injection failed the Frame point.
  */
-new_slab :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocator]) -> Result[u64, frames.FrameError] {
+new_slab :: fn(
+    cache : ptr[mut SlabCache],
+    allocator : ptr[mut frames.FrameAllocator]
+) -> Result[u64, frames.FrameError] {
     base :: frames.virtual_of(allocator, frames.allocate(allocator, cache.slab_order)?)
     header :: header_of(cache, base)
     header^ = SlabHeader.{}
@@ -456,7 +478,7 @@ new_slab :: fn(cache: ptr[mut SlabCache], allocator: ptr[mut frames.FrameAllocat
  * @param list Which list: Empty for the empty list, and Partial, or None, for the partial one.
  * @return A pointer to the list, in the cache.
  */
-list_of :: fn(cache: ptr[mut SlabCache], list: SlabList) -> ptr[mut List] {
+list_of :: fn(cache : ptr[mut SlabCache], list : SlabList) -> ptr[mut List] {
     return if list == .Empty { &cache.empty } else { &cache.partial }
 }
 
@@ -467,7 +489,7 @@ list_of :: fn(cache: ptr[mut SlabCache], list: SlabList) -> ptr[mut List] {
  * @param base The slab's base, a direct-map address; the slab must be on no list.
  * @param list Partial or Empty, the list it goes on, which its header records.
  */
-push :: fn(cache: ptr[mut SlabCache], base: u64, list: SlabList) {
+push :: fn(cache : ptr[mut SlabCache], base : u64, list : SlabList) {
     target :: list_of(cache, list)
     header :: header_of(cache, base)
     header.list = list
@@ -486,7 +508,7 @@ push :: fn(cache: ptr[mut SlabCache], base: u64, list: SlabList) {
  * @param cache The cache, its lock held.
  * @param base The slab's base, a direct-map address; a slab on no list stops the kernel with an assertion.
  */
-unlink :: fn(cache: ptr[mut SlabCache], base: u64) {
+unlink :: fn(cache : ptr[mut SlabCache], base : u64) {
     header :: header_of(cache, base)
     runtime.assert(header.list != .None, "unlink takes a slab on a list")
     target :: list_of(cache, header.list)

@@ -79,7 +79,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for every request: a report says what happened, so again is the same.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Started(_) => true
         case Ended(_) => true

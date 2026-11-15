@@ -48,7 +48,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for Dial: dialing again gives another connection, which is as good.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Dial => true
     }
@@ -73,7 +73,7 @@ TRIES :: 50
  *     gone or answered Unsupported, it was Unavailable for every try, or the connection doesn't speak P, which is
  *     closed then.
  */
-dial :: fn[P](end: slop_os.Channel, port: slop_os.Port) -> os.Channel[P]? {
+dial :: fn[P](end : slop_os.Channel, port : slop_os.Port) -> os.Channel[P]? {
     channel :: dial_raw(end, port) or_return null
     if os.speaks[P](channel) {
         return os.Channel[P].{end = channel}
@@ -95,7 +95,7 @@ dial :: fn[P](end: slop_os.Channel, port: slop_os.Port) -> os.Channel[P]? {
  *     connector's gone or answered Unsupported, a port to wait on couldn't be made, or it was Unavailable for every
  *     try.
  */
-dial_raw :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel? {
+dial_raw :: fn(end : slop_os.Channel, port : slop_os.Port) -> slop_os.Channel? {
     for try in 0..<TRIES {
         out := os.Outgoing.{}
         request :: os.begin[Request](&out)

@@ -29,7 +29,7 @@ import runtime from "base:runtime"
  * @error OutOfMemory No memory for a buffer or a node.
  * @error NoSpace No free extent for a node or a chunk.
  */
-reseal_step :: fn(volume: ptr[mut Volume], floor: u32, from: Key, most: u64) -> Result[Key?, Error] {
+reseal_step :: fn(volume : ptr[mut Volume], floor : u32, from : Key, most : u64) -> Result[Key?, Error] {
     keys :: volume.tree.keys or_return .Error(.Locked)
     if keys.current < floor {
         return .Error(.NotFound)
@@ -51,7 +51,8 @@ reseal_step :: fn(volume: ptr[mut Volume], floor: u32, from: Key, most: u64) -> 
         }
         if item.key.kind == cast[u8](RecordKind.Extent) && item.bytes == size_of(ExtentRecord) {
             extent :: cast[ptr[ExtentRecord]](&value.bytes[0])^
-            if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) && cast[u32](extent.pointer.generation) < floor
+            if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks)
+                && cast[u32](extent.pointer.generation) < floor
                 && cast[u64](extent.pointer.birth) != volume.nodes.transaction {
                 index :: item.key.offset / CHUNK_BYTES
                 used :: read_chunk(volume, item.key.object, index, chunk.bytes)?

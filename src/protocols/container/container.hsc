@@ -232,11 +232,14 @@ Request :: union {
      * generations that aren't exactly the volume's or a number that isn't the next, or Failed.
      */
     Rekey(Rekeying),
-    /** On a volume's connection: ask for the volume's key floor. Answered with Floor, NoMore if it has none, or Failed. */
+    /**
+     * On a volume's connection: ask for the volume's key floor. Answered with Floor, NoMore if it has none, or Failed.
+     */
     KeyFloor,
     /**
      * On a volume's connection: say the volume's live tree is sealed with this floor or later, its last step committed;
-     * durable with the next commit. Answered with Done, NotYours if it isn't the volume's floor still Sealing, or Failed.
+     * durable with the next commit. Answered with Done, NotYours if it isn't the volume's floor still Sealing, or
+     * Failed.
      */
     SealedAgain(u32),
     /**
@@ -376,7 +379,7 @@ Response :: union {
  * @return False for what changes something each time: allocating, giving back, committing, adding a generation, and
  *     making or deleting a snapshot, a clone or a volume; true for the rest, which are as good done again.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case OpenVolume(_) => true
         case Describe => true
@@ -423,7 +426,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Container]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Container]? {
     pair :: os.channel_for[Container](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

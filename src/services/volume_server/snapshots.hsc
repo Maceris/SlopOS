@@ -2,14 +2,14 @@ package volume_server
 
 import runtime from "base:runtime"
 import os from "std:os"
-import strings from "std:strings"
-import time from "std:time"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
 import read_only_dir from "std:os/slop_os/read_only_dir"
-import slopfs from "../../slopfs"
+import strings from "std:strings"
+import time from "std:time"
 import container from "../../protocols/container"
+import slopfs from "../../slopfs"
 
 /*
  * Snapshots through dir (decisions/0179): Snapshot takes one of the whole volume, Snapshots lists them, and
@@ -62,7 +62,13 @@ PastTree :: struct {
  *     be committed first; Unavailable if the container service didn't answer as it should; and OpenSnapshot's
  *     failures (open_snapshot).
  */
-snapshot_answer :: fn(server: ptr[mut Server], index: usize, request: dir.Request, name: u8[], out: ptr[mut os.Outgoing]) -> dir.Response {
+snapshot_answer :: fn(
+    server : ptr[mut Server],
+    index : usize,
+    request : dir.Request,
+    name : u8[],
+    out : ptr[mut os.Outgoing]
+) -> dir.Response {
     if index >= server.connections.count || server.connections[index].linked {
         return .Failed(.ReadOnly)
     }
@@ -75,8 +81,15 @@ snapshot_answer :: fn(server: ptr[mut Server], index: usize, request: dir.Reques
             made^ = .OwnSnapshotAt(cursor)
             into := os.Incoming.{}
             return match ask_built(&server.own, &asking, &into) {
-                case Snapshot(info) => dir.Response.SnapshotListed(files.Snapshot.{name = os.append(out, os.items(&into, info.name)),
-                    taken = info.created, next = cursor + 1})
+                case Snapshot(
+                    info
+                ) => dir.Response.SnapshotListed(
+                    files.Snapshot.{
+                        name = os.append(out, os.items(&into, info.name)),
+                        taken = info.created,
+                        next = cursor + 1,
+                    }
+                )
                 case NoMore => dir.Response.End
                 case _ => dir.Response.Failed(.Unavailable)
             }
@@ -95,7 +108,7 @@ snapshot_answer :: fn(server: ptr[mut Server], index: usize, request: dir.Reques
  * @return Snapshotted, its next 0; Failed: DeviceError if the commit failed, AlreadyExists if the name's taken,
  *     NoSpace without memory for the name, Unavailable for any other answer of the container service's.
  */
-snapshot_taken_now :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing]) -> dir.Response {
+snapshot_taken_now :: fn(server : ptr[mut Server], out : ptr[mut os.Outgoing]) -> dir.Response {
     if server.volume.dirty && !commit(server) {
         return .Failed(.DeviceError)
     }
@@ -112,7 +125,9 @@ snapshot_taken_now :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing]) -> 
     made^ = .TakeOwnSnapshot(container.OwnSnapshot.{snapshot = os.append(&asking, string_bytes(name)), now = taken})
     into := os.Incoming.{}
     return match ask_built(&server.own, &asking, &into) {
-        case Done => dir.Response.Snapshotted(files.Snapshot.{name = os.append(out, string_bytes(name)), taken = taken, next = 0})
+        case Done => dir.Response.Snapshotted(
+            files.Snapshot.{name = os.append(out, string_bytes(name)), taken = taken, next = 0}
+        )
         case AlreadyExists => dir.Response.Failed(.AlreadyExists)
         case _ => dir.Response.Failed(.Unavailable)
     }
@@ -128,7 +143,7 @@ snapshot_taken_now :: fn(server: ptr[mut Server], out: ptr[mut os.Outgoing]) -> 
  *     NotFound for no such snapshot or a directory not in it, NotADirectory for an object that isn't one there,
  *     NoSpace without a slot or memory, Unavailable if it couldn't be reached.
  */
-open_snapshot :: fn(server: ptr[mut Server], directory: u64, name: u8[]) -> dir.Response {
+open_snapshot :: fn(server : ptr[mut Server], directory : u64, name : u8[]) -> dir.Response {
     if name.count == 0 || name.count > slopfs.VOLUME_NAME_BYTES {
         return .Failed(.InvalidPath)
     }
@@ -165,12 +180,14 @@ open_snapshot :: fn(server: ptr[mut Server], directory: u64, name: u8[]) -> dir.
  * @return Its slot in pasts; NotFound for no such snapshot, NoSpace if every slot has something open or there's no
  *     memory, Unavailable if the container service or its blocks couldn't be reached.
  */
-past_named :: fn(server: ptr[mut Server], name: u8[]) -> Result[usize, files.FileError] {
+past_named :: fn(server : ptr[mut Server], name : u8[]) -> Result[usize, files.FileError] {
     free := server.pasts.count
     for &past, i in server.pasts {
         match past.tree {
             case Some(_) => {
-                if past.name_length == name.count && past.name_length <= past.name.count && same_name(past.name[0..<past.name_length], name) {
+                if past.name_length == name.count
+                    && past.name_length <= past.name.count
+                    && same_name(past.name[0..<past.name_length], name) {
                     return .Ok(i)
                 }
             }
@@ -218,10 +235,20 @@ past_named :: fn(server: ptr[mut Server], name: u8[]) -> Result[usize, files.Fil
             return .Error(.Unavailable)
         }
     }
-    device :: slopfs.Device.{context = cast[rawptr](&tree.reach), block_count = tree.reach.block_count, read = read_blocks,
-        write = refuse_write, flush = no_flush}
-    tree.nodes = slopfs.Nodes.{device = device, transaction = described.transaction, space = cast[rawptr](tree), allocate = refuse_allocate,
-        release = refuse_release}
+    device :: slopfs.Device.{
+        context = cast[rawptr](&tree.reach),
+        block_count = tree.reach.block_count,
+        read = read_blocks,
+        write = refuse_write,
+        flush = no_flush,
+    }
+    tree.nodes = slopfs.Nodes.{
+        device = device,
+        transaction = described.transaction,
+        space = cast[rawptr](tree),
+        allocate = refuse_allocate,
+        release = refuse_release,
+    }
     match slopfs.attach_volume(&tree.nodes, device, described.id, described.record, null) {
         case Ok(attached) => {
             attached.tree.lineage = described.lineage
@@ -253,7 +280,7 @@ past_named :: fn(server: ptr[mut Server], name: u8[]) -> Result[usize, files.Fil
  * @param b The other's; a different count is never the same.
  * @return Whether they're as long as each other, with the same bytes.
  */
-same_name :: fn(a: u8[], b: u8[]) -> bool {
+same_name :: fn(a : u8[], b : u8[]) -> bool {
     if a.count != b.count {
         return false
     }
@@ -272,7 +299,7 @@ same_name :: fn(a: u8[], b: u8[]) -> bool {
  * @param slot The snapshot's slot in pasts.
  * @return Whether a connection's past names it.
  */
-past_in_use :: fn(server: ptr[Server], slot: usize) -> bool {
+past_in_use :: fn(server : ptr[Server], slot : usize) -> bool {
     for connection, i in server.connections {
         if i < server.count && connection.kind != .Free && connection.past == slot + 1 {
             return true
@@ -287,7 +314,7 @@ past_in_use :: fn(server: ptr[Server], slot: usize) -> bool {
  * @param server The server, whose pasts may lose it.
  * @param slot The snapshot's slot in pasts; one past them, or free, is left.
  */
-let_go_if_unused :: fn(server: ptr[mut Server], slot: usize) {
+let_go_if_unused :: fn(server : ptr[mut Server], slot : usize) {
     if slot < server.pasts.count && !past_in_use(server, slot) {
         let_go_of_past(server, slot)
     }
@@ -300,7 +327,7 @@ let_go_if_unused :: fn(server: ptr[mut Server], slot: usize) {
  * @param server The server, whose pasts slot is left free.
  * @param slot The snapshot's slot in pasts; one past them, or free, is left.
  */
-let_go_of_past :: fn(server: ptr[mut Server], slot: usize) {
+let_go_of_past :: fn(server : ptr[mut Server], slot : usize) {
     if slot >= server.pasts.count {
         return void
     }
@@ -327,7 +354,7 @@ let_go_of_past :: fn(server: ptr[mut Server], slot: usize) {
  * @param past A connection's past: 0 for the live volume, a slot in pasts plus 1 for a snapshot's.
  * @return The volume; the live one for a past that names no snapshot being served.
  */
-volume_of_past :: fn(server: ptr[mut Server], past: usize) -> ptr[mut slopfs.Volume] {
+volume_of_past :: fn(server : ptr[mut Server], past : usize) -> ptr[mut slopfs.Volume] {
     if past == 0 || past > server.pasts.count {
         return server.volume
     }
@@ -344,7 +371,7 @@ volume_of_past :: fn(server: ptr[mut Server], past: usize) -> ptr[mut slopfs.Vol
  * @param from Unused.
  * @return False.
  */
-refuse_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
+refuse_write :: fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool {
     return false
 }
 
@@ -357,7 +384,7 @@ refuse_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool 
  * @param data Unused.
  * @return Null.
  */
-refuse_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
+refuse_allocate :: fn(context : rawptr, blocks : u64, owner : u64, data : bool) -> u64? {
     return null
 }
 
@@ -370,4 +397,4 @@ refuse_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u
  * @param owner Unused.
  * @param birth Unused.
  */
-refuse_release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64) {}
+refuse_release :: fn(context : rawptr, address : u64, blocks : u64, owner : u64, birth : u64) {}

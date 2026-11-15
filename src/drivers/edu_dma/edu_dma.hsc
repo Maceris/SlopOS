@@ -7,8 +7,8 @@
  */
 package edu_dma
 
-import runtime from "base:runtime"
 import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
 import pci from "../../pci"
@@ -60,8 +60,18 @@ EDU_DMA_LIMIT : u64 : 1 << 28
  *     mapped, 3 if BAR 0 couldn't, 4 if its DMA memory couldn't be made or placed, 5 if no port could be made to wait
  *     on, 6 if it wasn't stopped in time. Killed, it returns nothing.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain
+) -> int {
     block :: slop_os.startup_block()
     to :: log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     config_at :: driver_kit.map_device(config) or_return 2
@@ -115,6 +125,6 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  * @param offset The register's offset in bytes, 8-byte aligned.
  * @param value What's written.
  */
-write_u64 :: fn(edu: u64, offset: u64, value: u64) {
+write_u64 :: fn(edu : u64, offset : u64, value : u64) {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](edu + offset), value)
 }

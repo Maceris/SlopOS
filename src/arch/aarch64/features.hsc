@@ -69,7 +69,7 @@ FEATURE_FIELDS :: FeatureField.[
     .{.Aarch64Asid16, .Mmfr0, 4, 2},
     // HAFDBS: the access flag set by the hardware as a page is touched
     .{.Aarch64HardwareAccessFlag, .Mmfr1, 0, 1},
-    .{.Aarch64Pan, .Mmfr1, 20, 1},
+    .{.Aarch64Pan, .Mmfr1, 20, 1}
 ]
 
 /**
@@ -87,7 +87,7 @@ BASELINE :: slop_os.CpuFeature.[.Aarch64Fp, .Aarch64AdvSimd, .Aarch64Atomics, .A
  * @param feature The feature asked about.
  * @return True if features has it.
  */
-has :: fn(features: ptr[slop_os.CpuFeatures], feature: slop_os.CpuFeature) -> bool {
+has :: fn(features : ptr[slop_os.CpuFeatures], feature : slop_os.CpuFeature) -> bool {
     return slop_os.has_feature(features, feature)
 }
 
@@ -116,7 +116,7 @@ detect_features :: fn() -> slop_os.CpuFeatures {
  *     field is unsigned, there at minimum or above.
  * @return True if the calling CPU has the feature, as the field says.
  */
-feature_present :: fn(field: FeatureField) -> bool {
+feature_present :: fn(field : FeatureField) -> bool {
     value :: (id_register(field.register) >> cast[u64](field.shift)) & 0xf
     if field.feature == .Aarch64Fp || field.feature == .Aarch64AdvSimd {
         return value != 0xf
@@ -130,7 +130,7 @@ feature_present :: fn(field: FeatureField) -> bool {
  * @param register Which register.
  * @return The register's whole 64-bit value.
  */
-id_register :: fn(register: IdRegister) -> u64 {
+id_register :: fn(register : IdRegister) -> u64 {
     return match register {
         case .Pfr0 => aarch64.read_system_register(.ID_AA64PFR0_EL1)
         case .Pfr1 => aarch64.read_system_register_encoded(3, 0, 0, 4, 1)
@@ -148,7 +148,7 @@ id_register :: fn(register: IdRegister) -> u64 {
  * @return The missing feature's name, as Arm's manuals name it (feature_name), a static string; or null if the CPU
  *     has the whole baseline.
  */
-missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
+missing_baseline_feature :: fn(features : ptr[slop_os.CpuFeatures]) -> string? {
     for feature in BASELINE {
         if !has(features, feature) {
             return feature_name(feature)
@@ -163,7 +163,7 @@ missing_baseline_feature :: fn(features: ptr[slop_os.CpuFeatures]) -> string? {
  * @param feature The feature, one of BASELINE's.
  * @return Its name, a static string; "a feature" for one that isn't in BASELINE.
  */
-feature_name :: fn(feature: slop_os.CpuFeature) -> string {
+feature_name :: fn(feature : slop_os.CpuFeature) -> string {
     return match feature {
         case .Aarch64Fp => "floating point"
         case .Aarch64AdvSimd => "Advanced SIMD"

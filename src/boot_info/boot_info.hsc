@@ -81,7 +81,7 @@ BootInfo :: struct {
  *     stay valid until entry loads a carrier block of its own.
  * @param entry Where the CPU begins in the kernel, on its boot stack.
  */
-StartCpu :: alias fn(cpu: ptr[BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: CpuEntry)
+StartCpu :: alias fn(cpu : ptr[BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry : CpuEntry)
 
 /** Where a started CPU begins in the kernel. */
 CpuEntry :: alias fn() #never_returns

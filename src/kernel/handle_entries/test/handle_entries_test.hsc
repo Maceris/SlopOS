@@ -32,7 +32,7 @@ Table :: struct {
  *     state outlives check_model, and so every thread.
  * @return The test's state.
  */
-test_at :: fn(address: u64) -> ptr[mut testing.T] {
+test_at :: fn(address : u64) -> ptr[mut testing.T] {
     return cast[ptr[mut testing.T]](cast[rawptr](cast[uintptr](address)))
 }
 
@@ -42,11 +42,11 @@ test_at :: fn(address: u64) -> ptr[mut testing.T] {
  * @param t The test's state.
  * @return Its address.
  */
-address_of_test :: fn(t: ptr[mut testing.T]) -> u64 {
+address_of_test :: fn(t : ptr[mut testing.T]) -> u64 {
     return cast[u64](cast[uintptr](cast[rawptr](t)))
 }
 
-table_of :: fn(data: any) -> ptr[mut Table] {
+table_of :: fn(data : any) -> ptr[mut Table] {
     return cast[ptr[ptr[mut Table]]](data.data)^
 }
 
@@ -57,8 +57,11 @@ table_of :: fn(data: any) -> ptr[mut Table] {
  * @param b The other.
  * @return True if every field is.
  */
-same :: fn(a: handle_entries.Held, b: handle_entries.Held) -> bool {
-    return a.object == b.object && a.generation == b.generation && a.kind == b.kind && a.rights == b.rights
+same :: fn(a : handle_entries.Held, b : handle_entries.Held) -> bool {
+    return a.object == b.object
+        && a.generation == b.generation
+        && a.kind == b.kind
+        && a.rights == b.rights
         && a.owning == b.owning
 }
 
@@ -90,7 +93,12 @@ closer : runtime.ThreadFunction : fn(data #escaping : any) {
     testing.expect(test_at(table.t), (emptied is_some) && next == 1, "the first handle is closed, to generation 1")
     concurrency.unlock(&table.lock)
     concurrency.lock(&table.lock)
-    testing.expect_eq(test_at(table.t), handle_entries.fill(&table.entry, SECOND), 1, "the second handle is at generation 1")
+    testing.expect_eq(
+        test_at(table.t),
+        handle_entries.fill(&table.entry, SECOND),
+        1,
+        "the second handle is at generation 1"
+    )
     concurrency.unlock(&table.lock)
 }
 
@@ -106,7 +114,7 @@ race_body : runtime.ThreadFunction : fn(data #escaping : any) {
     testing.join(second)
 }
 
-reads_racing_a_close_and_reuse_see_one_whole_handle #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+reads_racing_a_close_and_reuse_see_one_whole_handle #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     table :: runtime.new(Table)
     defer runtime.free(table)
     table.t = address_of_test(t)
@@ -117,7 +125,7 @@ reads_racing_a_close_and_reuse_see_one_whole_handle #test :: fn(t: ptr[mut testi
 }
 
 /** An entry emptied gives back what it held, and its handle fails; one whose generation wraps says so. */
-emptying_advances_the_generation #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+emptying_advances_the_generation #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     entry := handle_entries.HandleEntry.{}
     handle_entries.start(&entry, 0xffff)
     testing.expect_eq(t, handle_entries.fill(&entry, FIRST), 0xffff, "filled at its generation")

@@ -317,7 +317,7 @@ Response :: union {
  * @return False for Claim, which sent again would claim another device, and Reissue; true for the others, which
  *     the same client is given again, or which do what they did once more.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Claim(_) => false
         case Connect(_) => true
@@ -350,7 +350,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Platform]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Platform]? {
     pair :: os.channel_for[Platform](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

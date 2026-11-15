@@ -3,12 +3,12 @@ package disk_check
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import testing from "std:testing"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
 import files from "std:os/slop_os/files"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /*
@@ -64,8 +64,10 @@ new_buffer :: fn() -> Buffer? {
  * @return A new handle to its memory, to read, write and transfer, which the caller sends, moving it; null if it
  *     couldn't be duplicated.
  */
-handed :: fn(buffer: ptr[Buffer]) -> slop_os.Memory? {
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+handed :: fn(buffer : ptr[Buffer]) -> slop_os.Memory? {
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](buffer.memory), rights) {
         case Ok(copy) => return cast[slop_os.Memory](copy)
         case Error(error) => return null
@@ -78,7 +80,7 @@ handed :: fn(buffer: ptr[Buffer]) -> slop_os.Memory? {
  * @param buffer The check's buffer, mapped at its address, readable and writable.
  * @return Its TRANSFER_BYTES bytes, a view good while it's mapped.
  */
-window_of :: fn(buffer: ptr[Buffer]) -> mut u8[] {
+window_of :: fn(buffer : ptr[Buffer]) -> mut u8[] {
     return view_of(cast[ptr[mut u8]](buffer.address), cast[usize](TRANSFER_BYTES))
 }
 
@@ -91,10 +93,19 @@ window_of :: fn(buffer: ptr[Buffer]) -> mut u8[] {
  * @return The buffer, in given, good while the tests run; Error(Failed), recorded, if memory or addresses
  *     couldn't be had for it, or it couldn't be mapped.
  */
-buffer_of :: fn(t: ptr[mut testing.T], given: ptr[mut Given], location := #caller_location) -> Result[ptr[Buffer], testing.Stopped] {
+buffer_of :: fn(
+    t : ptr[mut testing.T],
+    given : ptr[mut Given],
+    location := #caller_location
+) -> Result[ptr[Buffer], testing.Stopped] {
     if !given.has_buffer {
         made :: new_buffer()
-        given.buffer = testing.require_some(t, made, "the budget has room for a buffer for file connections, mapped here", location)?
+        given.buffer = testing.require_some(
+            t,
+            made,
+            "the budget has room for a buffer for file connections, mapped here",
+            location
+        )?
         given.has_buffer = true
     }
     return .Ok(&given.buffer)
@@ -109,7 +120,7 @@ buffer_of :: fn(t: ptr[mut testing.T], given: ptr[mut Given], location := #calle
  * @return Ok once it's run; Error if the buffer or a port couldn't be made, the module couldn't be read, or the file
  *     couldn't be written, its directory made, or it moved.
  */
-the_system_volume_reads_writes_and_moves_files #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_system_volume_reads_writes_and_moves_files #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     system :: system_of(t, given)?
     buffer :: buffer_of(t, given)?
@@ -118,8 +129,11 @@ the_system_volume_reads_writes_and_moves_files #test :: fn(t: ptr[mut testing.T]
     system_port :: testing.require_some(t, bound, "the budget has room for a port")?
     from_volume : u8[..]
     defer runtime.array_free(&from_volume)
-    testing.require(t, read_whole(system.end, system_port, MODULE_ON_VOLUME, buffer, &from_volume),
-        "the image builder put hello's module on the system volume")?
+    testing.require(
+        t,
+        read_whole(system.end, system_port, MODULE_ON_VOLUME, buffer, &from_volume),
+        "the image builder put hello's module on the system volume"
+    )?
     testing.require_ne(t, from_volume.count, 0, "hello's module isn't empty")?
     // The same bytes as the copy on the ESP
     match given.working_directory {
@@ -128,8 +142,11 @@ the_system_volume_reads_writes_and_moves_files #test :: fn(t: ptr[mut testing.T]
             esp_port :: testing.require_some(t, esp_bound, "the budget has room for a port")?
             from_esp : u8[..]
             defer runtime.array_free(&from_esp)
-            testing.require(t, read_whole(partition.end, esp_port, MODULE_ON_ESP, buffer, &from_esp),
-                "the test disk keeps the generation's modules on the EFI system partition too")?
+            testing.require(
+                t,
+                read_whole(partition.end, esp_port, MODULE_ON_ESP, buffer, &from_esp),
+                "the test disk keeps the generation's modules on the EFI system partition too"
+            )?
             testing.expect_eq(t, from_esp.count, from_volume.count, "both copies of hello's module are the same size")
             differs : usize? = null
             for byte, i in from_esp {
@@ -137,16 +154,30 @@ the_system_volume_reads_writes_and_moves_files #test :: fn(t: ptr[mut testing.T]
                     differs = i
                 }
             }
-            testing.expect_none(t, differs, "both copies of hello's module have the same bytes, the system volume's read whole through its server")
+            testing.expect_none(
+                t,
+                differs,
+                "both copies of hello's module have the same bytes, the system volume's read whole through its server"
+            )
         }
         case None => {}
     }
-    // A file of its own, written, synced and read back; how long making and syncing it took is a benchmark (decisions/0112)
+    /*
+     * A file of its own, written, synced and read back; how long making and syncing it took is a benchmark
+     * (decisions/0112)
+     */
     started :: slop_os.clock_monotonic() or_else 0
-    testing.require(t, write_new(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, buffer),
-        "the system volume takes a new file, written and synced")?
+    testing.require(
+        t,
+        write_new(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, buffer),
+        "the system volume takes a new file, written and synced"
+    )?
     runtime.log_info("perf: file_create_sync %", (slop_os.clock_monotonic() or_else 0) - started)
-    testing.expect(t, holds(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, buffer), "the file reads back as written, once synced")
+    testing.expect(
+        t,
+        holds(system.end, system_port, SYSTEM_FILE, SYSTEM_TEXT, buffer),
+        "the file reads back as written, once synced"
+    )
     // Moved into a directory it makes, and synced
     into := os.Incoming.{}
     out := os.Outgoing.{}
@@ -158,7 +189,9 @@ the_system_volume_reads_writes_and_moves_files #test :: fn(t: ptr[mut testing.T]
     }
     out = os.Outgoing.{}
     renaming :: os.begin[dir.Request](&out)
-    renaming^ = .Rename(dir.Rename.{from = bytes_of(&out, SYSTEM_FILE), to = bytes_of(&out, "made by the guest/moved.txt")})
+    renaming^ = .Rename(
+        dir.Rename.{from = bytes_of(&out, SYSTEM_FILE), to = bytes_of(&out, "made by the guest/moved.txt")}
+    )
     match ask_dir(system.end, system_port, &out, &into) {
         case Done => {}
         case _ => return stopped(t, "a file moves into a directory beside it")
@@ -203,7 +236,7 @@ TYPED_TEXT :: "kept with its type"
  * @return Ok once it's run; Error if a port or a second connection couldn't be made, or the note couldn't be written
  *     or read back.
  */
-typed_files_keep_their_type #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+typed_files_keep_their_type #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     system :: system_of(t, given)?
     bound :: os.port_for(slop_os.startup_block().budget, system.end)
@@ -247,7 +280,11 @@ typed_files_keep_their_type #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
             esp_bound :: os.port_for(slop_os.startup_block().budget, partition.end)
             esp_port :: testing.require_some(t, esp_bound, "the budget has room for a port")?
             fat_connected :: second_connection(partition, esp_port)
-            fat :: testing.require_some(t, fat_connected, "the EFI system partition takes a second connection to its root")?
+            fat :: testing.require_some(
+                t,
+                fat_connected,
+                "the EFI system partition takes a second connection to its root"
+            )?
             defer os.close_directory(fat)
             on_fat :: os.write_typed_in[CheckedNote](fat, "A typed note.bin", os.value_bytes(&out))
             testing.expect_eq(t, on_fat, wrong_type, "FAT keeps no types, so it takes no typed file")
@@ -266,7 +303,7 @@ typed_files_keep_their_type #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
  * @return The new connection, as a Directory, which the caller closes with os.close_directory; null if a channel or
  *     its port couldn't be made, or Connect couldn't be sent.
  */
-second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> os.Directory? {
+second_connection :: fn(directory : os.Channel[dir.Dir], port : slop_os.Port) -> os.Directory? {
     budget :: slop_os.startup_block().budget
     pair :: os.channel_for[dir.Dir](budget, 0) or_return null
     out := os.Outgoing.{}
@@ -295,7 +332,13 @@ second_connection :: fn(directory: os.Channel[dir.Dir], port: slop_os.Port) -> o
  * @return Whether it was read, up to MAX_FILE_BYTES and a transfer past them; false if it couldn't be opened or read,
  *     what's read so far left in bytes.
  */
-read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
+read_whole :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    path : string,
+    buffer : ptr[Buffer],
+    bytes : ptr[mut u8[..]]
+) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     opening :: os.begin[dir.Request](&out)
@@ -317,7 +360,13 @@ read_whole :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer:
  * @return Whether it was read, up to MAX_FILE_BYTES and a transfer past them; false if it couldn't be opened or read,
  *     what's read so far left in bytes.
  */
-read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
+read_whole_read_only :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    path : string,
+    buffer : ptr[Buffer],
+    bytes : ptr[mut u8[..]]
+) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     opening :: os.begin[read_only_dir.Request](&out)
@@ -338,7 +387,11 @@ read_whole_read_only :: fn(end: slop_os.Channel, port: slop_os.Port, path: strin
  * @return Whether it was read: true once a transfer is short, or bytes is past MAX_FILE_BYTES; false if a port, the
  *     buffer's handle, or a read failed.
  */
-read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: ptr[Buffer], bytes: ptr[mut u8[..]]) -> bool {
+read_file_whole :: fn(
+    opened : os.Channel[read_only_file.ReadOnlyFile],
+    buffer : ptr[Buffer],
+    bytes : ptr[mut u8[..]]
+) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     defer slop_os.handle_close(cast[slop_os.Handle](opened.end))
@@ -389,7 +442,13 @@ read_file_whole :: fn(opened: os.Channel[read_only_file.ReadOnlyFile], buffer: p
  * @param buffer The buffer the file's server writes from; text is copied into it.
  * @return Whether it was made, written whole and synced.
  */
-write_new :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, buffer: ptr[Buffer]) -> bool {
+write_new :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    path : string,
+    text : string,
+    buffer : ptr[Buffer]
+) -> bool {
     return write_new_bytes(end, port, path, text, text.count, buffer)
 }
 
@@ -404,7 +463,14 @@ write_new :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: st
  * @param buffer The buffer the file's server writes from.
  * @return Whether it was made, count bytes written, and synced; the file connection is closed either way.
  */
-write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, text: string, count: usize, buffer: ptr[Buffer]) -> bool {
+write_new_bytes :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    path : string,
+    text : string,
+    count : usize,
+    buffer : ptr[Buffer]
+) -> bool {
     into := os.Incoming.{}
     out := os.Outgoing.{}
     opening :: os.begin[dir.Request](&out)
@@ -425,7 +491,11 @@ write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, te
             window[i] = cast[u8](character)
         }
     }
-    requests := file.Request.[.UseBuffer(memory), .Write(files.Transfer.{offset = 0, count = cast[u32](count), buffer_offset = 0}), .Sync]
+    requests := file.Request.[
+        .UseBuffer(memory),
+        .Write(files.Transfer.{offset = 0, count = cast[u32](count), buffer_offset = 0}),
+        .Sync
+    ]
     for request in requests {
         out = os.Outgoing.{}
         made :: os.begin[file.Request](&out)
@@ -452,7 +522,12 @@ write_new_bytes :: fn(end: slop_os.Channel, port: slop_os.Port, path: string, te
  * @param into Where the answer is read into.
  * @return The answer, a copy; Unsupported if it couldn't be sent or the connection failed.
  */
-ask_read_only_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> read_only_file.Response {
+ask_read_only_file :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> read_only_file.Response {
     if read_only_file.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -474,7 +549,12 @@ ask_read_only_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut 
  * @param into Where the answer is read into.
  * @return The answer, a copy; Unsupported if it couldn't be sent or the connection failed.
  */
-ask_file :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> file.Response {
+ask_file :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> file.Response {
     if file.send_request(end, port, out) is_some {
         return .Unsupported
     }

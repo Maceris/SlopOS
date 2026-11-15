@@ -2,11 +2,11 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
-import concurrency from "std:concurrency"
-import frames from "frames"
 import robustness from "../robustness"
+import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -92,11 +92,17 @@ TagSet :: struct {
  * @error OutOfTags Every address-space tag is in use.
  * @error OwnerGone The owner is being destroyed, so the new space is destroyed.
  */
-create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> (made #unrestricted : Result[ptr[mut AddressSpace], SpaceError]) {
+create_address_space :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64
+) -> (made #unrestricted : Result[ptr[mut AddressSpace], SpaceError]) {
     object := cast[u64](0)
     match new_object(kernel, .AddressSpace, budget, frames.FRAME_SIZE) {
         case Ok(address) => object = address
-        case Error(error) => return .Error(if error == .BudgetExceeded { SpaceError.BudgetExceeded } else { SpaceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(if error == .BudgetExceeded { SpaceError.BudgetExceeded } else { SpaceError.OutOfMemory })
     }
     space :: cast[ptr[mut AddressSpace]](object)
     tag := cast[arch_interface.AddressSpaceTag](0)
@@ -137,7 +143,7 @@ create_address_space :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> 
  * @param kernel The kernel, which destroys each thread through destroy_object; the caller holds no lock of the space's.
  * @param space The space, being destroyed.
  */
-destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
+destroy_address_space :: fn(kernel : ptr[mut Kernel], space : ptr[mut AddressSpace]) {
     take_down_space_mappings(kernel, space)
     loop {
         lock_at(&space.threads_lock, .SpaceThreads)
@@ -163,7 +169,7 @@ destroy_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
  * @param kernel The kernel, whose frames, channel cores and tags they go back to.
  * @param space The space, destroyed, its grace period passed.
  */
-release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace]) {
+release_address_space :: fn(kernel : ptr[mut Kernel], space : ptr[mut AddressSpace]) {
     if cast[u64](space.table.root) == 0 {
         return void
     }
@@ -205,7 +211,7 @@ release_address_space :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace
  * @return True if it's on the list, so destroying the space destroys it; false if the space is dying, with the thread
  *     left off.
  */
-join_space :: fn(space: ptr[mut AddressSpace], thread: ptr[mut Thread]) -> bool {
+join_space :: fn(space : ptr[mut AddressSpace], thread : ptr[mut Thread]) -> bool {
     lock_at(&space.threads_lock, .SpaceThreads)
     defer unlock_at(&space.threads_lock, .SpaceThreads)
     if intrinsics.atomic_load_u32_acquire(&space.header.dying) != 0 {
@@ -228,7 +234,7 @@ join_space :: fn(space: ptr[mut AddressSpace], thread: ptr[mut Thread]) -> bool 
  *
  * @param thread The thread, whose space must still be valid.
  */
-leave_space :: fn(thread: ptr[mut Thread]) {
+leave_space :: fn(thread : ptr[mut Thread]) {
     space :: thread.space
     lock_at(&space.threads_lock, .SpaceThreads)
     defer unlock_at(&space.threads_lock, .SpaceThreads)
@@ -269,7 +275,7 @@ leave_space :: fn(thread: ptr[mut Thread]) {
  * @return A tag from 1 up, marked used, until free_tag; tag 0 with only one tag (no PCIDs), as every switch flushes
  *     the TLB then anyway; or null if every tag is in use.
  */
-allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
+allocate_tag :: fn(kernel : ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
     count :: cast[usize](arch.address_space_tag_count())
     if count <= 1 {
         return cast[arch_interface.AddressSpaceTag](0)
@@ -299,7 +305,7 @@ allocate_tag :: fn(kernel: ptr[mut Kernel]) -> arch_interface.AddressSpaceTag? {
  * @param kernel The kernel, whose tags it goes back to.
  * @param tag The tag; 0, as allocate_tag gives with only one tag, clears a bit no tag uses.
  */
-free_tag :: fn(kernel: ptr[mut Kernel], tag: arch_interface.AddressSpaceTag) {
+free_tag :: fn(kernel : ptr[mut Kernel], tag : arch_interface.AddressSpaceTag) {
     index :: cast[usize](cast[u16](tag))
     tags :: &kernel.tags
     lock_at(&tags.lock, .Tags)
@@ -327,8 +333,14 @@ free_tag :: fn(kernel: ptr[mut Kernel], tag: arch_interface.AddressSpaceTag) {
  * @error OutOfMemory No frame for a page table.
  * @error BudgetExceeded The space's budget couldn't pay for a page table.
  */
-map_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
-    mapping: arch_interface.Mapping) -> Result[void, SpaceError] {
+map_user :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    physical : u64,
+    size : u64,
+    mapping : arch_interface.Mapping
+) -> Result[void, SpaceError] {
     mapped, error :: map_pages(kernel, space, address, physical, size, mapping)
     match error {
         case Some(failure) => {
@@ -352,8 +364,14 @@ map_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u
  * @return error Why it stopped if it didn't map them all: AlreadyMapped, InvalidAddress, OutOfMemory or
  *     BudgetExceeded; null if it did.
  */
-map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
-    mapping: arch_interface.Mapping) -> (mapped: u64, error: SpaceError?) {
+map_pages :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    physical : u64,
+    size : u64,
+    mapping : arch_interface.Mapping
+) -> (mapped : u64, error : SpaceError?) {
     lock_at(&space.lock, .Space)
     defer unlock_at(&space.lock, .Space)
     return map_pages_locked(kernel, space, address, physical, size, mapping)
@@ -374,15 +392,27 @@ map_pages :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: 
  * @return error Why it stopped if it didn't map them all: AlreadyMapped for a page mapped already, InvalidAddress
  *     for any other refusal from the page table, OutOfMemory or BudgetExceeded for a page table; null if it did.
  */
-map_pages_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64, size: u64,
-    mapping: arch_interface.Mapping) -> (mapped: u64, error: SpaceError?) {
+map_pages_locked :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    physical : u64,
+    size : u64,
+    mapping : arch_interface.Mapping
+) -> (mapped : u64, error : SpaceError?) {
     tables : arch_interface.TableFrames
     defer give_back_user_tables(kernel, space, &tables)
     for page in 0..<size / frames.FRAME_SIZE {
         offset :: page * frames.FRAME_SIZE
         loop {
-            result :: arch.map(&space.table, cast[arch_interface.VirtualAddress](address + offset),
-                cast[arch_interface.PhysicalAddress](physical + offset), .Size4K, mapping, &tables)
+            result :: arch.map(
+                &space.table,
+                cast[arch_interface.VirtualAddress](address + offset),
+                cast[arch_interface.PhysicalAddress](physical + offset),
+                .Size4K,
+                mapping,
+                &tables
+            )
             match result {
                 case Ok => break
                 case Error(error) => {
@@ -416,13 +446,24 @@ map_pages_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], ad
  * @return True if it's mapped; false if any page of it is mapped already, as a fault in another of its pages may have
  *     done, or the address is refused, or no page table could be had or paid for.
  */
-map_large_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, physical: u64,
-    mapping: arch_interface.Mapping) -> bool {
+map_large_locked :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    physical : u64,
+    mapping : arch_interface.Mapping
+) -> bool {
     tables : arch_interface.TableFrames
     defer give_back_user_tables(kernel, space, &tables)
     loop {
-        match arch.map(&space.table, cast[arch_interface.VirtualAddress](address), cast[arch_interface.PhysicalAddress](physical), .Size2M,
-            mapping, &tables) {
+        match arch.map(
+            &space.table,
+            cast[arch_interface.VirtualAddress](address),
+            cast[arch_interface.PhysicalAddress](physical),
+            .Size2M,
+            mapping,
+            &tables
+        ) {
             case Ok => return true
             case Error(error) => {
                 if error != .NeedTableFrames || (refill_user_tables(kernel, space, &tables) is_some) {
@@ -448,7 +489,7 @@ map_large_locked :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], ad
  * @param address The user virtual address of the range, 4 KiB-aligned.
  * @param size The range's size in bytes, a multiple of 4 KiB; any remainder isn't unmapped.
  */
-unmap_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, size: u64) {
+unmap_user :: fn(kernel : ptr[mut Kernel], space : ptr[mut AddressSpace], address : u64, size : u64) {
     pages :: size / frames.FRAME_SIZE
     generation :: intrinsics.atomic_load_u32_acquire(&space.header.generation)
     flush : arch_interface.TlbBatch
@@ -483,21 +524,36 @@ unmap_user :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address:
  * @param flush Where the TLB entries to flush go, which the caller shoots down.
  * @return The index of the page it got to: pages, or more after a large page, when it's done; less when freed filled.
  */
-unmap_some :: fn(table: ptr[mut arch.PageTable], address: u64, first: u64, pages: u64, freed: ptr[mut arch_interface.FreedTables],
-    flush: ptr[mut arch_interface.TlbBatch]) -> u64 {
+unmap_some :: fn(
+    table : ptr[mut arch.PageTable],
+    address : u64,
+    first : u64,
+    pages : u64,
+    freed : ptr[mut arch_interface.FreedTables],
+    flush : ptr[mut arch_interface.TlbBatch]
+) -> u64 {
     page := first
     loop {
         if page >= pages {
             break
         }
-        result :: arch.unmap(table, cast[arch_interface.VirtualAddress](address + page * frames.FRAME_SIZE), .Size4K, freed, flush)
+        result :: arch.unmap(
+            table,
+            cast[arch_interface.VirtualAddress](address + page * frames.FRAME_SIZE),
+            .Size4K,
+            freed,
+            flush
+        )
         match result {
             case Ok(physical) => page += 1
             case Error(error) => {
                 if error == .NeedFreedSpace {
                     break
                 }
-                // A large page of anonymous memory (decisions/0129): it's unmapped whole, as the mapping holds all of it
+                /*
+                 * A large page of anonymous memory (decisions/0129): it's unmapped whole, as the mapping holds all of
+                 * it
+                 */
                 if error == .PartOfLargerPage {
                     large :: (address + page * frames.FRAME_SIZE) & ~(LARGE_PAGE - 1)
                     match arch.unmap(table, cast[arch_interface.VirtualAddress](large), .Size2M, freed, flush) {
@@ -528,7 +584,11 @@ unmap_some :: fn(table: ptr[mut arch.PageTable], address: u64, first: u64, pages
  * @return Null once tables holds four; BudgetExceeded if the budget couldn't pay for a frame, or OutOfMemory if
  *     there was no frame, its charge given back.
  */
-refill_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], tables: ptr[mut arch_interface.TableFrames]) -> SpaceError? {
+refill_user_tables :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    tables : ptr[mut arch_interface.TableFrames]
+) -> SpaceError? {
     cache :: &per_cpu().frame_cache
     for i in cast[usize](tables.count)..<4 {
         if !charge_more(cast[u64](space), frames.FRAME_SIZE) {
@@ -536,7 +596,10 @@ refill_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], 
         }
         match frames.take_frame(cache, &kernel.frames) {
             case Ok(frame) => {
-                intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
+                intrinsics.mem_zero(
+                    cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)),
+                    cast[usize](frames.FRAME_SIZE)
+                )
                 tables.frames[i] = frame
                 tables.count += 1
             }
@@ -556,7 +619,11 @@ refill_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], 
  * @param space The space whose budget paid for them.
  * @param tables The unused frames; its count is 0 after.
  */
-give_back_user_tables :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], tables: ptr[mut arch_interface.TableFrames]) {
+give_back_user_tables :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    tables : ptr[mut arch_interface.TableFrames]
+) {
     uncharge(cast[u64](space), space.header.generation, cast[u64](tables.count) * frames.FRAME_SIZE)
     give_back_tables(kernel, tables)
 }

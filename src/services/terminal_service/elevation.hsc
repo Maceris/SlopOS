@@ -11,14 +11,14 @@ package terminal_service
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import text_buffer from "std:text_buffer"
 import terminal from "std:os/slop_os/terminal"
+import text_buffer from "std:text_buffer"
 import time from "std:time"
 import accounts from "../../protocols/accounts"
-import prompt from "../../protocols/prompt"
-import power as power_protocol from "../../protocols/power"
-import trace from "../../protocols/trace"
 import events from "../../protocols/events"
+import power as power_protocol from "../../protocols/power"
+import prompt from "../../protocols/prompt"
+import trace from "../../protocols/trace"
 import screen from "../../screen"
 
 /** The status line's text while the elevation screen is up. */
@@ -37,19 +37,47 @@ ELEVATION_FIELDS :: 5
  *
  * @param service The service, whose active view has an Account request waiting (asking is true).
  */
-enter_elevation :: fn(service: ptr[mut Service]) {
+enter_elevation :: fn(service : ptr[mut Service]) {
     service.attention = false
     service.elevating = true
     kind :: view(service).ask.kind
-    runtime.log_info("elevation: % asks %", bytes_text(first_of(view(service).ask.requester[0..<view(service).ask.requester.count],
-        view(service).ask.requester_count)), if kind == .ShutDown { "to shut down" } else if kind == .Restart { "to restart" }
-        else if is_debug(kind) { "to debug a program" } else if kind == .Trace { "to trace the system" }
-        else if kind == .SystemLog { "to read the system's log" } else if kind == .Network { "to reach the network" }
-        else if kind == .AddKey { "to add a key" } else if kind == .RemoveKey { "to remove a key" }
-        else { "for an account" })
+    runtime.log_info(
+        "elevation: % asks %",
+        bytes_text(
+            first_of(
+                view(service).ask.requester[0..<view(service).ask.requester.count],
+                view(service).ask.requester_count
+            )
+        ),
+        if kind == .ShutDown {
+            "to shut down"
+        }
+        else if kind == .Restart {
+            "to restart"
+        }
+        else if is_debug(kind) {
+            "to debug a program"
+        }
+        else if kind == .Trace {
+            "to trace the system"
+        }
+        else if kind == .SystemLog {
+            "to read the system's log"
+        }
+        else if kind == .Network {
+            "to reach the network"
+        }
+        else if kind == .AddKey {
+            "to add a key"
+        }
+        else if kind == .RemoveKey { "to remove a key" } else { "for an account" }
+    )
     say(service, "")
     // The user's own program needs only their say; anything else, the administrator's
-    setup_step(service, if kind == .Debug || kind == .Network || is_keys(kind) { SetupStep.Confirm } else { SetupStep.AdminName })
+    setup_step(
+        service,
+        if kind == .Debug || kind == .Network || is_keys(kind) { SetupStep.Confirm } else { SetupStep.AdminName }
+    )
     update_status(service)
 }
 
@@ -59,8 +87,13 @@ enter_elevation :: fn(service: ptr[mut Service]) {
  * @param kind The kind.
  * @return True for an account, a shutdown and a restart.
  */
-is_elevation :: fn(kind: prompt.Kind) -> bool {
-    return kind == .Account || is_power(kind) || is_debug(kind) || kind == .Trace || kind == .SystemLog || kind == .Network
+is_elevation :: fn(kind : prompt.Kind) -> bool {
+    return kind == .Account
+        || is_power(kind)
+        || is_debug(kind)
+        || kind == .Trace
+        || kind == .SystemLog
+        || kind == .Network
         || is_keys(kind)
 }
 
@@ -70,7 +103,7 @@ is_elevation :: fn(kind: prompt.Kind) -> bool {
  * @param kind The kind.
  * @return True for Debug and DebugOther.
  */
-is_debug :: fn(kind: prompt.Kind) -> bool {
+is_debug :: fn(kind : prompt.Kind) -> bool {
     return kind == .Debug || kind == .DebugOther
 }
 
@@ -81,7 +114,7 @@ is_debug :: fn(kind: prompt.Kind) -> bool {
  * @param kind The kind.
  * @return True for those.
  */
-is_administrators :: fn(kind: prompt.Kind) -> bool {
+is_administrators :: fn(kind : prompt.Kind) -> bool {
     return is_power(kind) || kind == .DebugOther || kind == .Trace || kind == .SystemLog
 }
 
@@ -92,7 +125,7 @@ is_administrators :: fn(kind: prompt.Kind) -> bool {
  * @param service The service, whose power connection is asked.
  * @return The connection; null without a power connection, or if the supervisor refused.
  */
-events_connection :: fn(service: ptr[mut Service]) -> os.Channel[events.Events]? {
+events_connection :: fn(service : ptr[mut Service]) -> os.Channel[events.Events]? {
     connection :: service.power or_return null
     port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -119,7 +152,7 @@ events_connection :: fn(service: ptr[mut Service]) -> os.Channel[events.Events]?
  * @param service The service, whose power connection is asked.
  * @return The connection, for the program that asked; null without a power connection, or if the supervisor refused.
  */
-trace_connection :: fn(service: ptr[mut Service]) -> os.Channel[trace.Trace]? {
+trace_connection :: fn(service : ptr[mut Service]) -> os.Channel[trace.Trace]? {
     connection :: service.power or_return log_none("no power connection")
     port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return log_none("no port")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -146,7 +179,7 @@ trace_connection :: fn(service: ptr[mut Service]) -> os.Channel[trace.Trace]? {
  * @param kind The kind.
  * @return True for ShutDown and Restart.
  */
-is_power :: fn(kind: prompt.Kind) -> bool {
+is_power :: fn(kind : prompt.Kind) -> bool {
     return kind == .ShutDown || kind == .Restart
 }
 
@@ -159,16 +192,22 @@ is_power :: fn(kind: prompt.Kind) -> bool {
  *
  * @param service The service, its elevation screen up for a shutdown or a restart, the administrator's password typed.
  */
-check_administrator :: fn(service: ptr[mut Service]) {
-    if service.accounts_end == NONE || service.admin_count > service.admin.count || service.admin_password_count > service.admin_password.count {
+check_administrator :: fn(service : ptr[mut Service]) {
+    if service.accounts_end == NONE
+        || service.admin_count > service.admin.count
+        || service.admin_password_count > service.admin_password.count {
         say(service, "The account service isn't there.")
         setup_step(service, .AdminName)
         return void
     }
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    request^ = .CheckAdministrator(accounts.Credentials.{name = os.append(&out, service.admin[0..<service.admin_count]),
-        password = os.append(&out, service.admin_password[0..<service.admin_password_count])})
+    request^ = .CheckAdministrator(
+        accounts.Credentials.{
+            name = os.append(&out, service.admin[0..<service.admin_count]),
+            password = os.append(&out, service.admin_password[0..<service.admin_password_count]),
+        }
+    )
     sent :: accounts.send_request(service.accounts_end, service.port, &out) == null
     for i in 0..<out.words.count {
         out.words[i] = 0
@@ -190,7 +229,7 @@ check_administrator :: fn(service: ptr[mut Service]) {
  *
  * @param service The service, its elevation screen up for a shutdown or a restart.
  */
-power_allowed :: fn(service: ptr[mut Service]) {
+power_allowed :: fn(service : ptr[mut Service]) {
     restart :: view(service).ask.kind == .Restart
     runtime.log_info("elevation: the administrator allowed a %", if restart { "restart" } else { "shutdown" })
     end_elevation(service, true)
@@ -208,7 +247,7 @@ power_allowed :: fn(service: ptr[mut Service]) {
  * @param made Whether the account was made: true answers with its name, which is service.name; false refuses, as Escape
  *     or the account service's Refused does.
  */
-end_elevation :: fn(service: ptr[mut Service], made: bool) {
+end_elevation :: fn(service : ptr[mut Service], made : bool) {
     shown :: view(service)
     out := os.Outgoing.{}
     response :: os.begin[prompt.Response](&out)
@@ -282,9 +321,12 @@ end_elevation :: fn(service: ptr[mut Service], made: bool) {
  *
  * @param service The service, its elevation screen up, the new account's password typed twice and matching.
  */
-make_account_by :: fn(service: ptr[mut Service]) {
-    if service.accounts_end == NONE || service.name_count > service.name.count || service.password_count > service.password.count
-        || service.admin_count > service.admin.count || service.admin_password_count > service.admin_password.count {
+make_account_by :: fn(service : ptr[mut Service]) {
+    if service.accounts_end == NONE
+        || service.name_count > service.name.count
+        || service.password_count > service.password.count
+        || service.admin_count > service.admin.count
+        || service.admin_password_count > service.admin_password.count {
         say(service, "The account service isn't there.")
         setup_step(service, .AdminName)
         return void
@@ -296,11 +338,19 @@ make_account_by :: fn(service: ptr[mut Service]) {
     }
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    request^ = .CreateBy(accounts.Elevated.{
-        administrator = accounts.Credentials.{name = os.append(&out, service.admin[0..<service.admin_count]),
-            password = os.append(&out, service.admin_password[0..<service.admin_password_count])},
-        creation = accounts.Creation.{name = os.append(&out, service.name[0..<service.name_count]),
-            password = os.append(&out, service.password[0..<service.password_count]), now = now}})
+    request^ = .CreateBy(
+        accounts.Elevated.{
+            administrator = accounts.Credentials.{
+                name = os.append(&out, service.admin[0..<service.admin_count]),
+                password = os.append(&out, service.admin_password[0..<service.admin_password_count]),
+            },
+            creation = accounts.Creation.{
+                name = os.append(&out, service.name[0..<service.name_count]),
+                password = os.append(&out, service.password[0..<service.password_count]),
+                now = now,
+            },
+        }
+    )
     sent :: accounts.send_request(service.accounts_end, service.port, &out) == null
     for i in 0..<out.words.count {
         out.words[i] = 0
@@ -326,24 +376,47 @@ make_account_by :: fn(service: ptr[mut Service]) {
  * @param whole Whether the panel's shown and drawn whole, or only its fields' rows, as draw_elevation's is.
  * @param restart Whether it's a restart.
  */
-draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool) {
+draw_power_elevation :: fn(service : ptr[mut Service], whole : bool, restart : bool) {
     panel :: &view(service).screen.panel
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
     debugging :: is_debug(asked.kind)
-    screen.write_at(panel, 1, 2, if debugging { "Debug a program" } else if asked.kind == .Trace { "Trace the system" }
-        else if asked.kind == .Network { "Reach the network" }
-        else if asked.kind == .AddKey { "Let a key log in as you" } else if asked.kind == .RemoveKey { "Stop a key logging in as you" }
-        else if asked.kind == .SystemLog { "Read the system's log" }
-        else if restart { "Restart the system" } else { "Shut the system down" }, bold)
+    screen.write_at(
+        panel,
+        1,
+        2,
+        if debugging {
+            "Debug a program"
+        }
+        else if asked.kind == .Trace {
+            "Trace the system"
+        }
+        else if asked.kind == .Network {
+            "Reach the network"
+        }
+        else if asked.kind == .AddKey {
+            "Let a key log in as you"
+        }
+        else if asked.kind == .RemoveKey {
+            "Stop a key logging in as you"
+        }
+        else if asked.kind == .SystemLog {
+            "Read the system's log"
+        }
+        else if restart { "Restart the system" } else { "Shut the system down" },
+        bold
+    )
     storage : u8[200]
     line := text_buffer.make(storage)
     text_buffer.append(&line, bytes_text(first_of(asked.requester[0..<asked.requester.count], asked.requester_count)))
     if debugging {
         // The program to debug, which it can then read and change
         text_buffer.append(&line, " asks to debug ")
-        text_buffer.append(&line, bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count)))
+        text_buffer.append(
+            &line,
+            bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count))
+        )
         text_buffer.append(&line, if asked.kind == .DebugOther { ", another user's program, " } else { ", " })
     }
     else if asked.kind == .Trace {
@@ -361,26 +434,49 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
     }
     else if asked.kind == .RemoveKey {
         text_buffer.append(&line, " asks to stop ")
-        text_buffer.append(&line, bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count)))
+        text_buffer.append(
+            &line,
+            bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count))
+        )
         text_buffer.append(&line, " logging in as you, ")
     }
     else if asked.kind == .Network {
         // What it would reach, beyond the session's own
         text_buffer.append(&line, " asks to reach ")
-        text_buffer.append(&line, bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count)))
+        text_buffer.append(
+            &line,
+            bytes_text(first_of(asked.suggested[0..<asked.suggested.count], asked.suggested_count))
+        )
         text_buffer.append(&line, ", ")
     }
     else {
-        text_buffer.append(&line, if restart { " asks to restart the system, " } else { " asks to shut the system down, " })
+        text_buffer.append(
+            &line,
+            if restart { " asks to restart the system, " } else { " asks to shut the system down, " }
+        )
     }
     text_buffer.append(&line, bytes_text(first_of(asked.purpose[0..<asked.purpose.count], asked.purpose_count)))
     text_buffer.append(&line, ".")
     screen.write_at(panel, 3, 2, text_buffer.as_string(&line), plain)
     if asked.kind == .Debug || asked.kind == .Network || is_keys(asked.kind) {
-        screen.write_at(panel, 4, 2, if asked.kind == .Debug { "It could read and change everything the program has. Enter allows it, Esc refuses." }
-            else if asked.kind == .AddKey { "Whoever has its private key could. Enter allows it, Esc refuses." }
-            else if asked.kind == .RemoveKey { "Enter allows it, Esc refuses." }
-            else { "It could send what the program has there. Enter allows it, Esc refuses." }, plain)
+        screen.write_at(
+            panel,
+            4,
+            2,
+            if asked.kind == .Debug {
+                "It could read and change everything the program has. Enter allows it, Esc refuses."
+            }
+            else if asked.kind == .AddKey {
+                "Whoever has its private key could. Enter allows it, Esc refuses."
+            }
+            else if asked.kind == .RemoveKey {
+                "Enter allows it, Esc refuses."
+            }
+            else {
+                "It could send what the program has there. Enter allows it, Esc refuses."
+            },
+            plain
+        )
         if whole {
             redraw(service)
         }
@@ -400,7 +496,13 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
         screen.write_at(panel, top, column, bytes_text(typed), plain)
     }
     else {
-        screen.write_at(panel, top, column, bytes_text(first_of(service.admin[0..<service.admin.count], service.admin_count)), plain)
+        screen.write_at(
+            panel,
+            top,
+            column,
+            bytes_text(first_of(service.admin[0..<service.admin.count], service.admin_count)),
+            plain
+        )
     }
     if step == .AdminPassword {
         dots(panel, top + 1, column, clusters(typed))
@@ -413,7 +515,12 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
     }
     screen.write_at(panel, top + 8, 2, "Enter goes on, Backspace takes back what was typed last.", plain)
     panel.row = if step == .AdminName { top } else { top + 1 }
-    shown :: if step == .AdminName { cast[u16](min_count(typed.count, 40)) } else { cast[u16](min_count(clusters(typed), 40)) }
+    shown :: if step == .AdminName {
+        cast[u16](min_count(typed.count, 40))
+    }
+    else {
+        cast[u16](min_count(clusters(typed), 40))
+    }
     panel.column = column + shown
     if whole {
         redraw(service)
@@ -434,7 +541,7 @@ draw_power_elevation :: fn(service: ptr[mut Service], whole: bool, restart: bool
  * @param whole Whether to show the panel and draw every row of it; false clears and draws only the rows of the fields
  *     and the message, which is all a key changes.
  */
-draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
+draw_elevation :: fn(service : ptr[mut Service], whole : bool) {
     panel :: &view(service).screen.panel
     rows :: cast[u16](ELEVATION_FIELDS) + 4
     if whole {
@@ -446,7 +553,11 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     bold :: terminal.Style.{attributes = terminal.BOLD}
     plain :: terminal.Style.{}
     asked :: &view(service).ask
-    if is_power(asked.kind) || is_debug(asked.kind) || asked.kind == .Trace || asked.kind == .SystemLog || asked.kind == .Network
+    if is_power(asked.kind)
+        || is_debug(asked.kind)
+        || asked.kind == .Trace
+        || asked.kind == .SystemLog
+        || asked.kind == .Network
         || is_keys(asked.kind) {
         draw_power_elevation(service, whole, asked.kind == .Restart)
         return void
@@ -455,7 +566,13 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
     if service.setup == .Code {
         screen.write_at(panel, 3, 2, "The account is made. Its recovery code, shown this once:", plain)
         screen.write_at(panel, 5, 6, string_of(&service.code[0], service.code.count), bold)
-        screen.write_at(panel, 7, 2, "Give it to the account's owner, to keep apart from this computer: it opens the", plain)
+        screen.write_at(
+            panel,
+            7,
+            2,
+            "Give it to the account's owner, to keep apart from this computer: it opens the",
+            plain
+        )
         screen.write_at(panel, 8, 2, "account if the password is lost.", plain)
         screen.write_at(panel, 10, 2, "Press Enter once you have.", plain)
         panel.row = 10
@@ -485,7 +602,13 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
         screen.write_at(panel, top, column, bytes_text(typed), plain)
     }
     else {
-        screen.write_at(panel, top, column, bytes_text(first_of(service.admin[0..<service.admin.count], service.admin_count)), plain)
+        screen.write_at(
+            panel,
+            top,
+            column,
+            bytes_text(first_of(service.admin[0..<service.admin.count], service.admin_count)),
+            plain
+        )
     }
     if step == .AdminPassword {
         dots(panel, top + 1, column, clusters(typed))
@@ -515,9 +638,19 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
         screen.write_at(panel, top + 6, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(panel, top + 8, 2, "Enter goes on, Backspace takes back what was typed last.", plain)
-    panel.row = if step == .AdminName { top } else if step == .AdminPassword { top + 1 } else if step == .Name { top + 2 }
-        else if step == .Password { top + 3 } else { top + 4 }
-    shown :: if step == .AdminName || step == .Name { cast[u16](min_count(typed.count, 40)) } else { cast[u16](min_count(clusters(typed), 40)) }
+    panel.row = if step == .AdminName {
+        top
+    }
+    else if step == .AdminPassword {
+        top + 1
+    }
+    else if step == .Name { top + 2 } else if step == .Password { top + 3 } else { top + 4 }
+    shown :: if step == .AdminName || step == .Name {
+        cast[u16](min_count(typed.count, 40))
+    }
+    else {
+        cast[u16](min_count(clusters(typed), 40))
+    }
     panel.column = column + shown
     if whole {
         redraw(service)
@@ -528,13 +661,13 @@ draw_elevation :: fn(service: ptr[mut Service], whole: bool) {
 }
 
 /** Name an error for the log. */
-message_of_error :: fn(error: slop_os.ChannelError) -> string {
+message_of_error :: fn(error : slop_os.ChannelError) -> string {
     runtime.log_info("trace connection failed: %", error)
     return "failed"
 }
 
 /** Log why there's no trace connection. */
-log_none :: fn(why: string) -> os.Channel[trace.Trace]? {
+log_none :: fn(why : string) -> os.Channel[trace.Trace]? {
     runtime.log_info("trace connection: %", why)
     return null
 }

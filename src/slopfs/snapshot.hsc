@@ -41,7 +41,7 @@ DeadExtent :: struct {
  *     records it uses.
  * @return The record's key_owner, or id when that's 0.
  */
-key_owner_of :: fn(id: u64, record: ptr[VolumeRecord]) -> u64 {
+key_owner_of :: fn(id : u64, record : ptr[VolumeRecord]) -> u64 {
     owner :: cast[u64](record.key_owner)
     return if owner != 0 { owner } else { id }
 }
@@ -56,11 +56,20 @@ key_owner_of :: fn(id: u64, record: ptr[VolumeRecord]) -> u64 {
  * @error Corrupt A record isn't a SnapshotRecord, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for the list or a node.
  */
-snapshot_records :: fn(container: ptr[mut Container], id: u64, found: ptr[mut NumberedSnapshot[..]]) -> Result[void, Error] {
+snapshot_records :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    found : ptr[mut NumberedSnapshot[..]]
+) -> Result[void, Error] {
     record := SnapshotRecord.{}
     at := key_of(id, .Snapshot, 0)
     loop {
-        item :: tree_next(&container.nodes, &container.volumes, at, view_of(cast[ptr[mut u8]](&record), size_of(SnapshotRecord)))? or_break
+        item :: tree_next(
+            &container.nodes,
+            &container.volumes,
+            at,
+            view_of(cast[ptr[mut u8]](&record), size_of(SnapshotRecord))
+        )? or_break
         if item.key.object != id || item.key.kind != cast[u8](RecordKind.Snapshot) {
             break
         }
@@ -81,7 +90,7 @@ snapshot_records :: fn(container: ptr[mut Container], id: u64, found: ptr[mut Nu
  * @param record The snapshot's record: name_bytes says how much of its name field is the name.
  * @return Its name's bytes, a view into the record, good as long as it is; empty if name_bytes is past the field.
  */
-name_of_snapshot :: fn(record: ptr[SnapshotRecord]) -> u8[] {
+name_of_snapshot :: fn(record : ptr[SnapshotRecord]) -> u8[] {
     length :: cast[usize](cast[u16](record.name_bytes))
     if length > record.name.count {
         return record.name[0..<0]
@@ -99,7 +108,7 @@ name_of_snapshot :: fn(record: ptr[SnapshotRecord]) -> u8[] {
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for the list or a node.
  */
-find_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[]) -> Result[NumberedSnapshot?, Error] {
+find_snapshot :: fn(container : ptr[mut Container], id : u64, name : u8[]) -> Result[NumberedSnapshot?, Error] {
     snapshots : NumberedSnapshot[..]
     defer runtime.array_free(&snapshots)
     snapshot_records(container, id, &snapshots)?
@@ -118,7 +127,7 @@ find_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[]) -> Resul
  * @param name The name's bytes, as given; not checked as UTF-8.
  * @return True if they're 1 to VOLUME_NAME_BYTES long, without '/', '@' or NUL; they aren't checked as UTF-8.
  */
-volume_name_holds :: fn(name: u8[]) -> bool {
+volume_name_holds :: fn(name : u8[]) -> bool {
     if name.count == 0 || name.count > VOLUME_NAME_BYTES {
         return false
     }
@@ -148,7 +157,7 @@ volume_name_holds :: fn(name: u8[]) -> bool {
  * @error OutOfMemory No memory for the floor, the list or a node; nothing was changed.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64) -> Result[u64, Error] {
+take_snapshot :: fn(container : ptr[mut Container], id : u64, name : u8[], now : u64) -> Result[u64, Error] {
     if !volume_name_holds(name) {
         return .Error(.InvalidName)
     }
@@ -171,14 +180,24 @@ take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64
     if !space_room(&container.space, 0, 0, 0, 1) {
         return .Error(.OutOfMemory)
     }
-    snapshot := SnapshotRecord.{root = record.root, transaction = cast[u64le](transaction), next_object = record.next_object,
-        created = cast[u64le](now), name_bytes = cast[u16le](cast[u16](name.count))}
+    snapshot := SnapshotRecord.{
+        root = record.root,
+        transaction = cast[u64le](transaction),
+        next_object = record.next_object,
+        created = cast[u64le](now),
+        name_bytes = cast[u16le](cast[u16](name.count)),
+    }
     for byte, i in name {
         if i < snapshot.name.count {
             snapshot.name[i] = byte
         }
     }
-    tree_put(&container.nodes, &container.volumes, key_of(id, .Snapshot, number), view_of(cast[ptr[u8]](&snapshot), size_of(SnapshotRecord)))?
+    tree_put(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .Snapshot, number),
+        view_of(cast[ptr[u8]](&snapshot), size_of(SnapshotRecord))
+    )?
     set_floor(&container.space, id, transaction, null)
     // What this transaction already freed of the volume's, which the snapshot's root may still name
     hold_freed(&container.space, id, transaction)
@@ -195,11 +214,16 @@ take_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], now: u64
  * @error Corrupt A record isn't a DeadValue, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for the list or a node.
  */
-dead_extents :: fn(container: ptr[mut Container], id: u64, found: ptr[mut DeadExtent[..]]) -> Result[void, Error] {
+dead_extents :: fn(container : ptr[mut Container], id : u64, found : ptr[mut DeadExtent[..]]) -> Result[void, Error] {
     value := DeadValue.{}
     at := key_of(id, .Dead, 0)
     loop {
-        item :: tree_next(&container.nodes, &container.volumes, at, view_of(cast[ptr[mut u8]](&value), size_of(DeadValue)))? or_break
+        item :: tree_next(
+            &container.nodes,
+            &container.volumes,
+            at,
+            view_of(cast[ptr[mut u8]](&value), size_of(DeadValue))
+        )? or_break
         if item.key.object != id || item.key.kind != cast[u8](RecordKind.Dead) {
             break
         }
@@ -222,7 +246,7 @@ dead_extents :: fn(container: ptr[mut Container], id: u64, found: ptr[mut DeadEx
  * @param freed The transaction it was given back in.
  * @return True if one holds it.
  */
-held_by :: fn(snapshots: NumberedSnapshot[], birth: u64, freed: u64) -> bool {
+held_by :: fn(snapshots : NumberedSnapshot[], birth : u64, freed : u64) -> bool {
     for each in snapshots {
         taken :: cast[u64](each.record.transaction)
         if birth <= taken && taken < freed {
@@ -251,7 +275,12 @@ held_by :: fn(snapshots: NumberedSnapshot[], birth: u64, freed: u64) -> bool {
  * @error OutOfMemory No memory for a list, the space's records or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed: ptr[mut Extent[..]]?) -> Result[void, Error] {
+delete_snapshot :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    name : u8[],
+    freed : ptr[mut Extent[..]]?
+) -> Result[void, Error] {
     found :: find_snapshot(container, id, name)? or_return .Error(.NotFound)
     // Not while a clone's tree starts as it
     at : u64 = 0
@@ -301,14 +330,18 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
             tree_delete(&container.nodes, &container.volumes, key_of(id, .Dead, each.start))?
             space_free_held(&container.space, each.start, cast[u64](each.value.blocks), id)
             match freed {
-                case Some(list) => runtime.array_add(list, Extent.{start = each.start, blocks = cast[u64](each.value.blocks)})
+                case Some(
+                    list
+                ) => runtime.array_add(list, Extent.{start = each.start, blocks = cast[u64](each.value.blocks)})
                 case None => {}
             }
         }
     }
     // What's waiting to go on the dead list this transaction, freed in it
     for &change in space.changes {
-        if change.change == .Dead && change.owner == id && !held_by(remaining, change.birth, container.nodes.transaction) {
+        if change.change == .Dead
+            && change.owner == id
+            && !held_by(remaining, change.birth, container.nodes.transaction) {
             change.change = .FreedLater
             change.owner = 0
             runtime.array_add(&space.later, Later.{start = change.start, blocks = change.blocks, owner = 0})
@@ -342,7 +375,7 @@ delete_snapshot :: fn(container: ptr[mut Container], id: u64, name: u8[], freed:
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-lineage_of :: fn(container: ptr[mut Container], record: ptr[VolumeRecord]) -> Result[Lineage, Error] {
+lineage_of :: fn(container : ptr[mut Container], record : ptr[VolumeRecord]) -> Result[Lineage, Error] {
     lineage := Lineage.{}
     origin := cast[u64](record.origin)
     up_to := cast[u64](record.origin_transaction)
@@ -387,7 +420,13 @@ lineage_of :: fn(container: ptr[mut Container], record: ptr[VolumeRecord]) -> Re
  * @error OutOfMemory No memory for the floor, a list or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-clone_snapshot :: fn(container: ptr[mut Container], id: u64, snapshot: u8[], name: u8[], now: u64) -> Result[u64, Error] {
+clone_snapshot :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    snapshot : u8[],
+    name : u8[],
+    now : u64
+) -> Result[u64, Error] {
     if !volume_name_holds(name) {
         return .Error(.InvalidName)
     }
@@ -400,10 +439,19 @@ clone_snapshot :: fn(container: ptr[mut Container], id: u64, snapshot: u8[], nam
     if lineage.count + 1 > MAX_LINEAGE {
         return .Error(.TooLarge)
     }
-    clone := VolumeRecord.{root = found.record.root, next_object = found.record.next_object, hash_key = origin.hash_key,
-        created = cast[u64le](now), name_bytes = cast[u16le](cast[u16](name.count)), cipher = origin.cipher, generation = origin.generation,
-        origin = cast[u64le](id), origin_snapshot = cast[u64le](found.number), origin_transaction = found.record.transaction,
-        key_owner = cast[u64le](key_owner_of(id, &origin))}
+    clone := VolumeRecord.{
+        root = found.record.root,
+        next_object = found.record.next_object,
+        hash_key = origin.hash_key,
+        created = cast[u64le](now),
+        name_bytes = cast[u16le](cast[u16](name.count)),
+        cipher = origin.cipher,
+        generation = origin.generation,
+        origin = cast[u64le](id),
+        origin_snapshot = cast[u64le](found.number),
+        origin_transaction = found.record.transaction,
+        key_owner = cast[u64le](key_owner_of(id, &origin)),
+    }
     for byte, i in name {
         if i < clone.name.count {
             clone.name[i] = byte
@@ -429,12 +477,17 @@ clone_snapshot :: fn(container: ptr[mut Container], id: u64, snapshot: u8[], nam
  * @error NotFound A volume found isn't there to read.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
+load_floors :: fn(container : ptr[mut Container]) -> Result[void, Error] {
     container.space.reserve = reserve_of(container.device.block_count)
     owner := OwnerValue.{}
     owner_at := Key.{}
     loop {
-        found :: tree_next(&container.nodes, &container.owners, owner_at, view_of(cast[ptr[mut u8]](&owner), size_of(OwnerValue)))? or_break
+        found :: tree_next(
+            &container.nodes,
+            &container.owners,
+            owner_at,
+            view_of(cast[ptr[mut u8]](&owner), size_of(OwnerValue))
+        )? or_break
         if !space_room(&container.space, 0, 0, 0, 1) {
             return .Error(.OutOfMemory)
         }
@@ -484,7 +537,7 @@ load_floors :: fn(container: ptr[mut Container]) -> Result[void, Error] {
  * @param snapshot The snapshot's record, only read: its root and next object replace the volume's.
  * @return The record, a copy.
  */
-snapshot_volume_record :: fn(volume: ptr[VolumeRecord], snapshot: ptr[SnapshotRecord]) -> VolumeRecord {
+snapshot_volume_record :: fn(volume : ptr[VolumeRecord], snapshot : ptr[SnapshotRecord]) -> VolumeRecord {
     record := volume^
     record.root = snapshot.root
     record.next_object = snapshot.next_object
@@ -509,14 +562,25 @@ snapshot_volume_record :: fn(volume: ptr[VolumeRecord], snapshot: ptr[SnapshotRe
  * @error OutOfMemory No memory for the volume or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-open_snapshot :: fn(container #escaping : ptr[mut Container], id: u64, name: u8[], keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
+open_snapshot :: fn(
+    container #escaping : ptr[mut Container],
+    id : u64,
+    name : u8[],
+    keys #escaping : ptr[mut Keys]?
+) -> Result[ptr[mut Volume], Error] {
     record := volume_record(container, id)?
     found :: find_snapshot(container, id, name)? or_return .Error(.NotFound)
     if record.cipher != cast[u8](Cipher.None) && (keys is_none) {
         return .Error(.Locked)
     }
     snapshot := found.record
-    volume :: match attach_volume(&container.nodes, container.device, id, snapshot_volume_record(&record, &snapshot), keys) {
+    volume :: match attach_volume(
+        &container.nodes,
+        container.device,
+        id,
+        snapshot_volume_record(&record, &snapshot),
+        keys
+    ) {
         case Ok(made) => made
         case Error(error) => {
             match keys {
@@ -543,7 +607,7 @@ open_snapshot :: fn(container #escaping : ptr[mut Container], id: u64, name: u8[
  * @param b The other byte string, of any length.
  * @return True if they're the same length and byte for byte alike.
  */
-equal_bytes :: fn(a: u8[], b: u8[]) -> bool {
+equal_bytes :: fn(a : u8[], b : u8[]) -> bool {
     if a.count != b.count {
         return false
     }
@@ -565,7 +629,7 @@ equal_bytes :: fn(a: u8[], b: u8[]) -> bool {
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64?, Error] {
+find_volume_named :: fn(container : ptr[mut Container], name : u8[]) -> Result[u64?, Error] {
     at : u64 = 0
     loop {
         id :: next_volume_id(container, at)? or_return .Ok(null)
@@ -597,7 +661,7 @@ find_volume_named :: fn(container: ptr[mut Container], name: u8[]) -> Result[u64
  * @error OutOfMemory No memory for the account or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-set_quota :: fn(container: ptr[mut Container], id: u64, blocks: u64) -> Result[void, Error] {
+set_quota :: fn(container : ptr[mut Container], id : u64, blocks : u64) -> Result[void, Error] {
     record := volume_record(container, id)?
     if !space_room(&container.space, 0, 0, 0, 1) {
         return .Error(.OutOfMemory)
@@ -632,9 +696,13 @@ Usage :: struct {
  * @param id The volume's ID; one with no account uses nothing and has no quota.
  * @return The volume's usage now, in blocks; nothing is read from the disk.
  */
-usage_of :: fn(container: ptr[Container], id: u64) -> Usage {
+usage_of :: fn(container : ptr[Container], id : u64) -> Usage {
     account :: account_of(&container.space, id)
     space :: &container.space
-    return Usage.{used = account.used, quota = account.quota,
-        free = if space.free_blocks > space.reserve { space.free_blocks - space.reserve } else { 0 }, reserve = space.reserve}
+    return Usage.{
+        used = account.used,
+        quota = account.quota,
+        free = if space.free_blocks > space.reserve { space.free_blocks - space.reserve } else { 0 },
+        reserve = space.reserve,
+    }
 }

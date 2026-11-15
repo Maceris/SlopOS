@@ -23,7 +23,8 @@
  * - coverage: on, for the system call fuzzer (decisions/0186, He): the kernel built with coverage counters, which it
  *   gives user space read only (coverage_memory). off by default.
  * - model_checked: on, for the tests' model checks (decisions/0187, C3): every test program built with --model-checked,
- *   its atomics the model checker's to switch threads at, and stack checks that grow fibers' stacks; tools/unit_tests.py
+ *   its atomics the model checker's to switch threads at, and stack checks that grow fibers' stacks;
+ *   tools/unit_tests.py
  *   passes it. off by default, and then a model check runs one schedule.
  */
 package build
@@ -78,7 +79,7 @@ build :: fn() {
  * @return True when it's written, or the target isn't the root task's; false, with an error reported, if
  *     system_config isn't in the program, has no RECORDS, or the file couldn't be written.
  */
-write_system_records :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+write_system_records :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     if target.name != "root_task.elf" {
         return true
     }
@@ -120,8 +121,10 @@ write_system_records :: fn(target: ptr[compiler.BuildOptions], program: ptr[comp
  * @return True when it's written, or the target has none; false, with an error reported, if the program has no main or
  *     the file couldn't be written.
  */
-write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
-    if target.target_options.os != .SlopOS || !target.target_options.startup_code || !checks.ends_with(target.output_path, ".elf") {
+write_manifest :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
+    if target.target_options.os != .SlopOS
+        || !target.target_options.startup_code
+        || !checks.ends_with(target.output_path, ".elf") {
         return true
     }
     main :: match compiler.find_function(program.root, "main") {
@@ -154,7 +157,7 @@ write_manifest :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.P
  * @return The text unwrapped, from context's allocator at compile time, never freed; text itself when it has no line
  *     break.
  */
-unwrapped :: fn(text: string) -> string {
+unwrapped :: fn(text : string) -> string {
     bytes :: string_bytes(text)
     made : u8[..]
     for byte, i in bytes {
@@ -174,12 +177,19 @@ unwrapped :: fn(text: string) -> string {
  *     a comment writes a Documentation with nothing in it.
  * @return True once it's written; false, with an error reported, if the file couldn't be.
  */
-write_documentation :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo], main: compiler.FunctionInfo) -> bool {
+write_documentation :: fn(
+    target : ptr[compiler.BuildOptions],
+    program : ptr[compiler.ProgramInfo],
+    main : compiler.FunctionInfo
+) -> bool {
     parameters : bundle.Described[..]
     defer runtime.array_free(&parameters)
     for parameter in main.parameters {
         if parameter.documentation.count > 0 {
-            runtime.array_add(&parameters, bundle.Described.{name = parameter.name, text = unwrapped(parameter.documentation)})
+            runtime.array_add(
+                &parameters,
+                bundle.Described.{name = parameter.name, text = unwrapped(parameter.documentation)}
+            )
         }
     }
     results : string[..]
@@ -202,9 +212,14 @@ write_documentation :: fn(target: ptr[compiler.BuildOptions], program: ptr[compi
             runtime.array_add(&others, bundle.Described.{name = tag.tag, text = unwrapped(tag.text)})
         }
     }
-    made :: bundle.Documentation.{summary = unwrapped(main.documentation.brief), details = unwrapped(main.documentation.details),
-        parameters = parameters[0..<parameters.count], results = results[0..<results.count], errors = errors[0..<errors.count],
-        others = others[0..<others.count]}
+    made :: bundle.Documentation.{
+        summary = unwrapped(main.documentation.brief),
+        details = unwrapped(main.documentation.details),
+        parameters = parameters[0..<parameters.count],
+        results = results[0..<results.count],
+        errors = errors[0..<errors.count],
+        others = others[0..<others.count],
+    }
     record : u8[..]
     defer runtime.array_free(&record)
     bundle.write(made, &record)
@@ -266,7 +281,7 @@ add_kernel :: fn() {
  *
  * @param folder The folder whose subfolders are programs, relative to src/build.
  */
-add_programs :: fn(folder: string) {
+add_programs :: fn(folder : string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
         output_storage : u8[512]
@@ -345,7 +360,7 @@ PROGRAM_LIBRARIES :: ProgramLibrary.[ProgramLibrary.{program = "test_libraries",
  *
  * @param folder The folder whose subfolders are libraries, relative to src/build.
  */
-add_libraries :: fn(folder: string) {
+add_libraries :: fn(folder : string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
         output_storage : u8[512]
@@ -393,7 +408,7 @@ add_libraries :: fn(folder: string) {
  *
  * @param folder The folder whose subfolders are UEFI applications, relative to src/build.
  */
-add_uefi_programs :: fn(folder: string) {
+add_uefi_programs :: fn(folder : string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
         output_storage : u8[512]
@@ -423,7 +438,7 @@ add_uefi_programs :: fn(folder: string) {
  *
  * @param folder The folder whose subfolders are tools, relative to src/build.
  */
-add_tools :: fn(folder: string) {
+add_tools :: fn(folder : string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
         output_storage : u8[512]
@@ -449,7 +464,7 @@ add_tools :: fn(folder: string) {
  *
  * @param folder The folder searched, relative to src/build; a test folder's own subfolders aren't.
  */
-add_tests :: fn(folder: string) {
+add_tests :: fn(folder : string) {
     for subfolder in compiler.subfolders(folder) {
         name :: last_part(subfolder)
         if name != "test" {
@@ -485,7 +500,7 @@ add_tests :: fn(folder: string) {
  * @param path The path, with / or \ separators.
  * @return What's after the last separator, a view into path; all of it without one, empty if it ends in one.
  */
-last_part :: fn(path: string) -> string {
+last_part :: fn(path : string) -> string {
     after :: separator_after(path)
     runtime.assert(after <= path.count, "separator_after is inside the path")
     return path[after..<path.count]
@@ -497,7 +512,7 @@ last_part :: fn(path: string) -> string {
  * @param path The path, with / or \ separators.
  * @return What's before the last separator, a view into path; empty without one.
  */
-parent_of :: fn(path: string) -> string {
+parent_of :: fn(path : string) -> string {
     after :: separator_after(path)
     runtime.assert(after <= path.count, "separator_after is inside the path")
     if after == 0 {
@@ -512,7 +527,7 @@ parent_of :: fn(path: string) -> string {
  * @param path The path, with / or \ separators.
  * @return The index just after its last / or \, at most path's count; 0 without one.
  */
-separator_after :: fn(path: string) -> usize {
+separator_after :: fn(path : string) -> usize {
     start : usize = 0
     for character, index in path {
         if character == '/' || character == '\\' {

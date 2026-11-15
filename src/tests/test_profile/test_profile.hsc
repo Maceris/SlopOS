@@ -6,9 +6,9 @@
  */
 package test_profile
 
-import fiber from "std:fiber"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+import fiber from "std:fiber"
 import slop_os from "std:os/slop_os"
 
 /** How long spin_here spins. */
@@ -25,9 +25,10 @@ Spin :: struct {
  * @param fibers 1 to spin on a fiber; null or 0 for on the thread.
  * @return 0 once it's spun; 2 if its thread couldn't be started.
  */
-main :: fn(milliseconds: u64, fibers: u64?) -> int {
+main :: fn(milliseconds : u64, fibers : u64?) -> int {
     spin :: runtime.new(Spin)
-    spin.deadline = (slop_os.clock_monotonic() or_else 0) + (if milliseconds == 0 { cast[u64](1) } else { milliseconds }) * 1_000_000
+    spin.deadline = (slop_os.clock_monotonic() or_else 0)
+        + (if milliseconds == 0 { cast[u64](1) } else { milliseconds }) * 1_000_000
     node := runtime.extension_node(cast[ptr[Spin]](spin))
     on_fibers :: (fibers or_else 0) != 0
     push_context with_spin (extensions = &node) {

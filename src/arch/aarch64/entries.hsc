@@ -16,8 +16,10 @@ import kernel_entry from "../../kernel/entry"
  * entry gets the kernel stack's limit.
  */
 
-// ESR_EL1's exception classes this decodes, besides those aarch64 names (bits 26 to 31).
-//SPEC: Arm ARM (DDI 0487) D19.2.40 ESR_EL1 (exception classes)
+/*
+ * ESR_EL1's exception classes this decodes, besides those aarch64 names (bits 26 to 31).
+ * SPEC: Arm ARM (DDI 0487) D19.2.40 ESR_EL1 (exception classes)
+ */
 /** ESR_EL1.EC 0x00: an unknown reason, as an undefined instruction gives; decoded as InvalidInstruction. */
 ESR_CLASS_UNKNOWN : u64 : 0x00
 /** ESR_EL1.EC 0x3c: a BRK instruction; decoded as Breakpoint. */
@@ -67,7 +69,7 @@ DATA_ABORT_WRITE : u64 : 1 << 6
  * @param frame The interrupted code's registers, saved on SP_EL1 by the generated code, with the vector's offset,
  *     ESR_EL1 and FAR_EL1; for an entry from user mode, the thread's UserRegisters, which kernel_entry may change.
  */
-exception_entry #calling_convention(.entry) :: fn(frame: ptr[mut aarch64.RegisterFrame]) {
+exception_entry #calling_convention(.entry) :: fn(frame : ptr[mut aarch64.RegisterFrame]) {
     cpu : ptr[ArchCpu] : cast[ptr[ArchCpu]](aarch64.read_system_register(.TPIDR_EL1))
     kind :: frame.vector & 3
     interrupted_mask :: aarch64.read_system_register(.ICC_PMR_EL1)
@@ -154,14 +156,19 @@ unmask_for_return :: fn() {
  * @param frame The interrupted code's registers: x0 to x30, then its stack pointer (SP_EL0 from user mode, else where
  *     SP_EL1 was before the frame), the program counter and PSTATE, as nmi_register_name names them.
  */
-take_nmi :: fn(frame: ptr[mut aarch64.RegisterFrame]) {
+take_nmi :: fn(frame : ptr[mut aarch64.RegisterFrame]) {
     registers : u64[34]
     for value, i in frame.x {
         if i < registers.count {
             registers[i] = value
         }
     }
-    registers[31] = if from_user_mode(frame) { frame.sp_el0 } else { cast[u64](frame) + cast[u64](size_of(aarch64.RegisterFrame)) }
+    registers[31] = if from_user_mode(frame) {
+        frame.sp_el0
+    }
+    else {
+        cast[u64](frame) + cast[u64](size_of(aarch64.RegisterFrame))
+    }
     registers[32] = frame.elr
     registers[33] = frame.spsr
     kernel_entry.nmi(frame.elr, frame.x[29], registers[0..<registers.count])
@@ -174,9 +181,43 @@ take_nmi :: fn(frame: ptr[mut aarch64.RegisterFrame]) {
  * @param index Its place: x0 to x30, sp, pc, then pstate.
  * @return Its name, a constant; "?" past them.
  */
-nmi_register_name :: fn(index: usize) -> string {
-    names :: string.["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16",
-        "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "sp", "pc", "pstate"]
+nmi_register_name :: fn(index : usize) -> string {
+    names :: string.[
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15",
+        "x16",
+        "x17",
+        "x18",
+        "x19",
+        "x20",
+        "x21",
+        "x22",
+        "x23",
+        "x24",
+        "x25",
+        "x26",
+        "x27",
+        "x28",
+        "x29",
+        "x30",
+        "sp",
+        "pc",
+        "pstate"
+    ]
     if index >= names.count {
         return "?"
     }
@@ -189,7 +230,7 @@ nmi_register_name :: fn(index: usize) -> string {
  * @param frame The saved registers, whose vector says which of the table's entries was taken.
  * @return True for the lower-EL AArch64 entries; false for the current-EL ones and the lower-EL AArch32 ones.
  */
-from_user_mode :: fn(frame: ptr[aarch64.RegisterFrame]) -> bool {
+from_user_mode :: fn(frame : ptr[aarch64.RegisterFrame]) -> bool {
     return frame.vector & ~cast[u64](3) == aarch64.VECTOR_LOWER_AARCH64
 }
 
@@ -204,7 +245,7 @@ from_user_mode :: fn(frame: ptr[aarch64.RegisterFrame]) -> bool {
  * @param frame The saved registers, as exception_entry has them.
  * @param interrupt An IRQ's or FIQ's ID, as exception_entry took it; NO_INTERRUPT for other exceptions.
  */
-dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame], interrupt: u32) #never_returns {
+dispatch :: fn(frame : ptr[mut aarch64.RegisterFrame], interrupt : u32) #never_returns {
     kind :: frame.vector & 3
     source :: frame.vector & ~cast[u64](3)
     instruction :: cast[arch_interface.VirtualAddress](frame.elr)
@@ -249,20 +290,28 @@ dispatch :: fn(frame: ptr[mut aarch64.RegisterFrame], interrupt: u32) #never_ret
  *     FloatingPoint as the class says,
  *     and Protection for every other class, like an illegal execution state or a trapped system instruction.
  */
-decode_fault :: fn(class: u64, syndrome: u64, address: u64) -> arch_interface.Fault {
+decode_fault :: fn(class : u64, syndrome : u64, address : u64) -> arch_interface.Fault {
     status :: syndrome & 0x3f
-    if class == aarch64.ESR_CLASS_INSTRUCTION_ABORT || class == aarch64.ESR_CLASS_INSTRUCTION_ABORT_LOWER
-        || class == aarch64.ESR_CLASS_DATA_ABORT || class == aarch64.ESR_CLASS_DATA_ABORT_LOWER {
+    if class == aarch64.ESR_CLASS_INSTRUCTION_ABORT
+        || class == aarch64.ESR_CLASS_INSTRUCTION_ABORT_LOWER
+        || class == aarch64.ESR_CLASS_DATA_ABORT
+        || class == aarch64.ESR_CLASS_DATA_ABORT_LOWER {
         if status == FAULT_STATUS_ALIGNMENT {
             return .Alignment
         }
-        instruction_fetch :: class == aarch64.ESR_CLASS_INSTRUCTION_ABORT || class == aarch64.ESR_CLASS_INSTRUCTION_ABORT_LOWER
-        access : arch_interface.Access = if instruction_fetch { .Execute } else if syndrome & DATA_ABORT_WRITE != 0 { .Write } else { .Read }
-        return .Page(arch_interface.PageFault.{
-            address = cast[arch_interface.VirtualAddress](address),
-            access = access,
-            present = status & ~cast[u64](3) == FAULT_STATUS_PERMISSION,
-        })
+        instruction_fetch :: class == aarch64.ESR_CLASS_INSTRUCTION_ABORT
+            || class == aarch64.ESR_CLASS_INSTRUCTION_ABORT_LOWER
+        access : arch_interface.Access = if instruction_fetch {
+            .Execute
+        }
+        else if syndrome & DATA_ABORT_WRITE != 0 { .Write } else { .Read }
+        return .Page(
+            arch_interface.PageFault.{
+                address = cast[arch_interface.VirtualAddress](address),
+                access = access,
+                present = status & ~cast[u64](3) == FAULT_STATUS_PERMISSION,
+            }
+        )
     }
     return match class {
         case ESR_CLASS_UNKNOWN => .InvalidInstruction

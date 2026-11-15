@@ -11,9 +11,9 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
+import service_kit from "../../libraries/service_kit"
 import pci from "../../pci"
 import serial from "../../protocols/serial"
-import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
 /** The bytes of a page: 4096. */
@@ -87,9 +87,19 @@ Driver :: struct {
  *     made, 6 if its MSI couldn't be set up, 7 if its DMA memory couldn't be made or mapped, 8 if its queues couldn't
  *     be set up, 9 if the listener couldn't be bound.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    clients: os.Listener[serial.Serial]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[serial.Serial]
+) -> int {
     block :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     driver_made, driver_error :: runtime.new_aligned(Driver, align_of(Driver))
@@ -110,7 +120,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) or_return 6
+    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+        or_return 6
 
     // A page for each queue, then the buffers' page
     memory :: slop_os.dma_memory_create(domain, block.budget, 3 * PAGE, 0) or_return 7
@@ -118,8 +129,17 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, block.space, pages, 0, 3 * PAGE, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.receive = virtio.setup_queue(&driver.transport, RECEIVE_QUEUE, pages, device_address,virtio.QUEUE_PAGE, 0) or_return 8
-    driver.transmit = virtio.setup_queue(&driver.transport, TRANSMIT_QUEUE, pages + PAGE, device_address + PAGE,virtio.QUEUE_PAGE, 0) or_return 8
+    driver.receive = virtio.setup_queue(&driver.transport, RECEIVE_QUEUE, pages, device_address, virtio.QUEUE_PAGE, 0)
+        or_return 8
+    driver.transmit = virtio.setup_queue(
+        &driver.transport,
+        TRANSMIT_QUEUE,
+        pages + PAGE,
+        device_address + PAGE,
+        virtio.QUEUE_PAGE,
+        0
+    )
+        or_return 8
     driver.buffers = pages + 2 * PAGE
     driver.buffers_device = device_address + 2 * PAGE
     virtio.ready(&driver.transport)
@@ -165,7 +185,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  *     failed is dropped, and its held Read with it.
  * @param into Where each request is received, reused for each.
  */
-serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
     }
@@ -218,7 +238,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  *     closed here.
  * @param response The response, which has no variable-size data.
  */
-answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: serial.Response) {
+answer :: fn(driver : ptr[mut Driver], end : slop_os.Channel, response : serial.Response) {
     out := os.Outgoing.{}
     made :: os.begin[serial.Response](&out)
     made^ = response
@@ -233,11 +253,16 @@ answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: serial.Res
  * @return How many bytes went, from the first: all of them, or fewer when the device didn't take a buffer within
  *     SEND_NANOSECONDS, which is logged.
  */
-send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
+send :: fn(driver : ptr[mut Driver], bytes : u8[]) -> u32 {
     buffer :: driver.buffers + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES
     sent : usize = 0
     loop {
-        count :: if bytes.count - sent < cast[usize](BUFFER_BYTES) { bytes.count - sent } else { cast[usize](BUFFER_BYTES) }
+        count :: if bytes.count - sent < cast[usize](BUFFER_BYTES) {
+            bytes.count - sent
+        }
+        else {
+            cast[usize](BUFFER_BYTES)
+        }
         chunk :: view_of(cast[ptr[mut u8]](buffer), count)
         for &byte, i in chunk {
             from :: sent + i
@@ -245,7 +270,12 @@ send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
                 byte^ = bytes[from]
             }
         }
-        _ = virtio.offer(&driver.transmit, driver.buffers_device + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES, cast[u32](count), false)
+        _ = virtio.offer(
+            &driver.transmit,
+            driver.buffers_device + cast[u64](RECEIVE_BUFFERS) * BUFFER_BYTES,
+            cast[u32](count),
+            false
+        )
         if !wait_sent(driver) {
             runtime.log_info("the device didn't take % bytes to send", count)
             break
@@ -264,7 +294,7 @@ send :: fn(driver: ptr[mut Driver], bytes: u8[]) -> u32 {
  * @param driver The driver, a buffer offered on its transmit queue.
  * @return True once the device has given back a transmit buffer; false if it didn't in time.
  */
-wait_sent :: fn(driver: ptr[mut Driver]) -> bool {
+wait_sent :: fn(driver : ptr[mut Driver]) -> bool {
     deadline :: (slop_os.clock_monotonic() or_else 0) + SEND_NANOSECONDS
     loop {
         if virtio.take_used(&driver.transmit) is_some {
@@ -283,8 +313,13 @@ wait_sent :: fn(driver: ptr[mut Driver]) -> bool {
  * @param driver The driver, its receive queue offered the buffer.
  * @param buffer Which receive buffer, 0 to RECEIVE_BUFFERS - 1.
  */
-offer_receive :: fn(driver: ptr[mut Driver], buffer: u8) {
-    id :: virtio.offer(&driver.receive, driver.buffers_device + cast[u64](buffer) * BUFFER_BYTES, cast[u32](BUFFER_BYTES), true)
+offer_receive :: fn(driver : ptr[mut Driver], buffer : u8) {
+    id :: virtio.offer(
+        &driver.receive,
+        driver.buffers_device + cast[u64](buffer) * BUFFER_BYTES,
+        cast[u32](BUFFER_BYTES),
+        true
+    )
     if cast[usize](id) < driver.buffer_of.count {
         driver.buffer_of[id] = buffer
     }
@@ -297,11 +332,16 @@ offer_receive :: fn(driver: ptr[mut Driver], buffer: u8) {
  *
  * @param driver The driver, whose input grows.
  */
-take_input :: fn(driver: ptr[mut Driver]) {
+take_input :: fn(driver : ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.receive) or_break
         buffer :: if cast[usize](used.id) < driver.buffer_of.count { driver.buffer_of[used.id] } else { cast[u8](0) }
-        length :: if cast[u64](used.length) < BUFFER_BYTES { cast[usize](used.length) } else { cast[usize](BUFFER_BYTES) }
+        length :: if cast[u64](used.length) < BUFFER_BYTES {
+            cast[usize](used.length)
+        }
+        else {
+            cast[usize](BUFFER_BYTES)
+        }
         written :: view_of(cast[ptr[u8]](driver.buffers + cast[u64](buffer) * BUFFER_BYTES), length)
         for byte in written {
             if driver.input_count < driver.input.count {
@@ -320,7 +360,7 @@ take_input :: fn(driver: ptr[mut Driver]) {
  *
  * @param driver The driver, whose input shrinks and held Reads are cleared as they're answered.
  */
-answer_held :: fn(driver: ptr[mut Driver]) {
+answer_held :: fn(driver : ptr[mut Driver]) {
     for &most, index in driver.held {
         if driver.input_count == 0 {
             return void

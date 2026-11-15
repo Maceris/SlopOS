@@ -9,9 +9,9 @@ package terminal_service
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import text_buffer from "std:text_buffer"
-import terminal from "std:os/slop_os/terminal"
 import dir from "std:os/slop_os/dir"
+import terminal from "std:os/slop_os/terminal"
+import text_buffer from "std:text_buffer"
 import screen from "../../screen"
 
 /** The USB HID usage of the G key, which opens the grants view from the secure attention key's screen. */
@@ -54,7 +54,7 @@ GrantsView :: struct {
  *
  * @param service The service, its secure attention key's screen up.
  */
-enter_grants :: fn(service: ptr[mut Service]) {
+enter_grants :: fn(service : ptr[mut Service]) {
     if view(service).home_end == NONE {
         return void
     }
@@ -72,7 +72,7 @@ enter_grants :: fn(service: ptr[mut Service]) {
  * @param service The service, its grants view up.
  * @param event The key, by its USB HID usage; its modifiers aren't looked at.
  */
-grants_key :: fn(service: ptr[mut Service], event: terminal.Event) {
+grants_key :: fn(service : ptr[mut Service], event : terminal.Event) {
     grants :: &service.grants
     if event.code == USAGE_ESCAPE || event.code == USAGE_ENTER {
         service.granting = false
@@ -104,7 +104,7 @@ grants_key :: fn(service: ptr[mut Service], event: terminal.Event) {
  *
  * @param service The service, whose active view has a home connection.
  */
-list_grants :: fn(service: ptr[mut Service]) {
+list_grants :: fn(service : ptr[mut Service]) {
     grants :: &service.grants
     grants.count = 0
     home :: view(service).home_end
@@ -141,7 +141,7 @@ list_grants :: fn(service: ptr[mut Service]) {
  * @param service The service, whose active view has a home connection.
  * @param kept The grant, as listed; only its number is sent.
  */
-revoke :: fn(service: ptr[mut Service], kept: Kept) {
+revoke :: fn(service : ptr[mut Service], kept : Kept) {
     home :: view(service).home_end
     port :: os.port_for(slop_os.startup_block().budget, home) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -149,7 +149,10 @@ revoke :: fn(service: ptr[mut Service], kept: Kept) {
     os.begin[dir.Request](&out)^ = .Revoke(kept.number)
     into := os.Incoming.{}
     match ask_home(home, port, &out, &into) {
-        case Done => runtime.log_info("revoked a kept grant of %", bytes_text(first_of(kept.path[0..<kept.path.count], kept.count)))
+        case Done => runtime.log_info(
+            "revoked a kept grant of %",
+            bytes_text(first_of(kept.path[0..<kept.path.count], kept.count))
+        )
         case _ => runtime.log_info("couldn't revoke a kept grant")
     }
 }
@@ -160,7 +163,7 @@ revoke :: fn(service: ptr[mut Service], kept: Kept) {
  *
  * @param service The service, its grants view up.
  */
-draw_grants :: fn(service: ptr[mut Service]) {
+draw_grants :: fn(service : ptr[mut Service]) {
     screen.show_panel(&view(service).screen, true)
     panel :: &view(service).screen.panel
     grants :: &service.grants
@@ -178,10 +181,21 @@ draw_grants :: fn(service: ptr[mut Service]) {
         line := text_buffer.make(storage)
         text_buffer.append(&line, bytes_text(first_of(kept.path[0..<kept.path.count], kept.count)))
         text_buffer.append(&line, if kept.write { "   may write" } else { "   may read" })
-        screen.write_at(panel, GRANTS_ROW + cast[u16](i), 4, text_buffer.as_string(&line),
-            if i == grants.selected { terminal.Style.{attributes = terminal.INVERSE} } else { plain })
+        screen.write_at(
+            panel,
+            GRANTS_ROW + cast[u16](i),
+            4,
+            text_buffer.as_string(&line),
+            if i == grants.selected { terminal.Style.{attributes = terminal.INVERSE} } else { plain }
+        )
     }
-    screen.write_at(panel, GRANTS_ROW + cast[u16](MAX_GRANTS_SHOWN) + 1, 2, "Up and Down choose, Delete revokes the one chosen, Esc goes back.", plain)
+    screen.write_at(
+        panel,
+        GRANTS_ROW + cast[u16](MAX_GRANTS_SHOWN) + 1,
+        2,
+        "Up and Down choose, Delete revokes the one chosen, Esc goes back.",
+        plain
+    )
     redraw(service)
 }
 
@@ -195,7 +209,12 @@ draw_grants :: fn(service: ptr[mut Service]) {
  *     used again.
  * @return The answer; Unsupported also when the request couldn't be sent or the connection failed.
  */
-ask_home :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> dir.Response {
+ask_home :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -216,7 +235,7 @@ ask_home :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoin
  * @return The new connection's other end, the caller's to close; null if no port or channel could be made or Connect
  *     couldn't be sent.
  */
-another_connection :: fn(end: slop_os.Channel) -> slop_os.Channel? {
+another_connection :: fn(end : slop_os.Channel) -> slop_os.Channel? {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))

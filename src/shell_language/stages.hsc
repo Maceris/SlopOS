@@ -13,7 +13,7 @@ import runtime from "base:runtime"
  * @param name The field's name; "" for the item itself.
  * @return The field's value, or the item; Null for an item that isn't a record, or hasn't the field.
  */
-key_of :: fn(item: Value, name: string) -> Value {
+key_of :: fn(item : Value, name : string) -> Value {
     if name.count == 0 {
         return item
     }
@@ -32,7 +32,7 @@ key_of :: fn(item: Value, name: string) -> Value {
  * @param descending Whether the largest come first.
  * @return A new list of them, sorted, on the heap, never freed.
  */
-sort_items :: fn(items #escaping : Value[], field: string, descending: bool) -> ptr[mut ValueList] {
+sort_items :: fn(items #escaping : Value[], field : string, descending : bool) -> ptr[mut ValueList] {
     made :: new_list()
     for item in items {
         // Insertion: after every item it doesn't come before

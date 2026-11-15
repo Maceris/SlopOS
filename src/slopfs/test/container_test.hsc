@@ -36,7 +36,7 @@ Data :: struct {
  * @param into The bytes, all filled.
  * @param seed The seed, any value; the same seed makes the same bytes.
  */
-pattern :: fn(into: mut u8[], seed: u64) {
+pattern :: fn(into : mut u8[], seed : u64) {
     state := seed * 0x9e3779b97f4a7c15 + 1
     for i in 0..<into.count {
         state = state * 6364136223846793005 + 1442695040888963407
@@ -69,7 +69,7 @@ System :: struct {
  * @return The container, the caller's to free with free_system; Error if any of it failed, the failure recorded and
  *     nothing left to free.
  */
-system :: fn(t: ptr[mut testing.T]) -> Result[System, testing.Stopped] {
+system :: fn(t : ptr[mut testing.T]) -> Result[System, testing.Stopped] {
     device :: formatted(t, BLOCKS, 1)?
     made := System.{device = device, data = runtime.new(Data), back = runtime.new(Data)}
     if start_system(t, &made) is_error {
@@ -86,7 +86,7 @@ system :: fn(t: ptr[mut testing.T]) -> Result[System, testing.Stopped] {
  * @param made The container's disk, formatted, and its buffers; its container, volume and baseline are set here.
  * @return Ok if it's all done; Error(Failed), the failure recorded, if not.
  */
-start_system :: fn(t: ptr[mut testing.T], made: ptr[mut System]) -> testing.Outcome {
+start_system :: fn(t : ptr[mut testing.T], made : ptr[mut System]) -> testing.Outcome {
     mounting :: slopfs.mount(made.device)
     made.container = testing.require_ok(t, mounting, "a formatted disk mounts")?
     made.mounted = true
@@ -104,7 +104,7 @@ start_system :: fn(t: ptr[mut testing.T], made: ptr[mut System]) -> testing.Outc
  * @param made The container, mounted; unmounted and mounted again, its container and volume replaced.
  * @return Ok if it mounted and the volume opened; Error(Failed), the failure recorded, if not.
  */
-remount :: fn(t: ptr[mut testing.T], made: ptr[mut System]) -> testing.Outcome {
+remount :: fn(t : ptr[mut testing.T], made : ptr[mut System]) -> testing.Outcome {
     slopfs.unmount(made.container)
     made.mounted = false
     mounting :: slopfs.mount(made.device)
@@ -120,7 +120,7 @@ remount :: fn(t: ptr[mut testing.T], made: ptr[mut System]) -> testing.Outcome {
  *
  * @param made The container, which isn't used after.
  */
-free_system :: fn(made: ptr[mut System]) {
+free_system :: fn(made : ptr[mut System]) {
     if made.mounted {
         slopfs.unmount(made.container)
     }
@@ -151,7 +151,7 @@ Files :: struct {
  * @param made The container, its volume open; its data is filled with pattern 1.
  * @return The files' IDs; Error if any couldn't be made or written, the failure recorded.
  */
-made_files :: fn(t: ptr[mut testing.T], made: ptr[mut System]) -> Result[Files, testing.Stopped] {
+made_files :: fn(t : ptr[mut testing.T], made : ptr[mut System]) -> Result[Files, testing.Stopped] {
     volume :: made.volume
     root :: slopfs.ROOT_OBJECT
     files := Files.{}
@@ -184,7 +184,7 @@ made_files :: fn(t: ptr[mut testing.T], made: ptr[mut System]) -> Result[Files, 
  * @param files The files made_files made.
  * @return Ok once they're checked, whatever was found; Error(Failed), the failure recorded, if one couldn't be read.
  */
-check_files :: fn(t: ptr[mut testing.T], made: ptr[mut System], files: Files) -> testing.Outcome {
+check_files :: fn(t : ptr[mut testing.T], made : ptr[mut System], files : Files) -> testing.Outcome {
     volume :: made.volume
     data :: made.data
     back :: made.back
@@ -195,21 +195,33 @@ check_files :: fn(t: ptr[mut testing.T], made: ptr[mut System], files: Files) ->
     large :: slopfs.read(volume, files.large, 0, back.bytes[0..<400000])
     large_read :: testing.require_ok(t, large, "a file across chunks reads")?
     testing.expect_eq(t, large_read, 200000, "a file across chunks reads as long as was written")
-    testing.expect_none(t, difference(back.bytes[0..<200000], data.bytes[0..<200000]), "a file across chunks reads as written")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<200000], data.bytes[0..<200000]),
+        "a file across chunks reads as written"
+    )
     middle :: slopfs.read(volume, files.large, 65530, back.bytes[0..<20])
     middle_read :: testing.require_ok(t, middle, "a file reads from across its chunks' edge")?
     testing.expect_eq(t, middle_read, 20, "20 bytes read across a chunk's edge, all within the file")
-    testing.expect_none(t, difference(back.bytes[0..<20], data.bytes[65530..<65550]), "bytes across a chunk's edge read as written")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<20], data.bytes[65530..<65550]),
+        "bytes across a chunk's edge read as written"
+    )
     holey :: slopfs.read(volume, files.holey, 0, back.bytes[0..<400000])
     holey_read :: testing.require_ok(t, holey, "a file with a hole reads")?
     testing.expect_eq(t, holey_read, 300010, "a file with a hole is as long as its hole and what's past it")
     testing.expect_eq(t, back.bytes[0], 0, "a hole's first byte reads as zero")
     testing.expect_eq(t, back.bytes[299999], 0, "a hole's last byte reads as zero")
-    testing.expect_none(t, difference(back.bytes[300000..<300010], data.bytes[0..<10]), "what's past a hole reads as written")
+    testing.expect_none(
+        t,
+        difference(back.bytes[300000..<300010], data.bytes[0..<10]),
+        "what's past a hole reads as written"
+    )
     return .Ok
 }
 
-an_empty_disk_isnt_mounted_and_a_formatted_one_is #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_empty_disk_isnt_mounted_and_a_formatted_one_is #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     device :: testing.require_some(t, new_device(), "the disk's bytes are allocated")?
     defer free_device(device)
     id : u8[16]
@@ -224,13 +236,21 @@ an_empty_disk_isnt_mounted_and_a_formatted_one_is #test :: fn(t: ptr[mut testing
     container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
     defer slopfs.unmount(container)
     after_format :: slopfs.free_blocks(container)
-    testing.expect(t, after_format + 4 * slopfs.NODE_BLOCKS + slopfs.FIRST_DATA + 1 >= BLOCKS,
-        "only the space map's and owners' nodes, two copies each, are used after formatting")
-    testing.expect_lt(t, after_format, BLOCKS - slopfs.FIRST_DATA - 1, "formatting writes the space map's and owners' nodes")
+    testing.expect(
+        t,
+        after_format + 4 * slopfs.NODE_BLOCKS + slopfs.FIRST_DATA + 1 >= BLOCKS,
+        "only the space map's and owners' nodes, two copies each, are used after formatting"
+    )
+    testing.expect_lt(
+        t,
+        after_format,
+        BLOCKS - slopfs.FIRST_DATA - 1,
+        "formatting writes the space map's and owners' nodes"
+    )
     return .Ok
 }
 
-names_already_there_or_that_arent_names_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+names_already_there_or_that_arent_names_are_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     files :: made_files(t, &made)?
@@ -243,7 +263,7 @@ names_already_there_or_that_arent_names_are_refused #test :: fn(t: ptr[mut testi
     return .Ok
 }
 
-names_that_would_show_other_than_their_bytes_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+names_that_would_show_other_than_their_bytes_are_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     volume :: made.volume
@@ -266,7 +286,7 @@ names_that_would_show_other_than_their_bytes_are_refused #test :: fn(t: ptr[mut 
     return .Ok
 }
 
-a_typed_files_schema_is_kept #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_typed_files_schema_is_kept #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     creating :: slopfs.create(made.volume, slopfs.ROOT_OBJECT, "typed", .File)
@@ -282,7 +302,7 @@ a_typed_files_schema_is_kept #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
     return .Ok
 }
 
-files_read_back_as_written #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+files_read_back_as_written #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     files :: made_files(t, &made)?
@@ -291,7 +311,7 @@ files_read_back_as_written #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome
     return .Ok
 }
 
-files_read_back_the_same_after_a_mount #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+files_read_back_the_same_after_a_mount #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     files :: made_files(t, &made)?
@@ -302,12 +322,17 @@ files_read_back_the_same_after_a_mount #test :: fn(t: ptr[mut testing.T]) -> tes
     expected : u64? = files.docs
     testing.expect_eq(t, found_docs, expected, "a committed name names what it did")
     check_files(t, &made, files)?
-    testing.expect_eq(t, count_entries(made.volume, slopfs.ROOT_OBJECT), 3, "the root lists docs, large.bin and holey.bin")
+    testing.expect_eq(
+        t,
+        count_entries(made.volume, slopfs.ROOT_OBJECT),
+        3,
+        "the root lists docs, large.bin and holey.bin"
+    )
     testing.expect_eq(t, count_entries(made.volume, files.docs), 2, "docs lists empty.txt and small.txt")
     return .Ok
 }
 
-files_change_as_overwritten_grown_cut_renamed_and_moved #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+files_change_as_overwritten_grown_cut_renamed_and_moved #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     files :: made_files(t, &made)?
@@ -380,12 +405,17 @@ files_change_as_overwritten_grown_cut_renamed_and_moved #test :: fn(t: ptr[mut t
     testing.expect_eq(t, read_after, 90000, "a file's new size is committed")
     testing.expect_eq(t, back.bytes[999], data.bytes[999], "what the cut kept is committed")
     testing.expect_eq(t, back.bytes[1000], 0, "what was cut is committed as zeros")
-    testing.expect_eq(t, count_entries(made.volume, files.docs), 2, "docs lists empty.txt, renamed over, and holey.bin, moved in")
+    testing.expect_eq(
+        t,
+        count_entries(made.volume, files.docs),
+        2,
+        "docs lists empty.txt, renamed over, and holey.bin, moved in"
+    )
     testing.expect_eq(t, count_entries(made.volume, root), 2, "the root lists docs and large.bin, holey.bin moved out")
     return .Ok
 }
 
-removing_everything_gives_the_space_back #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+removing_everything_gives_the_space_back #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     files :: made_files(t, &made)?
@@ -404,12 +434,15 @@ removing_everything_gives_the_space_back #test :: fn(t: ptr[mut testing.T]) -> t
     // Committed twice, so what the first freed is free
     require_commit(t, made.container, "the removals commit")?
     require_commit(t, made.container, "a commit after the removals frees what they gave back")?
-    testing.expect(t, slopfs.free_blocks(made.container) + 8 * slopfs.NODE_BLOCKS >= made.baseline,
-        "with everything removed, the space is back, but for the trees' nodes, two copies each, rewritten")
+    testing.expect(
+        t,
+        slopfs.free_blocks(made.container) + 8 * slopfs.NODE_BLOCKS >= made.baseline,
+        "with everything removed, the space is back, but for the trees' nodes, two copies each, rewritten"
+    )
     return .Ok
 }
 
-verify_finds_blocks_allocated_and_never_used #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+verify_finds_blocks_allocated_and_never_used #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     container :: made.container
@@ -425,7 +458,7 @@ verify_finds_blocks_allocated_and_never_used #test :: fn(t: ptr[mut testing.T]) 
     return .Ok
 }
 
-a_broken_newest_checkpoint_falls_back_to_the_one_before #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_broken_newest_checkpoint_falls_back_to_the_one_before #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     data :: made.data
@@ -446,19 +479,32 @@ a_broken_newest_checkpoint_falls_back_to_the_one_before #test :: fn(t: ptr[mut t
     disk :: cast[ptr[mut Disk]](made.device.context)
     flip(disk, (1 + newest % slopfs.RING_BLOCKS) * slopfs.BLOCK_BYTES + 100)
     mounting :: slopfs.mount(made.device)
-    made.container = testing.require_ok(t, mounting, "a container with its newest checkpoint broken mounts from the one before")?
+    made.container = testing.require_ok(
+        t,
+        mounting,
+        "a container with its newest checkpoint broken mounts from the one before"
+    )?
     made.mounted = true
-    testing.expect_eq(t, slopfs.durable_transaction(made.container), kept_in, "the checkpoint before the broken one is taken")
+    testing.expect_eq(
+        t,
+        slopfs.durable_transaction(made.container),
+        kept_in,
+        "the checkpoint before the broken one is taken"
+    )
     opening :: slopfs.open_volume(made.container, 1)
     volume :: testing.require_ok(t, opening, "the volume opens as the checkpoint before named it")?
     reading :: slopfs.read(volume, file, 0, back.bytes[0..<8192])
     read :: testing.require_ok(t, reading, "the file reads as the checkpoint before had it")?
     testing.expect_eq(t, read, 8192, "the file is as long as it was then")
-    testing.expect_none(t, difference(back.bytes[0..<8192], data.bytes[0..<8192]), "the file holds what it did then, not the overwrite")
+    testing.expect_none(
+        t,
+        difference(back.bytes[0..<8192], data.bytes[0..<8192]),
+        "the file holds what it did then, not the overwrite"
+    )
     return .Ok
 }
 
-a_broken_block_of_a_file_reads_as_corrupt #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_broken_block_of_a_file_reads_as_corrupt #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     data :: made.data
@@ -472,10 +518,18 @@ a_broken_block_of_a_file_reads_as_corrupt #test :: fn(t: ptr[mut testing.T]) -> 
     made.mounted = false
     // The file's first block, found by its bytes, broken
     disk :: cast[ptr[mut Disk]](made.device.context)
-    at :: testing.require_some(t, find(disk, data.bytes[0..<64]), "a file that isn't encrypted is on the disk as written")?
+    at :: testing.require_some(
+        t,
+        find(disk, data.bytes[0..<64]),
+        "a file that isn't encrypted is on the disk as written"
+    )?
     flip(disk, at + 10)
     mounting :: slopfs.mount(made.device)
-    made.container = testing.require_ok(t, mounting, "a container mounts with a file's block broken, which it doesn't read")?
+    made.container = testing.require_ok(
+        t,
+        mounting,
+        "a container mounts with a file's block broken, which it doesn't read"
+    )?
     made.mounted = true
     opening :: slopfs.open_volume(made.container, 1)
     volume :: testing.require_ok(t, opening, "the volume opens with a file's block broken")?
@@ -490,7 +544,7 @@ a_broken_block_of_a_file_reads_as_corrupt #test :: fn(t: ptr[mut testing.T]) -> 
  * @param disk The test disk, changed in place.
  * @param at The byte's offset; past the disk's end, nothing changes.
  */
-flip :: fn(disk: ptr[mut Disk], at: u64) {
+flip :: fn(disk : ptr[mut Disk], at : u64) {
     index :: cast[usize](at)
     if index < disk.bytes.count {
         disk.bytes[index] = disk.bytes[index] ~ 0x5a
@@ -504,7 +558,7 @@ flip :: fn(disk: ptr[mut Disk], at: u64) {
  * @param bytes The bytes looked for, at most a block of them.
  * @return Their byte offset on the disk, a block's start; null if no block starts with them.
  */
-find :: fn(disk: ptr[mut Disk], bytes: u8[]) -> u64? {
+find :: fn(disk : ptr[mut Disk], bytes : u8[]) -> u64? {
     for block in 0..<BLOCKS {
         start :: cast[usize](block * slopfs.BLOCK_BYTES)
         end :: start + bytes.count
@@ -522,7 +576,7 @@ find :: fn(disk: ptr[mut Disk], bytes: u8[]) -> u64? {
  * @param directory The directory to list, in the volume; anything that isn't one fails the listing.
  * @return How many there are, up to 100000; 9999 if listing failed.
  */
-count_entries :: fn(volume: ptr[mut slopfs.Volume], directory: u64) -> u64 {
+count_entries :: fn(volume : ptr[mut slopfs.Volume], directory : u64) -> u64 {
     name : u8[255]
     count : u64 = 0
     cursor : u64 = 0
@@ -572,7 +626,7 @@ Compared :: struct {
     differs : usize?,
 }
 
-files_match_a_model_through_random_writes_cuts_and_mounts #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+files_match_a_model_through_random_writes_cuts_and_mounts #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     models := runtime.new(Models)
@@ -651,7 +705,7 @@ files_match_a_model_through_random_writes_cuts_and_mounts #test :: fn(t: ptr[mut
     return .Ok
 }
 
-a_directory_of_many_entries_lists_each_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_directory_of_many_entries_lists_each_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := system(t)?
     defer free_system(&made)
     creating :: slopfs.create(made.volume, slopfs.ROOT_OBJECT, "many", .Directory)
@@ -680,7 +734,7 @@ a_directory_of_many_entries_lists_each_once #test :: fn(t: ptr[mut testing.T]) -
  * @param number The number, 0 or more, at most 8 digits.
  * @return The name's length in bytes, counted as if it all fit.
  */
-name_of_number :: fn(text: mut u8[], number: int) -> usize {
+name_of_number :: fn(text : mut u8[], number : int) -> usize {
     prefix :: "file-"
     for character, i in prefix {
         if i < text.count {
@@ -720,13 +774,23 @@ name_of_number :: fn(text: mut u8[], number: int) -> usize {
  * @param which The file's place among the models, for the failure.
  * @return Ok if it matches; Error(Failed), the failure recorded, if it doesn't or couldn't be read.
  */
-compare_file :: fn(t: ptr[mut testing.T], volume: ptr[mut slopfs.Volume], model: ptr[mut Model], back: ptr[mut Data], step: int,
-    which: usize) -> testing.Outcome {
-
+compare_file :: fn(
+    t : ptr[mut testing.T],
+    volume : ptr[mut slopfs.Volume],
+    model : ptr[mut Model],
+    back : ptr[mut Data],
+    step : int,
+    which : usize
+) -> testing.Outcome {
     getting :: slopfs.info(volume, model.object)
     info :: testing.require_ok(t, getting, "a modelled file's record reads")?
     expected := Compared.{step = step, file = which, size = cast[u64](model.size)}
-    testing.require_eq(t, Compared.{step = step, file = which, size = info.size}, expected, "a file is as long as the model says")?
+    testing.require_eq(
+        t,
+        Compared.{step = step, file = which, size = info.size},
+        expected,
+        "a file is as long as the model says"
+    )?
     reading :: slopfs.read(volume, model.object, 0, back.bytes[0..<MODEL_BYTES])
     read :: testing.require_ok(t, reading, "a modelled file reads")?
     if model.size > MODEL_BYTES {
@@ -750,7 +814,7 @@ ACCENTED :: u8.[0x6e, 0x61, 0xc3, 0xaf, 0x76, 0x65]
  * @param bytes The name's bytes, viewed as a string as they are; none makes the name "".
  * @return The file's ID, or why it wasn't made, as create says.
  */
-create_named :: fn(volume: ptr[mut slopfs.Volume], directory: u64, bytes: u8[]) -> Result[u64, slopfs.Error] {
+create_named :: fn(volume : ptr[mut slopfs.Volume], directory : u64, bytes : u8[]) -> Result[u64, slopfs.Error] {
     if bytes.count == 0 {
         return slopfs.create(volume, directory, "", .File)
     }

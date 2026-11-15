@@ -48,7 +48,7 @@ CpuHeap :: struct {
  *
  * @param heap The kernel's Heap, where it lives; its caches are overwritten.
  */
-init_heap :: fn(heap: ptr[mut Heap]) {
+init_heap :: fn(heap : ptr[mut Heap]) {
     for i in 0..<SIZE_CLASSES {
         size :: SMALLEST_CLASS << cast[u64](i)
         heap.caches[i] = slab.make_cache(size, size)
@@ -89,12 +89,12 @@ heap_allocator :: fn(kernel #escaping : ptr[mut Kernel]) -> runtime.Allocator {
  *     memory could be had, or fault injection failed the Heap point, with old_memory left as it was; null on success.
  */
 heap_function : runtime.AllocatorFn : fn(
-    allocator_data: rawptr,
-    size: usize,
-    alignment: usize,
-    old_memory: rawptr,
-    old_size: usize,
-    location := #caller_location,
+    allocator_data : rawptr,
+    size : usize,
+    alignment : usize,
+    old_memory : rawptr,
+    old_size : usize,
+    location := #caller_location
 ) -> (mut u8[], runtime.AllocatorError?) {
     kernel :: cast[ptr[mut Kernel]](allocator_data)
     empty : mut u8[]
@@ -105,8 +105,10 @@ heap_function : runtime.AllocatorFn : fn(
         return empty, runtime.AllocatorError.OutOfMemory
     }
     // Growing or shrinking within the same block stays where it is
-    if old_memory != null && size > 0
-        && block_bytes(cast[u64](size), cast[u64](alignment)) == block_bytes(cast[u64](old_size), cast[u64](alignment)) {
+    if old_memory != null
+        && size > 0
+        && block_bytes(cast[u64](size), cast[u64](alignment))
+            == block_bytes(cast[u64](old_size), cast[u64](alignment)) {
         if size > old_size {
             intrinsics.mem_zero(cast[mut rawptr](cast[u64](old_memory) + cast[u64](old_size)), size - old_size)
         }
@@ -125,7 +127,11 @@ heap_function : runtime.AllocatorFn : fn(
     }
     if old_memory != null {
         if size > 0 {
-            intrinsics.mem_copy(cast[mut rawptr](result.data), old_memory, if old_size < size { old_size } else { size })
+            intrinsics.mem_copy(
+                cast[mut rawptr](result.data),
+                old_memory,
+                if old_size < size { old_size } else { size }
+            )
         }
         free_block(kernel, cast[u64](old_memory), block_bytes(cast[u64](old_size), cast[u64](alignment)))
     }
@@ -141,7 +147,7 @@ heap_function : runtime.AllocatorFn : fn(
  * @return The block's size in bytes: a class from SMALLEST_CLASS to LARGEST_SMALL, or FRAME_SIZE times a power of two,
  *     which can be more than LARGEST_BLOCK when the size is.
  */
-block_bytes :: fn(size: u64, alignment: u64) -> u64 {
+block_bytes :: fn(size : u64, alignment : u64) -> u64 {
     wanted :: if alignment > size { alignment } else { size }
     if wanted > LARGEST_SMALL {
         return frames.FRAME_SIZE << frames.order_for(wanted)
@@ -156,7 +162,7 @@ block_bytes :: fn(size: u64, alignment: u64) -> u64 {
  * @return The class's index, 0 for SMALLEST_CLASS; SIZE_CLASSES or more for a size above LARGEST_SMALL, which callers
  *     don't pass.
  */
-class_of :: fn(size: u64) -> u64 {
+class_of :: fn(size : u64) -> u64 {
     class : u64 = 0
     loop {
         class += 1
@@ -173,7 +179,7 @@ class_of :: fn(size: u64) -> u64 {
  * @return The block's address in the direct map, aligned to its size. Its contents are whatever was there.
  * @error OutOfMemory No memory for the block, or fault injection failed the Slab or Frame point.
  */
-allocate_block :: fn(kernel: ptr[mut Kernel], size: u64) -> Result[u64, frames.FrameError] {
+allocate_block :: fn(kernel : ptr[mut Kernel], size : u64) -> Result[u64, frames.FrameError] {
     if size == frames.FRAME_SIZE {
         address :: frames.take_frame(&per_cpu().frame_cache, &kernel.frames)?
         return .Ok(frames.virtual_of(&kernel.frames, address))
@@ -195,7 +201,7 @@ allocate_block :: fn(kernel: ptr[mut Kernel], size: u64) -> Result[u64, frames.F
  * @param address The block's direct-map address; the caller gives it up.
  * @param size The block's size in bytes, as block_bytes gave it when it was allocated.
  */
-free_block :: fn(kernel: ptr[mut Kernel], address: u64, size: u64) {
+free_block :: fn(kernel : ptr[mut Kernel], address : u64, size : u64) {
     if size > LARGEST_SMALL {
         // Blocks are in the direct map, at their physical address plus its offset
         physical :: cast[boot_info.PhysicalAddress](address - kernel.frames.direct_map_offset)

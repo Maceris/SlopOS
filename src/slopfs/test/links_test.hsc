@@ -50,7 +50,7 @@ Linked :: struct {
  * @return The volumes and links, the caller's to free with free_linked; Error if any of it failed, the failure
  *     recorded and nothing left to free.
  */
-linked :: fn(t: ptr[mut testing.T]) -> Result[Linked, testing.Stopped] {
+linked :: fn(t : ptr[mut testing.T]) -> Result[Linked, testing.Stopped] {
     device :: formatted(t, 4096, 0xb0)?
     made := Linked.{device = device}
     for &byte, i in made.id {
@@ -70,7 +70,7 @@ linked :: fn(t: ptr[mut testing.T]) -> Result[Linked, testing.Stopped] {
  * @param made The disk, formatted, and the container's ID; the rest is set here.
  * @return Ok if it's all done; Error(Failed), the failure recorded, if not.
  */
-link :: fn(t: ptr[mut testing.T], made: ptr[mut Linked]) -> testing.Outcome {
+link :: fn(t : ptr[mut testing.T], made : ptr[mut Linked]) -> testing.Outcome {
     mounting :: slopfs.mount(made.device)
     made.container = testing.require_ok(t, mounting, "a formatted disk mounts")?
     made.mounted = true
@@ -94,8 +94,17 @@ link :: fn(t: ptr[mut testing.T], made: ptr[mut Linked]) -> testing.Outcome {
     made.second = testing.require_ok(t, issuing_second, "a volume issues a link to its file")?
     testing.expect_eq(t, made.first, 1, "a volume's first link issued is numbered 1")
     testing.expect_eq(t, made.second, 2, "a volume's links issued are numbered on")
-    to_docs := slopfs.LinkRecord.{container = made.id, volume = cast[u64le](made.shared_id), number = cast[u64le](made.first), write = 1}
-    to_note := slopfs.LinkRecord.{container = made.id, volume = cast[u64le](made.shared_id), number = cast[u64le](made.second)}
+    to_docs := slopfs.LinkRecord.{
+        container = made.id,
+        volume = cast[u64le](made.shared_id),
+        number = cast[u64le](made.first),
+        write = 1,
+    }
+    to_note := slopfs.LinkRecord.{
+        container = made.id,
+        volume = cast[u64le](made.shared_id),
+        number = cast[u64le](made.second),
+    }
     making_links :: slopfs.create(made.home, slopfs.ROOT_OBJECT, "links", .Directory)
     made.links = testing.require_ok(t, making_links, "a directory for the links is made")?
     keeping_docs :: slopfs.create_link(made.home, made.links, "docs", &to_docs)
@@ -113,7 +122,7 @@ link :: fn(t: ptr[mut testing.T], made: ptr[mut Linked]) -> testing.Outcome {
  * @param made The container, mounted; unmounted and mounted again, its container and volumes replaced.
  * @return Ok if it mounted and both volumes opened; Error(Failed), the failure recorded, if not.
  */
-remount_linked :: fn(t: ptr[mut testing.T], made: ptr[mut Linked]) -> testing.Outcome {
+remount_linked :: fn(t : ptr[mut testing.T], made : ptr[mut Linked]) -> testing.Outcome {
     slopfs.unmount(made.container)
     made.mounted = false
     mounting :: slopfs.mount(made.device)
@@ -131,14 +140,14 @@ remount_linked :: fn(t: ptr[mut testing.T], made: ptr[mut Linked]) -> testing.Ou
  *
  * @param made What linked made, which isn't used after.
  */
-free_linked :: fn(made: ptr[mut Linked]) {
+free_linked :: fn(made : ptr[mut Linked]) {
     if made.mounted {
         slopfs.unmount(made.container)
     }
     free_device(made.device)
 }
 
-a_path_walks_up_to_its_first_link_and_no_further #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_path_walks_up_to_its_first_link_and_no_further #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := linked(t)?
     defer free_linked(&made)
     home :: made.home
@@ -163,7 +172,7 @@ a_path_walks_up_to_its_first_link_and_no_further #test :: fn(t: ptr[mut testing.
     return .Ok
 }
 
-a_link_isnt_a_file_or_directory_to_what_doesnt_follow_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_link_isnt_a_file_or_directory_to_what_doesnt_follow_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := linked(t)?
     defer free_linked(&made)
     home :: made.home
@@ -180,7 +189,7 @@ a_link_isnt_a_file_or_directory_to_what_doesnt_follow_it #test :: fn(t: ptr[mut 
     return .Ok
 }
 
-issued_links_are_listed_and_revoked_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+issued_links_are_listed_and_revoked_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := linked(t)?
     defer free_linked(&made)
     shared :: made.shared
@@ -189,7 +198,12 @@ issued_links_are_listed_and_revoked_once #test :: fn(t: ptr[mut testing.T]) -> t
     record :: testing.require_some(t, issued, "what was issued is recorded")?
     testing.expect_eq(t, cast[u64](record.object), made.docs, "an issued record names the object issued")
     testing.expect_eq(t, record.write, 1, "an issued record says it was issued with write")
-    testing.expect_eq(t, cast[u64](record.recipient_volume), made.home_id, "an issued record names the volume it was issued to")
+    testing.expect_eq(
+        t,
+        cast[u64](record.recipient_volume),
+        made.home_id,
+        "an issued record names the volume it was issued to"
+    )
     testing.expect(t, record.recipient_container == made.id, "an issued record names the container it was issued to")
     listing :: slopfs.next_issued(shared, 0)
     listed := testing.require_ok(t, listing, "what was issued lists")?
@@ -218,7 +232,7 @@ issued_links_are_listed_and_revoked_once #test :: fn(t: ptr[mut testing.T]) -> t
     return .Ok
 }
 
-links_issued_and_kept_last_across_a_mount #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+links_issued_and_kept_last_across_a_mount #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := linked(t)?
     defer free_linked(&made)
     revoking :: slopfs.revoke(made.shared, made.first)
@@ -229,7 +243,12 @@ links_issued_and_kept_last_across_a_mount #test :: fn(t: ptr[mut testing.T]) -> 
     walked :: testing.require_ok(t, walking, "a path to a kept link walks after a mount")?
     reading :: slopfs.link_of(made.home, walked.object)
     kept :: testing.require_ok(t, reading, "a kept link's record reads after a mount")?
-    testing.expect_eq(t, cast[u64](kept.number), made.second, "a kept link names the number it was issued after a mount")
+    testing.expect_eq(
+        t,
+        cast[u64](kept.number),
+        made.second,
+        "a kept link names the number it was issued after a mount"
+    )
     testing.expect_eq(t, kept.write, 0, "a link kept without write has none after a mount")
     reading_second :: slopfs.issued(made.shared, made.second)
     second :: testing.require_ok(t, reading_second, "an issued number reads after a mount")?
@@ -240,7 +259,7 @@ links_issued_and_kept_last_across_a_mount #test :: fn(t: ptr[mut testing.T]) -> 
     return .Ok
 }
 
-a_clones_copies_of_its_origins_issued_records_issue_nothing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_clones_copies_of_its_origins_issued_records_issue_nothing #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := linked(t)?
     defer free_linked(&made)
     container :: made.container
@@ -258,7 +277,11 @@ a_clones_copies_of_its_origins_issued_records_issue_nothing #test :: fn(t: ptr[m
     clone :: testing.require_ok(t, opening, "the clone opens")?
     reading :: slopfs.issued(clone, made.second)
     issued :: testing.require_ok(t, reading, "a clone's issued records read")?
-    testing.expect_none(t, issued, "a clone's copy of its origin's issued record issues nothing: the link was its origin's")
+    testing.expect_none(
+        t,
+        issued,
+        "a clone's copy of its origin's issued record issues nothing: the link was its origin's"
+    )
     listing :: slopfs.next_issued(clone, 0)
     listed :: testing.require_ok(t, listing, "a clone's issued records list")?
     testing.expect_none(t, listed, "a clone lists nothing issued of its origin's")
@@ -268,7 +291,7 @@ a_clones_copies_of_its_origins_issued_records_issue_nothing #test :: fn(t: ptr[m
     return .Ok
 }
 
-a_link_removed_takes_its_record_with_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_link_removed_takes_its_record_with_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := linked(t)?
     defer free_linked(&made)
     home :: made.home
@@ -290,7 +313,7 @@ a_link_removed_takes_its_record_with_it #test :: fn(t: ptr[mut testing.T]) -> te
  * @param b The other string, of any length.
  * @return True if they're the same length and byte for byte alike.
  */
-same_text :: fn(a: string, b: string) -> bool {
+same_text :: fn(a : string, b : string) -> bool {
     if a.count != b.count {
         return false
     }

@@ -1,14 +1,14 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import schema from "std:schema"
 import strings from "std:strings"
 import terminal from "std:terminal"
-import slop_os from "std:os/slop_os"
-import dir from "std:os/slop_os/dir"
 import bundle from "../../bundle"
+import shell_language as language from "../../shell_language"
 
 /*
  * Completion (design/shell.md §6): Tab completes the word before the cursor by where it is. In a command's place, a
@@ -20,7 +20,9 @@ import bundle from "../../bundle"
 
 /** The most candidates offered, so a directory of thousands, or a long list of programs, stays quick. */
 MAX_CANDIDATES :: 64
-/** The most programs whose summaries are asked for when several are listed: each is a request to the session manager. */
+/**
+ * The most programs whose summaries are asked for when several are listed: each is a request to the session manager.
+ */
 MAX_SUMMARIES :: 32
 
 /**
@@ -32,7 +34,7 @@ MAX_SUMMARIES :: 32
  * @param into The completions, empty to start with: start is set to where the word starts, and each candidate, and its
  *     description, added with context.allocator, for the editor to free.
  */
-complete_line :: fn(shell: ptr[mut Shell], line: u8[], cursor: usize, into: ptr[mut terminal.Completions]) {
+complete_line :: fn(shell : ptr[mut Shell], line : u8[], cursor : usize, into : ptr[mut terminal.Completions]) {
     end :: if cursor < line.count { cursor } else { line.count }
     start := end
     loop {
@@ -65,7 +67,9 @@ complete_line :: fn(shell: ptr[mut Shell], line: u8[], cursor: usize, into: ptr[
         complete_parameters(shell, command, prefix, into)
         return void
     }
-    if previous.count > 2 && slice_of(previous, 0, 2) == "--" && complete_members(shell, command, slice_of(previous, 2, previous.count), prefix, into) {
+    if previous.count > 2
+        && slice_of(previous, 0, 2) == "--"
+        && complete_members(shell, command, slice_of(previous, 2, previous.count), prefix, into) {
         return void
     }
     complete_paths(shell, prefix, into)
@@ -78,7 +82,7 @@ complete_line :: fn(shell: ptr[mut Shell], line: u8[], cursor: usize, into: ptr[
  * @param byte A byte of the line.
  * @return True for a space, a tab, a line break, | ; ( ) { } [ ] , = or ".
  */
-ends_word :: fn(byte: u8) -> bool {
+ends_word :: fn(byte : u8) -> bool {
     for each in " \t\n|;(){}[],=\"" {
         if byte == cast[u8](each) {
             return true
@@ -93,8 +97,12 @@ ends_word :: fn(byte: u8) -> bool {
  * @param byte A byte of the line.
  * @return True for | ; ( { and a line break.
  */
-ends_command :: fn(byte: u8) -> bool {
-    return byte == cast[u8]('|') || byte == cast[u8](';') || byte == cast[u8]('(') || byte == cast[u8]('{') || byte == 10
+ends_command :: fn(byte : u8) -> bool {
+    return byte == cast[u8]('|')
+        || byte == cast[u8](';')
+        || byte == cast[u8]('(')
+        || byte == cast[u8]('{')
+        || byte == 10
 }
 
 /**
@@ -105,7 +113,7 @@ ends_command :: fn(byte: u8) -> bool {
  * @param end Where it ends, excluded.
  * @return The text, a view of line; empty for bounds backwards or past its end.
  */
-text_of :: fn(line: u8[], start: usize, end: usize) -> string {
+text_of :: fn(line : u8[], start : usize, end : usize) -> string {
     if start >= end || end > line.count {
         return ""
     }
@@ -120,7 +128,7 @@ text_of :: fn(line: u8[], start: usize, end: usize) -> string {
  * @param end Where it ends, excluded.
  * @return The slice; empty for bounds backwards or past text's end.
  */
-slice_of :: fn(text: string, start: usize, end: usize) -> string {
+slice_of :: fn(text : string, start : usize, end : usize) -> string {
     return language.slice(text, start, end)
 }
 
@@ -132,7 +140,7 @@ slice_of :: fn(text: string, start: usize, end: usize) -> string {
  * @return first The first word; empty for none.
  * @return last The last word, the first again for one; empty for none.
  */
-words_of :: fn(text: string) -> (count : usize, first : string, last : string) {
+words_of :: fn(text : string) -> (count : usize, first : string, last : string) {
     count : usize = 0
     first := ""
     last := ""
@@ -158,7 +166,7 @@ words_of :: fn(text: string) -> (count : usize, first : string, last : string) {
  * @param prefix The prefix; empty starts everything.
  * @return True if text's first bytes are prefix's.
  */
-starts_with :: fn(text: string, prefix: string) -> bool {
+starts_with :: fn(text : string, prefix : string) -> bool {
     return prefix.count <= text.count && slice_of(text, 0, prefix.count) == prefix
 }
 
@@ -170,7 +178,7 @@ starts_with :: fn(text: string, prefix: string) -> bool {
  * @param candidate What would replace the word: a directory's path ends with /, so its entries can be completed next.
  * @param description What it is, shown beside it when several are listed; "" for nothing.
  */
-offer :: fn(into: ptr[mut terminal.Completions], candidate: string, description: string) {
+offer :: fn(into : ptr[mut terminal.Completions], candidate : string, description : string) {
     if into.candidates.count >= MAX_CANDIDATES {
         return void
     }
@@ -194,7 +202,7 @@ offer :: fn(into: ptr[mut terminal.Completions], candidate: string, description:
  * @param piped Whether the word comes after a |, where the stages go.
  * @param into The completions, added to.
  */
-complete_commands :: fn(shell: ptr[mut Shell], prefix: string, piped: bool, into: ptr[mut terminal.Completions]) {
+complete_commands :: fn(shell : ptr[mut Shell], prefix : string, piped : bool, into : ptr[mut terminal.Completions]) {
     for each in BUILTINS {
         if starts_with(each.name, prefix) && (piped || !is_stage_name(each.name)) {
             offer(into, each.name, each.summary)
@@ -241,7 +249,7 @@ complete_commands :: fn(shell: ptr[mut Shell], prefix: string, piped: bool, into
  * @param name The name.
  * @return True for one of STAGES.
  */
-is_stage_name :: fn(name: string) -> bool {
+is_stage_name :: fn(name : string) -> bool {
     for each in STAGES {
         if each == name {
             return true
@@ -257,7 +265,7 @@ is_stage_name :: fn(name: string) -> bool {
  * @param prefix What's typed, starting with $.
  * @param into The completions, added to, each described by its value's kind.
  */
-complete_names :: fn(shell: ptr[mut Shell], prefix: string, into: ptr[mut terminal.Completions]) {
+complete_names :: fn(shell : ptr[mut Shell], prefix : string, into : ptr[mut terminal.Completions]) {
     typed :: slice_of(prefix, 1, prefix.count)
     scope : ptr[Scope]? = shell.scope
     loop {
@@ -283,7 +291,12 @@ complete_names :: fn(shell: ptr[mut Shell], prefix: string, into: ptr[mut termin
  * @param prefix What's typed, starting with --.
  * @param into The completions, added to.
  */
-complete_parameters :: fn(shell: ptr[mut Shell], command: string, prefix: string, into: ptr[mut terminal.Completions]) {
+complete_parameters :: fn(
+    shell : ptr[mut Shell],
+    command : string,
+    prefix : string,
+    into : ptr[mut terminal.Completions]
+) {
     typed :: slice_of(prefix, 2, prefix.count)
     match function_named(shell, command) {
         case Some(function) => {
@@ -317,7 +330,10 @@ complete_parameters :: fn(shell: ptr[mut Shell], command: string, prefix: string
     documentation :: program_documentation(shell, command) or_else bundle.Documentation.{}
     for input in entry.inputs {
         parameter :: parameter_of(&manifest, input)
-        if parameter.giving == .Terminal || parameter.giving == .Powerbox || parameter.giving == .Input || parameter.giving == .Output
+        if parameter.giving == .Terminal
+            || parameter.giving == .Powerbox
+            || parameter.giving == .Input
+            || parameter.giving == .Output
             || !starts_with(option_name(parameter.name), typed) {
             continue
         }
@@ -341,7 +357,13 @@ complete_parameters :: fn(shell: ptr[mut Shell], command: string, prefix: string
  * @param into The completions, added to.
  * @return True if the parameter is an enum's, so its members are what's offered; false otherwise, for paths instead.
  */
-complete_members :: fn(shell: ptr[mut Shell], command: string, name: string, prefix: string, into: ptr[mut terminal.Completions]) -> bool {
+complete_members :: fn(
+    shell : ptr[mut Shell],
+    command : string,
+    name : string,
+    prefix : string,
+    into : ptr[mut terminal.Completions]
+) -> bool {
     if (function_named(shell, command) is_some) || (builtin_named(command) is_some) {
         return false
     }
@@ -377,7 +399,7 @@ complete_members :: fn(shell: ptr[mut Shell], command: string, name: string, pre
  * @param prefix What's typed of the path.
  * @param into The completions, added to: the typed path's directory part, then each entry's name.
  */
-complete_paths :: fn(shell: ptr[mut Shell], prefix: string, into: ptr[mut terminal.Completions]) {
+complete_paths :: fn(shell : ptr[mut Shell], prefix : string, into : ptr[mut terminal.Completions]) {
     split := prefix.count
     loop {
         if split == 0 || slice_of(prefix, split - 1, split) == "/" {
@@ -418,7 +440,11 @@ complete_paths :: fn(shell: ptr[mut Shell], prefix: string, into: ptr[mut termin
                 name :: if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
                 if name.count > 0 && starts_with(name, typed) && (typed.count > 0 || slice_of(name, 0, 1) != ".") {
                     folder :: entry.kind == .Directory
-                    offer(into, message("%1%2%3", directory, name, if folder { "/" } else { "" }), if folder { "directory" } else { "" })
+                    offer(
+                        into,
+                        message("%1%2%3", directory, name, if folder { "/" } else { "" }),
+                        if folder { "directory" } else { "" }
+                    )
                 }
                 cursor = entry.next
             }

@@ -26,7 +26,7 @@ KernelReporting :: struct #scoped {
  * @param target The KernelReporting, which lasts while run_tests does.
  * @param text The line, ending with its newline, which the log adds again, so it's taken off.
  */
-write_kernel_log :: fn(target: rawptr, text: string) {
+write_kernel_log :: fn(target : rawptr, text : string) {
     reporting :: cast[ptr[KernelReporting]](target)
     line :: if text.count > 0 && text[text.count - 1] == '\n' { text[0..<text.count - 1] } else { text }
     runtime.log_info("%: %", reporting.flag, line)
@@ -41,7 +41,7 @@ write_kernel_log :: fn(target: rawptr, text: string) {
  * @param tests The tests, as a table literal naming each #test function; empty runs none, and reports "0 tests".
  * @return How many failed: 0 when every one passed. Callers needn't act on it, as the report says it.
  */
-run_tests :: fn(flag: string, tests: testing.Test[]) -> usize {
+run_tests :: fn(flag : string, tests : testing.Test[]) -> usize {
     reporting := KernelReporting.{flag = flag}
     reporter :: testing.Reporter.{target = cast[rawptr](&reporting), write = write_kernel_log}
     return testing.run(tests, reporter)

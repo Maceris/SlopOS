@@ -60,24 +60,34 @@ Space :: struct {
 }
 
 /**
- * Make a kernel table with nothing mapped, in a zeroed buffer standing in for physical memory: its root the first frame,
+ * Make a kernel table with nothing mapped, in a zeroed buffer standing in for physical memory: its root the first
+ * frame,
  * its kernel half's tables the next.
  *
  * @param t The test's state, which a failure is recorded in.
  * @return The table and its memory, which the caller frees with free_space; Error if the buffer couldn't be allocated,
  *     the failure recorded.
  */
-kernel_space :: fn(t: ptr[mut testing.T]) -> Result[Space, testing.Stopped] {
+kernel_space :: fn(t : ptr[mut testing.T]) -> Result[Space, testing.Stopped] {
     bytes, error :: runtime.new_array(u8, cast[usize](FRAME_COUNT * FRAME_SIZE))
     testing.require(t, error == null, "the buffer standing in for physical memory is allocated")?
     intrinsics.mem_zero(cast[mut rawptr](bytes.data), bytes.count)
-    made := Space.{bytes = bytes, memory = Memory.{direct_map_offset = cast[u64](bytes.data) - MEMORY_BASE, next_frame = 0}}
+    made := Space.{
+        bytes = bytes,
+        memory = Memory.{direct_map_offset = cast[u64](bytes.data) - MEMORY_BASE, next_frame = 0},
+    }
     root :: next_frame(&made.memory)
     half :: next_frame(&made.memory)
     for i in 1..<arch.kernel_half_frames() {
         _ = next_frame(&made.memory)
     }
-    arch.init_kernel_page_table(&made.kernel, root, half, cast[arch_interface.AddressSpaceTag](0), made.memory.direct_map_offset)
+    arch.init_kernel_page_table(
+        &made.kernel,
+        root,
+        half,
+        cast[arch_interface.AddressSpaceTag](0),
+        made.memory.direct_map_offset
+    )
     return .Ok(made)
 }
 
@@ -86,7 +96,7 @@ kernel_space :: fn(t: ptr[mut testing.T]) -> Result[Space, testing.Stopped] {
  *
  * @param space The space, whose tables aren't used after.
  */
-free_space :: fn(space: Space) {
+free_space :: fn(space : Space) {
     runtime.free_array(space.bytes)
 }
 
@@ -99,51 +109,168 @@ free_space :: fn(space: Space) {
  * @param tables Frames for new tables, refilled to 4 first.
  * @return Ok once all five are mapped; Error at the first that isn't, the failure recorded.
  */
-map_kernel_pages :: fn(t: ptr[mut testing.T], space: ptr[mut Space], tables: ptr[mut arch_interface.TableFrames]) -> testing.Outcome {
+map_kernel_pages :: fn(
+    t : ptr[mut testing.T],
+    space : ptr[mut Space],
+    tables : ptr[mut arch_interface.TableFrames]
+) -> testing.Outcome {
     refill(tables, &space.memory)
     expect_mapped(t, &space.kernel, KERNEL_PAGE, 0x5000, .Size4K, KERNEL_DATA, tables, "a 4 KiB kernel page")?
     expect_mapped(t, &space.kernel, KERNEL_LARGE_PAGE, 0x400000, .Size2M, KERNEL_CODE, tables, "a 2 MiB kernel page")?
-    expect_mapped(t, &space.kernel, KERNEL_PAGE + FRAME_SIZE, 0x7000, .Size4K, FRAMEBUFFER, tables, "a 4 KiB write-combining page")?
-    expect_mapped(t, &space.kernel, KERNEL_LARGE_PAGE + 0x200000, 0x600000, .Size2M, FRAMEBUFFER, tables,
-        "a 2 MiB write-combining page")?
+    expect_mapped(
+        t,
+        &space.kernel,
+        KERNEL_PAGE + FRAME_SIZE,
+        0x7000,
+        .Size4K,
+        FRAMEBUFFER,
+        tables,
+        "a 4 KiB write-combining page"
+    )?
+    expect_mapped(
+        t,
+        &space.kernel,
+        KERNEL_LARGE_PAGE + 0x200000,
+        0x600000,
+        .Size2M,
+        FRAMEBUFFER,
+        tables,
+        "a 2 MiB write-combining page"
+    )?
     expect_mapped(t, &space.kernel, KERNEL_PAGE + 2 * FRAME_SIZE, 0x8000, .Size4K, DEVICE, tables, "a device page")?
     return .Ok
 }
 
-kernel_pages_map_and_translate #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+kernel_pages_map_and_translate #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     space := kernel_space(t)?
     defer free_space(space)
     kernel :: &space.kernel
     tables : arch_interface.TableFrames
     // A 4 KiB page needs a page directory and a page table below the kernel half's table
-    expect_map_fails(t, kernel, KERNEL_PAGE, 0x5000, .Size4K, KERNEL_DATA, &tables, .NeedTableFrames,
-        "a 4 KiB page needs a page directory and a page table, and there are no frames for them")
+    expect_map_fails(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        0x5000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        .NeedTableFrames,
+        "a 4 KiB page needs a page directory and a page table, and there are no frames for them"
+    )
     refill(&tables, &space.memory)
-    expect_mapped(t, kernel, KERNEL_PAGE, 0x5000, .Size4K, KERNEL_DATA, &tables, "with frames for its tables, it's mapped")?
+    expect_mapped(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        0x5000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        "with frames for its tables, it's mapped"
+    )?
     testing.expect_eq(t, tables.count, 2, "two of the four frames became its page directory and page table")
     expect_translates_to(t, kernel, KERNEL_PAGE + 0x123, 0x5123, KERNEL_DATA, "an address in the page, its offset kept")
     testing.expect(t, !translates(kernel, KERNEL_PAGE + FRAME_SIZE), "the next page isn't mapped")
-    expect_map_fails(t, kernel, KERNEL_PAGE, 0x6000, .Size4K, KERNEL_DATA, &tables, .AlreadyMapped, "the page is mapped already")
-    expect_map_fails(t, kernel, KERNEL_PAGE + 8, 0x6000, .Size4K, KERNEL_DATA, &tables, .InvalidAddress,
-        "an address that isn't page-aligned")
-    expect_map_fails(t, kernel, USER_PAGE, 0x6000, .Size4K, USER_DATA, &tables, .InvalidAddress,
-        "the kernel's table maps only the kernel half")
-    expect_map_fails(t, kernel, USER_PAGE, 0x6000, .Size4K, KERNEL_DATA, &tables, .InvalidAddress,
-        "nor a user address as a kernel page")
+    expect_map_fails(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        0x6000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        .AlreadyMapped,
+        "the page is mapped already"
+    )
+    expect_map_fails(
+        t,
+        kernel,
+        KERNEL_PAGE + 8,
+        0x6000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        .InvalidAddress,
+        "an address that isn't page-aligned"
+    )
+    expect_map_fails(
+        t,
+        kernel,
+        USER_PAGE,
+        0x6000,
+        .Size4K,
+        USER_DATA,
+        &tables,
+        .InvalidAddress,
+        "the kernel's table maps only the kernel half"
+    )
+    expect_map_fails(
+        t,
+        kernel,
+        USER_PAGE,
+        0x6000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        .InvalidAddress,
+        "nor a user address as a kernel page"
+    )
     // A 2 MiB page beside it, in the same page directory, and write-combining in both sizes
-    expect_mapped(t, kernel, KERNEL_LARGE_PAGE, 0x400000, .Size2M, KERNEL_CODE, &tables, "a 2 MiB page beside the 4 KiB one")?
+    expect_mapped(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE,
+        0x400000,
+        .Size2M,
+        KERNEL_CODE,
+        &tables,
+        "a 2 MiB page beside the 4 KiB one"
+    )?
     testing.expect_eq(t, tables.count, 2, "it's in the page directory there is, so no new table is taken")
     expect_translates_to(t, kernel, KERNEL_LARGE_PAGE + 0x12345, 0x412345, KERNEL_CODE, "an address in the 2 MiB page")
-    expect_mapped(t, kernel, KERNEL_PAGE + FRAME_SIZE, 0x7000, .Size4K, FRAMEBUFFER, &tables, "a 4 KiB write-combining page")
-    expect_translates_to(t, kernel, KERNEL_PAGE + FRAME_SIZE, 0x7000, FRAMEBUFFER, "write-combining, in a 4 KiB page's PAT bit")
-    expect_mapped(t, kernel, KERNEL_LARGE_PAGE + 0x200000, 0x600000, .Size2M, FRAMEBUFFER, &tables, "a 2 MiB write-combining page")
-    expect_translates_to(t, kernel, KERNEL_LARGE_PAGE + 0x200000, 0x600000, FRAMEBUFFER, "write-combining, in a 2 MiB page's PAT bit")
+    expect_mapped(
+        t,
+        kernel,
+        KERNEL_PAGE + FRAME_SIZE,
+        0x7000,
+        .Size4K,
+        FRAMEBUFFER,
+        &tables,
+        "a 4 KiB write-combining page"
+    )
+    expect_translates_to(
+        t,
+        kernel,
+        KERNEL_PAGE + FRAME_SIZE,
+        0x7000,
+        FRAMEBUFFER,
+        "write-combining, in a 4 KiB page's PAT bit"
+    )
+    expect_mapped(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE + 0x200000,
+        0x600000,
+        .Size2M,
+        FRAMEBUFFER,
+        &tables,
+        "a 2 MiB write-combining page"
+    )
+    expect_translates_to(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE + 0x200000,
+        0x600000,
+        FRAMEBUFFER,
+        "write-combining, in a 2 MiB page's PAT bit"
+    )
     expect_mapped(t, kernel, KERNEL_PAGE + 2 * FRAME_SIZE, 0x8000, .Size4K, DEVICE, &tables, "a device page")
     expect_translates_to(t, kernel, KERNEL_PAGE + 2 * FRAME_SIZE, 0x8000, DEVICE, "uncached, and not global")
     return .Ok
 }
 
-protecting_a_page_changes_it_and_flushes_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+protecting_a_page_changes_it_and_flushes_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     space := kernel_space(t)?
     defer free_space(space)
     kernel :: &space.kernel
@@ -152,13 +279,20 @@ protecting_a_page_changes_it_and_flushes_it #test :: fn(t: ptr[mut testing.T]) -
     map_kernel_pages(t, &space, &tables)?
     protected :: arch.protect(kernel, address(KERNEL_PAGE), .Size4K, KERNEL_READ_ONLY, &flush)
     testing.outcome_of(testing.expect_ok(t, protected, "a mapped page can be made read-only"))?
-    expect_translates_to(t, kernel, KERNEL_PAGE, 0x5000, KERNEL_READ_ONLY, "it's read-only, at the same physical address")
+    expect_translates_to(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        0x5000,
+        KERNEL_READ_ONLY,
+        "it's read-only, at the same physical address"
+    )
     testing.require_eq(t, flush.count, 1, "the page's old entry is in the batch to flush")?
     testing.expect_eq(t, cast[u64](flush.addresses[0]), KERNEL_PAGE, "at the page's address")
     return .Ok
 }
 
-unmapping_frees_tables_once_they_are_empty #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+unmapping_frees_tables_once_they_are_empty #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     space := kernel_space(t)?
     defer free_space(space)
     kernel :: &space.kernel
@@ -173,36 +307,114 @@ unmapping_frees_tables_once_they_are_empty #test :: fn(t: ptr[mut testing.T]) ->
     testing.expect_eq(t, freed.count, 0, "two pages are left in its page table, so no table is freed")
     testing.expect(t, !translates(kernel, KERNEL_PAGE), "it's unmapped")
     expect_unmap_fails(t, kernel, KERNEL_PAGE, .Size4K, &freed, &flush, .NotMapped, "it can't be unmapped twice")
-    expect_unmap_fails(t, kernel, KERNEL_LARGE_PAGE + FRAME_SIZE, .Size4K, &freed, &flush, .PartOfLargerPage,
-        "4 KiB of a 2 MiB page can't be unmapped alone")
-    expect_unmap_fails(t, kernel, KERNEL_PAGE, .Size2M, &freed, &flush, .NotMapped, "a 2 MiB page where only a page table is")
+    expect_unmap_fails(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE + FRAME_SIZE,
+        .Size4K,
+        &freed,
+        &flush,
+        .PartOfLargerPage,
+        "4 KiB of a 2 MiB page can't be unmapped alone"
+    )
+    expect_unmap_fails(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        .Size2M,
+        &freed,
+        &flush,
+        .NotMapped,
+        "a 2 MiB page where only a page table is"
+    )
     // The last two free the page table, but not the page directory, which holds the 2 MiB pages
-    expect_unmapped(t, kernel, KERNEL_PAGE + FRAME_SIZE, .Size4K, &freed, &flush, 0x7000, "the second 4 KiB page unmaps")
+    expect_unmapped(
+        t,
+        kernel,
+        KERNEL_PAGE + FRAME_SIZE,
+        .Size4K,
+        &freed,
+        &flush,
+        0x7000,
+        "the second 4 KiB page unmaps"
+    )
     testing.expect_eq(t, freed.count, 0, "one page is left in the page table")
-    expect_unmapped(t, kernel, KERNEL_PAGE + 2 * FRAME_SIZE, .Size4K, &freed, &flush, 0x8000, "the last 4 KiB page unmaps")
+    expect_unmapped(
+        t,
+        kernel,
+        KERNEL_PAGE + 2 * FRAME_SIZE,
+        .Size4K,
+        &freed,
+        &flush,
+        0x8000,
+        "the last 4 KiB page unmaps"
+    )
     testing.expect_eq(t, freed.count, 1, "the page table, empty, is freed; the page directory holds the 2 MiB pages")
     // With no room to record a freed table, nothing changes
     freed.count = 4
-    expect_unmapped(t, kernel, KERNEL_LARGE_PAGE + 0x200000, .Size2M, &freed, &flush, 0x600000,
-        "a 2 MiB page beside another frees no table")
-    expect_unmap_fails(t, kernel, KERNEL_LARGE_PAGE, .Size2M, &freed, &flush, .NeedFreedSpace,
-        "the last page in the page directory would free it, and freed is full")
+    expect_unmapped(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE + 0x200000,
+        .Size2M,
+        &freed,
+        &flush,
+        0x600000,
+        "a 2 MiB page beside another frees no table"
+    )
+    expect_unmap_fails(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE,
+        .Size2M,
+        &freed,
+        &flush,
+        .NeedFreedSpace,
+        "the last page in the page directory would free it, and freed is full"
+    )
     testing.expect(t, translates(kernel, KERNEL_LARGE_PAGE), "so the page is still mapped")
     // Then the page directory goes, but the kernel half's table above it stays
     freed.count = 1
-    expect_unmapped(t, kernel, KERNEL_LARGE_PAGE, .Size2M, &freed, &flush, 0x400000, "with room, the last 2 MiB page unmaps")
+    expect_unmapped(
+        t,
+        kernel,
+        KERNEL_LARGE_PAGE,
+        .Size2M,
+        &freed,
+        &flush,
+        0x400000,
+        "with room, the last 2 MiB page unmaps"
+    )
     testing.expect_eq(t, freed.count, 2, "freeing the page directory, but not the kernel half's table above it")
     // A full batch covers everything
     testing.expect(t, !flush.all, "six addresses fit in a batch")
     testing.expect_eq(t, flush.count, 6, "the protected page and five unmapped, the failed unmaps adding none")
     refill(&tables, &space.memory)
-    expect_mapped(t, kernel, KERNEL_PAGE, 0x5000, .Size4K, KERNEL_DATA, &tables, "the page maps again, with new tables")?
+    expect_mapped(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        0x5000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        "the page maps again, with new tables"
+    )?
     for i in 0..<11 {
         _ = arch.protect(kernel, address(KERNEL_PAGE), .Size4K, KERNEL_DATA, &flush)
     }
     testing.expect(t, flush.all, "17 addresses don't fit in a batch of 16, so it flushes everything")
     freed.count = 0
-    expect_unmapped(t, kernel, KERNEL_PAGE, .Size4K, &freed, &flush, 0x5000, "with the batch full, unmapping still works")
+    expect_unmapped(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        .Size4K,
+        &freed,
+        &flush,
+        0x5000,
+        "with the batch full, unmapping still works"
+    )
     testing.expect_eq(t, freed.count, 2, "freeing its page table and page directory")
     return .Ok
 }
@@ -222,13 +434,18 @@ UserSpace :: struct {
  * @return The address space and the kernel table, which the caller frees with free_space(made.space); Error if
  *     kernel_space failed, the failure recorded.
  */
-user_space :: fn(t: ptr[mut testing.T]) -> Result[UserSpace, testing.Stopped] {
+user_space :: fn(t : ptr[mut testing.T]) -> Result[UserSpace, testing.Stopped] {
     made := UserSpace.{space = kernel_space(t)?}
-    arch.init_page_table(&made.user, next_frame(&made.space.memory), cast[arch_interface.AddressSpaceTag](5), &made.space.kernel)
+    arch.init_page_table(
+        &made.user,
+        next_frame(&made.space.memory),
+        cast[arch_interface.AddressSpaceTag](5),
+        &made.space.kernel
+    )
     return .Ok(made)
 }
 
-the_kernel_half_is_shared_with_user_address_spaces #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_kernel_half_is_shared_with_user_address_spaces #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := user_space(t)?
     defer free_space(made.space)
     kernel :: &made.space.kernel
@@ -236,17 +453,42 @@ the_kernel_half_is_shared_with_user_address_spaces #test :: fn(t: ptr[mut testin
     freed : arch_interface.FreedTables
     flush : arch_interface.TlbBatch
     refill(&tables, &made.space.memory)
-    expect_mapped(t, kernel, KERNEL_PAGE, 0x9000, .Size4K, KERNEL_DATA, &tables, "a kernel page, after the address space was made")?
-    expect_translates_to(t, &made.user, KERNEL_PAGE, 0x9000, KERNEL_DATA, "the user table sees it, its kernel half shared")
+    expect_mapped(
+        t,
+        kernel,
+        KERNEL_PAGE,
+        0x9000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        "a kernel page, after the address space was made"
+    )?
+    expect_translates_to(
+        t,
+        &made.user,
+        KERNEL_PAGE,
+        0x9000,
+        KERNEL_DATA,
+        "the user table sees it, its kernel half shared"
+    )
     // Nor unmapped through a user table: the kernel's page stays
-    expect_map_fails(t, &made.user, KERNEL_PAGE + FRAME_SIZE, 0x9000, .Size4K, KERNEL_DATA, &tables, .InvalidAddress,
-        "a user table can't map in the kernel half")
+    expect_map_fails(
+        t,
+        &made.user,
+        KERNEL_PAGE + FRAME_SIZE,
+        0x9000,
+        .Size4K,
+        KERNEL_DATA,
+        &tables,
+        .InvalidAddress,
+        "a user table can't map in the kernel half"
+    )
     expect_unmap_fails(t, &made.user, KERNEL_PAGE, .Size4K, &freed, &flush, .NotMapped, "nor unmap from it")
     expect_translates_to(t, kernel, KERNEL_PAGE, 0x9000, KERNEL_DATA, "the kernel's page stays")
     return .Ok
 }
 
-a_user_page_takes_three_tables_which_go_when_it_is_unmapped #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_user_page_takes_three_tables_which_go_when_it_is_unmapped #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := user_space(t)?
     defer free_space(made.space)
     kernel :: &made.space.kernel
@@ -255,12 +497,26 @@ a_user_page_takes_three_tables_which_go_when_it_is_unmapped #test :: fn(t: ptr[m
     flush : arch_interface.TlbBatch
     refill(&tables, &made.space.memory)
     expect_mapped(t, &made.user, USER_PAGE, 0xa000, .Size4K, USER_DATA, &tables, "a user page in a user address space")?
-    testing.expect_eq(t, tables.count, 1, "it took three tables below the root: a PDPT, a page directory and a page table")
+    testing.expect_eq(
+        t,
+        tables.count,
+        1,
+        "it took three tables below the root: a PDPT, a page directory and a page table"
+    )
     expect_translates_to(t, &made.user, USER_PAGE + 0x10, 0xa010, USER_DATA, "an address in it, its offset kept")
     testing.expect(t, !translates(kernel, USER_PAGE), "the kernel's table doesn't see user pages")
     expect_map_fails(t, &made.user, 0, 0xa000, .Size4K, USER_DATA, &tables, .InvalidAddress, "page 0 is never mapped")
-    expect_map_fails(t, &made.user, 0x00007ffffffff000, 0xa000, .Size4K, USER_DATA, &tables, .InvalidAddress,
-        "nor the page below the canonical boundary")
+    expect_map_fails(
+        t,
+        &made.user,
+        0x00007ffffffff000,
+        0xa000,
+        .Size4K,
+        USER_DATA,
+        &tables,
+        .InvalidAddress,
+        "nor the page below the canonical boundary"
+    )
     expect_unmapped(t, &made.user, USER_PAGE, .Size4K, &freed, &flush, 0xa000, "the user page unmaps, giving its frame")
     testing.expect_eq(t, freed.count, 3, "its three tables are empty, and all freed")
     testing.expect_eq(t, cast[u16](flush.tag), 5, "the flush is for the address space's tag")
@@ -268,7 +524,7 @@ a_user_page_takes_three_tables_which_go_when_it_is_unmapped #test :: fn(t: ptr[m
     return .Ok
 }
 
-a_user_address_spaces_tables_are_released_a_few_at_a_time #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_user_address_spaces_tables_are_released_a_few_at_a_time #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := user_space(t)?
     defer free_space(made.space)
     tables : arch_interface.TableFrames
@@ -283,7 +539,11 @@ a_user_address_spaces_tables_are_released_a_few_at_a_time #test :: fn(t: ptr[mut
     refill(&tables, &made.space.memory)
     _ = mapped(&made.user, 0x80000000, 0xc000, .Size4K, USER_DATA, &tables)
     testing.expect(t, translates(&made.user, 0x80000000), "a page under another PDPT entry is mapped")
-    testing.expect(t, translates(&made.user, USER_PAGE + 0x200000), "a page under another page directory entry is mapped")
+    testing.expect(
+        t,
+        translates(&made.user, USER_PAGE + 0x200000),
+        "a page under another page directory entry is mapped"
+    )
     released : u32 = 0
     calls : u32 = 0
     loop {
@@ -310,7 +570,7 @@ a_user_address_spaces_tables_are_released_a_few_at_a_time #test :: fn(t: ptr[mut
  * @param memory The buffer, with a frame left (asserted).
  * @return The frame's pretend physical address.
  */
-next_frame :: fn(memory: ptr[mut Memory]) -> arch_interface.PhysicalAddress {
+next_frame :: fn(memory : ptr[mut Memory]) -> arch_interface.PhysicalAddress {
     runtime.assert(memory.next_frame < FRAME_COUNT, "the tests fit in FRAME_COUNT frames")
     frame :: MEMORY_BASE + memory.next_frame * FRAME_SIZE
     memory.next_frame += 1
@@ -323,7 +583,7 @@ next_frame :: fn(memory: ptr[mut Memory]) -> arch_interface.PhysicalAddress {
  * @param tables The frames, count set to 4.
  * @param memory Where the new frames come from.
  */
-refill :: fn(tables: ptr[mut arch_interface.TableFrames], memory: ptr[mut Memory]) {
+refill :: fn(tables : ptr[mut arch_interface.TableFrames], memory : ptr[mut Memory]) {
     for i in cast[usize](tables.count)..<4 {
         tables.frames[i] = next_frame(memory)
     }
@@ -336,7 +596,7 @@ refill :: fn(tables: ptr[mut arch_interface.TableFrames], memory: ptr[mut Memory
  * @param value Any number, kernel or user, canonical or not; it isn't checked.
  * @return The same bits, as a VirtualAddress.
  */
-address :: fn(value: u64) -> arch_interface.VirtualAddress {
+address :: fn(value : u64) -> arch_interface.VirtualAddress {
     return cast[arch_interface.VirtualAddress](value)
 }
 
@@ -353,14 +613,21 @@ address :: fn(value: u64) -> arch_interface.VirtualAddress {
  * @return Whether it was mapped.
  */
 mapped :: fn(
-    table: ptr[mut arch.PageTable],
-    virtual_address: u64,
-    physical: u64,
-    size: arch_interface.PageSize,
-    mapping: arch_interface.Mapping,
-    tables: ptr[mut arch_interface.TableFrames],
+    table : ptr[mut arch.PageTable],
+    virtual_address : u64,
+    physical : u64,
+    size : arch_interface.PageSize,
+    mapping : arch_interface.Mapping,
+    tables : ptr[mut arch_interface.TableFrames]
 ) -> bool {
-    return arch.map(table, address(virtual_address), cast[arch_interface.PhysicalAddress](physical), size, mapping, tables) is_ok
+    return arch.map(
+        table,
+        address(virtual_address),
+        cast[arch_interface.PhysicalAddress](physical),
+        size,
+        mapping,
+        tables
+    ) is_ok
 }
 
 /**
@@ -379,17 +646,24 @@ mapped :: fn(
  * @return Ok if it was mapped; Error(Failed), the failure recorded, if not, for a test that can't go on without it.
  */
 expect_mapped :: fn(
-    t: ptr[mut testing.T],
-    table: ptr[mut arch.PageTable],
-    virtual_address: u64,
-    physical: u64,
-    size: arch_interface.PageSize,
-    mapping: arch_interface.Mapping,
-    tables: ptr[mut arch_interface.TableFrames],
-    message: string,
-    location := #caller_location,
+    t : ptr[mut testing.T],
+    table : ptr[mut arch.PageTable],
+    virtual_address : u64,
+    physical : u64,
+    size : arch_interface.PageSize,
+    mapping : arch_interface.Mapping,
+    tables : ptr[mut arch_interface.TableFrames],
+    message : string,
+    location := #caller_location
 ) -> testing.Outcome {
-    result :: arch.map(table, address(virtual_address), cast[arch_interface.PhysicalAddress](physical), size, mapping, tables)
+    result :: arch.map(
+        table,
+        address(virtual_address),
+        cast[arch_interface.PhysicalAddress](physical),
+        size,
+        mapping,
+        tables
+    )
     return testing.outcome_of(testing.expect_ok(t, result, message, location))
 }
 
@@ -409,18 +683,25 @@ expect_mapped :: fn(
  * @param location Where the check is; the caller's own.
  */
 expect_map_fails :: fn(
-    t: ptr[mut testing.T],
-    table: ptr[mut arch.PageTable],
-    virtual_address: u64,
-    physical: u64,
-    size: arch_interface.PageSize,
-    mapping: arch_interface.Mapping,
-    tables: ptr[mut arch_interface.TableFrames],
-    expected: arch_interface.MapError,
-    message: string,
-    location := #caller_location,
+    t : ptr[mut testing.T],
+    table : ptr[mut arch.PageTable],
+    virtual_address : u64,
+    physical : u64,
+    size : arch_interface.PageSize,
+    mapping : arch_interface.Mapping,
+    tables : ptr[mut arch_interface.TableFrames],
+    expected : arch_interface.MapError,
+    message : string,
+    location := #caller_location
 ) {
-    result :: arch.map(table, address(virtual_address), cast[arch_interface.PhysicalAddress](physical), size, mapping, tables)
+    result :: arch.map(
+        table,
+        address(virtual_address),
+        cast[arch_interface.PhysicalAddress](physical),
+        size,
+        mapping,
+        tables
+    )
     _ = testing.expect_error(t, result, expected, message, location)
 }
 
@@ -439,15 +720,15 @@ expect_map_fails :: fn(
  * @param location Where the check is; the caller's own.
  */
 expect_unmapped :: fn(
-    t: ptr[mut testing.T],
-    table: ptr[mut arch.PageTable],
-    virtual_address: u64,
-    size: arch_interface.PageSize,
-    freed: ptr[mut arch_interface.FreedTables],
-    flush: ptr[mut arch_interface.TlbBatch],
-    physical: u64,
-    message: string,
-    location := #caller_location,
+    t : ptr[mut testing.T],
+    table : ptr[mut arch.PageTable],
+    virtual_address : u64,
+    size : arch_interface.PageSize,
+    freed : ptr[mut arch_interface.FreedTables],
+    flush : ptr[mut arch_interface.TlbBatch],
+    physical : u64,
+    message : string,
+    location := #caller_location
 ) {
     result :: arch.unmap(table, address(virtual_address), size, freed, flush)
     match result {
@@ -476,15 +757,15 @@ expect_unmapped :: fn(
  * @param location Where the check is; the caller's own.
  */
 expect_unmap_fails :: fn(
-    t: ptr[mut testing.T],
-    table: ptr[mut arch.PageTable],
-    virtual_address: u64,
-    size: arch_interface.PageSize,
-    freed: ptr[mut arch_interface.FreedTables],
-    flush: ptr[mut arch_interface.TlbBatch],
-    expected: arch_interface.UnmapError,
-    message: string,
-    location := #caller_location,
+    t : ptr[mut testing.T],
+    table : ptr[mut arch.PageTable],
+    virtual_address : u64,
+    size : arch_interface.PageSize,
+    freed : ptr[mut arch_interface.FreedTables],
+    flush : ptr[mut arch_interface.TlbBatch],
+    expected : arch_interface.UnmapError,
+    message : string,
+    location := #caller_location
 ) {
     result :: arch.unmap(table, address(virtual_address), size, freed, flush)
     _ = testing.expect_error(t, result, expected, message, location)
@@ -498,7 +779,7 @@ expect_unmap_fails :: fn(
  * @param virtual_address Any address, kernel or user, anywhere in a page; a page of any size counts.
  * @return Whether arch.translate finds a mapping.
  */
-translates :: fn(table: ptr[arch.PageTable], virtual_address: u64) -> bool {
+translates :: fn(table : ptr[arch.PageTable], virtual_address : u64) -> bool {
     return arch.translate(table, address(virtual_address)) != null
 }
 
@@ -514,8 +795,15 @@ translates :: fn(table: ptr[arch.PageTable], virtual_address: u64) -> bool {
  * @param message Why it should map so, for whoever reads a failure.
  * @param location Where the check is; the caller's own.
  */
-expect_translates_to :: fn(t: ptr[mut testing.T], table: ptr[arch.PageTable], virtual_address: u64, physical: u64,
-        mapping: arch_interface.Mapping, message: string, location := #caller_location) {
+expect_translates_to :: fn(
+    t : ptr[mut testing.T],
+    table : ptr[arch.PageTable],
+    virtual_address : u64,
+    physical : u64,
+    mapping : arch_interface.Mapping,
+    message : string,
+    location := #caller_location
+) {
     match arch.translate(table, address(virtual_address)) {
         case Some(found) => {
             _ = testing.expect_eq(t, cast[u64](found.physical_address), physical, message, location)

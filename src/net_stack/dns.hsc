@@ -43,21 +43,21 @@ MAX_RECORDS :: 32
 MAX_ALIASES :: 8
 
 /** The bytes of names: a dot, the letters' ends in each case, the digits', a hyphen and an underscore. */
-DOT : u8 : 46
-UPPER_A : u8 : 65
-UPPER_Z : u8 : 90
-LOWER_A : u8 : 97
-LOWER_Z : u8 : 122
-DIGIT_0 : u8 : 48
-DIGIT_9 : u8 : 57
-HYPHEN : u8 : 45
+DOT        : u8 : 46
+UPPER_A    : u8 : 65
+UPPER_Z    : u8 : 90
+LOWER_A    : u8 : 97
+LOWER_Z    : u8 : 122
+DIGIT_0    : u8 : 48
+DIGIT_9    : u8 : 57
+HYPHEN     : u8 : 45
 UNDERSCORE : u8 : 95
 
 /** DNS's types and class. */
-TYPE_A : u16 : 1
+TYPE_A     : u16 : 1
 TYPE_CNAME : u16 : 5
-TYPE_AAAA : u16 : 28
-CLASS_IN : u16 : 1
+TYPE_AAAA  : u16 : 28
+CLASS_IN   : u16 : 1
 
 /** How a lookup ended. */
 ResolveOutcome :: enum {
@@ -119,10 +119,10 @@ Query :: struct {
     /** The server last asked, by its index among the active ones. */
     server : usize,
     /** When it's next sent, or given up. */
-    deadline : u64,
-    outcome : ResolveOutcome,
+    deadline  : u64,
+    outcome   : ResolveOutcome,
     addresses : IpAddress[MAX_ANSWERS / 2],
-    count : usize,
+    count     : usize,
     /** The answer's lowest TTL, in nanoseconds, for the cache. */
     life : u64,
 }
@@ -138,24 +138,24 @@ LookupState :: enum {
 
 /** A lookup: a name, and its queries, IPv4's first. */
 Lookup :: struct {
-    state : LookupState,
-    generation : u16,
-    name : u8[MAX_NAME],
+    state       : LookupState,
+    generation  : u16,
+    name        : u8[MAX_NAME],
     name_length : usize,
-    queries : Query[2],
-    result : Resolution,
+    queries     : Query[2],
+    result      : Resolution,
 }
 
 /** A name's addresses of one kind, or that it has none, cached. */
 CacheEntry :: struct {
-    used : bool,
-    name : u8[MAX_NAME],
+    used        : bool,
+    name        : u8[MAX_NAME],
     name_length : usize,
-    v6 : bool,
-    outcome : ResolveOutcome,
-    addresses : IpAddress[MAX_ANSWERS / 2],
-    count : usize,
-    expires : u64,
+    v6          : bool,
+    outcome     : ResolveOutcome,
+    addresses   : IpAddress[MAX_ANSWERS / 2],
+    count       : usize,
+    expires     : u64,
 }
 
 /** What the resolver keeps in the stack. */
@@ -174,7 +174,7 @@ Resolver :: struct {
  * @param port Its port: DNS_PORT, or another for a test's server.
  * @return False if DNS_SERVERS are configured already.
  */
-set_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, port: u16) -> bool {
+set_dns_server :: fn(stack : ptr[mut Stack], address : IpAddress, port : u16) -> bool {
     // Learned ones give way
     for &server in stack.resolver.servers {
         if server.active && !server.configured {
@@ -192,7 +192,7 @@ set_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, port: u16) -> bo
  * @param address Its address.
  * @param from_router Whether a router's advertisement gave it.
  */
-learn_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, from_router: bool = false) {
+learn_dns_server :: fn(stack : ptr[mut Stack], address : IpAddress, from_router : bool = false) {
     routers := 0
     for server in stack.resolver.servers {
         if server.active && (server.configured || same_address(server.address, address)) {
@@ -226,7 +226,7 @@ learn_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, from_router: b
 }
 
 /** Keep a server in a free place; false if there's none. */
-add_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, port: u16, configured: bool) -> bool {
+add_dns_server :: fn(stack : ptr[mut Stack], address : IpAddress, port : u16, configured : bool) -> bool {
     for &server in stack.resolver.servers {
         if !server.active {
             server^ = DnsServer.{active = true, address = address, port = port, configured = configured}
@@ -243,7 +243,7 @@ add_dns_server :: fn(stack: ptr[mut Stack], address: IpAddress, port: u16, confi
  * @param into Where they go, as many as fit.
  * @return How many there are.
  */
-dns_servers :: fn(stack: ptr[Stack], into: mut DnsServer[]) -> usize {
+dns_servers :: fn(stack : ptr[Stack], into : mut DnsServer[]) -> usize {
     count := cast[usize](0)
     for server in stack.resolver.servers {
         if server.active {
@@ -267,7 +267,7 @@ dns_servers :: fn(stack: ptr[Stack], into: mut DnsServer[]) -> usize {
  * @return The lookup's number, never 0, for take_resolution once Resolved says it's done; null if LOOKUPS are running.
  *     A name that isn't one, or neither kind wanted, is done at once, BadName or NoAddress.
  */
-resolve :: fn(stack: ptr[mut Stack], name: u8[], v4: bool, v6: bool) -> u32? {
+resolve :: fn(stack : ptr[mut Stack], name : u8[], v4 : bool, v6 : bool) -> u32? {
     index := cast[usize](LOOKUPS)
     for each, i in stack.resolver.lookups {
         if each.state == .Free {
@@ -316,7 +316,7 @@ resolve :: fn(stack: ptr[mut Stack], name: u8[], v4: bool, v6: bool) -> u32? {
  * @param lookup Its number, as resolve gave it.
  * @return Its result; null if it isn't done, or isn't a lookup.
  */
-take_resolution :: fn(stack: ptr[mut Stack], lookup: u32) -> Resolution? {
+take_resolution :: fn(stack : ptr[mut Stack], lookup : u32) -> Resolution? {
     found :: find_lookup(stack, lookup) or_return null
     if found.state != .Done {
         return null
@@ -331,7 +331,7 @@ take_resolution :: fn(stack: ptr[mut Stack], lookup: u32) -> Resolution? {
  * @param stack The stack.
  * @param lookup Its number.
  */
-cancel_resolve :: fn(stack: ptr[mut Stack], lookup: u32) {
+cancel_resolve :: fn(stack : ptr[mut Stack], lookup : u32) {
     found :: find_lookup(stack, lookup) or_return void
     for &query in found.queries {
         stop_query(stack, query)
@@ -340,7 +340,7 @@ cancel_resolve :: fn(stack: ptr[mut Stack], lookup: u32) {
 }
 
 /** Find a lookup by number; null if it's free, or its number's old. */
-find_lookup :: fn(stack: ptr[mut Stack], lookup: u32) -> ptr[mut Lookup]? {
+find_lookup :: fn(stack : ptr[mut Stack], lookup : u32) -> ptr[mut Lookup]? {
     index :: cast[usize](lookup & 0xffff)
     if index >= stack.resolver.lookups.count {
         return null
@@ -359,7 +359,7 @@ find_lookup :: fn(stack: ptr[mut Stack], lookup: u32) -> ptr[mut Lookup]? {
  * @param into Where it goes: MAX_NAME bytes.
  * @return Its length; null if it isn't a name.
  */
-normal_name :: fn(name: u8[], into: mut u8[]) -> usize? {
+normal_name :: fn(name : u8[], into : mut u8[]) -> usize? {
     length := name.count
     if length > 0 && name[length - 1] == DOT {
         length -= 1
@@ -401,7 +401,7 @@ normal_name :: fn(name: u8[], into: mut u8[]) -> usize? {
  *
  * @return True if it did, the query's outcome and addresses set.
  */
-from_cache :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Query], v6: bool) -> bool {
+from_cache :: fn(stack : ptr[mut Stack], lookup : ptr[Lookup], query : ptr[mut Query], v6 : bool) -> bool {
     name :: view_of(&lookup.name[0], lookup.name_length)
     for &entry in stack.resolver.cache {
         if !entry.used || entry.v6 != v6 || !same_name(view_of(&entry.name[0], entry.name_length), name) {
@@ -420,9 +420,21 @@ from_cache :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Quer
 }
 
 /** Cache a query's answer, in place of the entry that expires first. */
-cache_answer :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[Query], v6: bool) {
-    life :: if query.outcome == .Found { if query.life < CACHE_LONGEST { query.life } else { CACHE_LONGEST } }
-        else if query.outcome == .NoSuchName || query.outcome == .NoAddress { NEGATIVE_LIFE } else { cast[u64](0) }
+cache_answer :: fn(stack : ptr[mut Stack], lookup : ptr[Lookup], query : ptr[Query], v6 : bool) {
+    life :: if query.outcome == .Found {
+        if query.life < CACHE_LONGEST {
+            query.life
+        }
+        else {
+            CACHE_LONGEST
+        }
+    }
+    else if query.outcome == .NoSuchName || query.outcome == .NoAddress {
+        NEGATIVE_LIFE
+    }
+    else {
+        cast[u64](0)
+    }
     if life == 0 {
         return void
     }
@@ -455,7 +467,7 @@ cache_answer :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[Query]
 }
 
 /** Tell whether two names in the resolver's form are the same: they're lower case already. */
-same_name :: fn(a: u8[], b: u8[]) -> bool {
+same_name :: fn(a : u8[], b : u8[]) -> bool {
     if a.count != b.count {
         return false
     }
@@ -468,7 +480,7 @@ same_name :: fn(a: u8[], b: u8[]) -> bool {
 }
 
 /** Count the active servers. */
-server_count :: fn(stack: ptr[Stack]) -> usize {
+server_count :: fn(stack : ptr[Stack]) -> usize {
     count := cast[usize](0)
     for server in stack.resolver.servers {
         if server.active {
@@ -479,7 +491,7 @@ server_count :: fn(stack: ptr[Stack]) -> usize {
 }
 
 /** Give the active server at an index among them, wrapped round; null if there's none. */
-server_at :: fn(stack: ptr[Stack], index: usize) -> DnsServer? {
+server_at :: fn(stack : ptr[Stack], index : usize) -> DnsServer? {
     count :: server_count(stack)
     if count == 0 {
         return null
@@ -497,7 +509,7 @@ server_at :: fn(stack: ptr[Stack], index: usize) -> DnsServer? {
 }
 
 /** Open a query's socket and send its first try, or fail it if there's no server or socket. */
-start_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Query], v6: bool) {
+start_query :: fn(stack : ptr[mut Stack], lookup : ptr[Lookup], query : ptr[mut Query], v6 : bool) {
     query.state = .Asking
     query.tries = 0
     query.server = 0
@@ -522,7 +534,7 @@ start_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Que
 }
 
 /** Send a query's next try, of its server, with a new ID, and set when it's next due. */
-send_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Query], v6: bool) {
+send_query :: fn(stack : ptr[mut Stack], lookup : ptr[Lookup], query : ptr[mut Query], v6 : bool) {
     server :: match server_at(stack, query.server) {
         case Some(found) => found
         // No server to ask: it fails now, rather than wait for a deadline it'd never move (13h)
@@ -534,8 +546,12 @@ send_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Quer
     }
     query.id = cast[u16](next_random(stack))
     message : u8[MAX_NAME + 2 + 12 + 4]
-    length :: build_query(view_of(&message[0], message.count), query.id, view_of(&lookup.name[0], lookup.name_length),
-        if v6 { TYPE_AAAA } else { TYPE_A })
+    length :: build_query(
+        view_of(&message[0], message.count),
+        query.id,
+        view_of(&lookup.name[0], lookup.name_length),
+        if v6 { TYPE_AAAA } else { TYPE_A }
+    )
     _ = udp_send(stack, query.socket, server.address, server.port, view_of(&message[0], length))
     // 1, 2, 4, 8 s
     query.deadline = stack.now + (DNS_TIMEOUT << cast[u64](query.tries))
@@ -551,7 +567,7 @@ send_query :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Quer
  * @param kind TYPE_A or TYPE_AAAA.
  * @return Its length.
  */
-build_query :: fn(into: mut u8[], id: u16, name: u8[], kind: u16) -> usize {
+build_query :: fn(into : mut u8[], id : u16, name : u8[], kind : u16) -> usize {
     put_u16(into, 0, id)
     // RD: recursion desired
     put_u16(into, 2, 0x0100)
@@ -576,7 +592,7 @@ build_query :: fn(into: mut u8[], id: u16, name: u8[], kind: u16) -> usize {
 }
 
 /** Close a query's socket, if it has one, and leave it done. */
-stop_query :: fn(stack: ptr[mut Stack], query: ptr[mut Query]) {
+stop_query :: fn(stack : ptr[mut Stack], query : ptr[mut Query]) {
     if query.state == .Asking && query.socket != 0 {
         udp_close(stack, query.socket)
     }
@@ -595,7 +611,7 @@ stop_query :: fn(stack: ptr[mut Stack], query: ptr[mut Query]) {
  * @param from_port Their port.
  * @param message The datagram's payload.
  */
-dns_received :: fn(stack: ptr[mut Stack], socket: u32, from: IpAddress, from_port: u16, message: u8[]) {
+dns_received :: fn(stack : ptr[mut Stack], socket : u32, from : IpAddress, from_port : u16, message : u8[]) {
     for &lookup, index in stack.resolver.lookups {
         if lookup.state != .Asking {
             continue
@@ -629,7 +645,13 @@ dns_received :: fn(stack: ptr[mut Stack], socket: u32, from: IpAddress, from_por
  * @return False if it isn't the query's answer, and is ignored; true if it was taken: the query done with its
  *     outcome, or, from a server that failed or refused, sent again to the next.
  */
-take_answer :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Query], v6: bool, message: u8[]) -> bool {
+take_answer :: fn(
+    stack : ptr[mut Stack],
+    lookup : ptr[Lookup],
+    query : ptr[mut Query],
+    v6 : bool,
+    message : u8[]
+) -> bool {
     if message.count < 12 || u16_at(message, 0) != query.id {
         return false
     }
@@ -648,8 +670,10 @@ take_answer :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Que
         return false
     }
     code :: flags & 0xf
-    // Truncated (TC): what fitted is taken if it has an address; otherwise it's no answer, and the next server's asked,
-    // as there's no TCP to ask again by, rather than its absence be kept as no address (13h)
+    /*
+     * Truncated (TC): what fitted is taken if it has an address; otherwise it's no answer, and the next server's asked,
+     * as there's no TCP to ask again by, rather than its absence be kept as no address (13h)
+     */
     truncated :: flags & 0x0200 != 0
     if truncated && code == 0 {
         read_addresses(message, question_end + 4, u16_at(message, 6), name, kind, query)
@@ -683,10 +707,10 @@ take_answer :: fn(stack: ptr[mut Stack], lookup: ptr[Lookup], query: ptr[mut Que
 
 /** A record of an answer's, as read_addresses keeps it. */
 Record :: struct {
-    owner : usize,
-    kind : u16,
-    ttl : u32,
-    data : usize,
+    owner       : usize,
+    kind        : u16,
+    ttl         : u32,
+    data        : usize,
     data_length : usize,
 }
 
@@ -700,7 +724,7 @@ Record :: struct {
  * @param kind TYPE_A or TYPE_AAAA.
  * @param query Where the addresses go, and the lowest TTL among the records followed.
  */
-read_addresses :: fn(message: u8[], at: usize, count: u16, name: u8[], kind: u16, query: ptr[mut Query]) {
+read_addresses :: fn(message : u8[], at : usize, count : u16, name : u8[], kind : u16, query : ptr[mut Query]) {
     records : Record[MAX_RECORDS]
     taken := cast[usize](0)
     offset := at
@@ -717,8 +741,13 @@ read_addresses :: fn(message: u8[], at: usize, count: u16, name: u8[], kind: u16
             break
         }
         if u16_at(message, data_at + 2) == CLASS_IN {
-            records[taken] = Record.{owner = offset, kind = u16_at(message, data_at), ttl = u32_at(message, data_at + 4),
-                data = data_at + 10, data_length = length}
+            records[taken] = Record.{
+                owner = offset,
+                kind = u16_at(message, data_at),
+                ttl = u32_at(message, data_at + 4),
+                data = data_at + 10,
+                data_length = length,
+            }
             taken += 1
         }
         offset = data_at + 10 + length
@@ -735,7 +764,8 @@ read_addresses :: fn(message: u8[], at: usize, count: u16, name: u8[], kind: u16
                 break
             }
             record :: records[i]
-            if record.kind == TYPE_CNAME && (name_equals(message, record.owner, view_of(&target[0], target_length)) is_some) {
+            if record.kind == TYPE_CNAME
+                && (name_equals(message, record.owner, view_of(&target[0], target_length)) is_some) {
                 target_length = read_name(message, record.data, view_of(&target[0], target.count)) or_else 0
                 lowest = if record.ttl < lowest { record.ttl } else { lowest }
                 followed = true
@@ -752,14 +782,20 @@ read_addresses :: fn(message: u8[], at: usize, count: u16, name: u8[], kind: u16
             break
         }
         record :: records[i]
-        if record.kind != kind || record.data_length != wanted || query.count >= query.addresses.count
+        if record.kind != kind
+            || record.data_length != wanted
+            || query.count >= query.addresses.count
             || (name_equals(message, record.owner, view_of(&target[0], target_length)) is_none) {
             continue
         }
         slot :: query.count
         if slot < query.addresses.count {
-            query.addresses[slot] = if kind == TYPE_A { IpAddress.V4(ipv4_at(message, record.data)) }
-                else { IpAddress.V6(ipv6_at(message, record.data)) }
+            query.addresses[slot] = if kind == TYPE_A {
+                IpAddress.V4(ipv4_at(message, record.data))
+            }
+            else {
+                IpAddress.V6(ipv6_at(message, record.data))
+            }
             query.count = slot + 1
         }
         lowest = if record.ttl < lowest { record.ttl } else { lowest }
@@ -775,7 +811,7 @@ read_addresses :: fn(message: u8[], at: usize, count: u16, name: u8[], kind: u16
  * @param name The name to compare with.
  * @return Where the message's name ends, past its pointer if it's compressed; null if they differ, or it isn't read.
  */
-name_equals :: fn(message: u8[], at: usize, name: u8[]) -> usize? {
+name_equals :: fn(message : u8[], at : usize, name : u8[]) -> usize? {
     read : u8[MAX_NAME]
     length :: read_name(message, at, view_of(&read[0], read.count)) or_return null
     if !same_name(view_of(&read[0], length), name) {
@@ -791,7 +827,7 @@ name_equals :: fn(message: u8[], at: usize, name: u8[]) -> usize? {
  * @param at Where it starts.
  * @return Past its last label or its pointer; null if it runs past the message.
  */
-skip_name :: fn(message: u8[], at: usize) -> usize? {
+skip_name :: fn(message : u8[], at : usize) -> usize? {
     offset := at
     loop {
         if offset >= message.count {
@@ -819,7 +855,7 @@ skip_name :: fn(message: u8[], at: usize) -> usize? {
  * @param into Where it goes: MAX_NAME bytes.
  * @return Its length; null if it's malformed, loops, runs past the message, or is longer than MAX_NAME.
  */
-read_name :: fn(message: u8[], at: usize, into: mut u8[]) -> usize? {
+read_name :: fn(message : u8[], at : usize, into : mut u8[]) -> usize? {
     offset := at
     written := cast[usize](0)
     // Pointers only go back, and there are at most as many as bytes before them: a bound that ends any loop
@@ -876,7 +912,7 @@ read_name :: fn(message: u8[], at: usize, into: mut u8[]) -> usize? {
  * @param lookup The lookup.
  * @param number Its number.
  */
-check_lookup :: fn(stack: ptr[mut Stack], lookup: ptr[mut Lookup], number: u32) {
+check_lookup :: fn(stack : ptr[mut Stack], lookup : ptr[mut Lookup], number : u32) {
     for query in lookup.queries {
         if query.state == .Asking {
             return void
@@ -899,14 +935,19 @@ check_lookup :: fn(stack: ptr[mut Stack], lookup: ptr[mut Lookup], number: u32) 
     asked :: v4.state == .Done || v6.state == .Done
     no_such :: (v4.state != .Done || v4.outcome == .NoSuchName) && (v6.state != .Done || v6.outcome == .NoSuchName)
     failed :: (v4.state == .Done && v4.outcome == .Failed) || (v6.state == .Done && v6.outcome == .Failed)
-    result.outcome = if result.count > 0 { ResolveOutcome.Found } else if asked && no_such { ResolveOutcome.NoSuchName }
-        else if failed { ResolveOutcome.Failed } else { ResolveOutcome.NoAddress }
+    result.outcome = if result.count > 0 {
+        ResolveOutcome.Found
+    }
+    else if asked && no_such {
+        ResolveOutcome.NoSuchName
+    }
+    else if failed { ResolveOutcome.Failed } else { ResolveOutcome.NoAddress }
     lookup.result = result
     finish_lookup(stack, lookup, number)
 }
 
 /** Leave a lookup done, and say so. */
-finish_lookup :: fn(stack: ptr[mut Stack], lookup: ptr[mut Lookup], number: u32) {
+finish_lookup :: fn(stack : ptr[mut Stack], lookup : ptr[mut Lookup], number : u32) {
     lookup.state = .Done
     event(stack, .Resolved(number))
 }
@@ -916,7 +957,7 @@ finish_lookup :: fn(stack: ptr[mut Stack], lookup: ptr[mut Lookup], number: u32)
  *
  * @param stack The stack.
  */
-tick_dns :: fn(stack: ptr[mut Stack]) {
+tick_dns :: fn(stack : ptr[mut Stack]) {
     for &lookup, index in stack.resolver.lookups {
         if lookup.state != .Asking {
             continue
@@ -943,7 +984,7 @@ tick_dns :: fn(stack: ptr[mut Stack]) {
  * @param stack The stack.
  * @return The soonest query's deadline; 0xffffffffffffffff for none.
  */
-dns_deadline :: fn(stack: ptr[Stack]) -> u64 {
+dns_deadline :: fn(stack : ptr[Stack]) -> u64 {
     soonest := ~cast[u64](0)
     for lookup in stack.resolver.lookups {
         if lookup.state != .Asking {

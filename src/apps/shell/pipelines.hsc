@@ -1,12 +1,12 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import schema from "std:schema"
 import slop_os from "std:os/slop_os"
 import stream from "std:os/slop_os/stream"
+import schema from "std:schema"
 import terminal from "std:terminal"
+import shell_language as language from "../../shell_language"
 
 /*
  * Pipelines (design/shell.md §4, decisions/0172): a | b | c. Programs next to each other are connected straight:
@@ -25,7 +25,7 @@ STAGES :: string.["where", "map", "sort", "take", "group", "page"]
  * @param tree One of a Pipeline node's children, of any kind; only a Call's name is looked at.
  * @return True for a call named one of STAGES.
  */
-is_stage :: fn(tree: ptr[Node]) -> bool {
+is_stage :: fn(tree : ptr[Node]) -> bool {
     if tree.kind != .Call {
         return false
     }
@@ -45,7 +45,7 @@ is_stage :: fn(tree: ptr[Node]) -> bool {
  * @param tree One of a Pipeline node's children, of any kind; anything but a Call isn't a program's.
  * @return True if it's a program's call; whether there's such a program isn't asked.
  */
-is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
+is_program :: fn(shell : ptr[Shell], tree : ptr[Node]) -> bool {
     if tree.kind != .Call || (builtin_named(tree.text) is_some) {
         return false
     }
@@ -64,13 +64,14 @@ is_program :: fn(shell: ptr[Shell], tree: ptr[Node]) -> bool {
  * @param tree The Pipeline node, its elements its children.
  * @return What its last stage gives; Null for a pipeline of nothing.
  */
-pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+pipeline :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     current : Value? = null
     at : usize = 0
     loop {
         stage :: child(tree, at) or_break
         if is_stage(stage) {
-            given :: current or_return error_at(stage.at, message("% works on what comes before it in a pipeline", stage.text))
+            given :: current
+                or_return error_at(stage.at, message("% works on what comes before it in a pipeline", stage.text))
             current = run_stage(shell, stage, given)?
             at += 1
             continue
@@ -113,7 +114,7 @@ pipeline :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Valu
  * @return What the last one writes, a list of its records as values; Null if it has no output; or why they couldn't
  *     run, or the first program's error, as start_programs and finish_programs say.
  */
-run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : Value?) -> Result[Value, EvalError] {
+run_programs :: fn(shell : ptr[mut Shell], trees : ptr[Node][], given #escaping : Value?) -> Result[Value, EvalError] {
     running :: start_programs(shell, trees, given, false)?
     shell.foreground = running
     defer {
@@ -142,7 +143,12 @@ run_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : 
  * @param background Whether they run in the background, where none is given the terminal.
  * @return The programs, on the heap, the caller's to finish and then end with end_running.
  */
-start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping : Value?, background: bool) -> Result[ptr[mut Running], EvalError] {
+start_programs :: fn(
+    shell : ptr[mut Shell],
+    trees : ptr[Node][],
+    given #escaping : Value?,
+    background : bool
+) -> Result[ptr[mut Running], EvalError] {
     if trees.count > MAX_PROGRAMS {
         return .Error(EvalError.{message = message("a pipeline runs at most % programs", MAX_PROGRAMS), at = 0})
     }
@@ -159,7 +165,12 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
     }
     for tree in trees {
         // A script runs in a shell of its own (scripts.hsc)
-        prepared :: if is_script(tree.text) { prepare_script_call(shell, tree, background) } else { prepare_call(shell, tree, background) }
+        prepared :: if is_script(tree.text) {
+            prepare_script_call(shell, tree, background)
+        }
+        else {
+            prepare_call(shell, tree, background)
+        }
         match prepared {
             case Ok(call) => runtime.array_add(&running.calls, call)
             case Error(error) => return .Error(error)
@@ -174,7 +185,14 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
         match input {
             case Some(parameter) => {
                 if !reads && !parameter.optional {
-                    return failed_at(call.tree.at, message("% reads what comes before it in a pipeline: something | %", call.tree.text, call.tree.text))
+                    return failed_at(
+                        call.tree.at,
+                        message(
+                            "% reads what comes before it in a pipeline: something | %",
+                            call.tree.text,
+                            call.tree.text
+                        )
+                    )
                 }
             }
             case None => {
@@ -190,9 +208,20 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
             case Some(before) => {
                 writes :: parameter_giving(before, .Output) or_return failed_at(call.tree.at, "it has no output")
                 reading :: input or_return failed_at(call.tree.at, "it has no input")
-                if !same_hash(schema.hash_rooted(&before.manifest, writes.records), schema.hash_rooted(&call.manifest, reading.records)) {
-                    return failed_at(call.tree.at, message("% writes %, and % reads %", before.tree.text, type_text(&before.manifest, writes.records),
-                        call.tree.text, type_text(&call.manifest, reading.records)))
+                if !same_hash(
+                    schema.hash_rooted(&before.manifest, writes.records),
+                    schema.hash_rooted(&call.manifest, reading.records)
+                ) {
+                    return failed_at(
+                        call.tree.at,
+                        message(
+                            "% writes %, and % reads %",
+                            before.tree.text,
+                            type_text(&before.manifest, writes.records),
+                            call.tree.text,
+                            type_text(&call.manifest, reading.records)
+                        )
+                    )
                 }
             }
             case None => {}
@@ -206,7 +235,10 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
             ends :: stream_ends(budget) or_return failed_at(call.tree.at, "there's no memory for its input")
             for before, j in running.calls {
                 if j + 1 == k {
-                    runtime.array_add(&before.grants, os.NamedGrant.{label = "output", handle = cast[slop_os.Handle](ends.a)})
+                    runtime.array_add(
+                        &before.grants,
+                        os.NamedGrant.{label = "output", handle = cast[slop_os.Handle](ends.a)}
+                    )
                 }
             }
             runtime.array_add(&call.grants, os.NamedGrant.{label = "input", handle = cast[slop_os.Handle](ends.b)})
@@ -272,7 +304,7 @@ start_programs :: fn(shell: ptr[mut Shell], trees: ptr[Node][], given #escaping 
  * @param message What went wrong, kept by the error.
  * @return The error, as start_programs's result.
  */
-failed_at :: fn(at: usize, message #escaping : string) -> Result[ptr[mut Running], EvalError] {
+failed_at :: fn(at : usize, message #escaping : string) -> Result[ptr[mut Running], EvalError] {
     return .Error(EvalError.{message = message, at = at})
 }
 
@@ -286,7 +318,7 @@ failed_at :: fn(at: usize, message #escaping : string) -> Result[ptr[mut Running
  * @return What the last one writes, a list of its records as values; what its entry gave back, if it gave something,
  *     when it has no output or wrote nothing to it; Null otherwise.
  */
-finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Result[Value, EvalError] {
+finish_programs :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) -> Result[Value, EvalError] {
     result := Value.Null
     first_error : EvalError? = null
     for call, k in running.calls {
@@ -310,7 +342,9 @@ finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Resul
                  * A last program without an output gives what its entry gave back, if it gave something; so does one
                  * with an output it wrote nothing to, as recover with a name, which brings something back
                  */
-                if k + 1 == running.calls.count && ((parameter_giving(call, .Output) is_none) || (wrote_nothing(result) && call.returned != .Null)) {
+                if k + 1 == running.calls.count
+                    && ((parameter_giving(call, .Output) is_none)
+                        || (wrote_nothing(result) && call.returned != .Null)) {
                     result = call.returned
                 }
             }
@@ -328,7 +362,7 @@ finish_programs :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) -> Resul
  * @param output What read_output gave: a list of the records.
  * @return True for an empty list; false for anything else.
  */
-wrote_nothing :: fn(output: Value) -> bool {
+wrote_nothing :: fn(output : Value) -> bool {
     return match output {
         case List(list) => list.items.count == 0
         case _ => false
@@ -371,7 +405,9 @@ Running :: struct {
      * gave its input up and leaves Ctrl-C to it.
      */
     terminal : bool,
-    /** The most records kept of what the last writes: MAX_JOB_RECORDS for a job's; 0 for no limit, in the foreground. */
+    /**
+     * The most records kept of what the last writes: MAX_JOB_RECORDS for a job's; 0 for no limit, in the foreground.
+     */
     keep_at_most : usize,
     /** How many records it wrote past keep_at_most, read and dropped. */
     dropped : u64,
@@ -384,7 +420,7 @@ Running :: struct {
  * @param shell The shell, whose port the programs' ends are waited on.
  * @param running The programs, freed: it can't be used after.
  */
-end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
+end_running :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
     match running.writer {
         case Some(writer) => {
             open := writer
@@ -424,7 +460,7 @@ end_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
  * @param budget The memory budget that pays for the channel.
  * @return The ends, a the writing end and b the reading end, the caller's; null if the channel couldn't be made.
  */
-stream_ends :: fn(budget: slop_os.MemoryBudget) -> slop_os.ChannelPair? {
+stream_ends :: fn(budget : slop_os.MemoryBudget) -> slop_os.ChannelPair? {
     match slop_os.channel_create(budget, 0, os.protocol_tag[stream.Stream]()) {
         case Ok(pair) => return pair
         case Error(error) => return null
@@ -438,7 +474,7 @@ stream_ends :: fn(budget: slop_os.MemoryBudget) -> slop_os.ChannelPair? {
  * @param b The hash it's compared with, of the same form; the order doesn't matter.
  * @return True if every byte is the same.
  */
-same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
+same_hash :: fn(a : u8[32], b : u8[32]) -> bool {
     for byte, i in a {
         if i < b.count && byte != b[i] {
             return false
@@ -462,10 +498,15 @@ same_hash :: fn(a: u8[32], b: u8[32]) -> bool {
  * @param given What's given: a list's items, nothing for Null, or a value alone.
  * @return Null.
  */
-write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escaping : Value) -> Result[Value, EvalError] {
+write_given :: fn(
+    running : ptr[mut Running],
+    call : ptr[mut Call],
+    given #escaping : Value
+) -> Result[Value, EvalError] {
     reading :: parameter_giving(call, .Input) or_return error_at(call.tree.at, "it has no input")
     items :: items_of(given).items
-    records :: schema.type_in(&call.manifest, reading.records) or_return error_at(call.tree.at, "its manifest is cut short")
+    records :: schema.type_in(&call.manifest, reading.records)
+        or_return error_at(call.tree.at, "its manifest is cut short")
     encoded : u8[..][..]
     defer {
         for &each in encoded {
@@ -491,20 +532,31 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
         runtime.array_add(&encoded, bytes)
     }
     ring :: (if total > largest { total } else { largest }) * 2 + 4096
-    writer := match stream.untyped_writer_on(running.into, schema.hash_rooted(&call.manifest, reading.records), ring, false) {
+    writer := match stream.untyped_writer_on(
+        running.into,
+        schema.hash_rooted(&call.manifest, reading.records),
+        ring,
+        false
+    ) {
         case Ok(opened) => opened
-        case Error(error) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
+        case Error(
+            error
+        ) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
     }
     // The writer as it is after the last put, however this returns, for end_running to close
     defer running.writer = writer
     for each in encoded {
         match stream.put(&writer, each) {
-            case Some(error) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
+            case Some(
+                error
+            ) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
             case None => {}
         }
     }
     match stream.end_without_waiting(&writer, 0) {
-        case Some(error) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
+        case Some(
+            error
+        ) => return error_at(call.tree.at, message("% didn't take what's given to it: %", call.tree.text, error))
         case None => {}
     }
     return .Ok(.Null)
@@ -522,7 +574,11 @@ write_given :: fn(running: ptr[mut Running], call: ptr[mut Call], given #escapin
  * @param call The last program's call, started.
  * @return The records, a list, empty if it wrote nothing.
  */
-read_output :: fn(shell: ptr[mut Shell], running: ptr[mut Running], call: ptr[mut Call]) -> Result[Value, EvalError] {
+read_output :: fn(
+    shell : ptr[mut Shell],
+    running : ptr[mut Running],
+    call : ptr[mut Call]
+) -> Result[Value, EvalError] {
     // Opening waits for the program to open its end, which it may do late: Ctrl-C's seen to meanwhile
     if (running.reader is_none) && running.from != NO_END {
         wait_readable(shell, running, running.from)
@@ -551,7 +607,7 @@ read_output :: fn(shell: ptr[mut Shell], running: ptr[mut Running], call: ptr[mu
  *     what's there.
  * @return True once the output's read to its end, or couldn't be read; false if more may come.
  */
-read_some :: fn(running: ptr[mut Running], call: ptr[mut Call], deadline: u64) -> bool {
+read_some :: fn(running : ptr[mut Running], call : ptr[mut Call], deadline : u64) -> bool {
     if running.output_done {
         return true
     }
@@ -577,7 +633,10 @@ read_some :: fn(running: ptr[mut Running], call: ptr[mut Call], deadline: u64) -
             case Error(error) => {
                 _ = slop_os.handle_close(cast[slop_os.Handle](end))
                 if error != .Gone {
-                    running.output_error = EvalError.{message = message("%'s output couldn't be read: %", call.tree.text, error), at = call.tree.at}
+                    running.output_error = EvalError.{
+                        message = message("%'s output couldn't be read: %", call.tree.text, error),
+                        at = call.tree.at,
+                    }
                 }
                 running.output_done = true
                 return true
@@ -629,14 +688,19 @@ read_some :: fn(running: ptr[mut Running], call: ptr[mut Call], deadline: u64) -
  * @param given What came before it: a list's items, nothing for Null, or a value alone.
  * @return A new list, given's own not changed; Null for page.
  */
-run_stage :: fn(shell: ptr[mut Shell], stage #escaping : ptr[Node], given #escaping : Value) -> Result[Value, EvalError] {
+run_stage :: fn(
+    shell : ptr[mut Shell],
+    stage #escaping : ptr[Node],
+    given #escaping : Value
+) -> Result[Value, EvalError] {
     if stage.text == "page" {
         return page(shell, stage, given)
     }
     items :: items_of(given).items
     made :: new_list()
     if stage.text == "where" || stage.text == "map" {
-        expression :: first_child(stage) or_return error_at(stage.at, message("% needs an expression after it", stage.text))
+        expression :: first_child(stage)
+            or_return error_at(stage.at, message("% needs an expression after it", stage.text))
         for item in items {
             value :: of_item(shell, item, expression)?
             if stage.text == "map" {
@@ -696,7 +760,11 @@ items_of :: fn(given #escaping : Value) -> ptr[mut ValueList] {
  *     before the shell's own.
  * @return The expression's value, or its error, as evaluate gives it.
  */
-of_item :: fn(shell: ptr[mut Shell], item #escaping : Value, expression #escaping : ptr[Node]) -> Result[Value, EvalError] {
+of_item :: fn(
+    shell : ptr[mut Shell],
+    item #escaping : Value,
+    expression #escaping : ptr[Node]
+) -> Result[Value, EvalError] {
     scope := runtime.new(Scope)
     scope.parent = shell.scope
     match item {
@@ -726,12 +794,19 @@ of_item :: fn(shell: ptr[mut Shell], item #escaping : Value, expression #escapin
  * @param stage take's Call node.
  * @return How many items it keeps; 0 or less keeps none.
  */
-stage_number :: fn(shell: ptr[mut Shell], stage: ptr[Node]) -> Result[i64, EvalError] {
+stage_number :: fn(shell : ptr[mut Shell], stage : ptr[Node]) -> Result[i64, EvalError] {
     argument :: first_child(stage) or_return .Error(EvalError.{message = "take needs how many", at = stage.at})
-    value :: if argument.kind == .Word { word_as("int", argument.text) or_else Value.Null } else { evaluate(shell, argument)? }
+    value :: if argument.kind == .Word {
+        word_as("int", argument.text) or_else Value.Null
+    }
+    else {
+        evaluate(shell, argument)?
+    }
     match value {
         case Int(count) => return .Ok(count)
-        case _ => return .Error(EvalError.{message = message("take needs a whole number, not %", argument.text), at = argument.at})
+        case _ => return .Error(
+            EvalError.{message = message("take needs a whole number, not %", argument.text), at = argument.at}
+        )
     }
 }
 
@@ -742,7 +817,7 @@ stage_number :: fn(shell: ptr[mut Shell], stage: ptr[Node]) -> Result[i64, EvalE
  * @return field The field's name, a view of the line; "" for the items themselves.
  * @return descending Whether --descending is among its arguments.
  */
-stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
+stage_field :: fn(stage : ptr[Node]) -> (field : string, descending : bool) {
     field := ""
     descending := false
     for argument in stage.children {
@@ -765,7 +840,7 @@ stage_field :: fn(stage: ptr[Node]) -> (field : string, descending : bool) {
  * @param items The items, which aren't changed.
  * @return A new list of them, sorted.
  */
-sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
+sorted :: fn(shell : ptr[mut Shell], stage : ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     field, descending :: stage_field(stage)
     return .Ok(.List(language.sort_items(items, field, descending)))
 }
@@ -782,7 +857,7 @@ sorted :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[])
  * @param items The items, which aren't changed.
  * @return A new list of the groups.
  */
-grouped :: fn(shell: ptr[mut Shell], stage: ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
+grouped :: fn(shell : ptr[mut Shell], stage : ptr[Node], items #escaping : Value[]) -> Result[Value, EvalError] {
     name, descending :: stage_field(stage)
     if name.count == 0 {
         return error_at(stage.at, "group needs the field to group by")

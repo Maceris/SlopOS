@@ -47,7 +47,7 @@ request :: fn() -> Request {
  * @return What it asks for; nothing asked for when it's empty or none of those, and none failed for an n that
  *     isn't a number or is 0.
  */
-request_of :: fn(text: string) -> Request {
+request_of :: fn(text : string) -> Request {
     if text == "count" {
         return Request.{counting = true}
     }
@@ -72,7 +72,7 @@ request_of :: fn(text: string) -> Request {
  * @param body The test's checks, which give its exit code.
  * @return body's code; or 1000 if the FailingAllocator couldn't be made, in which case body isn't run.
  */
-run :: fn(body: (fn() -> int)) -> int {
+run :: fn(body : (fn() -> int)) -> int {
     asked :: request()
     if !asked.counting && asked.allocation == 0 && asked.point == 0 {
         return body()
@@ -113,7 +113,7 @@ point_spec :: fn() -> robustness.FailSpec {
  *
  * @param faults The frame allocator's injection state; nothing is logged when its spec is Off.
  */
-report_points :: fn(faults: ptr[robustness.Faults]) {
+report_points :: fn(faults : ptr[robustness.Faults]) {
     if faults.spec.mode != .Off {
         runtime.log_info("faults: points %", faults.all)
     }

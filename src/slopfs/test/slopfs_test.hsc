@@ -59,7 +59,7 @@ Recorded :: struct {
  * @param into Where they go, at least count * BLOCK_BYTES bytes.
  * @return True if they were read; false if they run past the disk's end or into is too small.
  */
-read_blocks :: fn(context: rawptr, block: u64, count: u64, into: mut u8[]) -> bool {
+read_blocks :: fn(context : rawptr, block : u64, count : u64, into : mut u8[]) -> bool {
     disk :: cast[ptr[mut Disk]](context)
     start :: cast[usize](block * slopfs.BLOCK_BYTES)
     length :: cast[usize](count * slopfs.BLOCK_BYTES)
@@ -85,7 +85,7 @@ read_blocks :: fn(context: rawptr, block: u64, count: u64, into: mut u8[]) -> bo
  * @return True if they were written; false, writing nothing, if the disk is read-only, they run past its end, or from
  *     is too small.
  */
-write_blocks :: fn(context: rawptr, block: u64, count: u64, from: u8[]) -> bool {
+write_blocks :: fn(context : rawptr, block : u64, count : u64, from : u8[]) -> bool {
     disk :: cast[ptr[mut Disk]](context)
     start :: cast[usize](block * slopfs.BLOCK_BYTES)
     length :: cast[usize](count * slopfs.BLOCK_BYTES)
@@ -116,7 +116,7 @@ write_blocks :: fn(context: rawptr, block: u64, count: u64, from: u8[]) -> bool 
  * @param context The Disk, as a rawptr.
  * @return True: a disk in memory is always durable.
  */
-flush_blocks :: fn(context: rawptr) -> bool {
+flush_blocks :: fn(context : rawptr) -> bool {
     disk :: cast[ptr[mut Disk]](context)
     disk.flushes += 1
     if disk.recording {
@@ -142,7 +142,7 @@ Bump :: struct {
  * @param data Whether they're for a file's bytes; not used.
  * @return The first block; null once the blocks would pass BLOCKS.
  */
-bump_allocate :: fn(space: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
+bump_allocate :: fn(space : rawptr, blocks : u64, owner : u64, data : bool) -> u64? {
     bump :: cast[ptr[mut Bump]](space)
     if bump.next + blocks > BLOCKS {
         return null
@@ -161,7 +161,7 @@ bump_allocate :: fn(space: rawptr, blocks: u64, owner: u64, data: bool) -> u64? 
  * @param owner Whose they were; not used.
  * @param birth When they were born; not used.
  */
-bump_release :: fn(space: rawptr, address: u64, blocks: u64, owner: u64, birth: u64) {
+bump_release :: fn(space : rawptr, address : u64, blocks : u64, owner : u64, birth : u64) {
     bump :: cast[ptr[mut Bump]](space)
     bump.released += blocks
 }
@@ -178,7 +178,7 @@ Random :: struct {
  * @param random The generator, its state advanced.
  * @return A number, any u64.
  */
-next_random :: fn(random: ptr[mut Random]) -> u64 {
+next_random :: fn(random : ptr[mut Random]) -> u64 {
     x := random.state
     x = x ~ (x >> 12)
     x = x ~ (x << 25)
@@ -194,7 +194,10 @@ next_random :: fn(random: ptr[mut Random]) -> u64 {
  * @param sealed Whether the volume is encrypted.
  * @return The volume, or why it couldn't be opened, as open_volume or open_sealed_volume says.
  */
-open_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
+open_test_volume :: fn(
+    container #escaping : ptr[mut slopfs.Container],
+    sealed : bool
+) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
         return slopfs.open_sealed_volume(container, 1, passphrase())
     }
@@ -209,9 +212,21 @@ open_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], sealed: 
  * @param sealed Whether to encrypt it, with TEST_ARGON2's quick parameters.
  * @return The volume, or why it couldn't be made, as create_volume or create_sealed_volume says.
  */
-create_test_volume :: fn(container #escaping : ptr[mut slopfs.Container], name: string, sealed: bool) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
+create_test_volume :: fn(
+    container #escaping : ptr[mut slopfs.Container],
+    name : string,
+    sealed : bool
+) -> Result[ptr[mut slopfs.Volume], slopfs.Error] {
     if sealed {
-        return slopfs.create_sealed_volume(container, name, key_of_volume(), 1, .ChaCha20Poly1305, passphrase(), TEST_ARGON2)
+        return slopfs.create_sealed_volume(
+            container,
+            name,
+            key_of_volume(),
+            1,
+            .ChaCha20Poly1305,
+            passphrase(),
+            TEST_ARGON2
+        )
     }
     return slopfs.create_volume(container, name, key_of_volume(), 1)
 }
@@ -233,7 +248,7 @@ new_device :: fn() -> slopfs.Device? {
  * @return The device, its context a Disk, the caller's to free with free_device; null without the memory for its
  *     bytes.
  */
-new_device_of :: fn(blocks: u64) -> slopfs.Device? {
+new_device_of :: fn(blocks : u64) -> slopfs.Device? {
     bytes, error :: runtime.new_array(u8, cast[usize](blocks * slopfs.BLOCK_BYTES))
     if error != null {
         return null
@@ -243,8 +258,13 @@ new_device_of :: fn(blocks: u64) -> slopfs.Device? {
     }
     disk := runtime.new(Disk)
     disk^ = Disk.{bytes = bytes}
-    return slopfs.Device.{context = cast[rawptr](disk), block_count = blocks, read = read_blocks, write = write_blocks,
-        flush = flush_blocks}
+    return slopfs.Device.{
+        context = cast[rawptr](disk),
+        block_count = blocks,
+        read = read_blocks,
+        write = write_blocks,
+        flush = flush_blocks,
+    }
 }
 
 /**
@@ -252,7 +272,7 @@ new_device_of :: fn(blocks: u64) -> slopfs.Device? {
  *
  * @param device The device, from new_device or new_device_of; it may not be used again.
  */
-free_device :: fn(device: slopfs.Device) {
+free_device :: fn(device : slopfs.Device) {
     disk :: cast[ptr[mut Disk]](device.context)
     runtime.free_array(disk.bytes)
     runtime.array_free(&disk.log)
@@ -269,7 +289,7 @@ free_device :: fn(device: slopfs.Device) {
  * @return The device, the caller's to free with free_device; Error if it couldn't be had or formatted, the failure
  *     recorded and nothing left to free.
  */
-formatted :: fn(t: ptr[mut testing.T], blocks: u64, first: u8) -> Result[slopfs.Device, testing.Stopped] {
+formatted :: fn(t : ptr[mut testing.T], blocks : u64, first : u8) -> Result[slopfs.Device, testing.Stopped] {
     device :: testing.require_some(t, new_device_of(blocks), "the disk's bytes are allocated")?
     id : u8[16]
     for i in 0..<id.count {
@@ -293,7 +313,12 @@ formatted :: fn(t: ptr[mut testing.T], blocks: u64, first: u8) -> Result[slopfs.
  * @param location Where the check is; the caller's own.
  * @return Ok if it was Ok; Error(Failed), the failure recorded with the error, if it was an Error.
  */
-require_done :: fn[V, E](t: ptr[mut testing.T], result: Result[V, E], message: string, location := #caller_location) -> testing.Outcome {
+require_done :: fn[V, E](
+    t : ptr[mut testing.T],
+    result : Result[V, E],
+    message : string,
+    location := #caller_location
+) -> testing.Outcome {
     return testing.outcome_of(testing.expect_ok(t, result, message, location))
 }
 
@@ -307,7 +332,12 @@ require_done :: fn[V, E](t: ptr[mut testing.T], result: Result[V, E], message: s
  * @return True if it committed and verify found nothing wrong; false, the failure (the commit's error, or the problem
  *     verify found) recorded, if not.
  */
-commits :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], message: string, location := #caller_location) -> bool {
+commits :: fn(
+    t : ptr[mut testing.T],
+    container : ptr[mut slopfs.Container],
+    message : string,
+    location := #caller_location
+) -> bool {
     committed :: slopfs.commit(container)
     if !testing.expect_ok(t, committed, message, location) {
         return false
@@ -324,7 +354,12 @@ commits :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], messa
  * @param location Where the check is; the caller's own.
  * @return Ok if it committed and checked out; Error(Failed), the failure recorded, if not.
  */
-require_commit :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], message: string, location := #caller_location) -> testing.Outcome {
+require_commit :: fn(
+    t : ptr[mut testing.T],
+    container : ptr[mut slopfs.Container],
+    message : string,
+    location := #caller_location
+) -> testing.Outcome {
     return testing.outcome_of(commits(t, container, message, location))
 }
 
@@ -337,7 +372,12 @@ require_commit :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container]
  * @param location Where the check is; the caller's own.
  * @return True if verify found no problem; false, the failure recorded, if it did.
  */
-checks_out :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], message: string, location := #caller_location) -> bool {
+checks_out :: fn(
+    t : ptr[mut testing.T],
+    container : ptr[mut slopfs.Container],
+    message : string,
+    location := #caller_location
+) -> bool {
     verified :: slopfs.verify(container)
     return testing.expect_ok(t, verified, message, location)
 }
@@ -349,7 +389,7 @@ checks_out :: fn(t: ptr[mut testing.T], container: ptr[mut slopfs.Container], me
  * @param container The container under test, mounted.
  * @return True if the commit failed or verify found a problem; false if all's well.
  */
-commit_failed :: fn(container: ptr[mut slopfs.Container]) -> bool {
+commit_failed :: fn(container : ptr[mut slopfs.Container]) -> bool {
     match slopfs.commit(container) {
         case Ok => return slopfs.verify(container) is_error
         case Error(error) => return true
@@ -384,13 +424,18 @@ TREE_VALUE_BYTES :: 600
  * @return The tree, the caller's to free with free_grown; Error if the disk couldn't be had or the tree refused a put,
  *     delete or write, the failure recorded and nothing left to free.
  */
-grown :: fn(t: ptr[mut testing.T]) -> Result[Grown, testing.Stopped] {
+grown :: fn(t : ptr[mut testing.T]) -> Result[Grown, testing.Stopped] {
     device :: testing.require_some(t, new_device(), "the disk's bytes are allocated")?
     bump := runtime.new(Bump)
     bump^ = Bump.{next = slopfs.FIRST_DATA}
     made := Grown.{device = device, bump = bump, tree = slopfs.Tree.{kind = .Volume, owner = 7}}
-    made.nodes = slopfs.Nodes.{device = device, transaction = 1, space = cast[rawptr](bump), allocate = bump_allocate,
-        release = bump_release}
+    made.nodes = slopfs.Nodes.{
+        device = device,
+        transaction = 1,
+        space = cast[rawptr](bump),
+        allocate = bump_allocate,
+        release = bump_release,
+    }
     if grow(t, &made) is_error {
         free_grown(&made)
         return .Error(.Failed)
@@ -405,7 +450,7 @@ grown :: fn(t: ptr[mut testing.T]) -> Result[Grown, testing.Stopped] {
  * @param made The tree, empty, with its nodes and model; grown in place.
  * @return Ok once every step is done; Error(Failed), the failure recorded, if the tree refused one.
  */
-grow :: fn(t: ptr[mut testing.T], made: ptr[mut Grown]) -> testing.Outcome {
+grow :: fn(t : ptr[mut testing.T], made : ptr[mut Grown]) -> testing.Outcome {
     random := Random.{state = 0x9e3779b97f4a7c15}
     value : u8[TREE_VALUE_BYTES]
     for step in 0..<20000 {
@@ -415,7 +460,12 @@ grow :: fn(t: ptr[mut testing.T], made: ptr[mut Grown]) -> testing.Outcome {
         if choice == 0 {
             deleted :: slopfs.tree_delete(&made.nodes, &made.tree, key)
             was_there :: testing.require_ok(t, deleted, "a delete works whether or not the key is there")?
-            testing.expect_eq(t, was_there, maps.map_has(&made.model, object), "a delete finds the key just when the model has it")
+            testing.expect_eq(
+                t,
+                was_there,
+                maps.map_has(&made.model, object),
+                "a delete finds the key just when the model has it"
+            )
             _ = maps.map_remove(&made.model, object)
         }
         else {
@@ -441,13 +491,13 @@ grow :: fn(t: ptr[mut testing.T], made: ptr[mut Grown]) -> testing.Outcome {
  *
  * @param made The tree, whose model, allocator and disk aren't used after.
  */
-free_grown :: fn(made: ptr[mut Grown]) {
+free_grown :: fn(made : ptr[mut Grown]) {
     maps.map_free(&made.model)
     runtime.free(made.bump)
     free_device(made.device)
 }
 
-a_tree_grows_past_one_leaf_through_puts_and_deletes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_tree_grows_past_one_leaf_through_puts_and_deletes #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := grown(t)?
     defer free_grown(&made)
     loaded :: slopfs.load(&made.nodes, &made.tree, &made.tree.root)
@@ -458,7 +508,7 @@ a_tree_grows_past_one_leaf_through_puts_and_deletes #test :: fn(t: ptr[mut testi
     return .Ok
 }
 
-every_key_reads_back_as_the_model_has_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+every_key_reads_back_as_the_model_has_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := grown(t)?
     defer free_grown(&made)
     value : u8[TREE_VALUE_BYTES]
@@ -473,7 +523,11 @@ every_key_reads_back_as_the_model_has_it #test :: fn(t: ptr[mut testing.T]) -> t
                 fill(value, seed, length)
                 expected : usize? = length
                 testing.expect_eq(t, found, expected, "a key the model has is found, as long as the value last put")
-                testing.expect_none(t, difference(read_back[0..<length], value[0..<length]), "a key reads as the value last put")
+                testing.expect_none(
+                    t,
+                    difference(read_back[0..<length], value[0..<length]),
+                    "a key reads as the value last put"
+                )
             }
             case None => testing.expect_none(t, found, "a key the model hasn't, never put or deleted, isn't found")
         }
@@ -481,7 +535,7 @@ every_key_reads_back_as_the_model_has_it #test :: fn(t: ptr[mut testing.T]) -> t
     return .Ok
 }
 
-walking_forward_finds_every_key_in_order #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+walking_forward_finds_every_key_in_order #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := grown(t)?
     defer free_grown(&made)
     read_back : u8[TREE_VALUE_BYTES]
@@ -500,7 +554,7 @@ walking_forward_finds_every_key_in_order #test :: fn(t: ptr[mut testing.T]) -> t
     return .Ok
 }
 
-walking_back_finds_every_key #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+walking_back_finds_every_key #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made := grown(t)?
     defer free_grown(&made)
     read_back : u8[TREE_VALUE_BYTES]
@@ -528,7 +582,7 @@ walking_back_finds_every_key #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
  * @param from The key searched from.
  * @return True if found is before from, so the search went wrong.
  */
-compare_after :: fn(found: slopfs.Key, from: slopfs.Key) -> bool {
+compare_after :: fn(found : slopfs.Key, from : slopfs.Key) -> bool {
     return slopfs.compare_keys(found, from) < 0
 }
 
@@ -539,7 +593,7 @@ compare_after :: fn(found: slopfs.Key, from: slopfs.Key) -> bool {
  * @param seed The seed, any value; the same seed makes the same bytes.
  * @param length How many bytes to fill.
  */
-fill :: fn(into: mut u8[], seed: u64, length: usize) {
+fill :: fn(into : mut u8[], seed : u64, length : usize) {
     for i in 0..<length {
         if i < into.count {
             into[i] = cast[u8]((seed >> cast[u64](i % 8 * 8)) + cast[u64](i))
@@ -554,7 +608,7 @@ fill :: fn(into: mut u8[], seed: u64, length: usize) {
  * @param b The other byte string, of any length.
  * @return True if they're the same length and byte for byte alike.
  */
-same :: fn(a: u8[], b: u8[]) -> bool {
+same :: fn(a : u8[], b : u8[]) -> bool {
     return difference(a, b) is_none
 }
 
@@ -566,7 +620,7 @@ same :: fn(a: u8[], b: u8[]) -> bool {
  * @return The offset of the first byte that differs, or the shorter one's length if one is a prefix of the other;
  *     null if they're the same length and byte for byte alike.
  */
-difference :: fn(a: u8[], b: u8[]) -> usize? {
+difference :: fn(a : u8[], b : u8[]) -> usize? {
     for byte, i in a {
         if i >= b.count || b[i] != byte {
             return i

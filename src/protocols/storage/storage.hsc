@@ -4,10 +4,10 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import read_only_dir from "std:os/slop_os/read_only_dir"
-import block from "../block"
-import partitions from "../partitions"
-import container from "../container"
 import slopfs from "../../slopfs"
+import block from "../block"
+import container from "../container"
+import partitions from "../partitions"
 
 /*
  * The storage manager's protocol (roadmap 8a, decisions/0086): every partition of every disk it holds, by one index
@@ -282,7 +282,7 @@ Response :: union {
  * @return True for what only asks or opens, and SetQuota, which sets the same quota again; false for what makes or
  *     deletes something, or rotates or restarts, which would do it again.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Describe(_) => true
         case Open(_) => true
@@ -318,7 +318,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Storage]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Storage]? {
     pair :: os.channel_for[Storage](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

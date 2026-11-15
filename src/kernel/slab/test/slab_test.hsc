@@ -10,9 +10,9 @@ package slab_test
 import compiler from "base:compiler"
 import testing from "std:testing"
 import slab from ".."
-import frames from "../../frames"
 import boot_info from "../../../boot_info"
 import hosted_faults from "../../../robustness/hosted"
+import frames from "../../frames"
 
 /** The physical address the stand-in memory starts at: 256 KiB, frame 64. */
 MEMORY_BASE : u64 : 0x40000
@@ -30,7 +30,7 @@ Memory :: alias u64[32768]
  */
 REGIONS :: boot_info.MemoryRegion.[
     .{range = .{base = cast[boot_info.PhysicalAddress](0), size = MEMORY_BASE}, kind = .Reserved},
-    .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
+    .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable}
 ]
 
 /**
@@ -39,7 +39,7 @@ REGIONS :: boot_info.MemoryRegion.[
  * @param memory The stand-in memory, only its address used.
  * @return What's added to a physical address in it to reach its byte in memory.
  */
-offset_of :: fn(memory: ptr[mut Memory]) -> u64 {
+offset_of :: fn(memory : ptr[mut Memory]) -> u64 {
     return cast[u64](&memory[0]) - MEMORY_BASE
 }
 
@@ -51,7 +51,10 @@ offset_of :: fn(memory: ptr[mut Memory]) -> u64 {
  * @return The allocator, whose failure points the caller reports with hosted_faults.report_points; Error if make
  *     refused the memory, the failure recorded.
  */
-made_allocator :: fn(t: ptr[mut testing.T], memory: ptr[mut Memory]) -> Result[frames.FrameAllocator, testing.Stopped] {
+made_allocator :: fn(
+    t : ptr[mut testing.T],
+    memory : ptr[mut Memory]
+) -> Result[frames.FrameAllocator, testing.Stopped] {
     made :: frames.make(REGIONS, offset_of(memory))
     allocator := testing.require_ok(t, made, "256 KiB of usable memory makes a frame allocator")?
     allocator.faults.spec = hosted_faults.point_spec()
@@ -68,8 +71,13 @@ made_allocator :: fn(t: ptr[mut testing.T], memory: ptr[mut Memory]) -> Result[f
  * @param objects Where the objects' addresses go, in the order allocated.
  * @return Ok once all 64 are allocated, each aligned to its size; Error at the first that isn't, the failure recorded.
  */
-fill :: fn(t: ptr[mut testing.T], cache: ptr[mut slab.SlabCache], allocator: ptr[mut frames.FrameAllocator], offset: u64,
-        objects: ptr[mut u64[64]]) -> testing.Outcome {
+fill :: fn(
+    t : ptr[mut testing.T],
+    cache : ptr[mut slab.SlabCache],
+    allocator : ptr[mut frames.FrameAllocator],
+    offset : u64,
+    objects : ptr[mut u64[64]]
+) -> testing.Outcome {
     for i in 0..<64 {
         allocated :: slab.allocate(cache, allocator)
         object :: testing.require_ok(t, allocated, "there are frames for two slabs")?
@@ -79,7 +87,7 @@ fill :: fn(t: ptr[mut testing.T], cache: ptr[mut slab.SlabCache], allocator: ptr
     return .Ok
 }
 
-a_cache_of_64_byte_objects_fits_63_to_a_frame #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_cache_of_64_byte_objects_fits_63_to_a_frame #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     cache := slab.make_cache(64, 8)
     testing.expect_eq(t, cache.object_size, 64, "the size asked for, already aligned")
     testing.expect_eq(t, cache.slab_order, 0, "a frame holds enough of them")
@@ -87,7 +95,7 @@ a_cache_of_64_byte_objects_fits_63_to_a_frame #test :: fn(t: ptr[mut testing.T])
     return .Ok
 }
 
-objects_come_in_order_from_a_slab_then_from_a_new_one #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+objects_come_in_order_from_a_slab_then_from_a_new_one #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -103,7 +111,7 @@ objects_come_in_order_from_a_slab_then_from_a_new_one #test :: fn(t: ptr[mut tes
     return .Ok
 }
 
-the_last_object_freed_is_the_next_handed_out #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_last_object_freed_is_the_next_handed_out #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -113,11 +121,16 @@ the_last_object_freed_is_the_next_handed_out #test :: fn(t: ptr[mut testing.T]) 
     slab.free(&cache, &allocator, objects[10])
     testing.expect_eq(t, cache.partial.count, 2, "freeing from the full slab makes it partly used")
     again :: slab.allocate(&cache, &allocator)
-    testing.expect_eq(t, testing.require_ok(t, again, "an object was just freed")?, objects[10], "the last object freed is handed out first")
+    testing.expect_eq(
+        t,
+        testing.require_ok(t, again, "an object was just freed")?,
+        objects[10],
+        "the last object freed is handed out first"
+    )
     return .Ok
 }
 
-emptied_slabs_go_back_but_one #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+emptied_slabs_go_back_but_one #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -139,7 +152,7 @@ emptied_slabs_go_back_but_one #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
     return .Ok
 }
 
-a_magazine_takes_and_gives_back_half_its_size_at_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_magazine_takes_and_gives_back_half_its_size_at_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -158,8 +171,12 @@ a_magazine_takes_and_gives_back_half_its_size_at_once #test :: fn(t: ptr[mut tes
     }
     testing.expect_eq(t, magazine.count, slab.MAGAZINE_SIZE, "objects given back fill it")
     slab.give_back(&magazine, &cache, &allocator, first)
-    testing.expect_eq(t, magazine.count, slab.MAGAZINE_SIZE - slab.MAGAZINE_BATCH + 1,
-        "full, it gives a batch back to the cache before taking one more")
+    testing.expect_eq(
+        t,
+        magazine.count,
+        slab.MAGAZINE_SIZE - slab.MAGAZINE_BATCH + 1,
+        "full, it gives a batch back to the cache before taking one more"
+    )
     slab.drain(&magazine, &cache, &allocator)
     slab.free(&cache, &allocator, object)
     testing.expect_eq(t, magazine.count, 0, "draining empties it")
@@ -168,7 +185,7 @@ a_magazine_takes_and_gives_back_half_its_size_at_once #test :: fn(t: ptr[mut tes
     return .Ok
 }
 
-big_objects_get_slabs_of_several_frames_until_there_are_none #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+big_objects_get_slabs_of_several_frames_until_there_are_none #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)

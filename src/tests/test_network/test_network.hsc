@@ -29,16 +29,16 @@ package test_network
 
 import runtime from "base:runtime"
 import net from "std:net"
+import ntp from "std:ntp"
 import os from "std:os"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
 import net_address from "std:os/slop_os/net_address"
 import network from "std:os/slop_os/network"
 import read_only_dir from "std:os/slop_os/read_only_dir"
+import text_buffer from "std:text_buffer"
 import tls from "std:tls"
-import ntp from "std:ntp"
-import connector from "../../protocols/connector"
 import service_kit from "../../libraries/service_kit"
+import connector from "../../protocols/connector"
 
 /** How many bytes the TCP echo exchanges: 64 KiB. */
 ECHO_BYTES : usize : 65536
@@ -46,7 +46,9 @@ ECHO_BYTES : usize : 65536
 CHUNK :: 8192
 /** How many bytes the throughput measure sends: 4 MiB. */
 SINK_BYTES : usize : 4 << 20
-/** How many times an Open is tried while there's no route yet, as the lease is still coming: 60, half a second apart. */
+/**
+ * How many times an Open is tried while there's no route yet, as the lease is still coming: 60, half a second apart.
+ */
 OPEN_TRIES :: 60
 
 /**
@@ -58,8 +60,12 @@ OPEN_TRIES :: 60
  * @param trust The trust store, read only; null without a system volume.
  * @return 0, whatever it found, which its lines say; 2 without a network service or its peers' ports.
  */
-main :: fn(log: slop_os.DebugLog?, network: os.Channel[connector.Connector]?, command_line: slop_os.Memory?,
-    trust: os.Channel[read_only_dir.ReadOnlyDir]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    network : os.Channel[connector.Connector]?,
+    command_line : slop_os.Memory?,
+    trust : os.Channel[read_only_dir.ReadOnlyDir]?
+) -> int {
     startup :: slop_os.startup_block()
     dialing :: network or_return 2
     text :: service_kit.text_of(startup, command_line or_return 2) or_else ""
@@ -103,7 +109,7 @@ PEER_NAME :: "peer.slopos.test"
  * @param service The connection to the network service, which allows everything.
  * @param tcp_echo The echo peer's port.
  */
-use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
+use_names :: fn(service : os.Channel[network.Network], tcp_echo : u16) {
     startup :: slop_os.startup_block()
     port :: os.port_for(startup.budget, service.end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
@@ -150,7 +156,15 @@ use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
                 case Some(described) => append_address(&line, described.remote.address)
                 case None => text_buffer.append(&line, "an unknown address")
             }
-            text_buffer.append(&line, if got == string_bytes(message).count && string_of(&back[0], got) == message { ", its echo whole" } else { ", its echo wrong" })
+            text_buffer.append(
+                &line,
+                if got == string_bytes(message).count && string_of(&back[0], got) == message {
+                    ", its echo whole"
+                }
+                else {
+                    ", its echo wrong"
+                }
+            )
             runtime.log_info("%", text_buffer.as_string(&line))
             net.close(&tcp)
         }
@@ -182,14 +196,21 @@ use_names :: fn(service: os.Channel[network.Network], tcp_echo: u16) {
  * @param port A port bound to it.
  * @return The narrowed connection, the caller's; null if it wasn't made.
  */
-qemu_ranges :: fn(service: os.Channel[network.Network], port: slop_os.Port) -> os.Channel[network.Network]? {
+qemu_ranges :: fn(service : os.Channel[network.Network], port : slop_os.Port) -> os.Channel[network.Network]? {
     site := net_address.Address.{family = .V6}
     site.bytes[0] = 0xfe
     site.bytes[1] = 0xc0
     ranges := network.Policy.{connect_count = 3}
-    ranges.connect[0] = network.range_rule(net_address.v4(10, 0, 2, 0), 24, network.TRANSPORT_TCP | network.TRANSPORT_UDP, 0, 65535)
+    ranges.connect[0] = network.range_rule(
+        net_address.v4(10, 0, 2, 0),
+        24,
+        network.TRANSPORT_TCP | network.TRANSPORT_UDP,
+        0,
+        65535
+    )
     ranges.connect[1] = network.range_rule(site, 64, network.TRANSPORT_TCP, 0, 65535)
-    ranges.connect[2] = network.name_rule("*.slopos.test", network.TRANSPORT_TCP | network.TRANSPORT_UDP, 0, 65535) or_else network.Rule.{}
+    ranges.connect[2] = network.name_rule("*.slopos.test", network.TRANSPORT_TCP | network.TRANSPORT_UDP, 0, 65535)
+        or_else network.Rule.{}
     return network.narrow(service.end, port, &ranges)
 }
 
@@ -199,7 +220,7 @@ qemu_ranges :: fn(service: os.Channel[network.Network], port: slop_os.Port) -> o
  * @param line Where.
  * @param address The address.
  */
-append_address :: fn(line: ptr[mut text_buffer.TextBuffer], address: net_address.Address) {
+append_address :: fn(line : ptr[mut text_buffer.TextBuffer], address : net_address.Address) {
     b :: address.bytes
     if address.family == .V4 {
         text_buffer.append_format(line, "%.%.%.%", b[0], b[1], b[2], b[3])
@@ -220,7 +241,7 @@ append_address :: fn(line: ptr[mut text_buffer.TextBuffer], address: net_address
  * @param service The connection to the network service.
  * @param to The sink.
  */
-measure_send :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) {
+measure_send :: fn(service : os.Channel[network.Network], to : net_address.Endpoint) {
     started :: slop_os.clock_monotonic() or_else 0
     tcp := match open_when_routed(service, to) {
         case Ok(found) => found
@@ -264,7 +285,7 @@ measure_send :: fn(service: os.Channel[network.Network], to: net_address.Endpoin
  * @param offset The offset.
  * @return The byte.
  */
-pattern :: fn(offset: usize) -> u8 {
+pattern :: fn(offset : usize) -> u8 {
     return cast[u8]((offset * 131 + (offset >> 8)) & 0xff)
 }
 
@@ -275,7 +296,10 @@ pattern :: fn(offset: usize) -> u8 {
  * @param to Who to.
  * @return The connection, or why not.
  */
-open_when_routed :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) -> Result[net.Tcp, net.Failure] {
+open_when_routed :: fn(
+    service : os.Channel[network.Network],
+    to : net_address.Endpoint
+) -> Result[net.Tcp, net.Failure] {
     for try in 0..<OPEN_TRIES {
         match net.open(service, to) {
             case Ok(tcp) => return .Ok(tcp)
@@ -295,7 +319,7 @@ open_when_routed :: fn(service: os.Channel[network.Network], to: net_address.End
  *
  * @param nanoseconds How long.
  */
-wait :: fn(nanoseconds: u64) {
+wait :: fn(nanoseconds : u64) {
     waiter :: slop_os.port_create(slop_os.startup_block().budget) or_return void
     packets : slop_os.Packet[1]
     _ = slop_os.port_wait(waiter, packets, (slop_os.clock_monotonic() or_else 0) + nanoseconds)
@@ -309,7 +333,7 @@ wait :: fn(nanoseconds: u64) {
  * @param service The connection to the network service.
  * @param to The peer.
  */
-echo_tcp :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) {
+echo_tcp :: fn(service : os.Channel[network.Network], to : net_address.Endpoint) {
     tcp := match open_when_routed(service, to) {
         case Ok(found) => found
         case Error(failure) => {
@@ -389,7 +413,7 @@ echo_tcp :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) {
  * @param service The connection to the network service.
  * @param to The peer.
  */
-echo_udp :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) {
+echo_udp :: fn(service : os.Channel[network.Network], to : net_address.Endpoint) {
     socket := match net.udp(service) {
         case Ok(found) => found
         case Error(failure) => {
@@ -423,7 +447,7 @@ echo_udp :: fn(service: os.Channel[network.Network], to: net_address.Endpoint) {
  *
  * @param service The connection to the network service.
  */
-serve_echo :: fn(service: os.Channel[network.Network]) {
+serve_echo :: fn(service : os.Channel[network.Network]) {
     listener := match net.listen(service, 7) {
         case Ok(found) => found
         case Error(failure) => {
@@ -470,7 +494,12 @@ serve_echo :: fn(service: os.Channel[network.Network]) {
  * @param port The TLS peer's port; 0 for none.
  * @param nts_forged The forging NTS server's NTS-KE port; 0 for none.
  */
-use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_dir.ReadOnlyDir]?, port: u16, nts_forged: u16) {
+use_tls :: fn(
+    service : os.Channel[network.Network],
+    trust : os.Channel[read_only_dir.ReadOnlyDir]?,
+    port : u16,
+    nts_forged : u16
+) {
     loaded :: match trust {
         case Some(store) => net.load_anchors(store)
         case None => null
@@ -497,14 +526,15 @@ use_tls :: fn(service: os.Channel[network.Network], trust: os.Channel[read_only_
 }
 
 /**
- * Reach the TLS peer by each of its names: the RSA and P-256 ones reached, what's written echoed; the rest refused, each
+ * Reach the TLS peer by each of its names: the RSA and P-256 ones reached, what's written echoed; the rest refused,
+ * each
  * for its reason.
  *
  * @param service The connection to the network service, narrowed to QEMU's ranges.
  * @param anchors The trust anchors.
  * @param port The TLS peer's port.
  */
-reach_tls_peers :: fn(service: os.Channel[network.Network], anchors: u8[], port: u16) {
+reach_tls_peers :: fn(service : os.Channel[network.Network], anchors : u8[], port : u16) {
     for name in string.["rsa.slopos.test", "ecdsa.slopos.test"] {
         match net.connect_tls(service, name, port, anchors) {
             case Ok(found) => {
@@ -526,7 +556,11 @@ reach_tls_peers :: fn(service: os.Channel[network.Network], anchors: u8[], port:
                 }
                 while true
                 whole :: written == string_bytes(message).count && got == written && string_of(&back[0], got) == message
-                runtime.log_info("% reached over TLS, its certificate checked, %", name, if whole { "its echo whole" } else { "its echo wrong" })
+                runtime.log_info(
+                    "% reached over TLS, its certificate checked, %",
+                    name,
+                    if whole { "its echo whole" } else { "its echo wrong" }
+                )
                 net.close_tls(&stream)
             }
             case Error(failure) => log_tls_failure(name, failure)
@@ -552,7 +586,7 @@ reach_tls_peers :: fn(service: os.Channel[network.Network], anchors: u8[], port:
  * @param anchors The trust anchors.
  * @param port Its NTS-KE port.
  */
-refuse_forged_time :: fn(service: os.Channel[network.Network], anchors: u8[], port: u16) {
+refuse_forged_time :: fn(service : os.Channel[network.Network], anchors : u8[], port : u16) {
     session :: runtime.new(ntp.Session)
     defer runtime.free(session)
     name :: "forged.slopos.test"
@@ -576,7 +610,7 @@ refuse_forged_time :: fn(service: os.Channel[network.Network], anchors: u8[], po
  * @param name The host's name.
  * @param failure Why.
  */
-log_tls_failure :: fn(name: string, failure: net.TlsFailure) {
+log_tls_failure :: fn(name : string, failure : net.TlsFailure) {
     match failure.network {
         case Some(why) => runtime.log_info("% wasn't reached: %", name, why)
         case None => {
@@ -600,7 +634,7 @@ Served :: struct {
  *
  * @param service The connection to the network service.
  */
-serve_tls :: fn(service: os.Channel[network.Network]) {
+serve_tls :: fn(service : os.Channel[network.Network]) {
     served :: runtime.new(Served)
     defer runtime.free(served)
     if MACHINE_CHAIN.count > served.chain.count {
@@ -612,7 +646,11 @@ serve_tls :: fn(service: os.Channel[network.Network]) {
             served.chain[i] = byte
         }
     }
-    identity := tls.identity_of(.P256, tls.range(served.chain, 0, MACHINE_CHAIN.count), MACHINE_KEY[0..<MACHINE_KEY.count])
+    identity := tls.identity_of(
+        .P256,
+        tls.range(served.chain, 0, MACHINE_CHAIN.count),
+        MACHINE_KEY[0..<MACHINE_KEY.count]
+    )
     listener := match net.listen(service, 443) {
         case Ok(found) => found
         case Error(failure) => {

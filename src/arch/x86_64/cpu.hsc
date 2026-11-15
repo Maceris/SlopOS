@@ -6,8 +6,8 @@
  */
 package arch_x86_64
 
-import runtime from "base:runtime"
 import x86_64 from "base:intrinsics/x86_64"
+import runtime from "base:runtime"
 import arch_interface from "../../arch_interface"
 
 // Segment selectors, in GDT order. SYSRET needs user data right below user code (Intel SDM Vol. 3A §5.8.8).
@@ -177,6 +177,6 @@ current_cpu :: fn() -> ptr[mut ArchCpu] {
  *     fall inside it, which isn't checked.
  * @return STACK_GUARD bytes above the stack's lowest address.
  */
-stack_limit_of :: fn(stack: arch_interface.StackRange) -> rawptr {
+stack_limit_of :: fn(stack : arch_interface.StackRange) -> rawptr {
     return cast[rawptr](cast[u64](stack.low) + runtime.STACK_GUARD)
 }

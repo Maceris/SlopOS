@@ -14,13 +14,20 @@ import slop_os from "std:os/slop_os"
  * @error BadBuffer counters isn't the caller's to write.
  * @error NotCounted The kernel wasn't built with coverage counters.
  */
-sys_coverage_take :: fn(thread: ptr[mut Thread], counters: slop_os.UserBuffer) -> Result[u64, slop_os.CoverageError] {
+sys_coverage_take :: fn(thread : ptr[mut Thread], counters : slop_os.UserBuffer) -> Result[u64, slop_os.CoverageError] {
     counted :: intrinsics.coverage_counters()
     if counted.count == 0 {
         return .Error(.NotCounted)
     }
     count :: if counters.count < cast[u64](counted.count) { counters.count } else { cast[u64](counted.count) }
-    if count > 0 && !copy_to_user(per_cpu().kernel, thread.space, counters.address, cast[u64](cast[uintptr](&counted[0])), count) {
+    if count > 0
+        && !copy_to_user(
+            per_cpu().kernel,
+            thread.space,
+            counters.address,
+            cast[u64](cast[uintptr](&counted[0])),
+            count
+        ) {
         return .Error(.BadBuffer)
     }
     intrinsics.mem_zero(cast[mut rawptr](&counted[0]), counted.count)

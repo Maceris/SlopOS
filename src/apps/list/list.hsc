@@ -53,14 +53,15 @@ ListError :: union {
  * @param here The shell's directory, given without asking, which path is beneath.
  * @param path The directory to list, beneath here; without it, here itself.
  * @param all Whether to list the entries whose names start with a dot too, which are left out without it.
- * @param output Where the entries go: the shell, to show them, or what comes after it in a pipeline. Without it, they're
+ * @param output Where the entries go: the shell, to show them, or what comes after it in a pipeline. Without it,
+ *     they're
  *     only counted.
  * @return How many entries it listed.
  * @error NotFound There's nothing at that path; list a directory that's there.
  * @error NotADirectory That's a file; list the directory it's in.
  * @error Unreadable The directory couldn't be read, or its entries written.
  */
-main :: fn(here: os.Channel[dir.Dir], path: string?, all: bool, output: os.Sink[Entry]?) -> Result[u64, ListError] {
+main :: fn(here : os.Channel[dir.Dir], path : string?, all : bool, output : os.Sink[Entry]?) -> Result[u64, ListError] {
     asked :: if path is_some { "path" } else { "here" }
     problem :: Problem.{parameter = os.ParameterName.{name = asked}}
     budget :: slop_os.startup_block().budget
@@ -135,7 +136,7 @@ main :: fn(here: os.Channel[dir.Dir], path: string?, all: bool, output: os.Sink[
  * @param kind What the directory said it is.
  * @return The same, as EntryKind.
  */
-kind_of :: fn(kind: files.Kind) -> EntryKind {
+kind_of :: fn(kind : files.Kind) -> EntryKind {
     return match kind {
         case .File => EntryKind.File
         case .Directory => EntryKind.Directory
@@ -150,7 +151,7 @@ kind_of :: fn(kind: files.Kind) -> EntryKind {
  * @param problem The parameter it came from.
  * @return NotFound, NotADirectory, or Unreadable for anything else.
  */
-listing_error :: fn(error: files.FileError, problem: Problem) -> ListError {
+listing_error :: fn(error : files.FileError, problem : Problem) -> ListError {
     return match error {
         case .NotFound => ListError.NotFound(problem)
         case .NotADirectory => ListError.NotADirectory(problem)

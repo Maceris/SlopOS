@@ -85,7 +85,12 @@ Issued :: struct {
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-create_link :: fn(volume: ptr[mut Volume], directory: u64, name: string, record: ptr[LinkRecord]) -> Result[u64, Error] {
+create_link :: fn(
+    volume : ptr[mut Volume],
+    directory : u64,
+    name : string,
+    record : ptr[LinkRecord]
+) -> Result[u64, Error] {
     object :: create(volume, directory, name, .Link)?
     tree_put(volume.nodes, &volume.tree, key_of(object, .Link, 0), view_of(cast[ptr[u8]](record), size_of(LinkRecord)))?
     return .Ok(object)
@@ -101,14 +106,19 @@ create_link :: fn(volume: ptr[mut Volume], directory: u64, name: string, record:
  * @error Corrupt The link has no LinkRecord, or one of the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-link_of :: fn(volume: ptr[mut Volume], object: u64) -> Result[LinkRecord, Error] {
+link_of :: fn(volume : ptr[mut Volume], object : u64) -> Result[LinkRecord, Error] {
     record :: get_object(volume, object)?
     if kind_of_record(&record) != .Link {
         return .Error(.NotFound)
     }
     link := LinkRecord.{}
-    bytes :: tree_get(volume.nodes, &volume.tree, key_of(object, .Link, 0),
-        view_of(cast[ptr[mut u8]](&link), size_of(LinkRecord)))? or_return .Error(.Corrupt)
+    bytes :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(object, .Link, 0),
+        view_of(cast[ptr[mut u8]](&link), size_of(LinkRecord))
+    )?
+        or_return .Error(.Corrupt)
     if bytes != size_of(LinkRecord) {
         return .Error(.Corrupt)
     }
@@ -143,7 +153,7 @@ Walked :: struct {
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-walk :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[Walked, Error] {
+walk :: fn(volume : ptr[mut Volume], directory : u64, path : string) -> Result[Walked, Error] {
     at := directory
     start : usize = 0
     for i in 0..<path.count + 1 {
@@ -180,17 +190,39 @@ walk :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[Walk
  * @error Corrupt The issued state says 0, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-issue :: fn(volume: ptr[mut Volume], object: u64, write: bool, recipient_container: u8[16], recipient: u64) -> Result[u64, Error] {
+issue :: fn(
+    volume : ptr[mut Volume],
+    object : u64,
+    write : bool,
+    recipient_container : u8[16],
+    recipient : u64
+) -> Result[u64, Error] {
     get_object(volume, object)?
     state := IssuedState.{next = cast[u64le](cast[u64](1))}
-    _ = tree_get(volume.nodes, &volume.tree, key_of(0, .Issued, 0), view_of(cast[ptr[mut u8]](&state), size_of(IssuedState)))?
+    _ = tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(0, .Issued, 0),
+        view_of(cast[ptr[mut u8]](&state), size_of(IssuedState))
+    )?
     number :: cast[u64](state.next)
     if number == 0 {
         return .Error(.Corrupt)
     }
-    record := IssuedRecord.{volume = cast[u64le](volume.id), object = cast[u64le](object), created = cast[u64le](volume.now),
-        recipient_container = recipient_container, recipient_volume = cast[u64le](recipient), write = if write { cast[u8](1) } else { cast[u8](0) }}
-    tree_put(volume.nodes, &volume.tree, key_of(0, .Issued, number), view_of(cast[ptr[u8]](&record), size_of(IssuedRecord)))?
+    record := IssuedRecord.{
+        volume = cast[u64le](volume.id),
+        object = cast[u64le](object),
+        created = cast[u64le](volume.now),
+        recipient_container = recipient_container,
+        recipient_volume = cast[u64le](recipient),
+        write = if write { cast[u8](1) } else { cast[u8](0) },
+    }
+    tree_put(
+        volume.nodes,
+        &volume.tree,
+        key_of(0, .Issued, number),
+        view_of(cast[ptr[u8]](&record), size_of(IssuedRecord))
+    )?
     state.next = cast[u64le](number + 1)
     tree_put(volume.nodes, &volume.tree, key_of(0, .Issued, 0), view_of(cast[ptr[u8]](&state), size_of(IssuedState)))?
     volume.dirty = true
@@ -206,13 +238,18 @@ issue :: fn(volume: ptr[mut Volume], object: u64, write: bool, recipient_contain
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-issued :: fn(volume: ptr[mut Volume], number: u64) -> Result[IssuedRecord?, Error] {
+issued :: fn(volume : ptr[mut Volume], number : u64) -> Result[IssuedRecord?, Error] {
     if number == 0 {
         return .Ok(null)
     }
     record := IssuedRecord.{}
-    bytes :: tree_get(volume.nodes, &volume.tree, key_of(0, .Issued, number),
-        view_of(cast[ptr[mut u8]](&record), size_of(IssuedRecord)))? or_return .Ok(null)
+    bytes :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(0, .Issued, number),
+        view_of(cast[ptr[mut u8]](&record), size_of(IssuedRecord))
+    )?
+        or_return .Ok(null)
     if bytes != size_of(IssuedRecord) {
         return .Error(.Corrupt)
     }
@@ -231,12 +268,17 @@ issued :: fn(volume: ptr[mut Volume], number: u64) -> Result[IssuedRecord?, Erro
  * @error Corrupt A record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-next_issued :: fn(volume: ptr[mut Volume], at: u64) -> Result[Issued?, Error] {
+next_issued :: fn(volume : ptr[mut Volume], at : u64) -> Result[Issued?, Error] {
     number := if at == 0 { cast[u64](1) } else { at }
     loop {
         record := IssuedRecord.{}
-        found :: tree_next(volume.nodes, &volume.tree, key_of(0, .Issued, number),
-            view_of(cast[ptr[mut u8]](&record), size_of(IssuedRecord)))? or_return .Ok(null)
+        found :: tree_next(
+            volume.nodes,
+            &volume.tree,
+            key_of(0, .Issued, number),
+            view_of(cast[ptr[mut u8]](&record), size_of(IssuedRecord))
+        )?
+            or_return .Ok(null)
         if found.key.object != 0 || found.key.kind != cast[u8](RecordKind.Issued) {
             return .Ok(null)
         }
@@ -261,7 +303,7 @@ next_issued :: fn(volume: ptr[mut Volume], at: u64) -> Result[Issued?, Error] {
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-revoke :: fn(volume: ptr[mut Volume], number: u64) -> Result[bool, Error] {
+revoke :: fn(volume : ptr[mut Volume], number : u64) -> Result[bool, Error] {
     if (issued(volume, number)?) is_none {
         return .Ok(false)
     }

@@ -4,14 +4,15 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import terminal from "std:os/slop_os/terminal"
-import prompt from "../prompt"
 import pipe from "../pipe"
+import prompt from "../prompt"
 
 /*
  * What the trusted path asks of the session manager (decisions/0136, 0139, 0150). Start makes a session once someone's
  * logged in: whose it is, its home volume's root, and a terminal connection for its programs, which its first program
  * is started with; StartWithoutUser makes the one session of a boot with no accounts; each is answered with the
- * session's number, which is never another session's, its place's generation in it. List, for a session by its number, is answered with its programs running, their memory, and
+ * session's number, which is never another session's, its place's generation in it. List, for a session by its number,
+ * is answered with its programs running, their memory, and
  * whether each answered a Ping on its lifecycle channel; End asks one, by the index List gave it, to stop, then ends it
  * after a grace period, and it isn't started again; EndSession does that for every program of a session, which ends it
  * (decisions/0151). Shown tells it which session the console shows, NO_SESSION for none, as on the login screen: the
@@ -188,7 +189,7 @@ Response :: union {
  * @return False for Start and StartWithoutUser, which make another session; true for the rest: listing again changes
  *     nothing, and ending what's ended is answered Ended again.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Start(_) => false
         case StartWithoutUser(_) => false
@@ -218,7 +219,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Session]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Session]? {
     pair :: os.channel_for[Session](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
@@ -240,7 +241,12 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
  * @return Its name's first name_bytes bytes, at most NAME_BYTES, as UTF-8 though not checked to be: a view into
  *     program's name, good while program is; "" for none.
  */
-name_of :: fn(program: ptr[Program]) -> string {
-    count :: if cast[usize](program.name_bytes) <= program.name.count { cast[usize](program.name_bytes) } else { program.name.count }
+name_of :: fn(program : ptr[Program]) -> string {
+    count :: if cast[usize](program.name_bytes) <= program.name.count {
+        cast[usize](program.name_bytes)
+    }
+    else {
+        program.name.count
+    }
     return if count == 0 { "" } else { string_of(&program.name[0], count) }
 }

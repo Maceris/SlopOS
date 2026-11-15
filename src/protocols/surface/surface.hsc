@@ -269,7 +269,10 @@ Request :: union {
     AddBuffer(NewBuffer),
     /** Take a buffer back, its memory unmapped once no surface shows it. Not answered. */
     RemoveBuffer(u32),
-    /** Show a frame. Answered with a Released event for the buffer it replaces, and a Presented once it's shown; Refused if not. */
+    /**
+     * Show a frame. Answered with a Released event for the buffer it replaces, and a Presented once it's shown; Refused
+     * if not.
+     */
     Submit(Submission),
     /** Change a window's title. Not answered. */
     SetTitle(Title),
@@ -308,7 +311,7 @@ Response :: union {
  * @param event The event, as it came.
  * @return Its kind; null for a kind value this version doesn't have.
  */
-kind_of :: fn(event: Event) -> EventKind? {
+kind_of :: fn(event : Event) -> EventKind? {
     return match event.kind {
         case 1 => EventKind.Configure
         case 2 => EventKind.CloseRequested
@@ -328,7 +331,7 @@ kind_of :: fn(event: Event) -> EventKind? {
 }
 
 /** Make an event of a kind for a surface, its other fields 0. */
-event_of :: fn(kind: EventKind, surface: u32) -> Event {
+event_of :: fn(kind : EventKind, surface : u32) -> Event {
     return Event.{kind = cast[u8](kind), surface = surface}
 }
 
@@ -339,7 +342,7 @@ event_of :: fn(kind: EventKind, surface: u32) -> Event {
  * @return False for those that make something or take events: CreateWindow, CreateSubsurface, AddBuffer, Submit and
  *     Read; true for the rest.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Describe => true
         case CreateWindow(_) => false
@@ -366,7 +369,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @param budget The memory budget that pays for the new channel.
  * @return The caller's end of the new connection; null if it couldn't be made or sent, both its ends then closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Surface]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Surface]? {
     pair :: os.channel_for[Surface](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

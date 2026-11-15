@@ -4,11 +4,11 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
+import network from "std:os/slop_os/network"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
-import network from "std:os/slop_os/network"
-import trace from "../trace"
 import events from "../events"
+import trace from "../trace"
 
 /**
  * What a session's programs ask of its powerbox (decisions/0018, 0156, design/console-and-sessions.md §5). Each program
@@ -213,7 +213,8 @@ Request :: union {
      */
     RequestDebug(DebugRequest),
     /**
-     * Ask to trace the whole system, which the administrator allows on the trusted path (decisions/0185, 12g), with why,
+     * Ask to trace the whole system, which the administrator allows on the trusted path (decisions/0185, 12g), with
+     * why,
      * as UTF-8, up to PURPOSE_BYTES. Answered with TraceGranted, or Refused; at once with Busy.
      */
     RequestTrace(slop_os.Relative[u8]),
@@ -282,7 +283,7 @@ Response :: union {
  * @return True for Reopen, a kept grant opened again giving another connection to it; false for the rest, which would
  *     ask the user again, or serve a program twice.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case RequestFile(_) => false
         case RequestDirectory(_) => false

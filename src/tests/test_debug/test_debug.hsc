@@ -6,9 +6,10 @@
  * carries a fiber pool of two fibers, for a breakpoint set before the thread was, and the fibers listed (12f).
  */
 package test_debug
-import fiber from "std:fiber"
+
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+import fiber from "std:fiber"
 
 /** A struct the debugger shows with its members. */
 Point :: struct {
@@ -36,9 +37,14 @@ Shape :: union {
  * @param crash 1 to crash, writing through a bad pointer; 2 for a thread carrying fibers; none to make the values.
  * @return 0, or 1 if what was read was nothing, which can't be.
  */
-main :: fn(crash: u64?) -> int {
+main :: fn(crash : u64?) -> int {
     if crash is_some {
-        return if (crash or_else 0) == 2 { threads_and_fibers() } else { write_through(cast[ptr[u64]](cast[uintptr](8))) }
+        return if (crash or_else 0) == 2 {
+            threads_and_fibers()
+        }
+        else {
+            write_through(cast[ptr[u64]](cast[uintptr](8)))
+        }
     }
     point := Point.{x = 3, y = -4, label = "corner"}
     maybe : u32? = 7
@@ -56,7 +62,8 @@ main :: fn(crash: u64?) -> int {
     // Every word of each read through memory, so all of each stays there, where the debugger reads it
     read := words_of(cast[ptr[u64]](&point), 3)
     read += words_of(cast[ptr[u64]](&maybe), 1)
-    read += words_of(cast[ptr[u64]](&shape), 1) + cast[u64](intrinsics.volatile_load_u32(cast[ptr[u32]](cast[uintptr](&shape) + 8)))
+    read += words_of(cast[ptr[u64]](&shape), 1)
+        + cast[u64](intrinsics.volatile_load_u32(cast[ptr[u32]](cast[uintptr](&shape) + 8)))
     read += words_of(cast[ptr[u64]](&view), 2)
     return if read == 0 { 1 } else { 0 } // test_debug's breakpoint line, BREAK_LINE in boot_tests.py
 }
@@ -68,7 +75,7 @@ main :: fn(crash: u64?) -> int {
  * @param count How many words, one after another.
  * @return Their sum.
  */
-words_of :: fn(first: ptr[u64], count: usize) -> u64 {
+words_of :: fn(first : ptr[u64], count : usize) -> u64 {
     sum : u64 = 0
     for i in cast[usize](0)..<count {
         sum += intrinsics.volatile_load_u64(cast[ptr[u64]](cast[uintptr](first) + cast[uintptr](i * 8)))
@@ -81,7 +88,7 @@ words_of :: fn(first: ptr[u64], count: usize) -> u64 {
  *
  * @param target Where it writes: a bad address, for a crash.
  */
-write_through :: fn(target: ptr[u64]) -> int {
+write_through :: fn(target : ptr[u64]) -> int {
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](target), 1) // TEST_DEBUG_CRASH_LINE in boot_tests.py
     return 1
 }

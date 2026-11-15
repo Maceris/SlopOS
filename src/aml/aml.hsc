@@ -17,7 +17,8 @@
  * loading tables from AML (Load, LoadTable, Unload), which fail as Unsupported, and the global lock, which it takes as
  * always free, as there's no other agent here to share it with until an embedded controller needs one.
  */
-//SPEC: ACPI 6.5, §5.4 (definition blocks), §19 (ASL), §20 (AML grammar)
+// SPEC: ACPI 6.5, §5.4 (definition blocks), §19 (ASL), §20 (AML grammar)
+
 package aml
 
 import runtime from "base:runtime"
@@ -61,7 +62,9 @@ Limits :: struct {
     steps : u64 = 2_000_000,
     /** The most methods called inside one another, the first included; past it, Depth. */
     calls : u32 = 32,
-    /** The most terms nested inside one another, across calls, which bounds the interpreter's own stack; past it, Depth. */
+    /**
+     * The most terms nested inside one another, across calls, which bounds the interpreter's own stack; past it, Depth.
+     */
     nesting : u32 = 256,
     /** The most bytes one evaluation makes along the way, in its arena; past it, Memory. */
     evaluation_bytes : usize = 1024 * 1024,
@@ -111,19 +114,19 @@ Host :: struct {
      * Read an operation region: width bits at address in space. Returns the value, its upper bits 0, or null if the
      * host can't, which fails the access with RegionFailed.
      */
-    read : fn(state: u64, space: u8, address: u64, width: u32) -> u64?,
+    read : fn(state : u64, space : u8, address : u64, width : u32) -> u64?,
     /** Write an operation region: value's low width bits at address in space. Returns false if it couldn't. */
-    write : fn(state: u64, space: u8, address: u64, width: u32, value: u64) -> bool,
+    write : fn(state : u64, space : u8, address : u64, width : u32, value : u64) -> bool,
     /** Sleep for milliseconds, at most Limits.sleep_milliseconds; letting other work run. */
-    sleep : fn(state: u64, milliseconds: u64),
+    sleep : fn(state : u64, milliseconds : u64),
     /** Wait for microseconds without giving up the CPU, at most 100. */
-    stall : fn(state: u64, microseconds: u64),
+    stall : fn(state : u64, microseconds : u64),
     /** The timer: a monotonic count of 100-nanosecond units, from any start. */
-    timer : fn(state: u64) -> u64,
+    timer : fn(state : u64) -> u64,
     /** Notify(node, value): the object notified, for the host to act on (0x80 on a power button: it was pressed). */
-    notify : fn(state: u64, node: ptr[Node], value: u64),
+    notify : fn(state : u64, node : ptr[Node], value : u64),
     /** What AML stores to the debug object, as text, for the host's log. */
-    debug : fn(state: u64, text: string),
+    debug : fn(state : u64, text : string),
 }
 
 /** The interpreter: its namespace, its limits, the host, and what an evaluation in progress uses. */
@@ -172,7 +175,7 @@ Interpreter :: struct {
  * @param interfaces More strings `_OSI` answers true for; kept, so they have to live as long as it.
  * @return The interpreter, on the heap from context's allocator; null without the memory for it.
  */
-make :: fn(host: Host, limits: Limits, interfaces #escaping : string[]) -> ptr[mut Interpreter]? {
+make :: fn(host : Host, limits : Limits, interfaces #escaping : string[]) -> ptr[mut Interpreter]? {
     made, error :: runtime.new_aligned(Interpreter, align_of(Interpreter))
     if error != null {
         return null
@@ -197,7 +200,7 @@ make :: fn(host: Host, limits: Limits, interfaces #escaping : string[]) -> ptr[m
  * @param interpreter The interpreter, its root alone.
  * @return Null once they're added; Memory if the namespace's budget can't hold them.
  */
-predefine :: fn(interpreter: ptr[mut Interpreter]) -> Error? {
+predefine :: fn(interpreter : ptr[mut Interpreter]) -> Error? {
     for scope in string.["_GPE", "_PR_", "_SB_", "_SI_", "_TZ_"] {
         _ = add_node(interpreter, interpreter.root, segment_of(scope), .Scope, false) or_return .Memory
     }
@@ -213,11 +216,36 @@ predefine :: fn(interpreter: ptr[mut Interpreter]) -> Error? {
 }
 
 /** The Windows versions `_OSI` answers true for, as Linux's does, so firmware takes its tested paths. */
-WINDOWS_INTERFACES :: string.["Windows 2000", "Windows 2001", "Windows 2001 SP1", "Windows 2001.1", "Windows 2001 SP2",
-    "Windows 2001.1 SP1", "Windows 2006", "Windows 2006.1", "Windows 2006 SP1", "Windows 2006 SP2", "Windows 2009",
-    "Windows 2012", "Windows 2013", "Windows 2015", "Windows 2016", "Windows 2017", "Windows 2017.2", "Windows 2018",
-    "Windows 2018.2", "Windows 2019", "Windows 2020", "Windows 2021", "Windows 2022", "Module Device",
-    "Processor Device", "3.0 Thermal Model", "3.0 _SCP Extensions", "Processor Aggregator Device"]
+WINDOWS_INTERFACES :: string.[
+    "Windows 2000",
+    "Windows 2001",
+    "Windows 2001 SP1",
+    "Windows 2001.1",
+    "Windows 2001 SP2",
+    "Windows 2001.1 SP1",
+    "Windows 2006",
+    "Windows 2006.1",
+    "Windows 2006 SP1",
+    "Windows 2006 SP2",
+    "Windows 2009",
+    "Windows 2012",
+    "Windows 2013",
+    "Windows 2015",
+    "Windows 2016",
+    "Windows 2017",
+    "Windows 2017.2",
+    "Windows 2018",
+    "Windows 2018.2",
+    "Windows 2019",
+    "Windows 2020",
+    "Windows 2021",
+    "Windows 2022",
+    "Module Device",
+    "Processor Device",
+    "3.0 Thermal Model",
+    "3.0 _SCP Extensions",
+    "Processor Aggregator Device"
+]
 
 /** A definition block's header's bytes, before its AML (ACPI 6.5 §5.2.6). */
 TABLE_HEADER : usize : 36
@@ -232,16 +260,25 @@ TABLE_HEADER : usize : 36
  *     neither a DSDT nor an SSDT; Memory if the namespace can't hold it; or why its AML failed, which leaves what it
  *     had defined before that.
  */
-load_table :: fn(interpreter: ptr[mut Interpreter], table: u8[]) -> Error? {
+load_table :: fn(interpreter : ptr[mut Interpreter], table : u8[]) -> Error? {
     if table.count < TABLE_HEADER {
         return .BadTable
     }
-    length :: cast[usize](table[4]) | (cast[usize](table[5]) << 8) | (cast[usize](table[6]) << 16) | (cast[usize](table[7]) << 24)
+    length :: cast[usize](table[4])
+        | (cast[usize](table[5]) << 8)
+        | (cast[usize](table[6]) << 16)
+        | (cast[usize](table[7]) << 24)
     if length < TABLE_HEADER || length > table.count {
         return .BadTable
     }
-    dsdt :: table[0] == cast[u8]('D') && table[1] == cast[u8]('S') && table[2] == cast[u8]('D') && table[3] == cast[u8]('T')
-    ssdt :: table[0] == cast[u8]('S') && table[1] == cast[u8]('S') && table[2] == cast[u8]('D') && table[3] == cast[u8]('T')
+    dsdt :: table[0] == cast[u8]('D')
+        && table[1] == cast[u8]('S')
+        && table[2] == cast[u8]('D')
+        && table[3] == cast[u8]('T')
+    ssdt :: table[0] == cast[u8]('S')
+        && table[1] == cast[u8]('S')
+        && table[2] == cast[u8]('D')
+        && table[3] == cast[u8]('T')
     if !dsdt && !ssdt {
         return .BadTable
     }
@@ -280,7 +317,11 @@ load_table :: fn(interpreter: ptr[mut Interpreter], table: u8[]) -> Error? {
  *     nothing gives Uninitialized.
  * @error NotFound No object at the path.
  */
-evaluate :: fn(interpreter: ptr[mut Interpreter], path: string, arguments: Value[]) -> Result[Value, Error] #unrestricted {
+evaluate :: fn(
+    interpreter : ptr[mut Interpreter],
+    path : string,
+    arguments : Value[]
+) -> Result[Value, Error] #unrestricted {
     node :: find(interpreter, path) or_return .Error(.NotFound)
     return evaluate_node(interpreter, node, arguments)
 }
@@ -293,7 +334,11 @@ evaluate :: fn(interpreter: ptr[mut Interpreter], path: string, arguments: Value
  * @param arguments As evaluate's.
  * @return As evaluate's.
  */
-evaluate_node :: fn(interpreter: ptr[mut Interpreter], node #escaping : ptr[mut Node], arguments: Value[]) -> Result[Value, Error] #unrestricted {
+evaluate_node :: fn(
+    interpreter : ptr[mut Interpreter],
+    node #escaping : ptr[mut Node],
+    arguments : Value[]
+) -> Result[Value, Error] #unrestricted {
     begin(interpreter)
     defer end(interpreter)
     if node.kind == .Method || node.kind == .Builtin {
@@ -309,7 +354,7 @@ evaluate_node :: fn(interpreter: ptr[mut Interpreter], node #escaping : ptr[mut 
  *
  * @param interpreter The interpreter.
  */
-begin :: fn(interpreter: ptr[mut Interpreter]) {
+begin :: fn(interpreter : ptr[mut Interpreter]) {
     memory.reset_arena(interpreter.arena)
     interpreter.evaluation_bytes = 0
     interpreter.steps = 0
@@ -324,7 +369,7 @@ begin :: fn(interpreter: ptr[mut Interpreter]) {
  *
  * @param interpreter The interpreter.
  */
-end :: fn(interpreter: ptr[mut Interpreter]) {
+end :: fn(interpreter : ptr[mut Interpreter]) {
     interpreter.evaluating = false
 }
 
@@ -336,7 +381,7 @@ end :: fn(interpreter: ptr[mut Interpreter]) {
  *     after an optional `\`; `^` goes up from the root, which is no further.
  * @return The node, which lives as long as the interpreter; null if there's none, or the path isn't one.
  */
-find :: fn(interpreter: ptr[mut Interpreter], path: string) -> ptr[mut Node]? {
+find :: fn(interpreter : ptr[mut Interpreter], path : string) -> ptr[mut Node]? {
     bytes :: string_bytes(path)
     node := interpreter.root
     at : usize = 0

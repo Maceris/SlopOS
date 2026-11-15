@@ -7,12 +7,12 @@ package edit
 import runtime from "base:runtime"
 import memory from "std:memory"
 import os from "std:os"
-import strings from "std:strings"
-import terminal from "std:terminal"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
 import file from "std:os/slop_os/file"
 import terminal as protocol from "std:os/slop_os/terminal"
+import strings from "std:strings"
+import terminal from "std:terminal"
+import unicode from "std:unicode"
 
 /** The most bytes of a file edit opens: 4 MiB. */
 MAX_FILE_BYTES : u64 : 4 * 1024 * 1024
@@ -129,10 +129,11 @@ Editor :: struct {
  * @error Unreadable The file couldn't be read.
  * @error NoTerminal The terminal couldn't be used.
  */
-main :: fn(console: os.Channel[protocol.Terminal], file: os.Channel[file.File]) -> Result[Edited, EditError] {
+main :: fn(console : os.Channel[protocol.Terminal], file : os.Channel[file.File]) -> Result[Edited, EditError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "file"}}
     editor := runtime.new(Editor)
-    editor.console = terminal.open(console) or_return .Error(.NoTerminal(Problem.{parameter = os.ParameterName.{name = "console"}}))
+    editor.console = terminal.open(console)
+        or_return .Error(.NoTerminal(Problem.{parameter = os.ParameterName.{name = "console"}}))
     opened, error :: os.file_on(file.end, true)
     if error is_some {
         return .Error(.Unreadable(problem))
@@ -182,7 +183,13 @@ main :: fn(console: os.Channel[protocol.Terminal], file: os.Channel[file.File]) 
             case _ => break
         }
     }
-    return .Ok(Edited.{saved = editor.saved, lines = cast[u64](editor.starts.count), bytes = cast[memory.ByteCount](editor.text.count)})
+    return .Ok(
+        Edited.{
+            saved = editor.saved,
+            lines = cast[u64](editor.starts.count),
+            bytes = cast[memory.ByteCount](editor.text.count),
+        }
+    )
 }
 
 // ---- Reading and saving
@@ -193,7 +200,7 @@ main :: fn(console: os.Channel[protocol.Terminal], file: os.Channel[file.File]) 
  * @param editor The editor, whose file is read from its start.
  * @return Whether it was read; false if a read failed or it's past MAX_FILE_BYTES.
  */
-read_all :: fn(editor: ptr[mut Editor]) -> bool {
+read_all :: fn(editor : ptr[mut Editor]) -> bool {
     chunk : u8[READ_BYTES]
     loop {
         count :: os.read(editor.file, chunk[0..<chunk.count]) or_return false
@@ -216,7 +223,7 @@ read_all :: fn(editor: ptr[mut Editor]) -> bool {
  *
  * @param editor The editor; its modified is cleared and saved set once it's written, and its note says what happened.
  */
-save :: fn(editor: ptr[mut Editor]) {
+save :: fn(editor : ptr[mut Editor]) {
     os.file_seek(editor.file, 0)
     written := true
     if editor.text.count > 0 {
@@ -242,7 +249,7 @@ save :: fn(editor: ptr[mut Editor]) {
  * @param typed The text it types, if any.
  * @return False once it's quit; true otherwise.
  */
-key :: fn(editor: ptr[mut Editor], event: protocol.Event, typed: u8[]) -> bool {
+key :: fn(editor : ptr[mut Editor], event : protocol.Event, typed : u8[]) -> bool {
     control :: (event.modifiers & protocol.CONTROL) != 0
     code :: event.code
     if editor.finding {
@@ -317,7 +324,7 @@ key :: fn(editor: ptr[mut Editor], event: protocol.Event, typed: u8[]) -> bool {
  * @param editor The editor.
  * @return False to quit; true to keep editing.
  */
-quit :: fn(editor: ptr[mut Editor]) -> bool {
+quit :: fn(editor : ptr[mut Editor]) -> bool {
     if !editor.modified || editor.quitting {
         return false
     }
@@ -334,7 +341,7 @@ quit :: fn(editor: ptr[mut Editor]) -> bool {
  * @param code The key's code.
  * @param typed The text it types, if any.
  */
-find_key :: fn(editor: ptr[mut Editor], code: u16, typed: u8[]) {
+find_key :: fn(editor : ptr[mut Editor], code : u16, typed : u8[]) {
     if code == terminal.USAGE_ESCAPE {
         editor.finding = false
         return void
@@ -369,7 +376,7 @@ find_key :: fn(editor: ptr[mut Editor], code: u16, typed: u8[]) {
  *
  * @param editor The editor, whose found is looked for.
  */
-find :: fn(editor: ptr[mut Editor]) {
+find :: fn(editor : ptr[mut Editor]) {
     wanted :: editor.found[0..<editor.found.count]
     if wanted.count == 0 {
         return void
@@ -393,7 +400,7 @@ find :: fn(editor: ptr[mut Editor]) {
  * @param wanted The bytes.
  * @return True if the text has them there.
  */
-matches_at :: fn(editor: ptr[Editor], at: usize, wanted: u8[]) -> bool {
+matches_at :: fn(editor : ptr[Editor], at : usize, wanted : u8[]) -> bool {
     if at + wanted.count > editor.text.count {
         return false
     }
@@ -415,7 +422,7 @@ matches_at :: fn(editor: ptr[Editor], at: usize, wanted: u8[]) -> bool {
  * @param typed The text.
  * @param typing Whether it was typed, so it joins the change before it for undo.
  */
-insert_typed :: fn(editor: ptr[mut Editor], typed: u8[], typing: bool) {
+insert_typed :: fn(editor : ptr[mut Editor], typed : u8[], typing : bool) {
     kept : u8[..]
     defer runtime.array_free(&kept)
     for byte in typed {
@@ -441,7 +448,7 @@ insert_typed :: fn(editor: ptr[mut Editor], typed: u8[], typing: bool) {
  * @param bytes The bytes.
  * @param typing Whether it's typing, joined to a typing change just before it.
  */
-insert :: fn(editor: ptr[mut Editor], at: usize, bytes: u8[], typing: bool) {
+insert :: fn(editor : ptr[mut Editor], at : usize, bytes : u8[], typing : bool) {
     splice_in(editor, at, bytes)
     last :: editor.changes.count
     joined := false
@@ -472,7 +479,7 @@ insert :: fn(editor: ptr[mut Editor], at: usize, bytes: u8[], typing: bool) {
  * @param from Where they start.
  * @param to Where they end, at most the text's length; nothing's removed if it isn't past from.
  */
-remove :: fn(editor: ptr[mut Editor], from: usize, to: usize) {
+remove :: fn(editor : ptr[mut Editor], from : usize, to : usize) {
     if to <= from || to > editor.text.count {
         return void
     }
@@ -493,7 +500,7 @@ remove :: fn(editor: ptr[mut Editor], from: usize, to: usize) {
  *
  * @param editor The editor; the note says when there's nothing to undo.
  */
-undo :: fn(editor: ptr[mut Editor]) {
+undo :: fn(editor : ptr[mut Editor]) {
     if editor.changes.count == 0 {
         editor.note = "nothing to undo"
         return void
@@ -519,7 +526,7 @@ undo :: fn(editor: ptr[mut Editor]) {
  * @param at Where; past the end, at the end.
  * @param bytes The bytes.
  */
-splice_in :: fn(editor: ptr[mut Editor], at: usize, bytes: u8[]) {
+splice_in :: fn(editor : ptr[mut Editor], at : usize, bytes : u8[]) {
     made : u8[..]
     place :: if at < editor.text.count { at } else { editor.text.count }
     for byte, i in editor.text {
@@ -546,7 +553,7 @@ splice_in :: fn(editor: ptr[mut Editor], at: usize, bytes: u8[]) {
  * @param from Where they start.
  * @param to Where they end.
  */
-splice_out :: fn(editor: ptr[mut Editor], from: usize, to: usize) {
+splice_out :: fn(editor : ptr[mut Editor], from : usize, to : usize) {
     made : u8[..]
     for byte, i in editor.text {
         if i < from || i >= to {
@@ -562,7 +569,7 @@ splice_out :: fn(editor: ptr[mut Editor], from: usize, to: usize) {
  *
  * @param editor The editor.
  */
-changed :: fn(editor: ptr[mut Editor]) {
+changed :: fn(editor : ptr[mut Editor]) {
     find_starts(editor)
     editor.modified = true
     editor.quitting = false
@@ -575,7 +582,7 @@ changed :: fn(editor: ptr[mut Editor]) {
  *
  * @param editor The editor, whose starts are made again from its text.
  */
-find_starts :: fn(editor: ptr[mut Editor]) {
+find_starts :: fn(editor : ptr[mut Editor]) {
     runtime.array_reset(&editor.starts)
     runtime.array_add(&editor.starts, cast[usize](0))
     for byte, i in editor.text {
@@ -592,7 +599,7 @@ find_starts :: fn(editor: ptr[mut Editor]) {
  * @param at The place.
  * @return The line, from 0.
  */
-line_of :: fn(editor: ptr[Editor], at: usize) -> usize {
+line_of :: fn(editor : ptr[Editor], at : usize) -> usize {
     found := cast[usize](0)
     for start, i in editor.starts {
         if start <= at {
@@ -609,7 +616,7 @@ line_of :: fn(editor: ptr[Editor], at: usize) -> usize {
  * @param line The line; past the last, the text's end.
  * @return The place.
  */
-line_start :: fn(editor: ptr[Editor], line: usize) -> usize {
+line_start :: fn(editor : ptr[Editor], line : usize) -> usize {
     return if line < editor.starts.count { editor.starts[line] } else { editor.text.count }
 }
 
@@ -620,7 +627,7 @@ line_start :: fn(editor: ptr[Editor], line: usize) -> usize {
  * @param line The line.
  * @return The place.
  */
-line_end :: fn(editor: ptr[Editor], line: usize) -> usize {
+line_end :: fn(editor : ptr[Editor], line : usize) -> usize {
     next_start :: line + 1
     if next_start < editor.starts.count {
         return editor.starts[next_start] - 1
@@ -635,7 +642,7 @@ line_end :: fn(editor: ptr[Editor], line: usize) -> usize {
  * @param line The line.
  * @return A view of them.
  */
-line_bytes :: fn(editor: ptr[Editor], line: usize) -> u8[] {
+line_bytes :: fn(editor : ptr[Editor], line : usize) -> u8[] {
     start :: line_start(editor, line)
     end :: line_end(editor, line)
     if start > end || end > editor.text.count {
@@ -651,7 +658,7 @@ line_bytes :: fn(editor: ptr[Editor], line: usize) -> u8[] {
  * @param at The place.
  * @return The place after; the text's end at the end.
  */
-next :: fn(editor: ptr[Editor], at: usize) -> usize {
+next :: fn(editor : ptr[Editor], at : usize) -> usize {
     if at >= editor.text.count {
         return editor.text.count
     }
@@ -672,7 +679,7 @@ next :: fn(editor: ptr[Editor], at: usize) -> usize {
  * @param at The place.
  * @return The place before; 0 at the start.
  */
-previous :: fn(editor: ptr[Editor], at: usize) -> usize {
+previous :: fn(editor : ptr[Editor], at : usize) -> usize {
     if at == 0 {
         return 0
     }
@@ -699,7 +706,7 @@ previous :: fn(editor: ptr[Editor], at: usize) -> usize {
  * @param at The place.
  * @return The columns (unicode.text_width).
  */
-column_of :: fn(editor: ptr[Editor], at: usize) -> usize {
+column_of :: fn(editor : ptr[Editor], at : usize) -> usize {
     line :: line_of(editor, at)
     start :: line_start(editor, line)
     if at < start || at > editor.text.count {
@@ -715,7 +722,7 @@ column_of :: fn(editor: ptr[Editor], at: usize) -> usize {
  * @param at Where, at most the text's length.
  * @param keep_column Whether the column it's in becomes the one up and down keep to.
  */
-move_to :: fn(editor: ptr[mut Editor], at: usize, keep_column: bool) {
+move_to :: fn(editor : ptr[mut Editor], at : usize, keep_column : bool) {
     editor.at = if at < editor.text.count { at } else { editor.text.count }
     if keep_column {
         editor.goal = column_of(editor, editor.at)
@@ -728,7 +735,7 @@ move_to :: fn(editor: ptr[mut Editor], at: usize, keep_column: bool) {
  * @param editor The editor.
  * @param lines How many: up when negative.
  */
-vertical :: fn(editor: ptr[mut Editor], lines: int) {
+vertical :: fn(editor : ptr[mut Editor], lines : int) {
     line :: cast[int](line_of(editor, editor.at))
     last :: cast[int](editor.starts.count) - 1
     wanted := line + lines
@@ -769,7 +776,7 @@ vertical :: fn(editor: ptr[mut Editor], lines: int) {
  * @param editor The editor.
  * @return The rows.
  */
-text_rows :: fn(editor: ptr[Editor]) -> usize {
+text_rows :: fn(editor : ptr[Editor]) -> usize {
     return if editor.rows > 2 { editor.rows - 1 } else { 1 }
 }
 
@@ -779,7 +786,7 @@ text_rows :: fn(editor: ptr[Editor]) -> usize {
  *
  * @param editor The editor; its top and left move to keep the cursor in sight.
  */
-draw :: fn(editor: ptr[mut Editor]) {
+draw :: fn(editor : ptr[mut Editor]) {
     rows :: text_rows(editor)
     line :: line_of(editor, editor.at)
     if line < editor.top {
@@ -798,7 +805,10 @@ draw :: fn(editor: ptr[mut Editor]) {
     send(editor, .ShowCursor(false))
     for row in 0..<rows {
         send(editor, .MoveCursor(protocol.Position.{column = 0, row = cast[u16](row)}))
-        send(editor, .Clear(protocol.Area.{column = 0, row = cast[u16](row), columns = cast[u16](editor.columns), rows = 1}))
+        send(
+            editor,
+            .Clear(protocol.Area.{column = 0, row = cast[u16](row), columns = cast[u16](editor.columns), rows = 1})
+        )
         shown :: editor.top + row
         if shown < editor.starts.count {
             part :: visible(line_bytes(editor, shown), editor.left, editor.columns)
@@ -809,16 +819,33 @@ draw :: fn(editor: ptr[mut Editor]) {
     }
     status :: status_text(editor)
     send(editor, .MoveCursor(protocol.Position.{column = 0, row = cast[u16](rows)}))
-    send(editor, .Clear(protocol.Area.{column = 0, row = cast[u16](rows), columns = cast[u16](editor.columns), rows = 1}))
+    send(
+        editor,
+        .Clear(protocol.Area.{column = 0, row = cast[u16](rows), columns = cast[u16](editor.columns), rows = 1})
+    )
     cut :: visible(string_bytes(status), 0, editor.columns)
     if cut.count > 0 {
-        _ = terminal.write(&editor.console, string_of(&cut[0], cut.count), protocol.Style.{attributes = protocol.INVERSE})
+        _ = terminal.write(
+            &editor.console,
+            string_of(&cut[0], cut.count),
+            protocol.Style.{attributes = protocol.INVERSE}
+        )
     }
     if editor.finding {
-        send(editor, .MoveCursor(protocol.Position.{column = cast[u16](unicode.text_width(string_bytes(status))), row = cast[u16](rows)}))
+        send(
+            editor,
+            .MoveCursor(
+                protocol.Position.{column = cast[u16](unicode.text_width(string_bytes(status))), row = cast[u16](rows)}
+            )
+        )
     }
     else {
-        send(editor, .MoveCursor(protocol.Position.{column = cast[u16](column - editor.left), row = cast[u16](line - editor.top)}))
+        send(
+            editor,
+            .MoveCursor(
+                protocol.Position.{column = cast[u16](column - editor.left), row = cast[u16](line - editor.top)}
+            )
+        )
     }
     send(editor, .ShowCursor(true))
 }
@@ -829,7 +856,7 @@ draw :: fn(editor: ptr[mut Editor]) {
  * @param editor The editor.
  * @return The text, on the heap, never freed.
  */
-status_text :: fn(editor: ptr[Editor]) -> string {
+status_text :: fn(editor : ptr[Editor]) -> string {
     if editor.finding {
         query :: if editor.query.count > 0 { string_of(&editor.query[0], editor.query.count) } else { "" }
         return (strings.format("find: %", query) or_else "")
@@ -838,8 +865,14 @@ status_text :: fn(editor: ptr[Editor]) -> string {
         return editor.note
     }
     line :: line_of(editor, editor.at)
-    return (strings.format("line %1 of %2, column %3%4  ^S saves  ^Q quits  ^F finds  ^Z undoes", line + 1, editor.starts.count,
-        column_of(editor, editor.at) + 1, if editor.modified { ", changed" } else { "" }) or_else "")
+    return (strings.format(
+        "line %1 of %2, column %3%4  ^S saves  ^Q quits  ^F finds  ^Z undoes",
+        line + 1,
+        editor.starts.count,
+        column_of(editor, editor.at) + 1,
+        if editor.modified { ", changed" } else { "" }
+    )
+        or_else "")
 }
 
 /**
@@ -850,7 +883,7 @@ status_text :: fn(editor: ptr[Editor]) -> string {
  * @param columns How many columns.
  * @return A view of the bytes shown: whole grapheme clusters only.
  */
-visible :: fn(bytes: u8[], left: usize, columns: usize) -> u8[] {
+visible :: fn(bytes : u8[], left : usize, columns : usize) -> u8[] {
     place := cast[usize](0)
     width := cast[usize](0)
     start := bytes.count
@@ -886,7 +919,7 @@ visible :: fn(bytes: u8[], left: usize, columns: usize) -> u8[] {
  * @param editor The editor, whose terminal is asked.
  * @return What it answered; 80 columns and 24 rows if it didn't.
  */
-describe :: fn(editor: ptr[mut Editor]) -> protocol.Features {
+describe :: fn(editor : ptr[mut Editor]) -> protocol.Features {
     fallback :: protocol.Features.{columns = 80, rows = 24}
     console :: &editor.console
     if !protocol.send(console.end, console.port, .Describe) {
@@ -918,17 +951,18 @@ describe :: fn(editor: ptr[mut Editor]) -> protocol.Features {
  * @param editor The editor.
  * @param features What the terminal said.
  */
-size_from :: fn(editor: ptr[mut Editor], features: protocol.Features) {
+size_from :: fn(editor : ptr[mut Editor], features : protocol.Features) {
     editor.columns = if features.columns >= 10 { cast[usize](features.columns) } else { 80 }
     editor.rows = if features.rows >= 3 { cast[usize](features.rows) } else { 24 }
 }
 
 /**
- * Send the terminal a request it doesn't answer, ignoring a failure: a terminal that's gone ends the next wait for a key.
+ * Send the terminal a request it doesn't answer, ignoring a failure: a terminal that's gone ends the next wait for a
+ * key.
  *
  * @param editor The editor.
  * @param request The request.
  */
-send :: fn(editor: ptr[mut Editor], request: protocol.Request) {
+send :: fn(editor : ptr[mut Editor], request : protocol.Request) {
     _ = protocol.send(editor.console.end, editor.console.port, request)
 }

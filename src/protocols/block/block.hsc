@@ -126,7 +126,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for every request: a block written twice holds the same, and a flush again flushes nothing new.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Read(_) => true
         case Write(_) => true
@@ -152,7 +152,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Block]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Block]? {
     pair :: os.channel_for[Block](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

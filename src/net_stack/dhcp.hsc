@@ -29,37 +29,37 @@ DHCP_DECLINE_WAIT : u64 : 10 * SECOND
 
 // DHCP's message types (option 53)
 DHCP_DISCOVER : u8 : 1
-DHCP_OFFER : u8 : 2
-DHCP_REQUEST : u8 : 3
-DHCP_DECLINE : u8 : 4
-DHCP_ACK : u8 : 5
-DHCP_NAK : u8 : 6
+DHCP_OFFER    : u8 : 2
+DHCP_REQUEST  : u8 : 3
+DHCP_DECLINE  : u8 : 4
+DHCP_ACK      : u8 : 5
+DHCP_NAK      : u8 : 6
 
 // DHCP's options
-OPTION_PAD : u8 : 0
-OPTION_SUBNET_MASK : u8 : 1
-OPTION_ROUTER : u8 : 3
-OPTION_DNS : u8 : 6
+OPTION_PAD               : u8 : 0
+OPTION_SUBNET_MASK       : u8 : 1
+OPTION_ROUTER            : u8 : 3
+OPTION_DNS               : u8 : 6
 OPTION_REQUESTED_ADDRESS : u8 : 50
-OPTION_LEASE_TIME : u8 : 51
-OPTION_MESSAGE_TYPE : u8 : 53
-OPTION_SERVER : u8 : 54
-OPTION_PARAMETERS : u8 : 55
-OPTION_T1 : u8 : 58
-OPTION_T2 : u8 : 59
-OPTION_END : u8 : 255
+OPTION_LEASE_TIME        : u8 : 51
+OPTION_MESSAGE_TYPE      : u8 : 53
+OPTION_SERVER            : u8 : 54
+OPTION_PARAMETERS        : u8 : 55
+OPTION_T1                : u8 : 58
+OPTION_T2                : u8 : 59
+OPTION_END               : u8 : 255
 
 /** What a DHCP message from a server says, as read from its options. */
 DhcpAnswer :: struct {
-    kind : u8,
-    address : Ipv4,
-    server : Ipv4,
+    kind          : u8,
+    address       : Ipv4,
+    server        : Ipv4,
     prefix_length : u8,
-    router : Ipv4,
-    dns : Ipv4,
-    lease : u32,
-    t1 : u32,
-    t2 : u32,
+    router        : Ipv4,
+    dns           : Ipv4,
+    lease         : u32,
+    t1            : u32,
+    t2            : u32,
 }
 
 /**
@@ -67,7 +67,7 @@ DhcpAnswer :: struct {
  *
  * @param stack The stack.
  */
-start_dhcp :: fn(stack: ptr[mut Stack]) {
+start_dhcp :: fn(stack : ptr[mut Stack]) {
     stack.ipv4 = Ipv4.{}
     stack.prefix_length = 0
     stack.router = Ipv4.{}
@@ -83,7 +83,7 @@ start_dhcp :: fn(stack: ptr[mut Stack]) {
  *
  * @param stack The stack.
  */
-tick_dhcp :: fn(stack: ptr[mut Stack]) {
+tick_dhcp :: fn(stack : ptr[mut Stack]) {
     if stack.dhcp == .Off || stack.now < stack.dhcp_deadline {
         return void
     }
@@ -138,7 +138,7 @@ tick_dhcp :: fn(stack: ptr[mut Stack]) {
  *
  * @param stack The stack.
  */
-lose_lease :: fn(stack: ptr[mut Stack]) {
+lose_lease :: fn(stack : ptr[mut Stack]) {
     event(stack, .LeaseLost)
     start_dhcp(stack)
 }
@@ -148,7 +148,7 @@ lose_lease :: fn(stack: ptr[mut Stack]) {
  *
  * @param stack The stack, requesting an offered address.
  */
-decline :: fn(stack: ptr[mut Stack]) {
+decline :: fn(stack : ptr[mut Stack]) {
     event(stack, .AddressConflict(.V4(stack.offered)))
     send_dhcp(stack, DHCP_DECLINE)
     stack.offered = Ipv4.{}
@@ -165,7 +165,7 @@ decline :: fn(stack: ptr[mut Stack]) {
  * @param stack The stack.
  * @param kind DHCP_DISCOVER, DHCP_REQUEST or DHCP_DECLINE.
  */
-send_dhcp :: fn(stack: ptr[mut Stack], kind: u8) {
+send_dhcp :: fn(stack : ptr[mut Stack], kind : u8) {
     message : u8[DHCP_MESSAGE]
     bytes :: view_of(&message[0], message.count)
     put_u8(bytes, 0, 1)
@@ -227,7 +227,12 @@ send_dhcp :: fn(stack: ptr[mut Stack], kind: u8) {
     }
     stack.dhcp_tries += 1
     // Within a second either way, but never before now: a wait under a second, near T2 or the lease's end, isn't moved
-    stack.dhcp_deadline = if wait >= SECOND { stack.now + wait - SECOND + next_random(stack) % (2 * SECOND) } else { stack.now + wait }
+    stack.dhcp_deadline = if wait >= SECOND {
+        stack.now + wait - SECOND + next_random(stack) % (2 * SECOND)
+    }
+    else {
+        stack.now + wait
+    }
 }
 
 /**
@@ -238,7 +243,7 @@ send_dhcp :: fn(stack: ptr[mut Stack], kind: u8) {
  * @param destination Who it's for.
  * @param datagram The datagram, from its UDP header.
  */
-receive_udp4 :: fn(stack: ptr[mut Stack], source: Ipv4, destination: Ipv4, datagram: u8[]) {
+receive_udp4 :: fn(stack : ptr[mut Stack], source : Ipv4, destination : Ipv4, datagram : u8[]) {
     if datagram.count < UDP_HEADER {
         return void
     }
@@ -247,7 +252,8 @@ receive_udp4 :: fn(stack: ptr[mut Stack], source: Ipv4, destination: Ipv4, datag
         return void
     }
     whole :: datagram[0..<length]
-    if u16_at(whole, 6) != 0 && checksum_finish(pseudo_sum_v4(source, destination, PROTOCOL_UDP, length) + checksum_add(0, whole)) != 0 {
+    if u16_at(whole, 6) != 0
+        && checksum_finish(pseudo_sum_v4(source, destination, PROTOCOL_UDP, length) + checksum_add(0, whole)) != 0 {
         return void
     }
     if u16_at(whole, 0) == DHCP_SERVER_PORT && u16_at(whole, 2) == DHCP_CLIENT_PORT {
@@ -267,7 +273,7 @@ receive_udp4 :: fn(stack: ptr[mut Stack], source: Ipv4, destination: Ipv4, datag
  * @param length The UDP or TCP length, header and payload.
  * @return The sum, not folded.
  */
-pseudo_sum_v4 :: fn(source: Ipv4, destination: Ipv4, protocol: u8, length: usize) -> u64 {
+pseudo_sum_v4 :: fn(source : Ipv4, destination : Ipv4, protocol : u8, length : usize) -> u64 {
     sum := checksum_add(0, view_of(&source.bytes[0], source.bytes.count))
     sum = checksum_add(sum, view_of(&destination.bytes[0], destination.bytes.count))
     return sum + cast[u64](protocol) + cast[u64](length)
@@ -283,10 +289,14 @@ pseudo_sum_v4 :: fn(source: Ipv4, destination: Ipv4, protocol: u8, length: usize
  * @param payload What it carries.
  * @return True once it's queued or waiting; false if there's no route.
  */
-send_udp4 :: fn(stack: ptr[mut Stack], to: Ipv4, from_port: u16, to_port: u16, payload: u8[]) -> bool {
+send_udp4 :: fn(stack : ptr[mut Stack], to : Ipv4, from_port : u16, to_port : u16, payload : u8[]) -> bool {
     datagram : u8[MAX_FRAME]
-    length :: if UDP_HEADER + payload.count < datagram.count - IPV4_HEADER - ETHERNET_HEADER { UDP_HEADER + payload.count }
-        else { datagram.count - IPV4_HEADER - ETHERNET_HEADER }
+    length :: if UDP_HEADER + payload.count < datagram.count - IPV4_HEADER - ETHERNET_HEADER {
+        UDP_HEADER + payload.count
+    }
+    else {
+        datagram.count - IPV4_HEADER - ETHERNET_HEADER
+    }
     bytes :: view_of(&datagram[0], length)
     put_u16(bytes, 0, from_port)
     put_u16(bytes, 2, to_port)
@@ -306,7 +316,7 @@ send_udp4 :: fn(stack: ptr[mut Stack], to: Ipv4, from_port: u16, to_port: u16, p
  * @param message The message, after the UDP header.
  * @return What it says; kind 0 if it isn't a server's reply with the magic cookie and a message type.
  */
-read_dhcp :: fn(message: u8[]) -> DhcpAnswer {
+read_dhcp :: fn(message : u8[]) -> DhcpAnswer {
     answer := DhcpAnswer.{}
     if message.count < DHCP_OPTIONS_AT || byte_at(message, 0) != 2 || u32_at(message, 236) != 0x63825363 {
         return answer
@@ -365,7 +375,7 @@ read_dhcp :: fn(message: u8[]) -> DhcpAnswer {
  * @param mask The mask.
  * @return 0 to 32.
  */
-prefix_of_mask :: fn(mask: u32) -> u8 {
+prefix_of_mask :: fn(mask : u32) -> u8 {
     length := cast[u8](0)
     bit := cast[u32](0x80000000)
     loop {
@@ -385,8 +395,11 @@ prefix_of_mask :: fn(mask: u32) -> u8 {
  * @param stack The stack.
  * @param message The message, after the UDP header.
  */
-receive_dhcp :: fn(stack: ptr[mut Stack], message: u8[]) {
-    if stack.dhcp == .Off || stack.dhcp == .Bound || u32_at(message, 4) != stack.xid || !same_mac(mac_at(message, 28), stack.mac) {
+receive_dhcp :: fn(stack : ptr[mut Stack], message : u8[]) {
+    if stack.dhcp == .Off
+        || stack.dhcp == .Bound
+        || u32_at(message, 4) != stack.xid
+        || !same_mac(mac_at(message, 28), stack.mac) {
         return void
     }
     answer :: read_dhcp(message)
@@ -414,7 +427,7 @@ receive_dhcp :: fn(stack: ptr[mut Stack], message: u8[]) {
  * @param stack The stack.
  * @param answer The ACK.
  */
-bind :: fn(stack: ptr[mut Stack], answer: DhcpAnswer) {
+bind :: fn(stack : ptr[mut Stack], answer : DhcpAnswer) {
     stack.ipv4 = answer.address
     stack.prefix_length = if answer.prefix_length != 0 { answer.prefix_length } else { cast[u8](24) }
     stack.router = answer.router
@@ -448,6 +461,17 @@ bind :: fn(stack: ptr[mut Stack], answer: DhcpAnswer) {
     bytes :: view_of(&gratuitous[0], gratuitous.count)
     put_arp(bytes, ARP_REQUEST, stack.mac, stack.ipv4, Mac.{}, stack.ipv4)
     queue_frame(stack, BROADCAST_MAC, ETHER_ARP, bytes)
-    event(stack, .Leased(Lease.{address = stack.ipv4, prefix_length = stack.prefix_length, router = stack.router,
-        dns = stack.dns, server = stack.dhcp_server, seconds = lease}))
+    event(
+        stack,
+        .Leased(
+            Lease.{
+                address = stack.ipv4,
+                prefix_length = stack.prefix_length,
+                router = stack.router,
+                dns = stack.dns,
+                server = stack.dhcp_server,
+                seconds = lease,
+            }
+        )
+    )
 }

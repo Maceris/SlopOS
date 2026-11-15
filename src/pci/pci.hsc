@@ -112,7 +112,7 @@ Host :: struct {
  * @param host The host bridge, its first_bus and last_bus.
  * @return Its bytes: BUS_BYTES for each bus from first_bus to last_bus.
  */
-ecam_size :: fn(host: ptr[Host]) -> u64 {
+ecam_size :: fn(host : ptr[Host]) -> u64 {
     return (cast[u64](host.last_bus) - cast[u64](host.first_bus) + 1) * BUS_BYTES
 }
 
@@ -125,8 +125,9 @@ ecam_size :: fn(host: ptr[Host]) -> u64 {
  * @param function The function number, 0 to 7; higher bits are dropped.
  * @return Its offset in bytes from the ECAM's start (ecam), FUNCTION_BYTES of it.
  */
-function_offset :: fn(host: ptr[Host], bus: u8, device: u8, function: u8) -> u64 {
-    return (cast[u64](bus) - cast[u64](host.first_bus)) * BUS_BYTES + cast[u64](device & 0x1f) * 8 * FUNCTION_BYTES
+function_offset :: fn(host : ptr[Host], bus : u8, device : u8, function : u8) -> u64 {
+    return (cast[u64](bus) - cast[u64](host.first_bus)) * BUS_BYTES
+        + cast[u64](device & 0x1f) * 8 * FUNCTION_BYTES
         + cast[u64](function & 7) * FUNCTION_BYTES
 }
 
@@ -137,7 +138,7 @@ function_offset :: fn(host: ptr[Host], bus: u8, device: u8, function: u8) -> u64
  * @param address The function's address, as slop_os.device_address makes it; its low 16 bits are its requester ID.
  * @return The requester ID mapped, when msi-map maps it; the requester ID itself otherwise.
  */
-msi_source :: fn(host: ptr[Host], address: u32) -> u32 {
+msi_source :: fn(host : ptr[Host], address : u32) -> u32 {
     rid :: address & 0xffff
     if host.msi_count != 0 && rid >= host.rid_base && rid - host.rid_base < host.msi_count {
         return rid - host.rid_base + host.msi_base
@@ -153,16 +154,22 @@ msi_source :: fn(host: ptr[Host], address: u32) -> u32 {
  * @return The host bridge, from the first MCFG or DTB table; null if the copy isn't one, or has neither, or a device
  *     tree has no pci-host-ecam-generic.
  */
-find_host :: fn(tables: u64, size: u64) -> Host? {
+find_host :: fn(tables : u64, size : u64) -> Host? {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
         return null
     }
-    entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
+    entries :: view_of(
+        cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))),
+        cast[usize](header.count)
+    )
     ram := view_of(cast[ptr[slop_os.PhysicalRange]](tables), 0)
     for &entry in entries {
         if signature_of(entry) == "RAM " && entry.offset + cast[u64](entry.size) <= size {
-            ram = view_of(cast[ptr[slop_os.PhysicalRange]](tables + entry.offset), cast[usize](entry.size) / size_of(slop_os.PhysicalRange))
+            ram = view_of(
+                cast[ptr[slop_os.PhysicalRange]](tables + entry.offset),
+                cast[usize](entry.size) / size_of(slop_os.PhysicalRange)
+            )
         }
     }
     for &entry in entries {
@@ -189,12 +196,15 @@ find_host :: fn(tables: u64, size: u64) -> Host? {
  * @return The first such table's address in the mapping and its size in bytes, a view good while the mapping is;
  *     null if there's none, or the copy isn't one.
  */
-firmware_table :: fn(tables: u64, size: u64, signature: string) -> devicetree.Region? {
+firmware_table :: fn(tables : u64, size : u64, signature : string) -> devicetree.Region? {
     header :: cast[ptr[slop_os.FirmwareTables]](tables)
     if size < cast[u64](size_of(slop_os.FirmwareTables)) || header.magic != slop_os.FIRMWARE_MAGIC {
         return null
     }
-    entries :: view_of(cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))), cast[usize](header.count))
+    entries :: view_of(
+        cast[ptr[slop_os.FirmwareTable]](tables + cast[u64](size_of(slop_os.FirmwareTables))),
+        cast[usize](header.count)
+    )
     for &entry in entries {
         if entry.offset + cast[u64](entry.size) <= size && signature_of(entry) == signature {
             return devicetree.Region.{address = tables + entry.offset, size = cast[u64](entry.size)}
@@ -209,7 +219,7 @@ firmware_table :: fn(tables: u64, size: u64, signature: string) -> devicetree.Re
  * @param entry The table's entry in the copy's index.
  * @return Its 4 signature bytes, a view into entry.
  */
-signature_of :: fn(entry: ptr[slop_os.FirmwareTable]) -> string {
+signature_of :: fn(entry : ptr[slop_os.FirmwareTable]) -> string {
     return string_of(&entry.signature[0], 4)
 }
 
@@ -224,7 +234,7 @@ signature_of :: fn(entry: ptr[slop_os.FirmwareTable]) -> string {
  * @param ram The RAM the kernel owns, from the copy's "RAM " table, which no window covers.
  * @return The host bridge, from the allocation, with its windows.
  */
-from_mcfg :: fn(mcfg: u64, ram: slop_os.PhysicalRange[]) -> Host {
+from_mcfg :: fn(mcfg : u64, ram : slop_os.PhysicalRange[]) -> Host {
     host : Host
     base :: read_u64(mcfg + 44)
     host.segment = read_u16(mcfg, 52)
@@ -274,7 +284,7 @@ from_mcfg :: fn(mcfg: u64, ram: slop_os.PhysicalRange[]) -> Host {
  * @param blob Where the device tree blob is mapped, readable.
  * @return The host bridge; null if the blob isn't one, or has no such node with a reg.
  */
-from_device_tree :: fn(blob: u64) -> Host? {
+from_device_tree :: fn(blob : u64) -> Host? {
     tree := devicetree.open(blob) or_return null
     bridge := devicetree.find_compatible(&tree, "pci-host-ecam-generic") or_return null
     region :: devicetree.reg(&tree, &bridge, 0) or_return null
@@ -312,7 +322,10 @@ from_device_tree :: fn(blob: u64) -> Host? {
         cpu_address :: devicetree.read_cells(ranges.address + (start + 3) * 4, cast[u32](parent_cells))
         size :: devicetree.read_cells(ranges.address + (start + 3 + parent_cells) * 4, 2)
         prefetchable :: ((devicetree.cell(ranges, start) or_else 0) >> 30) & 1 != 0
-        add_window(&host, Window.{cpu = cpu_address, pci = pci_address, size = size, wide = space == 3, prefetchable = prefetchable})
+        add_window(
+            &host,
+            Window.{cpu = cpu_address, pci = pci_address, size = size, wide = space == 3, prefetchable = prefetchable}
+        )
     }
     return host
 }
@@ -323,7 +336,7 @@ from_device_tree :: fn(blob: u64) -> Host? {
  * @param host The host bridge, whose window_count grows by one.
  * @param window The window; dropped when MAX_WINDOWS are there already.
  */
-add_window :: fn(host: ptr[mut Host], window: Window) {
+add_window :: fn(host : ptr[mut Host], window : Window) {
     index :: cast[usize](host.window_count)
     if index < host.windows.count {
         host.windows[index] = window
@@ -338,7 +351,7 @@ add_window :: fn(host: ptr[mut Host], window: Window) {
  * @param alignment The alignment, a power of two.
  * @return The least multiple of alignment at least value.
  */
-round_up :: fn(value: u64, alignment: u64) -> u64 {
+round_up :: fn(value : u64, alignment : u64) -> u64 {
     return (value + alignment - 1) & ~(alignment - 1)
 }
 
@@ -350,7 +363,7 @@ round_up :: fn(value: u64, alignment: u64) -> u64 {
  *     inside.
  * @return The byte as the device or table gives it at the load; never cached, nor merged with other volatile accesses.
  */
-read_u8 :: fn(config: u64, offset: u64) -> u8 #no_context {
+read_u8 :: fn(config : u64, offset : u64) -> u8 #no_context {
     return intrinsics.volatile_load_u8(cast[ptr[u8]](config + offset))
 }
 
@@ -361,7 +374,7 @@ read_u8 :: fn(config: u64, offset: u64) -> u8 #no_context {
  * @param offset The register's offset, 2-byte aligned.
  * @return The register's value as the device or table gives it at the load, in the CPU's byte order; never cached.
  */
-read_u16 :: fn(config: u64, offset: u64) -> u16 #no_context {
+read_u16 :: fn(config : u64, offset : u64) -> u16 #no_context {
     return bit_cast[u16le](intrinsics.volatile_load_u16(cast[ptr[u16]](config + offset)))
 }
 
@@ -372,7 +385,7 @@ read_u16 :: fn(config: u64, offset: u64) -> u16 #no_context {
  * @param offset The register's offset, 4-byte aligned.
  * @return The register's value as the device gives it at the load, in the CPU's byte order; never cached.
  */
-read_u32 :: fn(config: u64, offset: u64) -> u32 #no_context {
+read_u32 :: fn(config : u64, offset : u64) -> u32 #no_context {
     return bit_cast[u32le](intrinsics.volatile_load_u32(cast[ptr[u32]](config + offset)))
 }
 
@@ -382,7 +395,7 @@ read_u32 :: fn(config: u64, offset: u64) -> u32 #no_context {
  * @param at Where they are, readable.
  * @return Their value, in the CPU's byte order.
  */
-read_u64 :: fn(at: u64) -> u64 #no_context {
+read_u64 :: fn(at : u64) -> u64 #no_context {
     value : u64le = 0
     intrinsics.mem_copy_non_overlapping(cast[mut rawptr](&value), cast[rawptr](at), 8)
     return value
@@ -396,7 +409,7 @@ read_u64 :: fn(at: u64) -> u64 #no_context {
  *     inside.
  * @param value What's written.
  */
-write_u8 :: fn(config: u64, offset: u64, value: u8) #no_context {
+write_u8 :: fn(config : u64, offset : u64, value : u8) #no_context {
     intrinsics.volatile_store_u8(cast[ptr[mut u8]](config + offset), value)
 }
 
@@ -407,7 +420,7 @@ write_u8 :: fn(config: u64, offset: u64, value: u8) #no_context {
  * @param offset The register's offset, 2-byte aligned.
  * @param value What's written.
  */
-write_u16 :: fn(config: u64, offset: u64, value: u16) #no_context {
+write_u16 :: fn(config : u64, offset : u64, value : u16) #no_context {
     intrinsics.volatile_store_u16(cast[ptr[mut u16]](config + offset), bit_cast[u16](cast[u16le](value)))
 }
 
@@ -418,7 +431,7 @@ write_u16 :: fn(config: u64, offset: u64, value: u16) #no_context {
  * @param offset The register's offset, 4-byte aligned.
  * @param value What's written.
  */
-write_u32 :: fn(config: u64, offset: u64, value: u32) #no_context {
+write_u32 :: fn(config : u64, offset : u64, value : u32) #no_context {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](config + offset), bit_cast[u32](cast[u32le](value)))
 }
 
@@ -432,11 +445,16 @@ write_u32 :: fn(config: u64, offset: u64, value: u32) #no_context {
  * @param after A capability's offset to look after, for the next with id; 0 to look from the list's start.
  * @return The capability's offset in configuration space; null if the function has no list, or none with id.
  */
-find_capability :: fn(config: u64, id: u8, after: u64 = 0) -> u64? {
+find_capability :: fn(config : u64, id : u8, after : u64 = 0) -> u64? {
     if read_u16(config, STATUS) & STATUS_CAPABILITIES == 0 {
         return null
     }
-    at := if after == 0 { cast[u64](read_u8(config, CAPABILITIES)) & 0xfc } else { cast[u64](read_u8(config, after + 1)) & 0xfc }
+    at := if after == 0 {
+        cast[u64](read_u8(config, CAPABILITIES)) & 0xfc
+    }
+    else {
+        cast[u64](read_u8(config, after + 1)) & 0xfc
+    }
     for step in 0..<48 {
         if at == 0 {
             return null

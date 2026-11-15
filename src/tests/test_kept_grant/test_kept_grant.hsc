@@ -5,10 +5,10 @@
 package test_kept_grant
 
 import os from "std:os"
-import strings from "std:strings"
-import terminal from "std:terminal"
 import slop_os from "std:os/slop_os"
 import terminal as protocol from "std:os/slop_os/terminal"
+import strings from "std:strings"
+import terminal from "std:terminal"
 import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** The key the file's kept under. */
@@ -48,17 +48,29 @@ KeptError :: union {
  * @error Refused The powerbox gave nothing; for reopen, nothing's kept under the key, or it was revoked.
  * @error Unusable What it gave couldn't be written or read.
  */
-main :: fn(console: os.Channel[protocol.Terminal]?, powerbox: os.Channel[powerbox_protocol.Powerbox], reopen: bool) -> Result[Kept, KeptError] {
+main :: fn(
+    console : os.Channel[protocol.Terminal]?,
+    powerbox : os.Channel[powerbox_protocol.Powerbox],
+    reopen : bool
+) -> Result[Kept, KeptError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "powerbox"}}
     port :: os.port_for(slop_os.startup_block().budget, powerbox.end) or_return .Error(.Unusable(problem))
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
     if reopen {
-        request^ = .Reopen(powerbox_protocol.Reopening.{key = os.append(&out, string_bytes(KEY)), kind = .File, write = false})
+        request^ = .Reopen(
+            powerbox_protocol.Reopening.{key = os.append(&out, string_bytes(KEY)), kind = .File, write = false}
+        )
     }
     else {
-        request^ = .RequestFile(powerbox_protocol.FileRequest.{purpose = os.append(&out, string_bytes("to keep a line in it")),
-            suggested = os.append(&out, string_bytes("kept.txt")), write = true, keep = os.append(&out, string_bytes(KEY))})
+        request^ = .RequestFile(
+            powerbox_protocol.FileRequest.{
+                purpose = os.append(&out, string_bytes("to keep a line in it")),
+                suggested = os.append(&out, string_bytes("kept.txt")),
+                write = true,
+                keep = os.append(&out, string_bytes(KEY)),
+            }
+        )
         match console {
             case Some(given) => {
                 match terminal.open(given) {

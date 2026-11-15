@@ -28,15 +28,15 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
+import strings from "std:strings"
+import text_buffer from "std:text_buffer"
 import bundle from "../../bundle"
 import generations from "../../generations"
 import service_kit from "../../libraries/service_kit"
 import library_interface from "../../library_interface"
-import strings from "std:strings"
-import text_buffer from "std:text_buffer"
-import substitution from "../../substitution"
 import bundle_store from "../../protocols/bundle_store"
 import update from "../../protocols/update"
+import substitution from "../../substitution"
 
 /**
  * The file in the updates directory an update is staged in: a generation's record, whose kernel and boot set are in
@@ -81,8 +81,12 @@ Service :: struct {
  *     opened as a directory, 3 if updates couldn't be opened as one, 4 if a port for store couldn't be made, and 5 if
  *     clients couldn't be added as a client. It doesn't return otherwise.
  */
-main :: fn(esp: os.Channel[dir.Dir], updates: os.Channel[dir.Dir], store: os.Channel[bundle_store.BundleStore],
-    clients: os.Listener[update.Update]) -> int {
+main :: fn(
+    esp : os.Channel[dir.Dir],
+    updates : os.Channel[dir.Dir],
+    store : os.Channel[bundle_store.BundleStore],
+    clients : os.Listener[update.Update]
+) -> int {
     made, error :: runtime.new_aligned(Service, align_of(Service))
     if error != null {
         return 99
@@ -141,7 +145,7 @@ main :: fn(esp: os.Channel[dir.Dir], updates: os.Channel[dir.Dir], store: os.Cha
  * @param index The client's index in service.connected; one past them, or one already dropped, is left alone.
  * @param into Where each request is read into, reused from one to the next.
  */
-serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incoming]) {
     if index >= service.connected.ends.count {
         return void
     }
@@ -188,7 +192,7 @@ serve :: fn(service: ptr[mut Service], index: usize, into: ptr[mut os.Incoming])
  *     generation's kernel, boot set and command line, so it changes only services and the supervisor applies it now
  *     (decisions/0126); Done otherwise, whatever failed along the way, which is logged.
  */
-booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Response {
+booted_as :: fn(service : ptr[mut Service], booted : update.Booted) -> update.Response {
     current := booted.generation
     match read_record(service, booted.generation) {
         case Some(found) => {
@@ -226,9 +230,9 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
                 running := booted_record
                 staged := found
                 if booted.healthy && same_but_services(&running, &staged) {
-                runtime.log_info("generation % changes only services, and is applied live", staged.number)
-                return .Live(update.LiveOf.{generation = staged.number, store_root = staged.store_root})
-            }
+                    runtime.log_info("generation % changes only services, and is applied live", staged.number)
+                    return .Live(update.LiveOf.{generation = staged.number, store_root = staged.store_root})
+                }
             }
             case None => {}
         }
@@ -244,7 +248,7 @@ booted_as :: fn(service: ptr[mut Service], booted: update.Booted) -> update.Resp
  * @param service The service's state, through whose esp the records are listed, read and removed.
  * @param booted The generation booted's number; 0 makes every spent tentative generation newer than none.
  */
-give_up_on_spent :: fn(service: ptr[mut Service], booted: u64) {
+give_up_on_spent :: fn(service : ptr[mut Service], booted : u64) {
     listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return void
     defer os.free_directory_listing(listed)
     for entry in listed {
@@ -266,14 +270,17 @@ give_up_on_spent :: fn(service: ptr[mut Service], booted: u64) {
  * @param b The other, the one installed.
  * @return Whether their kernels, KASLR, command lines and boot sets, each file's name and hash in order, are the same.
  */
-same_but_services :: fn(a: ptr[generations.Generation], b: ptr[generations.Generation]) -> bool {
-    if !bundle.same(a.kernel, b.kernel) || a.file_count != b.file_count || a.kaslr != b.kaslr
+same_but_services :: fn(a : ptr[generations.Generation], b : ptr[generations.Generation]) -> bool {
+    if !bundle.same(a.kernel, b.kernel)
+        || a.file_count != b.file_count
+        || a.kaslr != b.kaslr
         || generations.line_of(&a.command_line) != generations.line_of(&b.command_line) {
         return false
     }
     for i in cast[usize](0)..<a.files.count {
-        if i < cast[usize](a.file_count) && (generations.text_of(&a.files[i].name) != generations.text_of(&b.files[i].name)
-            || !bundle.same(a.files[i].hash, b.files[i].hash)) {
+        if i < cast[usize](a.file_count)
+            && (generations.text_of(&a.files[i].name) != generations.text_of(&b.files[i].name)
+                || !bundle.same(a.files[i].hash, b.files[i].hash)) {
             return false
         }
     }
@@ -296,7 +303,7 @@ same_but_services :: fn(a: ptr[generations.Generation], b: ptr[generations.Gener
  *     room is asked on esp_raw, and the objects and the record are written through esp.
  * @return The generation installed, as its record was written; null if nothing was.
  */
-install :: fn(service: ptr[mut Service]) -> generations.Generation? {
+install :: fn(service : ptr[mut Service]) -> generations.Generation? {
     pending_bytes :: os.read_entire_file_in(service.updates, PENDING) or_return null
     defer runtime.free_array(bit_cast[u8[]](pending_bytes))
     staged := match generations.generation_of(bit_cast[u8[]](pending_bytes)) {
@@ -343,13 +350,23 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
     }
     room :: room_of(service) or_else files.Room.{}
     if room.size != 0 && needed > room.free {
-        runtime.log_warn("generation % doesn't fit on the ESP: it needs % bytes, which has %", staged.number, needed, room.free)
+        runtime.log_warn(
+            "generation % doesn't fit on the ESP: it needs % bytes, which has %",
+            staged.number,
+            needed,
+            room.free
+        )
         return null
     }
     for object, i in objects {
         if i < wanted.count {
             path_storage : u8[128]
-            if os.write_entire_file_in(service.esp, generations.object_path(wanted[i], &path_storage), bit_cast[string](object.bytes)) != null {
+            if os.write_entire_file_in(
+                service.esp,
+                generations.object_path(wanted[i], &path_storage),
+                bit_cast[string](object.bytes)
+            )
+                != null {
                 runtime.log_warn("generation %'s objects couldn't be written", staged.number)
                 return null
             }
@@ -377,7 +394,7 @@ install :: fn(service: ptr[mut Service]) -> generations.Generation? {
  * @param installed The generation install just put on the ESP, tentative and not yet booted, which is kept whatever
  *     current is, so an update installed after a rollback isn't collected at once; 0 for none.
  */
-collect :: fn(service: ptr[mut Service], current: u64, installed: u64) {
+collect :: fn(service : ptr[mut Service], current : u64, installed : u64) {
     records : generations.Generation[..]
     defer runtime.array_free(&records)
     listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return void
@@ -389,14 +406,18 @@ collect :: fn(service: ptr[mut Service], current: u64, installed: u64) {
     }
     previous := cast[u64](0)
     for each in records {
-        if each.state == generations.STATE_PERMANENT && (current == 0 || each.number < current) && each.number > previous {
+        if each.state == generations.STATE_PERMANENT
+            && (current == 0 || each.number < current)
+            && each.number > previous {
             previous = each.number
         }
     }
     kept : generations.Generation[..]
     defer runtime.array_free(&kept)
     for each in records {
-        keep :: each.state == generations.STATE_RECOVERY || each.number == previous || (current != 0 && each.number >= current)
+        keep :: each.state == generations.STATE_RECOVERY
+            || each.number == previous
+            || (current != 0 && each.number >= current)
             || (installed != 0 && each.number == installed)
         if keep {
             runtime.array_add(&kept, each)
@@ -446,7 +467,7 @@ collect :: fn(service: ptr[mut Service], current: u64, installed: u64) {
  *     can't be had or doesn't pass the check, or the generation can't be made or written. Objects written before a
  *     refusal are left for collection.
  */
-substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> update.Response {
+substitute :: fn(service : ptr[mut Service], asked : update.SubstituteOf) -> update.Response {
     booted :: read_record(service, asked.generation) or_return .Refused
     newest :: newest_number(service)
     current :: read_record(service, newest) or_else booted
@@ -518,7 +539,9 @@ substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> updat
     if !on_esp(service, record_hash) && !write_object(service, record_hash, record) {
         return .Refused
     }
-    if !add_file(&made, substitution.POLICY_FILE, record_hash) || (generations.check(&made) is_some) || !write_record(service, &made) {
+    if !add_file(&made, substitution.POLICY_FILE, record_hash)
+        || (generations.check(&made) is_some)
+        || !write_record(service, &made) {
         return .Refused
     }
     runtime.log_info("generation % staged with % substitutions, booted next", made.number, asked.policy.count)
@@ -533,9 +556,10 @@ substitute :: fn(service: ptr[mut Service], asked: update.SubstituteOf) -> updat
  * @param generation The generation whose boot set is searched, its first file_count files only; only read.
  * @return The policy in its substitution.POLICY_FILE; an empty one if it has none, or it can't be read from the ESP.
  */
-policy_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generation]) -> bundle.Substitutions {
+policy_in :: fn(service : ptr[mut Service], generation : ptr[generations.Generation]) -> bundle.Substitutions {
     for i in cast[usize](0)..<generation.files.count {
-        if i >= cast[usize](generation.file_count) || generations.text_of(&generation.files[i].name) != substitution.POLICY_FILE {
+        if i >= cast[usize](generation.file_count)
+            || generations.text_of(&generation.files[i].name) != substitution.POLICY_FILE {
             continue
         }
         bytes :: object_on_esp(service, generation.files[i].hash) or_return bundle.Substitutions.{}
@@ -552,12 +576,13 @@ policy_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generatio
  * @param b The second policy compared, its first count entries; only read.
  * @return Whether they have as many entries, each the same from and to, in the same order.
  */
-same_policy :: fn(a: bundle.Substitutions, b: bundle.Substitutions) -> bool {
+same_policy :: fn(a : bundle.Substitutions, b : bundle.Substitutions) -> bool {
     if a.count != b.count {
         return false
     }
     for i in cast[usize](0)..<a.entries.count {
-        if cast[u64](i) < a.count && (!bundle.same(a.entries[i].from, b.entries[i].from) || !bundle.same(a.entries[i].to, b.entries[i].to)) {
+        if cast[u64](i) < a.count
+            && (!bundle.same(a.entries[i].from, b.entries[i].from) || !bundle.same(a.entries[i].to, b.entries[i].to)) {
             return false
         }
     }
@@ -572,9 +597,14 @@ same_policy :: fn(a: bundle.Substitutions, b: bundle.Substitutions) -> bool {
  * @param hash The library's object's hash, compared with each file's whole.
  * @return hash, if a file in the boot set whose name ends in .library has it; null otherwise.
  */
-library_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generation], hash: bundle.Hash) -> bundle.Hash? {
+library_in :: fn(
+    service : ptr[mut Service],
+    generation : ptr[generations.Generation],
+    hash : bundle.Hash
+) -> bundle.Hash? {
     for i in cast[usize](0)..<generation.files.count {
-        if i < cast[usize](generation.file_count) && strings.ends_with(generations.text_of(&generation.files[i].name), ".library")
+        if i < cast[usize](generation.file_count)
+            && strings.ends_with(generations.text_of(&generation.files[i].name), ".library")
             && bundle.same(generation.files[i].hash, hash) {
             return hash
         }
@@ -590,7 +620,7 @@ library_in :: fn(service: ptr[mut Service], generation: ptr[generations.Generati
  * @param hash The file's object's hash.
  * @return Whether it was added; false if the boot set is full, or the name doesn't fit a file's name.
  */
-add_file :: fn(generation: ptr[mut generations.Generation], name: string, hash: bundle.Hash) -> bool {
+add_file :: fn(generation : ptr[mut generations.Generation], name : string, hash : bundle.Hash) -> bool {
     at :: cast[usize](generation.file_count)
     if at >= generation.files.count || !generations.set_name(&generation.files[at].name, name) {
         return false
@@ -607,7 +637,7 @@ add_file :: fn(generation: ptr[mut generations.Generation], name: string, hash: 
  * @return The highest number among the records but the recovery generation's; 0 if there's none, or the records
  *     can't be listed.
  */
-newest_number :: fn(service: ptr[mut Service]) -> u64 {
+newest_number :: fn(service : ptr[mut Service]) -> u64 {
     newest := cast[u64](0)
     listed :: os.list_directory_in(service.esp, generations.RECORDS) or_return 0
     defer os.free_directory_listing(listed)
@@ -627,7 +657,7 @@ newest_number :: fn(service: ptr[mut Service]) -> u64 {
  * @param hash The hash naming boot/objects/<hex>; the bytes read aren't checked against it.
  * @return Its bytes, from the context's allocator, which the caller frees; null if it isn't there or can't be read.
  */
-object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
+object_on_esp :: fn(service : ptr[mut Service], hash : bundle.Hash) -> u8[]? {
     path_storage : u8[128]
     text :: os.read_entire_file_in(service.esp, generations.object_path(hash, &path_storage)) or_return null
     return bit_cast[u8[]](text)
@@ -643,14 +673,15 @@ object_on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
  * @param bytes The bytes written, all of them, in place of any file there; only read, and not checked against hash.
  * @return Whether it was written and renamed into place; a failure is logged, and leaves no object under its name.
  */
-write_object :: fn(service: ptr[mut Service], hash: bundle.Hash, bytes: u8[]) -> bool {
+write_object :: fn(service : ptr[mut Service], hash : bundle.Hash, bytes : u8[]) -> bool {
     path_storage : u8[128]
     path :: generations.object_path(hash, &path_storage)
     part_storage : u8[160]
     part := text_buffer.make(part_storage)
     text_buffer.append(&part, path)
     text_buffer.append(&part, ".part")
-    if part.truncated || os.write_entire_file_in(service.esp, text_buffer.as_string(&part), bit_cast[string](bytes)) != null {
+    if part.truncated
+        || os.write_entire_file_in(service.esp, text_buffer.as_string(&part), bit_cast[string](bytes)) != null {
         runtime.log_warn("an object couldn't be written to the ESP")
         return false
     }
@@ -669,7 +700,7 @@ write_object :: fn(service: ptr[mut Service], hash: bundle.Hash, bytes: u8[]) ->
  * @return The kernel's hash, then every boot-set file's, in order, repeats kept, from the context's allocator, which
  *     the caller frees.
  */
-hashes_of :: fn(generation: ptr[generations.Generation]) -> bundle.Hash[..] {
+hashes_of :: fn(generation : ptr[generations.Generation]) -> bundle.Hash[..] {
     made : bundle.Hash[..]
     runtime.array_add(&made, generation.kernel)
     for i in cast[usize](0)..<generation.files.count {
@@ -687,7 +718,7 @@ hashes_of :: fn(generation: ptr[generations.Generation]) -> bundle.Hash[..] {
  * @param number The generation's number; 0, no generation, gives null.
  * @return The generation; null if its record isn't there, can't be read, or isn't a valid record.
  */
-read_record :: fn(service: ptr[mut Service], number: u64) -> generations.Generation? {
+read_record :: fn(service : ptr[mut Service], number : u64) -> generations.Generation? {
     if number == 0 {
         return null
     }
@@ -707,10 +738,14 @@ read_record :: fn(service: ptr[mut Service], number: u64) -> generations.Generat
  * @param generation The generation, whose number names the record.
  * @return Whether it was written; a failure is logged.
  */
-write_record :: fn(service: ptr[mut Service], generation: ptr[generations.Generation]) -> bool {
+write_record :: fn(service : ptr[mut Service], generation : ptr[generations.Generation]) -> bool {
     path_storage : u8[128]
-    if os.write_entire_file_in(service.esp, generations.record_path(generation.number, &path_storage),
-        bit_cast[string](generations.bytes_of(generation))) != null {
+    if os.write_entire_file_in(
+        service.esp,
+        generations.record_path(generation.number, &path_storage),
+        bit_cast[string](generations.bytes_of(generation))
+    )
+        != null {
         runtime.log_warn("generation %'s record couldn't be written", generation.number)
         return false
     }
@@ -724,7 +759,7 @@ write_record :: fn(service: ptr[mut Service], generation: ptr[generations.Genera
  * @param hash The hash naming boot/objects/<hex>, looked for as a file; nothing's read.
  * @return Whether boot/objects/<hex> is a file.
  */
-on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> bool {
+on_esp :: fn(service : ptr[mut Service], hash : bundle.Hash) -> bool {
     path_storage : u8[128]
     return os.path_kind_in(service.esp, generations.object_path(hash, &path_storage)) == .FILE
 }
@@ -742,7 +777,7 @@ on_esp :: fn(service: ptr[mut Service], hash: bundle.Hash) -> bool {
  * @return Its bytes, from the context's allocator, which the caller frees; null if the store hasn't it, it's empty,
  *     it couldn't be read or copied, or its bytes don't have its hash.
  */
-object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
+object_of :: fn(service : ptr[mut Service], hash : bundle.Hash) -> u8[]? {
     out := os.Outgoing.{}
     os.begin[bundle_store.Request](&out)^ = .Get(hash)
     into := os.Incoming.{}
@@ -776,7 +811,7 @@ object_of :: fn(service: ptr[mut Service], hash: bundle.Hash) -> u8[]? {
  *     the connection fails.
  * @return Its size and what's free, in bytes; null if it couldn't be asked, or didn't answer with its room.
  */
-room_of :: fn(service: ptr[mut Service]) -> files.Room? {
+room_of :: fn(service : ptr[mut Service]) -> files.Room? {
     out := os.Outgoing.{}
     os.begin[dir.Request](&out)^ = .Room
     if dir.send_request(service.esp_raw, service.esp_port, &out) is_some {
@@ -803,7 +838,7 @@ room_of :: fn(service: ptr[mut Service]) -> files.Room? {
  * @param hash The hash looked for, compared whole.
  * @return Whether it's among them.
  */
-has_hash :: fn(hashes: ptr[bundle.Hash[..]], hash: bundle.Hash) -> bool {
+has_hash :: fn(hashes : ptr[bundle.Hash[..]], hash : bundle.Hash) -> bool {
     for each in hashes^ {
         if bundle.same(each, hash) {
             return true
@@ -823,7 +858,7 @@ Object :: struct {
  *
  * @param all The list, empty afterwards.
  */
-free_all :: fn(all: ptr[mut Object[..]]) {
+free_all :: fn(all : ptr[mut Object[..]]) {
     for each in all^ {
         runtime.free_array(each.bytes)
     }
@@ -836,7 +871,7 @@ free_all :: fn(all: ptr[mut Object[..]]) {
  * @param text The record's file name, a directory entry's, as read; only read.
  * @return Its number, in decimal; null if it's empty or has anything but digits. Too many digits overflow unchecked.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     if text.count == 0 {
         return null
     }

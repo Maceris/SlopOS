@@ -1,9 +1,9 @@
 package supervisor
 
 import runtime from "base:runtime"
-import random from "std:random"
 import slop_os from "std:os/slop_os"
 import lifecycle from "std:os/slop_os/lifecycle"
+import random from "std:random"
 import log_line from "../../log_line"
 
 /*
@@ -31,7 +31,7 @@ MAX_CHAOS :: 16
  * @param kills How many to kill, at most MAX_CHAOS and as many as there are that may be started again.
  * @param given_seed The seed to choose them with; 0 for one at random, which is logged.
  */
-run_chaos :: fn(supervisor: ptr[mut Supervisor], kills: u64, given_seed: u64) {
+run_chaos :: fn(supervisor : ptr[mut Supervisor], kills : u64, given_seed : u64) {
     seed := if given_seed != 0 { given_seed } else { random.next_u64() | 1 }
     log_line.write(supervisor.log, "supervisor: test_chaos: % kills, seed %", kills, seed)
     budget :: supervisor.block.budget
@@ -82,9 +82,17 @@ run_chaos :: fn(supervisor: ptr[mut Supervisor], kills: u64, given_seed: u64) {
     // What the ends brought, handled, and the budgets given back
     pause(supervisor, 1_000_000_000)
     after :: (slop_os.memory_budget_info(budget) or_else slop_os.BudgetInfo.{}).used
-    log_line.write(supervisor.log, "supervisor: test_chaos: the supervisor's budget used % bytes before, % after", before, after)
+    log_line.write(
+        supervisor.log,
+        "supervisor: test_chaos: the supervisor's budget used % bytes before, % after",
+        before,
+        after
+    )
     if failed == 0 && made > 0 && after <= before + CHAOS_SLACK {
-        log_line.write(supervisor.log, "supervisor: test_chaos: every service killed was started again and answered, and the budgets are as they were")
+        log_line.write(
+            supervisor.log,
+            "supervisor: test_chaos: every service killed was started again and answered, and the budgets are as they were"
+        )
     }
 }
 
@@ -96,7 +104,7 @@ run_chaos :: fn(supervisor: ptr[mut Supervisor], kills: u64, given_seed: u64) {
  * @param index The entry's index.
  * @return True if it may.
  */
-may_kill :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
+may_kill :: fn(supervisor : ptr[mut Supervisor], index : usize) -> bool {
     if index >= supervisor.started.count {
         return false
     }
@@ -120,7 +128,7 @@ may_kill :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
  * @param index The entry's index.
  * @return True once it's running again; false if it isn't by the deadline, or is done.
  */
-killed_and_back :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
+killed_and_back :: fn(supervisor : ptr[mut Supervisor], index : usize) -> bool {
     if index >= supervisor.started.count {
         return false
     }
@@ -130,7 +138,8 @@ killed_and_back :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
     supervisor.started[index].running = false
     deadline :: (slop_os.clock_monotonic() or_else 0) + CHAOS_DEADLINE
     loop {
-        if supervisor.started[index].done || (supervisor.started[index].running && supervisor.started[index].restarts > restarts) {
+        if supervisor.started[index].done
+            || (supervisor.started[index].running && supervisor.started[index].restarts > restarts) {
             break
         }
         if (slop_os.clock_monotonic() or_else 0) >= deadline {
@@ -150,7 +159,7 @@ killed_and_back :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
  * @return True if it answered, or is a driver running again; false for a service without a lifecycle channel, or no
  *     answer in time.
  */
-answers :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
+answers :: fn(supervisor : ptr[mut Supervisor], index : usize) -> bool {
     if index >= supervisor.started.count {
         return false
     }
@@ -189,7 +198,7 @@ answers :: fn(supervisor: ptr[mut Supervisor], index: usize) -> bool {
  * @param state The state, not 0.
  * @return The next state.
  */
-next_state :: fn(state: u64) -> u64 {
+next_state :: fn(state : u64) -> u64 {
     x := state
     x ~= x << 13
     x ~= x >> 7

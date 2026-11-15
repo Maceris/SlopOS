@@ -24,7 +24,9 @@ import testing from "std:testing"
 OWNERSHIP_RACE_ROUNDS :: 4000
 /** How long the boot CPU waits for the moving CPU to start, and to finish a round, in milliseconds. */
 OWNERSHIP_RACE_TIMEOUT_MS :: 1000
-/** The most spins the boot CPU waits before it destroys a round's object: each round waits a different number below it. */
+/**
+ * The most spins the boot CPU waits before it destroys a round's object: each round waits a different number below it.
+ */
 OWNERSHIP_RACE_SPREAD :: 64
 
 /** test_ownership_race's state, which the moving CPU reaches through kernel.ownership_race_test while it runs. */
@@ -52,9 +54,16 @@ OwnershipRaceTest :: struct {
  *
  * @param kernel Not used: the test finds the kernel through per_cpu.
  */
-test_ownership_race :: fn(kernel: ptr[mut Kernel]) {
-    _ = run_tests("test_ownership_race", testing.Test.[.{name = "an_object_moved_while_it_is_destroyed_is_on_no_list",
-        run = an_object_moved_while_it_is_destroyed_is_on_no_list}])
+test_ownership_race :: fn(kernel : ptr[mut Kernel]) {
+    _ = run_tests(
+        "test_ownership_race",
+        testing.Test.[
+            .{
+                name = "an_object_moved_while_it_is_destroyed_is_on_no_list",
+                run = an_object_moved_while_it_is_destroyed_is_on_no_list,
+            }
+        ]
+    )
 }
 
 /**
@@ -69,7 +78,7 @@ test_ownership_race :: fn(kernel: ptr[mut Kernel]) {
  * @return Ok once it's run; Error if there's only one CPU, no memory for the state, the processes or a port, or the
  *     moving CPU doesn't start or keep up in time.
  */
-an_object_moved_while_it_is_destroyed_is_on_no_list #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_object_moved_while_it_is_destroyed_is_on_no_list #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
     testing.require_ge(t, kernel.online_cpus - 1, 1, "the test is booted with another CPU to move the objects")?
     made :: allocate_object[OwnershipRaceTest](&kernel.frames)
@@ -132,7 +141,12 @@ an_object_moved_while_it_is_destroyed_is_on_no_list #test :: fn(t: ptr[mut testi
     testing.require(t, kept_up, "the moving CPU moves each round's object in time")?
     _ = destroy_object(kernel, cast[u64](first))
     _ = destroy_object(kernel, cast[u64](second))
-    whole :: testing.expect_eq(t, torn, 0, "an object moved while it's destroyed is on neither owner's list, and both lists are whole")
+    whole :: testing.expect_eq(
+        t,
+        torn,
+        0,
+        "an object moved while it's destroyed is on neither owner's list, and both lists are whole"
+    )
     ran :: testing.expect_eq(t, kept, cast[int](OWNERSHIP_RACE_ROUNDS), "every round ran")
     return testing.outcome_of(whole && ran)
 }
@@ -143,7 +157,7 @@ an_object_moved_while_it_is_destroyed_is_on_no_list #test :: fn(t: ptr[mut testi
  * @param list The list.
  * @return True if nothing's on it.
  */
-list_empty :: fn(list: ptr[mut OwnedList]) -> bool {
+list_empty :: fn(list : ptr[mut OwnedList]) -> bool {
     lock_at(&list.lock, .ObjectList)
     defer unlock_at(&list.lock, .ObjectList)
     return list.first == 0
@@ -155,7 +169,7 @@ list_empty :: fn(list: ptr[mut OwnedList]) -> bool {
  *
  * @param list The list.
  */
-clear_list :: fn(list: ptr[mut OwnedList]) {
+clear_list :: fn(list : ptr[mut OwnedList]) {
     lock_at(&list.lock, .ObjectList)
     defer unlock_at(&list.lock, .ObjectList)
     list.first = 0
@@ -169,7 +183,7 @@ clear_list :: fn(list: ptr[mut OwnedList]) {
  * @param wanted The number it has to reach.
  * @return True if it reached wanted in time.
  */
-wait_for_count :: fn(kernel: ptr[Kernel], count: ptr[u32], wanted: u32) -> bool {
+wait_for_count :: fn(kernel : ptr[Kernel], count : ptr[u32], wanted : u32) -> bool {
     deadline :: arch.counter() + kernel.counter_frequency / 1000 * OWNERSHIP_RACE_TIMEOUT_MS
     loop {
         arch.spin_hint()

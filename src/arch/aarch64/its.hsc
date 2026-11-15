@@ -1,10 +1,10 @@
 package arch_aarch64
 
 import intrinsics from "base:intrinsics"
-import runtime from "base:runtime"
 import aarch64 from "base:intrinsics/aarch64"
-import arch_interface from "../../arch_interface"
+import runtime from "base:runtime"
 import concurrency from "std:concurrency"
+import arch_interface from "../../arch_interface"
 
 /*
  * Message-signaled interrupts through the GICv3's ITS (arch_interface, MSIs; decisions/0073). A device writes its
@@ -16,7 +16,10 @@ import concurrency from "std:concurrency"
  * and each redistributor has its own pending table. Each CPU's redistributor is a collection, numbered as it's found.
  * The ITS is told what to do through its command queue, one command at a time under its_lock, each waited for.
  */
-//SPEC: Arm GICv3 and GICv4 Architecture Specification (IHI 0069): §5 (LPIs and the ITS), §5.3 (ITS commands), §12.19 (GITS_*), §12.11 (GICR_PROPBASER, GICR_PENDBASER)
+/*
+ * SPEC: Arm GICv3 and GICv4 Architecture Specification (IHI 0069): §5 (LPIs and the ITS), §5.3 (ITS commands), §12.19
+ * (GITS_*), §12.11 (GICR_PROPBASER, GICR_PENDBASER)
+ */
 
 // ITS registers: the control frame, then the translation frame 64 KiB on
 /** GITS_CTLR's offset: the ITS's control register, Enabled in bit 0 and Quiescent in bit 31. */
@@ -181,7 +184,7 @@ ItsState :: struct {
  * @param system The shared state, whose its.physical and its.registers are set.
  * @param physical The ITS's registers' physical address, ITS_SIZE bytes of them.
  */
-map_its :: fn(system: ptr[mut ArchSystem], physical: u64) {
+map_its :: fn(system : ptr[mut ArchSystem], physical : u64) {
     if physical == 0 || !map_device_range(system, physical, ITS_SIZE) {
         return void
     }
@@ -196,7 +199,7 @@ map_its :: fn(system: ptr[mut ArchSystem], physical: u64) {
  * @return The device table's entry size times 2 to the device ID bits (at most MAX_DEVICE_BITS), rounded up to
  *     64 KiB; 0 if no GITS_BASER describes a device table.
  */
-device_table_size :: fn(system: ptr[ArchSystem]) -> u64 {
+device_table_size :: fn(system : ptr[ArchSystem]) -> u64 {
     base :: system.its.registers
     for n in 0..<8 {
         baser :: read_u64(base, GITS_BASER + cast[u64](n) * 8)
@@ -214,7 +217,7 @@ device_table_size :: fn(system: ptr[ArchSystem]) -> u64 {
  * @param typer GITS_TYPER's value.
  * @return Devbits + 1, capped at MAX_DEVICE_BITS: 1 to 16.
  */
-device_bits_of :: fn(typer: u64) -> u64 {
+device_bits_of :: fn(typer : u64) -> u64 {
     bits :: ((typer >> 13) & 0x1f) + 1
     return if bits > MAX_DEVICE_BITS { MAX_DEVICE_BITS } else { bits }
 }
@@ -225,7 +228,7 @@ device_bits_of :: fn(typer: u64) -> u64 {
  * @param value The size in bytes, below 2^64 - 0xffff.
  * @return The smallest multiple of 0x10000 at least value.
  */
-round_up_64k :: fn(value: u64) -> u64 {
+round_up_64k :: fn(value : u64) -> u64 {
     return (value + 0xffff) & ~cast[u64](0xffff)
 }
 
@@ -235,7 +238,7 @@ round_up_64k :: fn(value: u64) -> u64 {
  * @param system The shared state, whose redistributor region is mapped (non-zero).
  * @return How many redistributors there are, at least 1.
  */
-redistributor_count :: fn(system: ptr[ArchSystem]) -> u64 {
+redistributor_count :: fn(system : ptr[ArchSystem]) -> u64 {
     count : u64 = 0
     with {
         frame := system.redistributors
@@ -269,7 +272,11 @@ msi_controller_memory :: fn() -> u64 {
     if tables == 0 {
         return 0
     }
-    return COMMAND_QUEUE_SIZE + PROPERTY_TABLE_SIZE + COLLECTION_TABLE_SIZE + tables + redistributor_count(system) * PENDING_TABLE_SIZE
+    return COMMAND_QUEUE_SIZE
+        + PROPERTY_TABLE_SIZE
+        + COLLECTION_TABLE_SIZE
+        + tables
+        + redistributor_count(system) * PENDING_TABLE_SIZE
 }
 
 /**
@@ -283,7 +290,7 @@ msi_controller_memory :: fn() -> u64 {
  * @param memory msi_controller_memory's bytes, zeroed and contiguous, physical, aligned to at least 64 KiB; the
  *     ITS and the redistributors own it from here on.
  */
-init_msi :: fn(memory: arch_interface.PhysicalAddress) {
+init_msi :: fn(memory : arch_interface.PhysicalAddress) {
     system :: current_system()
     its :: &system.its
     base :: its.registers
@@ -328,11 +335,24 @@ init_msi :: fn(memory: arch_interface.PhysicalAddress) {
         }
         if table != 0 {
             pages :: size / 4096
-            write_u64(base, offset, BASER_VALID | TABLE_INNER_CACHE << 59 | kind << 56 | (entry_size - 1) << 48 | table
-                | TABLE_SHAREABLE << 10 | (pages - 1))
+            write_u64(
+                base,
+                offset,
+                BASER_VALID
+                    | TABLE_INNER_CACHE << 59
+                    | kind << 56
+                    | (entry_size - 1) << 48
+                    | table
+                    | TABLE_SHAREABLE << 10
+                    | (pages - 1)
+            )
         }
     }
-    write_u64(base, GITS_CBASER, BASER_VALID | TABLE_INNER_CACHE << 59 | commands | TABLE_SHAREABLE << 10 | (COMMAND_QUEUE_SIZE / 4096 - 1))
+    write_u64(
+        base,
+        GITS_CBASER,
+        BASER_VALID | TABLE_INNER_CACHE << 59 | commands | TABLE_SHAREABLE << 10 | (COMMAND_QUEUE_SIZE / 4096 - 1)
+    )
     write_u64(base, GITS_CWRITER, 0)
     write_u32(base, GITS_CTLR, CTLR_ENABLED)
 
@@ -344,11 +364,26 @@ init_msi :: fn(memory: arch_interface.PhysicalAddress) {
     loop {
         typer :: read_u64(frame, GICR_TYPER)
         if typer & TYPER_PHYSICAL_LPIS != 0 && cast[usize](count) < MAX_COLLECTIONS {
-            write_u64(frame, GICR_PROPBASER, properties | TABLE_SHAREABLE << 10 | TABLE_INNER_CACHE << 7 | (LPI_ID_BITS - 1))
-            write_u64(frame, GICR_PENDBASER, PENDING_ZEROED | (pending + cast[u64](count) * PENDING_TABLE_SIZE) | TABLE_SHAREABLE << 10
-                | TABLE_INNER_CACHE << 7)
+            write_u64(
+                frame,
+                GICR_PROPBASER,
+                properties | TABLE_SHAREABLE << 10 | TABLE_INNER_CACHE << 7 | (LPI_ID_BITS - 1)
+            )
+            write_u64(
+                frame,
+                GICR_PENDBASER,
+                PENDING_ZEROED
+                    | (pending + cast[u64](count) * PENDING_TABLE_SIZE)
+                    | TABLE_SHAREABLE << 10
+                    | TABLE_INNER_CACHE << 7
+            )
             write_u32(frame, GICR_CTLR, read_u32(frame, GICR_CTLR) | GICR_CTLR_ENABLE_LPIS)
-            target :: if its.targets_by_address { frame - system.direct_map_offset } else { ((typer >> 8) & 0xffff) << 16 }
+            target :: if its.targets_by_address {
+                frame - system.direct_map_offset
+            }
+            else {
+                ((typer >> 8) & 0xffff) << 16
+            }
             its.collections[count] = Collection.{affinity = typer >> 32, target = target}
             count += 1
         }
@@ -415,7 +450,7 @@ ITT_EVENTS : u32 : 32
  *     next power of two at least events, and at most the 32 msi_device_memory's bytes hold, so the ITS never uses
  *     memory past the table (an event of 32 or more is refused by the ITS).
  */
-add_msi_device :: fn(source: u32, memory: arch_interface.PhysicalAddress, events: u32) {
+add_msi_device :: fn(source : u32, memory : arch_interface.PhysicalAddress, events : u32) {
     its :: &current_system().its
     if !its.ready || cast[u64](source) >> its.device_bits != 0 {
         return void
@@ -437,7 +472,7 @@ add_msi_device :: fn(source: u32, memory: arch_interface.PhysicalAddress, events
  *
  * @param source The device's ITS device ID, as add_msi_device had it. Nothing happens without an ITS set up.
  */
-remove_msi_device :: fn(source: u32) {
+remove_msi_device :: fn(source : u32) {
     system :: current_system()
     its :: &system.its
     if !its.ready {
@@ -468,7 +503,12 @@ remove_msi_device :: fn(source: u32) {
  * @param id The kernel's device interrupt ID on that CPU, from device_interrupt_range.
  * @return The message the device sends to raise it: event as the data, written to GITS_TRANSLATER's physical address.
  */
-route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+route_msi :: fn(
+    source : u32,
+    event : u32,
+    cpu_hardware_id : u64,
+    id : arch_interface.InterruptId
+) -> arch_interface.MsiMessage {
     system :: current_system()
     its :: &system.its
     message :: arch_interface.MsiMessage.{address = its.physical + GITS_TRANSLATER, data = event}
@@ -529,7 +569,7 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
  * @param cpu_hardware_id The CPU's MPIDR; only its affinity fields are compared.
  * @return The collection's index, below its.collection_count; null if no collection targets that CPU.
  */
-collection_of :: fn(its: ptr[ItsState], cpu_hardware_id: u64) -> u64? {
+collection_of :: fn(its : ptr[ItsState], cpu_hardware_id : u64) -> u64? {
     affinity :: ((cpu_hardware_id >> 32) & 0xff) << 24 | (cpu_hardware_id & 0xffffff)
     for found, index in its.collections {
         if cast[u32](index) < its.collection_count && found.affinity == affinity {
@@ -552,7 +592,12 @@ collection_of :: fn(its: ptr[ItsState], cpu_hardware_id: u64) -> u64? {
  * @param id The kernel's device interrupt ID on that CPU.
  * @return The message the device sends to raise it, the same as route_msi gave, so the device needn't change.
  */
-move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+move_msi :: fn(
+    source : u32,
+    event : u32,
+    cpu_hardware_id : u64,
+    id : arch_interface.InterruptId
+) -> arch_interface.MsiMessage {
     system :: current_system()
     its :: &system.its
     message :: arch_interface.MsiMessage.{address = its.physical + GITS_TRANSLATER, data = event}
@@ -588,7 +633,7 @@ move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface
  * @param source The device's ITS device ID.
  * @param event The event's number. Nothing happens without an ITS set up, or if the event isn't routed.
  */
-unroute_msi :: fn(source: u32, event: u32) {
+unroute_msi :: fn(source : u32, event : u32) {
     system :: current_system()
     its :: &system.its
     if !its.ready {
@@ -613,7 +658,7 @@ unroute_msi :: fn(source: u32, event: u32) {
  * @param system The shared state, with the ITS and routes.
  * @param lpi The LPI's interrupt ID, FIRST_LPI or above.
  */
-free_lpi :: fn(system: ptr[mut ArchSystem], lpi: u32) {
+free_lpi :: fn(system : ptr[mut ArchSystem], lpi : u32) {
     its :: &system.its
     properties :: view_of(cast[ptr[mut u8]](its.properties), LPI_COUNT)
     index :: cast[usize](lpi - FIRST_LPI)
@@ -630,7 +675,7 @@ free_lpi :: fn(system: ptr[mut ArchSystem], lpi: u32) {
  * @param its The ITS's state, whose lpis_used marks it taken.
  * @return The LPI's interrupt ID, FIRST_LPI to FIRST_LPI + LPI_COUNT - 1; null if every one is taken.
  */
-take_lpi :: fn(its: ptr[mut ItsState]) -> u32? {
+take_lpi :: fn(its : ptr[mut ItsState]) -> u32? {
     for &word, index in its.lpis_used {
         if word^ != 0xffffffffffffffff {
             for bit in 0..<64 {
@@ -650,7 +695,7 @@ take_lpi :: fn(its: ptr[mut ItsState]) -> u32? {
  * @param its The ITS's state, whose lpis_used loses the LPI's bit; nothing else in it changes.
  * @param lpi The LPI's interrupt ID, from take_lpi; one out of range is ignored.
  */
-give_lpi :: fn(its: ptr[mut ItsState], lpi: u32) {
+give_lpi :: fn(its : ptr[mut ItsState], lpi : u32) {
     index :: cast[usize]((lpi - FIRST_LPI) / 64)
     if index < its.lpis_used.count {
         its.lpis_used[index] &= ~(cast[u64](1) << cast[u64]((lpi - FIRST_LPI) % 64))
@@ -668,7 +713,7 @@ give_lpi :: fn(its: ptr[mut ItsState], lpi: u32) {
  * @param second The second doubleword, as the command defines it.
  * @param third The third doubleword, as the command defines it.
  */
-run_command :: fn(its: ptr[mut ItsState], first: u64, second: u64, third: u64) {
+run_command :: fn(its : ptr[mut ItsState], first : u64, second : u64, third : u64) {
     slot :: its.commands + its.command_offset
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](slot), first)
     intrinsics.volatile_store_u64(cast[ptr[mut u64]](slot + 8), second)

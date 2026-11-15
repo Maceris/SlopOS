@@ -4,7 +4,8 @@
  * found in the firmware tables' copy (slop_os.FirmwareTables). Only I/O port blocks are taken: a machine whose PM1 or
  * GPE blocks are memory-mapped, as a hardware-reduced one's are, has none here.
  */
-//SPEC: ACPI 6.5, §5.2.9 (FADT), §5.2.3.2 (Generic Address Structure), §4.8.1 (PM1 and GPE blocks)
+// SPEC: ACPI 6.5, §5.2.9 (FADT), §5.2.3.2 (Generic Address Structure), §4.8.1 (PM1 and GPE blocks)
+
 package acpi_tables
 
 import slop_os from "std:os/slop_os"
@@ -63,16 +64,24 @@ SPACE_SYSTEM_IO : u8 : 1
  * @param table The FADT, header and all.
  * @return What it says; null for one shorter than ACPI 1.0's 116 bytes.
  */
-parse_fadt :: fn(table: u8[]) -> Fadt? {
+parse_fadt :: fn(table : u8[]) -> Fadt? {
     if table.count < 116 {
         return null
     }
     made := Fadt.{
-        sci = cast[u16](little(table, 46, 2)), smi_command = cast[u16](little(table, 48, 4) & 0xffff), acpi_enable = cast[u8](little(table, 52, 1)),
-        pm1a_event = block(table, 56, 148), pm1b_event = block(table, 60, 160), pm1a_control = block(table, 64, 172),
-        pm1b_control = block(table, 68, 184), pm1_event_length = cast[u8](little(table, 88, 1)),
-        gpe0 = block(table, 80, 220), gpe0_length = cast[u8](little(table, 92, 1)), gpe1 = block(table, 84, 232),
-        gpe1_length = cast[u8](little(table, 93, 1)), gpe1_base = cast[u8](little(table, 94, 1)),
+        sci = cast[u16](little(table, 46, 2)),
+        smi_command = cast[u16](little(table, 48, 4) & 0xffff),
+        acpi_enable = cast[u8](little(table, 52, 1)),
+        pm1a_event = block(table, 56, 148),
+        pm1b_event = block(table, 60, 160),
+        pm1a_control = block(table, 64, 172),
+        pm1b_control = block(table, 68, 184),
+        pm1_event_length = cast[u8](little(table, 88, 1)),
+        gpe0 = block(table, 80, 220),
+        gpe0_length = cast[u8](little(table, 92, 1)),
+        gpe1 = block(table, 84, 232),
+        gpe1_length = cast[u8](little(table, 93, 1)),
+        gpe1_base = cast[u8](little(table, 94, 1)),
         flags = cast[u32](little(table, 112, 4)),
     }
     if made.flags & RESET_SUPPORTED != 0 && table.count >= 129 && little(table, 116, 1) == cast[u64](SPACE_SYSTEM_IO) {
@@ -93,7 +102,7 @@ parse_fadt :: fn(table: u8[]) -> Fadt? {
  * @param extended The Generic Address Structure's offset.
  * @return The port; 0 for none, or one that isn't in system I/O or past 65535.
  */
-block :: fn(table: u8[], field: u64, extended: u64) -> u16 {
+block :: fn(table : u8[], field : u64, extended : u64) -> u16 {
     value :: little(table, field, 4)
     if value != 0 {
         return if value <= 0xffff { cast[u16](value) } else { 0 }
@@ -146,7 +155,7 @@ Madt :: struct {
  * @param table The MADT, header and all.
  * @return What it says, up to MAX_MADT_ENTRIES of each; null for one shorter than its header.
  */
-parse_madt :: fn(table: u8[]) -> Madt? {
+parse_madt :: fn(table : u8[]) -> Madt? {
     if table.count < 44 {
         return null
     }
@@ -163,13 +172,19 @@ parse_madt :: fn(table: u8[]) -> Madt? {
             break
         }
         if kind == 1 && length >= 12 && made.io_apic_count < made.io_apics.count {
-            made.io_apics[made.io_apic_count] = IoApic.{id = cast[u8](little(table, at + 2, 1)), address = little(table, at + 4, 4),
-                gsi_base = cast[u32](little(table, at + 8, 4))}
+            made.io_apics[made.io_apic_count] = IoApic.{
+                id = cast[u8](little(table, at + 2, 1)),
+                address = little(table, at + 4, 4),
+                gsi_base = cast[u32](little(table, at + 8, 4)),
+            }
             made.io_apic_count += 1
         }
         if kind == 2 && length >= 10 && made.override_count < made.overrides.count {
-            made.overrides[made.override_count] = Override.{source = cast[u8](little(table, at + 3, 1)),
-                gsi = cast[u32](little(table, at + 4, 4)), flags = cast[u16](little(table, at + 8, 2))}
+            made.overrides[made.override_count] = Override.{
+                source = cast[u8](little(table, at + 3, 1)),
+                gsi = cast[u32](little(table, at + 4, 4)),
+                flags = cast[u16](little(table, at + 8, 2)),
+            }
             made.override_count += 1
         }
         at += length
@@ -197,7 +212,7 @@ Signaling :: struct {
  * @param low Whether it's active-low where nothing says: true for the SCI, false for ISA's.
  * @return The GSI and how it signals.
  */
-route_isa :: fn(madt: ptr[Madt], irq: u32, level: bool, low: bool) -> Signaling {
+route_isa :: fn(madt : ptr[Madt], irq : u32, level : bool, low : bool) -> Signaling {
     for override, i in madt.overrides {
         if i >= madt.override_count {
             break
@@ -205,8 +220,11 @@ route_isa :: fn(madt: ptr[Madt], irq: u32, level: bool, low: bool) -> Signaling 
         if cast[u32](override.source) == irq && irq < 16 {
             polarity :: override.flags & 3
             trigger :: (override.flags >> 2) & 3
-            return Signaling.{gsi = override.gsi, level = if trigger == 0 { level } else { trigger == 3 },
-                low = if polarity == 0 { low } else { polarity == 3 }}
+            return Signaling.{
+                gsi = override.gsi,
+                level = if trigger == 0 { level } else { trigger == 3 },
+                low = if polarity == 0 { low } else { polarity == 3 },
+            }
         }
     }
     return Signaling.{gsi = irq, level = level, low = low}
@@ -220,7 +238,7 @@ route_isa :: fn(madt: ptr[Madt], irq: u32, level: bool, low: bool) -> Signaling 
  * @param count Its bytes, 1 to 8.
  * @return The integer; bytes past the table read as 0.
  */
-little :: fn(table: u8[], offset: u64, count: u64) -> u64 {
+little :: fn(table : u8[], offset : u64, count : u64) -> u64 {
     value : u64 = 0
     for i in 0..<count {
         at :: offset + i
@@ -240,7 +258,7 @@ little :: fn(table: u8[], offset: u64, count: u64) -> u64 {
  * @param copy The copy, all of it.
  * @return Its entries; empty if it isn't one.
  */
-entries_of :: fn(copy: u8[]) -> slop_os.FirmwareTable[] {
+entries_of :: fn(copy : u8[]) -> slop_os.FirmwareTable[] {
     header :: size_of(slop_os.FirmwareTables)
     none :: view_of(cast[ptr[slop_os.FirmwareTable]](null), 0)
     if copy.count <= header {
@@ -262,7 +280,7 @@ entries_of :: fn(copy: u8[]) -> slop_os.FirmwareTable[] {
  * @param entry One of its entries.
  * @return The table's bytes, a view into copy; empty if the entry runs past it.
  */
-table_of :: fn(copy: u8[], entry: ptr[slop_os.FirmwareTable]) -> u8[] {
+table_of :: fn(copy : u8[], entry : ptr[slop_os.FirmwareTable]) -> u8[] {
     start :: entry.offset
     stop :: entry.offset + cast[u64](entry.size)
     if start > stop || stop > cast[u64](copy.count) {
@@ -283,7 +301,7 @@ table_of :: fn(copy: u8[], entry: ptr[slop_os.FirmwareTable]) -> u8[] {
  * @param signature Four characters, as "FACP".
  * @return True if they're its signature's.
  */
-is_table :: fn(entry: ptr[slop_os.FirmwareTable], signature: string) -> bool {
+is_table :: fn(entry : ptr[slop_os.FirmwareTable], signature : string) -> bool {
     bytes :: string_bytes(signature)
     if bytes.count != 4 {
         return false
@@ -303,7 +321,7 @@ is_table :: fn(entry: ptr[slop_os.FirmwareTable], signature: string) -> bool {
  * @param signature Four characters.
  * @return Its bytes, a view into copy; empty if there's none.
  */
-first_table :: fn(copy: u8[], signature: string) -> u8[] {
+first_table :: fn(copy : u8[], signature : string) -> u8[] {
     for &entry in entries_of(copy) {
         if is_table(entry, signature) {
             return table_of(copy, entry)

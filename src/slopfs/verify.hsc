@@ -72,7 +72,7 @@ Walk :: struct {
  * @param walk The walk that stopped.
  * @return OutOfMemory if it ran out of memory; Unreadable for anything else, what it couldn't read.
  */
-stopped :: fn(walk: ptr[Walk]) -> Problem {
+stopped :: fn(walk : ptr[Walk]) -> Problem {
     return if walk.short { Problem.OutOfMemory } else { Problem.Unreadable }
 }
 
@@ -83,7 +83,7 @@ stopped :: fn(walk: ptr[Walk]) -> Problem {
  * @param used The extent in use, with its owner.
  * @return True if it was kept; false, the walk marked short, without the memory for it.
  */
-add_used :: fn(walk: ptr[mut Walk], used: Used) -> bool {
+add_used :: fn(walk : ptr[mut Walk], used : Used) -> bool {
     if runtime.array_try_add(&walk.used, used) != null {
         walk.short = true
         return false
@@ -109,7 +109,7 @@ add_used :: fn(walk: ptr[mut Walk], used: Used) -> bool {
  * @error Owners The owners tree doesn't list exactly the extents in use, with their lengths and owners.
  * @error OutOfMemory There wasn't the memory to keep what the walk found.
  */
-verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
+verify :: fn(container : ptr[mut Container]) -> Result[Report, Problem] {
     walk := Walk.{}
     defer runtime.array_free(&walk.used)
     defer maps.map_free(&walk.seen)
@@ -229,7 +229,12 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
     index : usize = 0
     loop {
         found := Found.{}
-        match tree_next(&container.nodes, &container.owners, owner_at, view_of(cast[ptr[mut u8]](&owner_value), size_of(OwnerValue))) {
+        match tree_next(
+            &container.nodes,
+            &container.owners,
+            owner_at,
+            view_of(cast[ptr[mut u8]](&owner_value), size_of(OwnerValue))
+        ) {
             case Ok(next_owner) => found = next_owner or_break
             case Error(error) => return .Error(stopped(&walk))
         }
@@ -237,7 +242,9 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
             return .Error(.Owners)
         }
         used :: walk.used[index]
-        if found.key.object != used.start || cast[u64](owner_value.blocks) != used.blocks || cast[u64](owner_value.volume) != used.owner {
+        if found.key.object != used.start
+            || cast[u64](owner_value.blocks) != used.blocks
+            || cast[u64](owner_value.volume) != used.owner {
             return .Error(.Owners)
         }
         index += 1
@@ -257,12 +264,17 @@ verify :: fn(container: ptr[mut Container]) -> Result[Report, Problem] {
  * @param owner The volume, a locked one whose tree can't be read.
  * @return True if they were kept; false if the owners tree couldn't be read, or there wasn't the memory.
  */
-add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) -> bool {
+add_owned :: fn(container : ptr[mut Container], walk : ptr[mut Walk], owner : u64) -> bool {
     value := OwnerValue.{}
     at := Key.{}
     loop {
         found := Found.{}
-        match tree_next(&container.nodes, &container.owners, at, view_of(cast[ptr[mut u8]](&value), size_of(OwnerValue))) {
+        match tree_next(
+            &container.nodes,
+            &container.owners,
+            at,
+            view_of(cast[ptr[mut u8]](&value), size_of(OwnerValue))
+        ) {
             case Ok(next) => found = next or_break
             case Error(error) => return false
         }
@@ -284,7 +296,7 @@ add_owned :: fn(container: ptr[mut Container], walk: ptr[mut Walk], owner: u64) 
  * @param tree The tree; an empty one has nothing to walk.
  * @return True if it was walked; false if a node couldn't be read or didn't check out, or there wasn't the memory.
  */
-walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tree]) -> bool {
+walk_tree :: fn(container : ptr[mut Container], walk : ptr[mut Walk], tree : ptr[Tree]) -> bool {
     if cast[u64](tree.root.address) == 0 {
         return true
     }
@@ -298,7 +310,7 @@ walk_tree :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
  * @param start The extent's first block.
  * @return True the first time; false after, or without the memory to note it, which marks the walk short.
  */
-first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
+first_time :: fn(walk : ptr[mut Walk], start : u64) -> bool {
     if maps.map_get(&walk.seen, start) is_some {
         return false
     }
@@ -320,7 +332,13 @@ first_time :: fn(walk: ptr[mut Walk], start: u64) -> bool {
  * @return True if it and everything beneath it was walked; false if a node couldn't be read or didn't check out, or
  *     there wasn't the memory.
  */
-walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tree], pointer: ptr[BlockPointer], above: u16) -> bool {
+walk_node :: fn(
+    container : ptr[mut Container],
+    walk : ptr[mut Walk],
+    tree : ptr[Tree],
+    pointer : ptr[BlockPointer],
+    above : u16
+) -> bool {
     // A node another tree has is the same below, copy-on-write: walked once
     if !first_time(walk, cast[u64](pointer.address)) {
         return true
@@ -335,7 +353,8 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
     if !add_used(walk, Used.{start = cast[u64](pointer.address), blocks = NODE_BLOCKS, owner = owner}) {
         return false
     }
-    if cast[u64](pointer.copy) != 0 && !add_used(walk, Used.{start = cast[u64](pointer.copy), blocks = NODE_BLOCKS, owner = owner}) {
+    if cast[u64](pointer.copy) != 0
+        && !add_used(walk, Used.{start = cast[u64](pointer.copy), blocks = NODE_BLOCKS, owner = owner}) {
         return false
     }
     if level_of(node) > 0 {
@@ -357,10 +376,17 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
             continue
         }
         extent :: cast[ptr[ExtentRecord]](&value[0])
-        if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) && first_time(walk, cast[u64](extent.pointer.address)) {
+        if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks)
+            && first_time(walk, cast[u64](extent.pointer.address)) {
             walk.report.chunks += 1
-            if !add_used(walk, Used.{start = cast[u64](extent.pointer.address), blocks = cast[u64](cast[u32](extent.pointer.blocks)),
-                owner = owner_at(tree, cast[u64](extent.pointer.birth))}) {
+            if !add_used(
+                walk,
+                Used.{
+                    start = cast[u64](extent.pointer.address),
+                    blocks = cast[u64](cast[u32](extent.pointer.blocks)),
+                    owner = owner_at(tree, cast[u64](extent.pointer.birth)),
+                }
+            ) {
                 return false
             }
         }
@@ -373,7 +399,7 @@ walk_node :: fn(container: ptr[mut Container], walk: ptr[mut Walk], tree: ptr[Tr
  *
  * @param used The extents, sorted in place.
  */
-sort_used :: fn(used: mut Used[]) {
+sort_used :: fn(used : mut Used[]) {
     gap := used.count / 2
     loop {
         for i in gap..<used.count {

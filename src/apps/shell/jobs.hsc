@@ -1,12 +1,12 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import terminal from "std:terminal"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
 import lifecycle from "std:os/slop_os/lifecycle"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import shell_language as language from "../../shell_language"
 
 /*
  * Jobs (design/shell.md §6, decisions/0174): the programs a line runs together. One runs in the foreground while the
@@ -53,7 +53,7 @@ Job :: struct {
  * @param shell The shell, whose terminal client's port it is.
  * @return The port, the terminal client's own.
  */
-watch_port :: fn(shell: ptr[Shell]) -> slop_os.Port {
+watch_port :: fn(shell : ptr[Shell]) -> slop_os.Port {
     return shell.console.port
 }
 
@@ -66,7 +66,7 @@ watch_port :: fn(shell: ptr[Shell]) -> slop_os.Port {
  * @param packets The packets; the terminal client's own, under keys below FIRST_KEY, are skipped.
  * @param taken How many of packets the wait filled in, from the first.
  */
-take_packets :: fn(shell: ptr[mut Shell], packets: slop_os.Packet[], taken: usize) {
+take_packets :: fn(shell : ptr[mut Shell], packets : slop_os.Packet[], taken : usize) {
     for packet, i in packets {
         if i < taken && packet.kind == .Stop && packet.key >= FAULT_KEY {
             take_faults(shell, packet.key - FAULT_KEY)
@@ -93,7 +93,7 @@ take_packets :: fn(shell: ptr[mut Shell], packets: slop_os.Packet[], taken: usiz
  * @param shell The shell, whose jobs are looked in.
  * @param first_key The job's first key; nothing's read for one no job has.
  */
-read_job_output :: fn(shell: ptr[mut Shell], first_key: u64) {
+read_job_output :: fn(shell : ptr[mut Shell], first_key : u64) {
     for job in shell.jobs {
         if job.running.first_key != first_key || job.running.calls.count == 0 {
             continue
@@ -111,7 +111,7 @@ read_job_output :: fn(shell: ptr[mut Shell], first_key: u64) {
  * @param shell The shell, among whose foreground's and jobs' calls the program's is found by its key.
  * @param key The key the program's end is watched under.
  */
-read_progress :: fn(shell: ptr[mut Shell], key: u64) {
+read_progress :: fn(shell : ptr[mut Shell], key : u64) {
     call :: call_watched(shell, key) or_return void
     loop {
         reply :: lifecycle.read(call.lifecycle) or_break
@@ -129,7 +129,7 @@ read_progress :: fn(shell: ptr[mut Shell], key: u64) {
  * @param key The key.
  * @return The program's call; null if none running has the key.
  */
-call_watched :: fn(shell: ptr[mut Shell], key: u64) -> ptr[mut Call]? {
+call_watched :: fn(shell : ptr[mut Shell], key : u64) -> ptr[mut Call]? {
     match shell.foreground {
         case Some(running) => {
             for call in running.calls {
@@ -157,7 +157,7 @@ call_watched :: fn(shell: ptr[mut Shell], key: u64) -> ptr[mut Call]? {
  * @param call The program's call; one not started has nothing to end, and counts as ended.
  * @return True if it's ended, or never started, or its end was waited for already.
  */
-has_ended :: fn(shell: ptr[Shell], call: ptr[Call]) -> bool {
+has_ended :: fn(shell : ptr[Shell], call : ptr[Call]) -> bool {
     if !call.started || call.waited {
         return true
     }
@@ -177,7 +177,7 @@ has_ended :: fn(shell: ptr[Shell], call: ptr[Call]) -> bool {
  * @param shell The shell, whose terminal is asked for an Interrupt without waiting, and shows the progress.
  * @param running The programs waited for, which Ctrl-C stops.
  */
-attend :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
+attend :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
     // A program on the terminal has the input, Ctrl-C with it
     if !running.terminal && running.stop_by == 0 && terminal.interrupted(&shell.console) {
         _ = terminal.write_line(&shell.console, "^C")
@@ -196,7 +196,7 @@ attend :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
  * @param shell The shell, whose ended says which have ended already, and aren't asked.
  * @param running The programs; their stop_by is set, once.
  */
-stop_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
+stop_running :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
     if running.stop_by != 0 {
         return void
     }
@@ -214,7 +214,7 @@ stop_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
  * @param shell The shell, whose ended says which have ended already.
  * @param running The programs; once killed, their ends come as any other's do, as killed.
  */
-kill_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
+kill_running :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
     for call in running.calls {
         if !has_ended(shell, call) {
             runtime.log_info("% didn't stop in time, so it's killed", call.tree.text)
@@ -231,7 +231,7 @@ kill_running :: fn(shell: ptr[mut Shell], running: ptr[mut Running]) {
  * @param shell The shell, whose terminal shows it.
  * @param running The programs, whose calls' progress is shown.
  */
-show_progress :: fn(shell: ptr[mut Shell], running: ptr[Running]) {
+show_progress :: fn(shell : ptr[mut Shell], running : ptr[Running]) {
     storage : u8[256]
     out := text_buffer.make(storage)
     progress_text(&out, running)
@@ -247,7 +247,7 @@ show_progress :: fn(shell: ptr[mut Shell], running: ptr[Running]) {
  * @param out The text appended to; nothing's appended if none has.
  * @param running The programs.
  */
-progress_text :: fn(out: ptr[mut text_buffer.TextBuffer], running: ptr[Running]) {
+progress_text :: fn(out : ptr[mut text_buffer.TextBuffer], running : ptr[Running]) {
     for call in running.calls {
         if !call.reporting {
             continue
@@ -271,7 +271,7 @@ progress_text :: fn(out: ptr[mut text_buffer.TextBuffer], running: ptr[Running])
  * @param running The programs it's among, which Ctrl-C stops.
  * @return The program's exit code; null if the port couldn't be waited on, so its end can't be seen.
  */
-wait_for :: fn(shell: ptr[mut Shell], key: u64, running: ptr[mut Running]) -> u64? {
+wait_for :: fn(shell : ptr[mut Shell], key : u64, running : ptr[mut Running]) -> u64? {
     loop {
         for each, i in shell.ended {
             if each.key == key {
@@ -281,7 +281,12 @@ wait_for :: fn(shell: ptr[mut Shell], key: u64, running: ptr[mut Running]) -> u6
             }
         }
         attend(shell, running)
-        deadline :: if running.stop_by != 0 && running.stop_by != slop_os.NO_DEADLINE { running.stop_by } else { slop_os.NO_DEADLINE }
+        deadline :: if running.stop_by != 0 && running.stop_by != slop_os.NO_DEADLINE {
+            running.stop_by
+        }
+        else {
+            slop_os.NO_DEADLINE
+        }
         packets : slop_os.Packet[8]
         taken :: match slop_os.port_wait(watch_port(shell), packets, deadline) {
             case Ok(count) => count
@@ -299,7 +304,7 @@ wait_for :: fn(shell: ptr[mut Shell], key: u64, running: ptr[mut Running]) -> u6
  * @param running The programs the end's from, which Ctrl-C stops.
  * @param end The end, which stays the caller's; a port is bound to it while this waits, and closed after.
  */
-wait_readable :: fn(shell: ptr[mut Shell], running: ptr[mut Running], end: slop_os.Channel) {
+wait_readable :: fn(shell : ptr[mut Shell], running : ptr[mut Running], end : slop_os.Channel) {
     port :: os.port_for(slop_os.startup_block().budget, end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     loop {
@@ -318,7 +323,7 @@ wait_readable :: fn(shell: ptr[mut Shell], running: ptr[mut Running], end: slop_
  * @param shell The shell, whose ended and progress take the packet, and whose terminal says which jobs have ended.
  * @param packet The packet.
  */
-take_while_reading :: fn(shell: ptr[mut Shell], packet: slop_os.Packet) {
+take_while_reading :: fn(shell : ptr[mut Shell], packet : slop_os.Packet) {
     packets :: slop_os.Packet.[packet]
     take_packets(shell, packets, 1)
     for &job in shell.jobs {
@@ -345,7 +350,7 @@ MAX_JOB_RECORDS :: 10000
  * @param job The job, its programs ended.
  * @return The line, on the heap, never freed.
  */
-ended_text :: fn(job: Job) -> string {
+ended_text :: fn(job : Job) -> string {
     kept :: match job.running.collected {
         case Some(list) => list.items.count
         case None => cast[usize](0)
@@ -356,8 +361,12 @@ ended_text :: fn(job: Job) -> string {
     if job.running.dropped == 0 {
         return message("[%1] ended, with %2 records: wait %1 for them", job.number, kept)
     }
-    return message("[%1] ended, with %2 records, the first %3 kept: wait %1 for them", job.number,
-        cast[u64](kept) + job.running.dropped, kept)
+    return message(
+        "[%1] ended, with %2 records, the first %3 kept: wait %1 for them",
+        job.number,
+        cast[u64](kept) + job.running.dropped,
+        kept
+    )
 }
 
 // ---- Jobs in the background
@@ -372,7 +381,7 @@ ended_text :: fn(job: Job) -> string {
  * @param tree The Background node, its child the call or pipeline.
  * @return Null once it's started; an error for anything but programs, or the start's.
  */
-start_job :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+start_job :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     inner :: first_child(tree) or_return error_at(tree.at, "& needs a command before it")
     trees : ptr[Node][..]
     defer runtime.array_free(&trees)
@@ -394,7 +403,13 @@ start_job :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Val
     // Its output read as it's written, so it never waits for wait
     if running.from != NO_END {
         signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-        _ = slop_os.port_bind(watch_port(shell), cast[slop_os.Handle](running.from), signals, running.first_key + OUTPUT_KEY, .Persistent)
+        _ = slop_os.port_bind(
+            watch_port(shell),
+            cast[slop_os.Handle](running.from),
+            signals,
+            running.first_key + OUTPUT_KEY,
+            .Persistent
+        )
     }
     shell.last_job += 1
     runtime.array_add(&shell.jobs, Job.{number = shell.last_job, running = running})
@@ -410,7 +425,7 @@ start_job :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Val
  * @param tree The Call node of jobs, which takes nothing.
  * @return Null.
  */
-list_jobs :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+list_jobs :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 0 {
         return error_at(tree.at, "jobs takes nothing")
     }
@@ -453,7 +468,7 @@ list_jobs :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
  * @return The job's index in the shell's jobs; an error for more than one argument, one that isn't a number, or a
  *     number no job has.
  */
-job_named :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[usize, EvalError] {
+job_named :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[usize, EvalError] {
     if tree.children.count > 1 {
         return .Error(EvalError.{message = message("% takes a job's number", tree.text), at = tree.at})
     }
@@ -461,10 +476,17 @@ job_named :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[usize, EvalErr
         return .Error(EvalError.{message = "there are no jobs", at = tree.at})
     }
     argument :: first_child(tree) or_return .Ok(shell.jobs.count - 1)
-    given :: if argument.kind == .Word { word_as("int", argument.text) or_else Value.Null } else { evaluate(shell, argument)? }
+    given :: if argument.kind == .Word {
+        word_as("int", argument.text) or_else Value.Null
+    }
+    else {
+        evaluate(shell, argument)?
+    }
     number :: match given {
         case Int(value) => value
-        case _ => return .Error(EvalError.{message = message("% takes a job's number, not %", tree.text, argument.text), at = argument.at})
+        case _ => return .Error(
+            EvalError.{message = message("% takes a job's number, not %", tree.text, argument.text), at = argument.at}
+        )
     }
     for job, i in shell.jobs {
         if cast[i64](job.number) == number {
@@ -482,7 +504,7 @@ job_named :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[usize, EvalErr
  * @param tree The Call node of wait.
  * @return What its last program wrote, a list of records, or Null without an output; or its first program's error.
  */
-wait_job :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+wait_job :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     index :: job_named(shell, tree)?
     if index >= shell.jobs.count {
         return error_at(tree.at, "there's no such job")
@@ -501,7 +523,7 @@ wait_job :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErro
  * @param tree The Call node of stop.
  * @return Null.
  */
-stop_job :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+stop_job :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     index :: job_named(shell, tree)?
     if index >= shell.jobs.count {
         return error_at(tree.at, "there's no such job")

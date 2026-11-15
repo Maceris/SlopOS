@@ -2,8 +2,8 @@ package arch_x86_64
 
 import x86_64 from "base:intrinsics/x86_64"
 import runtime from "base:runtime"
-import arch_interface from "../../arch_interface"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../../arch_interface"
 
 /*
  * User-mode registers (arch_interface, User State): a thread's RegisterFrame, as entries save it and
@@ -22,7 +22,7 @@ USER_RFLAGS : u64 : 0x202
  * @param registers The thread's registers, all of them overwritten.
  * @param start Where the thread starts, in user addresses, and the argument it gets; not checked here.
  */
-init_user_registers :: fn(registers: ptr[mut UserRegisters], start: ptr[arch_interface.UserStart]) {
+init_user_registers :: fn(registers : ptr[mut UserRegisters], start : ptr[arch_interface.UserStart]) {
     registers.frame = x86_64.RegisterFrame.{}
     registers.frame.rip = cast[u64](start.instruction_pointer)
     registers.frame.rsp = cast[u64](start.stack_pointer)
@@ -38,7 +38,7 @@ init_user_registers :: fn(registers: ptr[mut UserRegisters], start: ptr[arch_int
  * @param registers The registers SYSCALL's entry saved.
  * @return rax, the number, as user mode put it there; not checked.
  */
-syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
+syscall_number :: fn(registers : ptr[UserRegisters]) -> u64 {
     return registers.frame.rax
 }
 
@@ -49,7 +49,7 @@ syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
  * @param index Which argument, 0 to 5: rdi, rsi, rdx, r10, r8 and r9, r10 in rcx's place since SYSCALL takes rcx.
  * @return The argument register's value, or 0 for an index past 5.
  */
-syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
+syscall_argument :: fn(registers : ptr[UserRegisters], index : u32) -> u64 {
     frame :: &registers.frame
     return match index {
         case 0 => frame.rdi
@@ -68,7 +68,7 @@ syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
  * @param registers The registers SYSCALL's entry saved, whose rax, rdx and r8 are set.
  * @param result The result: its tag goes in rax, its values in rdx and r8.
  */
-set_syscall_result :: fn(registers: ptr[mut UserRegisters], result: ptr[arch_interface.SyscallResult]) {
+set_syscall_result :: fn(registers : ptr[mut UserRegisters], result : ptr[arch_interface.SyscallResult]) {
     registers.frame.rax = result.tag
     registers.frame.rdx = result.values[0]
     registers.frame.r8 = result.values[1]
@@ -80,7 +80,7 @@ set_syscall_result :: fn(registers: ptr[mut UserRegisters], result: ptr[arch_int
  * @param registers The registers an entry saved.
  * @return rip, a user address.
  */
-instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.VirtualAddress {
+instruction_pointer :: fn(registers : ptr[UserRegisters]) -> arch_interface.VirtualAddress {
     return cast[arch_interface.VirtualAddress](registers.frame.rip)
 }
 
@@ -99,7 +99,7 @@ SYSCALL_LENGTH : u64 : 2
  * @param registers The registers SYSCALL's entry saved, whose rip is after the SYSCALL; its other registers have to
  *     still hold the call's number and arguments.
  */
-restart_syscall :: fn(registers: ptr[mut UserRegisters]) {
+restart_syscall :: fn(registers : ptr[mut UserRegisters]) {
     registers.frame.rip -= SYSCALL_LENGTH
 }
 
@@ -132,7 +132,7 @@ user_register_count :: fn() -> u32 {
  * @param index Which register, 0 to 17: rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 to r15, rip, rflags.
  * @return The register's value, or 0 for an index past 17.
  */
-get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
+get_user_register :: fn(registers : ptr[UserRegisters], index : u32) -> u64 {
     frame :: &registers.frame
     return match index {
         case 0 => frame.rax
@@ -167,7 +167,7 @@ get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
  *     USER_CHANGEABLE_FLAGS are taken; the others keep what they had.
  * @return True if it was set; false for an index past 17, or rsp or rip outside user addresses, and nothing changed.
  */
-set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u64) -> bool {
+set_user_register :: fn(registers : ptr[mut UserRegisters], index : u32, value : u64) -> bool {
     frame :: &registers.frame
     low, high :: user_address_range()
     // Returning to a non-canonical or kernel address would fault in the kernel, by sysretq
@@ -203,7 +203,7 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
  *
  * @param registers The registers to load, which have to be user mode's: user segments and user addresses.
  */
-return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
+return_to_user :: fn(registers : ptr[UserRegisters]) #never_returns {
     x86_64.return_to_user(&registers.frame)
 }
 
@@ -239,7 +239,12 @@ DebugRegisters :: struct {
  * @return False, changing nothing, for more than four slots, an address outside user memory, or a data slot whose
  *     size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it.
  */
-set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters], step: bool, slots: slop_os.DebugSlot[]) -> bool {
+set_debug :: fn(
+    debug : ptr[mut DebugRegisters],
+    registers : ptr[mut UserRegisters],
+    step : bool,
+    slots : slop_os.DebugSlot[]
+) -> bool {
     made := DebugRegisters.{}
     low, high :: user_address_range()
     for slot, i in slots {
@@ -285,7 +290,7 @@ set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters
  * @param debug The thread's state; with no slot used, nothing's loaded.
  * @param registers Not used: TF is in the saved flags.
  */
-debug_on :: fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) {
+debug_on :: fn(debug : ptr[DebugRegisters], registers : ptr[mut UserRegisters]) {
     if debug.control == 0 {
         return void
     }
@@ -349,7 +354,7 @@ TSC_AUX_MSR : u32 : 0xc0000103
  *
  * @param trapped Whether they trap.
  */
-set_counter_trap :: fn(trapped: bool) {
+set_counter_trap :: fn(trapped : bool) {
     cpu :: current_cpu()
     if cpu.counter_trapped == trapped {
         return void
@@ -367,7 +372,7 @@ set_counter_trap :: fn(trapped: bool) {
  * @param instruction Its first bytes, little-endian.
  * @return The counter; null for any other instruction.
  */
-emulate_counter_read :: fn(registers: ptr[mut UserRegisters], instruction: u32) -> u64? {
+emulate_counter_read :: fn(registers : ptr[mut UserRegisters], instruction : u32) -> u64? {
     length : u64 = 0
     if instruction & 0xffff == 0x310f {
         length = 2

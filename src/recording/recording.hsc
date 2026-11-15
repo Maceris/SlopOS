@@ -24,21 +24,26 @@ package recording
 import compiler from "base:compiler"
 import runtime from "base:runtime"
 import os from "std:os"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 
 /** The most threads a recording follows; a program that starts more ends the recording. */
 MAX_THREADS :: 32
 /** The most bytes of one buffer a call reads or writes that are recorded; a bigger one ends the recording. */
 MAX_BUFFER : u64 : 1 << 20
-/** How long a replay waits for a thread to come to its next event before it's taken as diverged, in nanoseconds: 5 s. */
+/**
+ * How long a replay waits for a thread to come to its next event before it's taken as diverged, in nanoseconds: 5 s.
+ */
 REPLAY_WAIT : u64 : 5_000_000_000
 /** No thread. */
 NO_THREAD : u32 : 0xffffffff
 /** A pointer's buffer, which has no count word. */
 NO_COUNT : u32 : 0xffffffff
 /** The STOP_ points a recording's intercept stops at, which its launch attaches (os.LaunchFaults.points). */
-RECORDING_POINTS : u32 : slop_os.STOP_SYSCALL_ENTRY | slop_os.STOP_SYSCALL_EXIT | slop_os.STOP_FAULT | slop_os.STOP_ALL_CALLS
+RECORDING_POINTS : u32 : slop_os.STOP_SYSCALL_ENTRY
+    | slop_os.STOP_SYSCALL_EXIT
+    | slop_os.STOP_FAULT
+    | slop_os.STOP_ALL_CALLS
     | slop_os.STOP_THREAD_START
 
 #if TARGET_ARCH == .arm64 {
@@ -109,7 +114,11 @@ call_shapes :: fn() -> CallShape[] {
             continue
         }
         function :: cast[ptr[compiler.TypeInfoFunction]](member.member_type)
-        shape := CallShape.{name = member.name, never_returns = function.never_returns, answered = is_answered(member.name)}
+        shape := CallShape.{
+            name = member.name,
+            never_returns = function.never_returns,
+            answered = is_answered(member.name),
+        }
         shape.returns_handle = function.output.count > 0 && gives_handle(function.output[0].type)
         word : u32 = 0
         for input in function.input {
@@ -160,16 +169,21 @@ call_shapes :: fn() -> CallShape[] {
  * @param name The call's name.
  * @return True if it's answered; false if it runs again.
  */
-is_answered :: fn(name: string) -> bool {
+is_answered :: fn(name : string) -> bool {
     /*
-     * Those that make them run again; so does staging handles to send, which moves them out of the program's table as it
-     * did when recorded, so the handles it's given later are numbered as they were. Nothing staged goes anywhere without
+     * Those that make them run again; so does staging handles to send, which moves them out of the program's table as
+     * it
+     * did when recorded, so the handles it's given later are numbered as they were. Nothing staged goes anywhere
+     * without
      * the write, which is answered
      */
     if name == "channel_create" || name == "port_create" || name == "channel_send_handles" {
         return false
     }
-    return starts_with(name, "channel_") || starts_with(name, "port_") || starts_with(name, "clock_") || name == "debug_log_write"
+    return starts_with(name, "channel_")
+        || starts_with(name, "port_")
+        || starts_with(name, "clock_")
+        || name == "debug_log_write"
 }
 
 /**
@@ -178,7 +192,7 @@ is_answered :: fn(name: string) -> bool {
  * @param type The type.
  * @return True for a handle.
  */
-is_handle :: fn(type: ptr[compiler.TypeInfo]) -> bool {
+is_handle :: fn(type : ptr[compiler.TypeInfo]) -> bool {
     at := type
     for i in 0..<16 {
         if at.variant != .ALIAS {
@@ -199,7 +213,7 @@ is_handle :: fn(type: ptr[compiler.TypeInfo]) -> bool {
  * @param type The result's type.
  * @return True if its Ok's value is a handle.
  */
-gives_handle :: fn(type: ptr[compiler.TypeInfo]) -> bool {
+gives_handle :: fn(type : ptr[compiler.TypeInfo]) -> bool {
     base :: underlying(type)
     if base.variant != .UNION {
         return false
@@ -220,7 +234,7 @@ gives_handle :: fn(type: ptr[compiler.TypeInfo]) -> bool {
  * @param count How many it has, one more after.
  * @param buffer The buffer.
  */
-add_buffer :: fn(buffers: ptr[mut Buffer[6]], count: ptr[mut u32], buffer: Buffer) {
+add_buffer :: fn(buffers : ptr[mut Buffer[6]], count : ptr[mut u32], buffer : Buffer) {
     slot :: cast[usize](count^)
     if slot < buffers^.count {
         buffers^[slot] = buffer
@@ -234,7 +248,7 @@ add_buffer :: fn(buffers: ptr[mut Buffer[6]], count: ptr[mut u32], buffer: Buffe
  * @param type The type.
  * @return The first that isn't an alias, at most 16 deep.
  */
-underlying :: fn(type: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
+underlying :: fn(type : ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
     current := type
     for depth in 0..<16 {
         if current.variant != .ALIAS {
@@ -252,7 +266,7 @@ underlying :: fn(type: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
  * @param start What it may start with.
  * @return True if it does.
  */
-starts_with :: fn(text: string, start: string) -> bool {
+starts_with :: fn(text : string, start : string) -> bool {
     bytes :: string_bytes(text)
     wanted :: string_bytes(start)
     if wanted.count > bytes.count {
@@ -296,7 +310,10 @@ Event :: struct {
     results : u64[3],
     /** Counter's value, or End's code. */
     value : u64,
-    /** Where its bytes start in the recording's bytes: Enter's read buffers', Leave's written buffers', one after another. */
+    /**
+     * Where its bytes start in the recording's bytes: Enter's read buffers', Leave's written buffers', one after
+     * another.
+     */
     bytes_at : usize,
     /** How many bytes it has. */
     bytes_count : usize,
@@ -328,13 +345,13 @@ RecordingFile :: struct {
 /** An event as a file keeps it: plain data, its kind a number, as a typed file's lists can only hold. */
 StoredEvent :: struct {
     /** Its kind, EventKind's value. */
-    kind : u32,
-    thread : u32,
-    number : u32,
-    words : u64[6],
-    results : u64[3],
-    value : u64,
-    bytes_at : u64,
+    kind        : u32,
+    thread      : u32,
+    number      : u32,
+    words       : u64[6],
+    results     : u64[3],
+    value       : u64,
+    bytes_at    : u64,
     bytes_count : u64,
 }
 
@@ -344,9 +361,17 @@ StoredEvent :: struct {
  * @param event The event.
  * @return It, as plain data.
  */
-stored_of :: fn(event: Event) -> StoredEvent {
-    return StoredEvent.{kind = cast[u32](event.kind), thread = event.thread, number = event.number, words = event.words,
-        results = event.results, value = event.value, bytes_at = cast[u64](event.bytes_at), bytes_count = cast[u64](event.bytes_count)}
+stored_of :: fn(event : Event) -> StoredEvent {
+    return StoredEvent.{
+        kind = cast[u32](event.kind),
+        thread = event.thread,
+        number = event.number,
+        words = event.words,
+        results = event.results,
+        value = event.value,
+        bytes_at = cast[u64](event.bytes_at),
+        bytes_count = cast[u64](event.bytes_count),
+    }
 }
 
 /**
@@ -355,12 +380,20 @@ stored_of :: fn(event: Event) -> StoredEvent {
  * @param stored The event, as the file kept it.
  * @return It; null for a kind that isn't one.
  */
-event_of :: fn(stored: StoredEvent) -> Event? {
+event_of :: fn(stored : StoredEvent) -> Event? {
     if stored.kind > cast[u32](EventKind.End) {
         return null
     }
-    return Event.{kind = cast[EventKind](stored.kind), thread = stored.thread, number = stored.number, words = stored.words,
-        results = stored.results, value = stored.value, bytes_at = cast[usize](stored.bytes_at), bytes_count = cast[usize](stored.bytes_count)}
+    return Event.{
+        kind = cast[EventKind](stored.kind),
+        thread = stored.thread,
+        number = stored.number,
+        words = stored.words,
+        results = stored.results,
+        value = stored.value,
+        bytes_at = cast[usize](stored.bytes_at),
+        bytes_count = cast[usize](stored.bytes_count),
+    }
 }
 
 /** A recording: its events, their bytes, and what the program was started with. */
@@ -391,7 +424,9 @@ Followed :: struct {
     answered : bool,
 }
 
-/** A recorder's or replayer's hold on a program: its process, intercept, space and the port its stops and end come on. */
+/**
+ * A recorder's or replayer's hold on a program: its process, intercept, space and the port its stops and end come on.
+ */
 Program :: struct {
     /** Its process, with every right. */
     process : slop_os.Process,
@@ -414,7 +449,7 @@ Program :: struct {
  * @param seeds The seeds it was built with, kept in the recording.
  * @return The recording, on the heap; its problem says why it stopped short, if it did, the program killed then.
  */
-record :: fn(program: Program, shapes: CallShape[], seeds: u8[64]) -> ptr[mut Recording] {
+record :: fn(program : Program, shapes : CallShape[], seeds : u8[64]) -> ptr[mut Recording] {
     recording := runtime.new(Recording)
     recording.seeds = seeds
     _ = slop_os.process_set_traps(program.process, slop_os.TRAP_COUNTER)
@@ -458,7 +493,11 @@ record :: fn(program: Program, shapes: CallShape[], seeds: u8[64]) -> ptr[mut Re
                 shape :: &shapes[cast[usize](event.number)]
                 event.bytes_at = recording.bytes.count
                 if !read_buffers(program, recording, shape.inputs, shape.inputs_count, event.words) {
-                    return stopped_short(program, recording, "a call's buffer couldn't be read, or was too big to record")
+                    return stopped_short(
+                        program,
+                        recording,
+                        "a call's buffer couldn't be read, or was too big to record"
+                    )
                 }
                 event.bytes_count = recording.bytes.count - event.bytes_at
                 add_event(recording, event)
@@ -491,7 +530,11 @@ record :: fn(program: Program, shapes: CallShape[], seeds: u8[64]) -> ptr[mut Re
                 if cast[usize](followed.number) < shapes.count {
                     shape :: &shapes[cast[usize](followed.number)]
                     if !read_buffers(program, recording, shape.outputs, shape.outputs_count, followed.words) {
-                        return stopped_short(program, recording, "a call's buffer couldn't be read, or was too big to record")
+                        return stopped_short(
+                            program,
+                            recording,
+                            "a call's buffer couldn't be read, or was too big to record"
+                        )
                     }
                 }
                 event.bytes_count = recording.bytes.count - event.bytes_at
@@ -536,7 +579,7 @@ record :: fn(program: Program, shapes: CallShape[], seeds: u8[64]) -> ptr[mut Re
  * @param why Why, a sentence, kept.
  * @return The recording.
  */
-stopped_short :: fn(program: Program, recording: ptr[mut Recording], why #escaping : string) -> ptr[mut Recording] {
+stopped_short :: fn(program : Program, recording : ptr[mut Recording], why #escaping : string) -> ptr[mut Recording] {
     recording.problem = why
     _ = slop_os.process_kill(program.process)
     return recording
@@ -552,7 +595,13 @@ stopped_short :: fn(program: Program, recording: ptr[mut Recording], why #escapi
  * @param words The call's argument words, which say where they are and how big.
  * @return True once they're read; false if one couldn't be, or is past MAX_BUFFER.
  */
-read_buffers :: fn(program: Program, recording: ptr[mut Recording], buffers: Buffer[6], count: u32, words: u64[6]) -> bool {
+read_buffers :: fn(
+    program : Program,
+    recording : ptr[mut Recording],
+    buffers : Buffer[6],
+    count : u32,
+    words : u64[6]
+) -> bool {
     for buffer, n in buffers {
         if cast[u32](n) >= count {
             break
@@ -587,7 +636,7 @@ read_buffers :: fn(program: Program, recording: ptr[mut Recording], buffers: Buf
  * @param words The call's argument words.
  * @return Its count of elements times their size, or for a pointer, what it points to's size.
  */
-size_of_buffer :: fn(buffer: Buffer, words: u64[6]) -> u64 {
+size_of_buffer :: fn(buffer : Buffer, words : u64[6]) -> u64 {
     if buffer.count_word == NO_COUNT {
         return buffer.element
     }
@@ -604,7 +653,7 @@ size_of_buffer :: fn(buffer: Buffer, words: u64[6]) -> u64 {
  * @param recording The recording.
  * @param event The event.
  */
-add_event :: fn(recording: ptr[mut Recording], event: Event) {
+add_event :: fn(recording : ptr[mut Recording], event : Event) {
     runtime.array_add(&recording.events, event)
 }
 
@@ -616,7 +665,7 @@ add_event :: fn(recording: ptr[mut Recording], event: Event) {
  * @param id The kernel ID.
  * @return Its index; NO_THREAD if it isn't followed.
  */
-index_of :: fn(threads: ptr[Followed[MAX_THREADS]], count: u32, id: u64) -> u32 {
+index_of :: fn(threads : ptr[Followed[MAX_THREADS]], count : u32, id : u64) -> u32 {
     for followed, i in threads^ {
         if cast[u32](i) < count && followed.id == id {
             return cast[u32](i)
@@ -632,7 +681,7 @@ index_of :: fn(threads: ptr[Followed[MAX_THREADS]], count: u32, id: u64) -> u32 
  * @param count Its length, one more after, if there's room.
  * @param index The thread.
  */
-push :: fn(queue: ptr[mut u32[MAX_THREADS]], count: ptr[mut u32], index: u32) {
+push :: fn(queue : ptr[mut u32[MAX_THREADS]], count : ptr[mut u32], index : u32) {
     slot :: cast[usize](count^)
     if slot < queue^.count {
         queue^[slot] = index
@@ -647,7 +696,7 @@ push :: fn(queue: ptr[mut u32[MAX_THREADS]], count: ptr[mut u32], index: u32) {
  * @param count Its length, one less after.
  * @return The thread.
  */
-pop :: fn(queue: ptr[mut u32[MAX_THREADS]], count: ptr[mut u32]) -> u32 {
+pop :: fn(queue : ptr[mut u32[MAX_THREADS]], count : ptr[mut u32]) -> u32 {
     if count^ == 0 || queue^.count == 0 {
         return NO_THREAD
     }
@@ -680,7 +729,7 @@ Replayed :: struct {
  * @param recording The recording.
  * @return How it went; the program killed if it diverged.
  */
-replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -> Replayed {
+replay :: fn(program : Program, shapes : CallShape[], recording : ptr[Recording]) -> Replayed {
     _ = slop_os.process_set_traps(program.process, slop_os.TRAP_COUNTER)
     threads : Followed[MAX_THREADS]
     count : u32 = 0
@@ -697,8 +746,8 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
         }
         match event.kind {
             case .Start => {
-                stop :: wait_for(program, &stops, 0, true, .ThreadStart) or_return diverged(program, result,
-                    sentence("thread % didn't start", event.thread))
+                stop :: wait_for(program, &stops, 0, true, .ThreadStart)
+                    or_return diverged(program, result, sentence("thread % didn't start", event.thread))
                 if cast[usize](count) < threads.count {
                     threads[cast[usize](count)] = Followed.{id = stop.thread, number = NO_THREAD}
                     count += 1
@@ -706,11 +755,29 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
             }
             case .Enter => {
                 followed :: &threads[index % threads.count]
-                stop :: wait_for(program, &stops, followed.id, false, .SyscallEntry) or_return diverged(program, result,
-                    sentence("thread % didn't make call % (%) as recorded", event.thread, result.calls, name_of(shapes, event.number)))
+                stop :: wait_for(program, &stops, followed.id, false, .SyscallEntry)
+                    or_return diverged(
+                        program,
+                        result,
+                        sentence(
+                            "thread % didn't make call % (%) as recorded",
+                            event.thread,
+                            result.calls,
+                            name_of(shapes, event.number)
+                        )
+                    )
                 if stop.point != .SyscallEntry {
-                    return diverged(program, result, sentence("thread % was to make call % (%), but %", event.thread, result.calls,
-                        name_of(shapes, event.number), what_it_did(program, shapes, stop)))
+                    return diverged(
+                        program,
+                        result,
+                        sentence(
+                            "thread % was to make call % (%), but %",
+                            event.thread,
+                            result.calls,
+                            name_of(shapes, event.number),
+                            what_it_did(program, shapes, stop)
+                        )
+                    )
                 }
                 registers : u64[slop_os.THREAD_REGISTERS]
                 _ = slop_os.thread_read_registers(program.process, stop.thread, registers)
@@ -722,13 +789,30 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
                     }
                 }
                 if number != event.number || words != event.words {
-                    return diverged(program, result, sentence("thread %'s call % was % as recorded, but % now", event.thread, result.calls,
-                        name_of(shapes, event.number), name_of(shapes, number)))
+                    return diverged(
+                        program,
+                        result,
+                        sentence(
+                            "thread %'s call % was % as recorded, but % now",
+                            event.thread,
+                            result.calls,
+                            name_of(shapes, event.number),
+                            name_of(shapes, number)
+                        )
+                    )
                 }
                 shape :: &shapes[cast[usize](number) % shapes.count]
                 if !same_buffers(program, recording, event, shape.inputs, shape.inputs_count, words) {
-                    return diverged(program, result, sentence("thread %'s call % (%) was given other bytes than recorded", event.thread,
-                        result.calls, shape.name))
+                    return diverged(
+                        program,
+                        result,
+                        sentence(
+                            "thread %'s call % (%) was given other bytes than recorded",
+                            event.thread,
+                            result.calls,
+                            shape.name
+                        )
+                    )
                 }
                 followed.number = number
                 followed.words = words
@@ -744,7 +828,11 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
                 if followed.answered {
                     // Answered: the buffers it writes written, its result set, and it's let go by Skip at its Resume
                     if !write_buffers(program, recording, event, shape.outputs, shape.outputs_count, followed.words) {
-                        return diverged(program, result, sentence("thread %'s call (%) couldn't be answered", event.thread, shape.name))
+                        return diverged(
+                            program,
+                            result,
+                            sentence("thread %'s call (%) couldn't be answered", event.thread, shape.name)
+                        )
                     }
                     registers : u64[slop_os.THREAD_REGISTERS]
                     _ = slop_os.thread_read_registers(program.process, followed.id, registers)
@@ -755,23 +843,51 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
                     }
                     _ = slop_os.thread_write_registers(program.process, followed.id, registers)
                     if !keep_received(program, recording, event, shape, followed.words, &received) {
-                        return diverged(program, result, sentence("thread %'s call (%) was given handles the replay couldn't hold as recorded",
-                            event.thread, shape.name))
+                        return diverged(
+                            program,
+                            result,
+                            sentence(
+                                "thread %'s call (%) was given handles the replay couldn't hold as recorded",
+                                event.thread,
+                                shape.name
+                            )
+                        )
                     }
                 }
                 else {
-                    stop :: wait_for(program, &stops, followed.id, false, .SyscallExit) or_return diverged(program, result,
-                        sentence("thread %'s call (%) didn't end as recorded", event.thread, shape.name))
+                    stop :: wait_for(program, &stops, followed.id, false, .SyscallExit)
+                        or_return diverged(
+                            program,
+                            result,
+                            sentence("thread %'s call (%) didn't end as recorded", event.thread, shape.name)
+                        )
                     if stop.point != .SyscallExit {
-                        return diverged(program, result, sentence("thread %'s call (%) was to end, but %", event.thread, shape.name,
-                            what_it_did(program, shapes, stop)))
+                        return diverged(
+                            program,
+                            result,
+                            sentence(
+                                "thread %'s call (%) was to end, but %",
+                                event.thread,
+                                shape.name,
+                                what_it_did(program, shapes, stop)
+                            )
+                        )
                     }
                     registers : u64[slop_os.THREAD_REGISTERS]
                     _ = slop_os.thread_read_registers(program.process, stop.thread, registers)
                     for register, i in RESULT_REGISTERS {
-                        if i < event.results.count && cast[usize](register) < registers.count && registers[cast[usize](register)] != event.results[i] {
-                            return diverged(program, result, sentence("thread %'s call (%) gave another result than recorded", event.thread,
-                                shape.name))
+                        if i < event.results.count
+                            && cast[usize](register) < registers.count
+                            && registers[cast[usize](register)] != event.results[i] {
+                            return diverged(
+                                program,
+                                result,
+                                sentence(
+                                    "thread %'s call (%) gave another result than recorded",
+                                    event.thread,
+                                    shape.name
+                                )
+                            )
                         }
                     }
                 }
@@ -779,17 +895,33 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
             }
             case .Resume => {
                 followed :: &threads[index % threads.count]
-                action :: if followed.answered { slop_os.InterceptAction.Skip } else { slop_os.InterceptAction.Continue }
+                action :: if followed.answered {
+                    slop_os.InterceptAction.Skip
+                }
+                else {
+                    slop_os.InterceptAction.Continue
+                }
                 followed.answered = false
                 _ = slop_os.intercept_resume(program.intercept, followed.id, action)
             }
             case .Counter => {
                 followed :: &threads[index % threads.count]
-                stop :: wait_for(program, &stops, followed.id, false, .Fault) or_return diverged(program, result,
-                    sentence("thread % didn't read the counter as recorded", event.thread))
+                stop :: wait_for(program, &stops, followed.id, false, .Fault)
+                    or_return diverged(
+                        program,
+                        result,
+                        sentence("thread % didn't read the counter as recorded", event.thread)
+                    )
                 if stop.point != .Fault || stop.number != slop_os.FAULT_COUNTER {
-                    return diverged(program, result, sentence("thread % was to read the counter, but %", event.thread,
-                        what_it_did(program, shapes, stop)))
+                    return diverged(
+                        program,
+                        result,
+                        sentence(
+                            "thread % was to read the counter, but %",
+                            event.thread,
+                            what_it_did(program, shapes, stop)
+                        )
+                    )
                 }
                 give_counter(program, stop, event.value)
                 _ = slop_os.intercept_resume(program.intercept, stop.thread, .Continue)
@@ -797,7 +929,10 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
             case .End => {
                 code :: wait_for_end(program) or_return diverged(program, result, "it didn't end as recorded")
                 if code != event.value {
-                    return Replayed.{calls = result.calls, divergence = sentence("it ended with % rather than %", code, event.value)}
+                    return Replayed.{
+                        calls = result.calls,
+                        divergence = sentence("it ended with % rather than %", code, event.value),
+                    }
                 }
             }
         }
@@ -814,7 +949,7 @@ replay :: fn(program: Program, shapes: CallShape[], recording: ptr[Recording]) -
  * @param why Where and how, a sentence.
  * @return The result, not exact.
  */
-diverged :: fn(program: Program, result: Replayed, why: string) -> Replayed {
+diverged :: fn(program : Program, result : Replayed, why : string) -> Replayed {
     _ = slop_os.process_kill(program.process)
     return Replayed.{calls = result.calls, divergence = why}
 }
@@ -829,7 +964,13 @@ diverged :: fn(program: Program, result: Replayed, why: string) -> Replayed {
  * @param point The point, for any.
  * @return The stop; null if none came within REPLAY_WAIT, or the program ended.
  */
-wait_for :: fn(program: Program, stops: ptr[mut slop_os.StopInfo[..]], id: u64, any: bool, point: slop_os.StopPoint) -> slop_os.StopInfo? {
+wait_for :: fn(
+    program : Program,
+    stops : ptr[mut slop_os.StopInfo[..]],
+    id : u64,
+    any : bool,
+    point : slop_os.StopPoint
+) -> slop_os.StopInfo? {
     deadline :: (slop_os.clock_monotonic() or_else 0) + REPLAY_WAIT
     loop {
         loop {
@@ -867,7 +1008,7 @@ wait_for :: fn(program: Program, stops: ptr[mut slop_os.StopInfo[..]], id: u64, 
  * @param stop The stop.
  * @return "made call clock_monotonic", or "ended a call", or "faulted: <fault>", or "started".
  */
-what_it_did :: fn(program: Program, shapes: CallShape[], stop: slop_os.StopInfo) -> string {
+what_it_did :: fn(program : Program, shapes : CallShape[], stop : slop_os.StopInfo) -> string {
     match stop.point {
         case .SyscallEntry => {
             registers : u64[slop_os.THREAD_REGISTERS]
@@ -886,7 +1027,7 @@ what_it_did :: fn(program: Program, shapes: CallShape[], stop: slop_os.StopInfo)
  * @param program The program.
  * @return Its code; null if it didn't end within REPLAY_WAIT.
  */
-wait_for_end :: fn(program: Program) -> u64? {
+wait_for_end :: fn(program : Program) -> u64? {
     deadline :: (slop_os.clock_monotonic() or_else 0) + REPLAY_WAIT
     loop {
         packets : slop_os.Packet[4]
@@ -913,7 +1054,14 @@ wait_for_end :: fn(program: Program) -> u64? {
  * @param words Its argument words now.
  * @return True if every byte is the same.
  */
-same_buffers :: fn(program: Program, recording: ptr[Recording], event: Event, buffers: Buffer[6], count: u32, words: u64[6]) -> bool {
+same_buffers :: fn(
+    program : Program,
+    recording : ptr[Recording],
+    event : Event,
+    buffers : Buffer[6],
+    count : u32,
+    words : u64[6]
+) -> bool {
     at := event.bytes_at
     for buffer, n in buffers {
         if cast[u32](n) >= count {
@@ -956,7 +1104,14 @@ same_buffers :: fn(program: Program, recording: ptr[Recording], event: Event, bu
  * @param words Its argument words.
  * @return True once they're written; false if one couldn't be.
  */
-write_buffers :: fn(program: Program, recording: ptr[Recording], event: Event, buffers: Buffer[6], count: u32, words: u64[6]) -> bool {
+write_buffers :: fn(
+    program : Program,
+    recording : ptr[Recording],
+    event : Event,
+    buffers : Buffer[6],
+    count : u32,
+    words : u64[6]
+) -> bool {
     at := event.bytes_at
     for buffer, n in buffers {
         if cast[u32](n) >= count {
@@ -987,12 +1142,17 @@ write_buffers :: fn(program: Program, recording: ptr[Recording], event: Event, b
  * @param stop The thread's FAULT_COUNTER stop.
  * @param value The recorded value.
  */
-give_counter :: fn(program: Program, stop: slop_os.StopInfo, value: u64) {
+give_counter :: fn(program : Program, stop : slop_os.StopInfo, value : u64) {
     registers : u64[slop_os.THREAD_REGISTERS]
     _ = slop_os.thread_read_registers(program.process, stop.thread, registers)
     #if TARGET_ARCH == .arm64 {
         instruction : u32 = 0
-        _ = slop_os.process_read_memory(program.process, program.space, registers[32] - 4, os.mut_bytes_of(&instruction))
+        _ = slop_os.process_read_memory(
+            program.process,
+            program.space,
+            registers[32] - 4,
+            os.mut_bytes_of(&instruction)
+        )
         target :: cast[usize](instruction & 0x1f)
         if target < 31 {
             registers[target] = value
@@ -1012,7 +1172,7 @@ give_counter :: fn(program: Program, stop: slop_os.StopInfo, value: u64) {
  * @param number Its number.
  * @return Its name; "an unknown call" past the table.
  */
-name_of :: fn(shapes: CallShape[], number: u32) -> string {
+name_of :: fn(shapes : CallShape[], number : u32) -> string {
     return if cast[usize](number) < shapes.count { shapes[cast[usize](number)].name } else { "an unknown call" }
 }
 
@@ -1023,7 +1183,7 @@ name_of :: fn(shapes: CallShape[], number: u32) -> string {
  * @param values Its values.
  * @return The sentence, never freed.
  */
-sentence :: fn(format: string, values: any...) -> string {
+sentence :: fn(format : string, values : any...) -> string {
     storage : u8[512]
     text := text_buffer.make(storage)
     text_buffer.append_format(&text, format, values)
@@ -1048,7 +1208,7 @@ sentence :: fn(format: string, values: any...) -> string {
  * @param received The handles given from the recording.
  * @return True if one of its handle words is one of them.
  */
-takes_received :: fn(shape: ptr[CallShape], words: u64[6], received: u32[]) -> bool {
+takes_received :: fn(shape : ptr[CallShape], words : u64[6], received : u32[]) -> bool {
     // A placeholder is a real handle: what changes the handle table alone runs again on it, as it did when recorded
     if starts_with(shape.name, "handle_") {
         return false
@@ -1079,8 +1239,14 @@ takes_received :: fn(shape: ptr[CallShape], words: u64[6], received: u32[]) -> b
  * @param received The handles kept, added to.
  * @return True once each is held; false if a placeholder couldn't be made, or was numbered other than recorded.
  */
-keep_received :: fn(program: Program, recording: ptr[Recording], event: Event, shape: ptr[CallShape], words: u64[6],
-    received: ptr[mut u32[..]]) -> bool {
+keep_received :: fn(
+    program : Program,
+    recording : ptr[Recording],
+    event : Event,
+    shape : ptr[CallShape],
+    words : u64[6],
+    received : ptr[mut u32[..]]
+) -> bool {
     if shape.returns_handle && event.results[0] == 0 && event.results[1] != 0 {
         if !hold_placeholder(program, cast[u32](event.results[1])) {
             return false
@@ -1127,7 +1293,7 @@ keep_received :: fn(program: Program, recording: ptr[Recording], event: Event, s
  * @param value The handle the recording gave it.
  * @return True if the placeholder's numbered value; false if it couldn't be made or given, or was numbered otherwise.
  */
-hold_placeholder :: fn(program: Program, value: u32) -> bool {
+hold_placeholder :: fn(program : Program, value : u32) -> bool {
     placeholder :: slop_os.port_create(slop_os.startup_block().budget) or_return false
     handles :: slop_os.Handle.[cast[slop_os.Handle](placeholder)]
     given : slop_os.Handle[1]
@@ -1137,4 +1303,3 @@ hold_placeholder :: fn(program: Program, value: u32) -> bool {
     }
     return cast[u32](given[0]) == value
 }
-

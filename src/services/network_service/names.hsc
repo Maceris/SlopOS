@@ -5,8 +5,8 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import net_address from "std:os/slop_os/net_address"
 import network from "std:os/slop_os/network"
-import net_stack from "../../net_stack"
 import service_kit from "../../libraries/service_kit"
+import net_stack from "../../net_stack"
 
 /*
  * Names (decisions/0188, 13e): Resolve and OpenName, each held while the stack's resolver looks the name up, and
@@ -76,9 +76,17 @@ Race :: struct {
  * @param memory OpenName's memory; closed if it's refused here.
  * @return A refusal to answer at once; null once it's held, to be answered when the lookup's done.
  */
-start_lookup :: fn(service: ptr[mut Service], client: usize, end: slop_os.Channel, name: u8[], v4: bool, v6: bool, opening: bool,
-    port: u16, memory: slop_os.Memory) -> network.Refusal? {
-
+start_lookup :: fn(
+    service : ptr[mut Service],
+    client : usize,
+    end : slop_os.Channel,
+    name : u8[],
+    v4 : bool,
+    v6 : bool,
+    opening : bool,
+    port : u16,
+    memory : slop_os.Memory
+) -> network.Refusal? {
     refusal := network.Refusal.NoRoom
     root :: if client < service.serving.client_root.count { service.serving.client_root[client] } else { cast[u64](0) }
     held := cast[usize](0)
@@ -92,8 +100,8 @@ start_lookup :: fn(service: ptr[mut Service], client: usize, end: slop_os.Channe
             if name.count == 0 || name.count > network.MAX_NAME {
                 refusal = .BadName
             }
-            // A channel's share, so one can't hold every lookup
-            else if held >= LOOKUPS_PER_ROOT {
+            else // A channel's share, so one can't hold every lookup
+            if held >= LOOKUPS_PER_ROOT {
                 refusal = .NoRoom
             }
             else if opening && port == 0 {
@@ -105,8 +113,17 @@ start_lookup :: fn(service: ptr[mut Service], client: usize, end: slop_os.Channe
                         continue
                     }
                     lookup :: net_stack.resolve(found, name, v4, v6) or_break
-                    each^ = Pending.{active = true, lookup = lookup, client = client, end = end, root = root, opening = opening,
-                        port = port, memory = memory, name_length = name.count}
+                    each^ = Pending.{
+                        active = true,
+                        lookup = lookup,
+                        client = client,
+                        end = end,
+                        root = root,
+                        opening = opening,
+                        port = port,
+                        memory = memory,
+                        name_length = name.count,
+                    }
                     for byte, i in name {
                         if i < each.name.count {
                             each.name[i] = byte
@@ -130,7 +147,7 @@ start_lookup :: fn(service: ptr[mut Service], client: usize, end: slop_os.Channe
  * @param service The service.
  * @param client The client's index.
  */
-drop_lookups :: fn(service: ptr[mut Service], client: usize) {
+drop_lookups :: fn(service : ptr[mut Service], client : usize) {
     for &each in service.serving.pending {
         if !each.active || each.client != client {
             continue
@@ -153,7 +170,7 @@ drop_lookups :: fn(service: ptr[mut Service], client: usize) {
  * @param stack The stack.
  * @param lookup The lookup.
  */
-lookup_done :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], lookup: u32) {
+lookup_done :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack], lookup : u32) {
     result :: net_stack.take_resolution(stack, lookup) or_return void
     for &each in service.serving.pending {
         if !each.active || each.lookup != lookup {
@@ -162,7 +179,8 @@ lookup_done :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], lo
         each.active = false
         serving :: &service.serving
         client :: each.client
-        present :: client < serving.clients.ends.count && client < serving.policies.count
+        present :: client < serving.clients.ends.count
+            && client < serving.policies.count
             && cast[slop_os.Handle](serving.clients.ends[client]) == cast[slop_os.Handle](each.end)
         if !present || client >= serving.policies.count {
             if each.opening {
@@ -192,7 +210,10 @@ lookup_done :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], lo
                 for i in 0..<result.count {
                     if i < result.addresses.count && count < addresses.count {
                         address :: endpoint_of(result.addresses[i], 0).address
-                        addresses[count] = network.ResolvedAddress.{family = cast[u8](address.family), bytes = address.bytes}
+                        addresses[count] = network.ResolvedAddress.{
+                            family = cast[u8](address.family),
+                            bytes = address.bytes,
+                        }
                         count += 1
                     }
                 }
@@ -210,7 +231,7 @@ lookup_done :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], lo
  * @param outcome The outcome.
  * @return Null for Found.
  */
-refusal_of :: fn(outcome: net_stack.ResolveOutcome) -> network.Refusal? {
+refusal_of :: fn(outcome : net_stack.ResolveOutcome) -> network.Refusal? {
     return match outcome {
         case .Found => null
         case .NoSuchName => network.Refusal.NoSuchName
@@ -230,14 +251,24 @@ refusal_of :: fn(outcome: net_stack.ResolveOutcome) -> network.Refusal? {
  * @param policy The asking connection's policy.
  * @return Opened with the stream's channel; or Refused NotAllowed if no address is allowed, or why it couldn't open.
  */
-open_by_name :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], pending: ptr[Pending], result: ptr[net_stack.Resolution],
-    policy: ptr[network.Policy]) -> network.Response {
-
+open_by_name :: fn(
+    service : ptr[mut Service],
+    stack : ptr[mut net_stack.Stack],
+    pending : ptr[Pending],
+    result : ptr[net_stack.Resolution],
+    policy : ptr[network.Policy]
+) -> network.Response {
     race := Race.{racing = true, port = pending.port}
     name :: view_of(&pending.name[0], pending.name_length)
     for i in 0..<result.count {
-        if i < result.addresses.count && race.candidate_count < race.candidates.count
-            && network.allows_named(policy, network.TRANSPORT_TCP, name, endpoint_of(result.addresses[i], pending.port)) {
+        if i < result.addresses.count
+            && race.candidate_count < race.candidates.count
+            && network.allows_named(
+                policy,
+                network.TRANSPORT_TCP,
+                name,
+                endpoint_of(result.addresses[i], pending.port)
+            ) {
             race.candidates[race.candidate_count] = result.addresses[i]
             race.candidate_count += 1
         }
@@ -295,7 +326,7 @@ open_by_name :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], p
  * @param index The stream's index.
  * @return True if one started; false if none's left with a route, or there's no free place.
  */
-start_attempt :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], index: usize) -> bool {
+start_attempt :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack], index : usize) -> bool {
     if index >= service.serving.streams.count {
         return false
     }
@@ -333,7 +364,7 @@ start_attempt :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], 
 }
 
 /** Abort every attempt of a race. */
-abort_attempts :: fn(stack: ptr[mut net_stack.Stack], race: ptr[mut Race]) {
+abort_attempts :: fn(stack : ptr[mut net_stack.Stack], race : ptr[mut Race]) {
     for &attempt in race.attempts {
         if attempt^ != 0 {
             net_stack.tcp_abort(stack, attempt^)
@@ -349,7 +380,7 @@ abort_attempts :: fn(stack: ptr[mut net_stack.Stack], race: ptr[mut Race]) {
  * @param connection The connection.
  * @return True if it is.
  */
-is_attempt :: fn(stream: ptr[Stream], connection: u32) -> bool {
+is_attempt :: fn(stream : ptr[Stream], connection : u32) -> bool {
     if !stream.race.racing || connection == 0 {
         return false
     }
@@ -369,7 +400,7 @@ is_attempt :: fn(stream: ptr[Stream], connection: u32) -> bool {
  * @param index The stream's index.
  * @param connection The attempt that changed.
  */
-attempt_changed :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], index: usize, connection: u32) {
+attempt_changed :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack], index : usize, connection : u32) {
     if index >= service.serving.streams.count {
         return void
     }
@@ -402,7 +433,12 @@ attempt_changed :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]
  * @param ended The attempt's end.
  * @return True if the stream ended with it, for connection_ended to finish; false if it races on.
  */
-attempt_ended :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], index: usize, ended: net_stack.TcpEnded) -> bool {
+attempt_ended :: fn(
+    service : ptr[mut Service],
+    stack : ptr[mut net_stack.Stack],
+    index : usize,
+    ended : net_stack.TcpEnded
+) -> bool {
     if index >= service.serving.streams.count {
         return true
     }
@@ -439,14 +475,16 @@ attempt_ended :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack], 
  * @param service The service.
  * @param stack The stack.
  */
-race_on :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
+race_on :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack]) {
     time :: now()
     for i in cast[usize](0)..<STREAMS {
         if i >= service.serving.streams.count {
             break
         }
         stream :: &service.serving.streams[i]
-        if cast[slop_os.Handle](stream.end) == slop_os.NO_HANDLE || !stream.race.racing || time < stream.race.next_attempt {
+        if cast[slop_os.Handle](stream.end) == slop_os.NO_HANDLE
+            || !stream.race.racing
+            || time < stream.race.next_attempt {
             continue
         }
         if !start_attempt(service, stack, i) {
@@ -462,11 +500,13 @@ race_on :: fn(service: ptr[mut Service], stack: ptr[mut net_stack.Stack]) {
  * @param service The service.
  * @return The soonest; 0xffffffffffffffff for none.
  */
-race_deadline :: fn(service: ptr[Service]) -> u64 {
+race_deadline :: fn(service : ptr[Service]) -> u64 {
     soonest := ~cast[u64](0)
     for stream in service.serving.streams {
-        if cast[slop_os.Handle](stream.end) != slop_os.NO_HANDLE && stream.race.racing
-            && stream.race.next_candidate < stream.race.candidate_count && stream.race.next_attempt < soonest {
+        if cast[slop_os.Handle](stream.end) != slop_os.NO_HANDLE
+            && stream.race.racing
+            && stream.race.next_candidate < stream.race.candidate_count
+            && stream.race.next_attempt < soonest {
             soonest = stream.race.next_attempt
         }
     }
@@ -480,7 +520,7 @@ race_deadline :: fn(service: ptr[Service]) -> u64 {
  * @param stack The stack.
  * @param text The command line.
  */
-configure_dns :: fn(stack: ptr[mut net_stack.Stack], text: string) {
+configure_dns :: fn(stack : ptr[mut net_stack.Stack], text : string) {
     value :: service_kit.word_after(text, "dns=") or_return void
     bytes :: string_bytes(value)
     colon := bytes.count
@@ -494,10 +534,23 @@ configure_dns :: fn(stack: ptr[mut net_stack.Stack], text: string) {
         return void
     }
     address :: net_address.parse_v4(value[0..<colon]) or_return void
-    port :: if colon + 1 < value.count { cast[u16](service_kit.number_of(value[colon + 1..<value.count]) or_else 53) }
-        else { cast[u16](53) }
-    stack_address :: net_stack.IpAddress.V4(net_stack.Ipv4.{bytes = u8.[address.bytes[0], address.bytes[1], address.bytes[2], address.bytes[3]]})
+    port :: if colon + 1 < value.count {
+        cast[u16](service_kit.number_of(value[colon + 1..<value.count]) or_else 53)
+    }
+    else {
+        cast[u16](53)
+    }
+    stack_address :: net_stack.IpAddress.V4(
+        net_stack.Ipv4.{bytes = u8.[address.bytes[0], address.bytes[1], address.bytes[2], address.bytes[3]]}
+    )
     if net_stack.set_dns_server(stack, stack_address, port) {
-        runtime.log_info("the DNS server is %.%.%.%, port %", address.bytes[0], address.bytes[1], address.bytes[2], address.bytes[3], port)
+        runtime.log_info(
+            "the DNS server is %.%.%.%, port %",
+            address.bytes[0],
+            address.bytes[1],
+            address.bytes[2],
+            address.bytes[3],
+            port
+        )
     }
 }

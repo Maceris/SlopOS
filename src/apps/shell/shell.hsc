@@ -5,21 +5,21 @@
  */
 package shell
 
-import recording from "../../recording"
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import text_buffer from "std:text_buffer"
-import terminal from "std:terminal"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
-import terminal as protocol from "std:os/slop_os/terminal"
 import dir from "std:os/slop_os/dir"
 import network from "std:os/slop_os/network"
-import read_only_file from "std:os/slop_os/read_only_file"
 import process_manager from "std:os/slop_os/process_manager"
-import programs as finding from "../../protocols/programs"
+import read_only_file from "std:os/slop_os/read_only_file"
+import terminal as protocol from "std:os/slop_os/terminal"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import unicode from "std:unicode"
 import installations from "../../installations"
+import programs as finding from "../../protocols/programs"
+import recording from "../../recording"
+import shell_language as language from "../../shell_language"
 
 /** The prompt in the shell's home; elsewhere it's the directory, then "> ". */
 PROMPT :: "> "
@@ -119,10 +119,18 @@ Shell :: struct {
  *     a port couldn't be made; 3 when its terminal goes. For a script: 0 once it's run to its end, 1 for its error, 2
  *     if it couldn't be read. For a command: 0 if it ran without an error, 1 if it had one.
  */
-main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
-    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[finding.Programs]?, data: installations.AppData?,
-    script: os.Channel[read_only_file.ReadOnlyFile]?, cpu_budget: slop_os.CpuBudget?, network: os.Channel[network.Network]?,
-    command: string?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    session_terminal : os.Channel[protocol.Terminal],
+    home : os.Channel[dir.Dir]?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    programs : os.Channel[finding.Programs]?,
+    data : installations.AppData?,
+    script : os.Channel[read_only_file.ReadOnlyFile]?,
+    cpu_budget : slop_os.CpuBudget?,
+    network : os.Channel[network.Network]?,
+    command : string?
+) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
     shell.network = network
@@ -210,7 +218,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
  * @param line The line, which the parse copies, so it's the caller's still.
  * @return True if it ran without an error; false for the first error, shown.
  */
-run_line :: fn(shell: ptr[mut Shell], line: string) -> bool {
+run_line :: fn(shell : ptr[mut Shell], line : string) -> bool {
     tree :: match parse(line) {
         case Ok(made) => made
         case Error(error) => {
@@ -250,7 +258,7 @@ run_line :: fn(shell: ptr[mut Shell], line: string) -> bool {
  * @param shell The shell, whose directory is read; nothing is changed.
  * @return The prompt: PROMPT in the home, or a message on the heap, never freed.
  */
-prompt_of :: fn(shell: ptr[Shell]) -> string {
+prompt_of :: fn(shell : ptr[Shell]) -> string {
     if shell.directory.count == 0 {
         return PROMPT
     }
@@ -267,7 +275,7 @@ prompt_of :: fn(shell: ptr[Shell]) -> string {
  *     many columns along as the line's text before it takes on the terminal (unicode.text_width).
  * @param message What's wrong; each line is cut at 512 bytes.
  */
-show_error :: fn(shell: ptr[mut Shell], line: string, at: usize, message: string) {
+show_error :: fn(shell : ptr[mut Shell], line : string, at : usize, message : string) {
     storage : u8[512]
     out := text_buffer.make(storage)
     text_buffer.append(&out, "error: ")
@@ -292,6 +300,6 @@ show_error :: fn(shell: ptr[mut Shell], line: string, at: usize, message: string
  * @param shell The shell, whose terminal it's written on.
  * @param text The line, without its line feed.
  */
-say :: fn(shell: ptr[mut Shell], text: string) {
+say :: fn(shell : ptr[mut Shell], text : string) {
     _ = terminal.write_line(&shell.console, text)
 }

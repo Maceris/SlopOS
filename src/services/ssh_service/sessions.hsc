@@ -12,15 +12,15 @@ package ssh_service
 import runtime from "base:runtime"
 import net from "std:net"
 import os from "std:os"
-import ssh from "std:ssh"
-import text_buffer from "std:text_buffer"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import net_address from "std:os/slop_os/net_address"
 import terminal from "std:os/slop_os/terminal"
+import ssh from "std:ssh"
+import text_buffer from "std:text_buffer"
 import log_line from "../../log_line"
-import prompt from "../../protocols/prompt"
 import pipe from "../../protocols/pipe"
+import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
 import remote_terminal from "../../remote_terminal"
 import vt from "../../vt"
@@ -44,10 +44,10 @@ Remote :: struct {
     starting_prompts : slop_os.Channel,
     starting_command : bool,
     /** Its keys on the service's port start here. */
-    key : u64,
-    started_at : u64,
+    key           : u64,
+    started_at    : u64,
     authenticated : bool,
-    closing : bool,
+    closing       : bool,
     /** What's come from the client that the connection hasn't taken yet. */
     inbox : u8[16384],
     inbox_first : usize,
@@ -64,7 +64,7 @@ Remote :: struct {
     /** Its session, once it's started. */
     started : bool,
     session : u32,
-    term : remote_terminal.RemoteTerminal,
+    term    : remote_terminal.RemoteTerminal,
     decoder : vt.Decoder,
     decoded : vt.Decoded,
     /** The terminal's, prompts' and wait's ends, the service's; NONE for none. */
@@ -93,7 +93,7 @@ Remote :: struct {
 }
 
 /** Take a channel request: a pty's size, then a shell or a command, which starts the session. */
-channel_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number: u32) {
+channel_request :: fn(service : ptr[mut Service], remote : ptr[mut Remote], number : u32) {
     request :: ssh.request_of(&remote.conn)
     kind :: request.kind
     if kind == .Pty && !remote.started {
@@ -122,26 +122,32 @@ channel_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number
 }
 
 /** The client's terminal was resized: the terminal's size, and a Resize for its reader. */
-window_changed :: fn(remote: ptr[mut Remote]) {
+window_changed :: fn(remote : ptr[mut Remote]) {
     request :: ssh.request_of(&remote.conn)
     remote_terminal.resize(&remote.term, request.columns, request.rows)
     if remote.decoded.count < remote.decoded.events.count {
-        remote.decoded.events[remote.decoded.count] = terminal.Event.{kind = cast[u8](terminal.EventKind.Resize),
-            columns = remote.term.columns, rows = remote.term.rows}
+        remote.decoded.events[remote.decoded.count] = terminal.Event.{
+            kind = cast[u8](terminal.EventKind.Resize),
+            columns = remote.term.columns,
+            rows = remote.term.rows,
+        }
         remote.decoded.count += 1
     }
     deliver(remote)
 }
 
 /** Take what the client sent on its channel: input for the session's terminal. */
-channel_input :: fn(remote: ptr[mut Remote], number: u32) {
+channel_input :: fn(remote : ptr[mut Remote], number : u32) {
     // The SFTP program's Reads take what's come, as they ask
     if remote.pipe_end != NONE || remote.starting_pipe {
         return void
     }
     chunk : u8[terminal.MAX_EVENT_TEXT]
     loop {
-        // No more than its events and their text have room for, each byte an event at most: the rest waits on the channel
+        /*
+         * No more than its events and their text have room for, each byte an event at most: the rest waits on the
+         * channel
+         */
         events_room :: remote.decoded.events.count - remote.decoded.count
         text_room :: remote.decoded.text.count - remote.decoded.text_count
         room :: if events_room < text_room { events_room } else { text_room }
@@ -167,19 +173,31 @@ channel_input :: fn(remote: ptr[mut Remote], number: u32) {
  *
  * @return True once it's asked; false if it couldn't be.
  */
-start_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote], command: u8[]) -> bool {
+start_session :: fn(service : ptr[mut Service], remote : ptr[mut Remote], command : u8[]) -> bool {
     if remote.home == NONE || command.count > session.COMMAND_BYTES {
         return false
     }
     budget :: slop_os.startup_block().budget
     terminals :: os.channel_for[terminal.Terminal](budget, terminal.RING_BYTES) or_return false
     prompts :: os.channel_for[prompt.Prompt](budget, 0) or_return false
-    remote.term = if remote.pty { remote_terminal.make(remote.columns, remote.rows) } else { remote_terminal.make_plain() }
+    remote.term = if remote.pty {
+        remote_terminal.make(remote.columns, remote.rows)
+    }
+    else {
+        remote_terminal.make_plain()
+    }
     out := os.Outgoing.{}
     request :: os.begin[session.Request](&out)
-    request^ = .Start(session.SessionStart.{user = os.append(&out, ssh.user_of(&remote.conn)), layout = os.append(&out, string_bytes("us")),
-        home = os.Channel[dir.Dir].{end = remote.home}, terminal = os.Channel[terminal.Terminal].{end = terminals.b},
-        prompts = os.Channel[prompt.Prompt].{end = prompts.b}, command = os.append(&out, command)})
+    request^ = .Start(
+        session.SessionStart.{
+            user = os.append(&out, ssh.user_of(&remote.conn)),
+            layout = os.append(&out, string_bytes("us")),
+            home = os.Channel[dir.Dir].{end = remote.home},
+            terminal = os.Channel[terminal.Terminal].{end = terminals.b},
+            prompts = os.Channel[prompt.Prompt].{end = prompts.b},
+            command = os.append(&out, command),
+        }
+    )
     // The home, the terminal's and prompts' other ends move with it
     remote.home = NONE
     remote.starting_terminal = terminals.a
@@ -193,7 +211,7 @@ start_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote], command:
 }
 
 /** The session manager couldn't start a connection's session: its ends closed, and the request refused. */
-start_failed :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+start_failed :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) {
     for end in slop_os.Channel.[remote.starting_terminal, remote.starting_prompts] {
         if end != NONE {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -205,8 +223,10 @@ start_failed :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     ssh.answer_request(&remote.conn, false)
 }
 
-/** The session manager's started a connection's session: its terminal, prompts and end served, and the request allowed. */
-session_started :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number: u32) {
+/**
+ * The session manager's started a connection's session: its terminal, prompts and end served, and the request allowed.
+ */
+session_started :: fn(service : ptr[mut Service], remote : ptr[mut Remote], number : u32) {
     budget :: slop_os.startup_block().budget
     terminals_a :: remote.starting_terminal
     prompts_a :: remote.starting_prompts
@@ -218,13 +238,31 @@ session_started :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number
     if remote.starting_pipe {
         // SFTP's: its program's pipe, served as a terminal would be
         remote.pipe_end = terminals_a
-        _ = slop_os.port_bind(service.port, cast[slop_os.Handle](remote.pipe_end), signals, remote.key + TERMINAL_KEY, .Persistent)
+        _ = slop_os.port_bind(
+            service.port,
+            cast[slop_os.Handle](remote.pipe_end),
+            signals,
+            remote.key + TERMINAL_KEY,
+            .Persistent
+        )
     }
     else {
         remote.terminal_end = terminals_a
         remote.prompts_end = prompts_a
-        _ = slop_os.port_bind(service.port, cast[slop_os.Handle](remote.terminal_end), signals, remote.key + TERMINAL_KEY, .Persistent)
-        _ = slop_os.port_bind(service.port, cast[slop_os.Handle](remote.prompts_end), signals, remote.key + PROMPTS_KEY, .Persistent)
+        _ = slop_os.port_bind(
+            service.port,
+            cast[slop_os.Handle](remote.terminal_end),
+            signals,
+            remote.key + TERMINAL_KEY,
+            .Persistent
+        )
+        _ = slop_os.port_bind(
+            service.port,
+            cast[slop_os.Handle](remote.prompts_end),
+            signals,
+            remote.key + PROMPTS_KEY,
+            .Persistent
+        )
     }
     // Its end waited for on a connection of its own
     match session.connect(service.sessions_end, service.sessions_port, budget) {
@@ -233,12 +271,25 @@ session_started :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number
             asking := os.Outgoing.{}
             os.begin[session.Request](&asking)^ = .Wait(number)
             _ = session.send_request(remote.wait_end, service.port, &asking)
-            _ = slop_os.port_bind(service.port, cast[slop_os.Handle](remote.wait_end), signals, remote.key + WAIT_KEY, .Persistent)
+            _ = slop_os.port_bind(
+                service.port,
+                cast[slop_os.Handle](remote.wait_end),
+                signals,
+                remote.key + WAIT_KEY,
+                .Persistent
+            )
         }
         case None => {}
     }
-    log_line.write(service.log, "ssh_service: started a session for % %", text_of(ssh.user_of(&remote.conn)),
-        if remote.starting_pipe { "for SFTP" } else if remote.starting_command { "to run a command" } else { "with a shell" })
+    log_line.write(
+        service.log,
+        "ssh_service: started a session for % %",
+        text_of(ssh.user_of(&remote.conn)),
+        if remote.starting_pipe {
+            "for SFTP"
+        }
+        else if remote.starting_command { "to run a command" } else { "with a shell" }
+    )
     remote.starting_pipe = false
     ssh.answer_request(&remote.conn, true)
 }
@@ -249,7 +300,7 @@ session_started :: fn(service: ptr[mut Service], remote: ptr[mut Remote], number
  *
  * @return True if anything moved.
  */
-serve_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
+serve_session :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) -> bool {
     if !remote.started {
         return false
     }
@@ -336,7 +387,11 @@ serve_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool 
     }
     // What's pending, onto the channel
     if remote.pending_count > 0 && remote.has_channel {
-        sent :: ssh.channel_write(&remote.conn, remote.channel, ssh.range(remote.pending[0..<PENDING_BYTES], 0, remote.pending_count))
+        sent :: ssh.channel_write(
+            &remote.conn,
+            remote.channel,
+            ssh.range(remote.pending[0..<PENDING_BYTES], 0, remote.pending_count)
+        )
         if sent > 0 {
             remote.pending_count = ssh.drop_front(remote.pending[0..<PENDING_BYTES], remote.pending_count, sent)
             moved = true
@@ -359,15 +414,20 @@ serve_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool 
  *
  * @return True once it's asked.
  */
-start_sftp :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
+start_sftp :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) -> bool {
     if remote.home == NONE {
         return false
     }
     pipes :: os.channel_for[pipe.Pipe](slop_os.startup_block().budget, pipe.RING_BYTES) or_return false
     out := os.Outgoing.{}
     request :: os.begin[session.Request](&out)
-    request^ = .StartSftp(session.SftpStart.{user = os.append(&out, ssh.user_of(&remote.conn)), home = os.Channel[dir.Dir].{end = remote.home},
-        stream = os.Channel[pipe.Pipe].{end = pipes.b}})
+    request^ = .StartSftp(
+        session.SftpStart.{
+            user = os.append(&out, ssh.user_of(&remote.conn)),
+            home = os.Channel[dir.Dir].{end = remote.home},
+            stream = os.Channel[pipe.Pipe].{end = pipes.b},
+        }
+    )
     // The home and the pipe's other end move with it
     remote.home = NONE
     remote.starting_terminal = pipes.a
@@ -382,12 +442,13 @@ start_sftp :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
 }
 
 /**
- * Serve a connection's SFTP program's pipe: its Writes onto the channel while there's room, and a Read it holds answered
+ * Serve a connection's SFTP program's pipe: its Writes onto the channel while there's room, and a Read it holds
+ * answered
  * with what's come from the client, or Ended once the client's finished.
  *
  * @return True if anything moved.
  */
-serve_pipe :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
+serve_pipe :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) -> bool {
     moved := false
     into := os.Incoming.{}
     loop {
@@ -418,7 +479,12 @@ serve_pipe :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
     // A Read waiting: what's come, or Ended
     if remote.pipe_end != NONE && remote.pipe_wanted > 0 && remote.has_channel {
         chunk : u8[pipe.CHUNK_BYTES]
-        most :: if cast[usize](remote.pipe_wanted) < chunk.count { cast[usize](remote.pipe_wanted) } else { chunk.count }
+        most :: if cast[usize](remote.pipe_wanted) < chunk.count {
+            cast[usize](remote.pipe_wanted)
+        }
+        else {
+            chunk.count
+        }
         got :: ssh.channel_read(&remote.conn, remote.channel, ssh.range_mut(chunk[0..<chunk.count], 0, most))
         answer := os.Outgoing.{}
         response :: os.begin[pipe.Response](&answer)
@@ -438,11 +504,19 @@ serve_pipe :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
 }
 
 /** Take one of the terminal's requests. */
-terminal_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[mut os.Incoming]) {
+terminal_request :: fn(service : ptr[mut Service], remote : ptr[mut Remote], into : ptr[mut os.Incoming]) {
     storage : u8[16384]
     out := text_buffer.make(storage)
     match os.message_of[terminal.Request](into)^ {
-        case Write(text) => remote_terminal.write(&remote.term, os.items(into, text.text), os.items(into, text.runs), os.items(into, text.links), &out)
+        case Write(
+            text
+        ) => remote_terminal.write(
+            &remote.term,
+            os.items(into, text.text),
+            os.items(into, text.runs),
+            os.items(into, text.links),
+            &out
+        )
         case MoveCursor(position) => remote_terminal.move_cursor(&remote.term, position, &out)
         case ShowCursor(shown) => {
             if !remote.term.plain {
@@ -483,7 +557,7 @@ terminal_request :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into:
 }
 
 /** Add bytes to what's to go on the channel; what doesn't fit is dropped. */
-add_pending :: fn(remote: ptr[mut Remote], bytes: u8[]) {
+add_pending :: fn(remote : ptr[mut Remote], bytes : u8[]) {
     for byte in bytes {
         if remote.pending_count < remote.pending.count {
             remote.pending[remote.pending_count] = byte
@@ -493,7 +567,7 @@ add_pending :: fn(remote: ptr[mut Remote], bytes: u8[]) {
 }
 
 /** Answer a Read waiting with the events decoded, if there are any. */
-deliver :: fn(remote: ptr[mut Remote]) {
+deliver :: fn(remote : ptr[mut Remote]) {
     if remote.held == 0 || remote.decoded.count == 0 || remote.terminal_end == NONE {
         return void
     }
@@ -501,14 +575,20 @@ deliver :: fn(remote: ptr[mut Remote]) {
 }
 
 /** Answer the Read waiting with the first count events decoded, all of them or none, and start again. */
-answer_read :: fn(remote: ptr[mut Remote], count: usize) {
-    if remote.terminal_end == NONE || count > remote.decoded.events.count || remote.decoded.text_count > remote.decoded.text.count {
+answer_read :: fn(remote : ptr[mut Remote], count : usize) {
+    if remote.terminal_end == NONE
+        || count > remote.decoded.events.count
+        || remote.decoded.text_count > remote.decoded.text.count {
         return void
     }
     out := os.Outgoing.{}
     response :: os.begin[terminal.Response](&out)
-    response^ = .Input(terminal.Events.{events = os.append(&out, remote.decoded.events[0..<count]),
-        text = os.append(&out, remote.decoded.text[0..<remote.decoded.text_count])})
+    response^ = .Input(
+        terminal.Events.{
+            events = os.append(&out, remote.decoded.events[0..<count]),
+            text = os.append(&out, remote.decoded.text[0..<remote.decoded.text_count]),
+        }
+    )
     _ = terminal.send_response(remote.terminal_end, remote.port, &out)
     remote.held = 0
     remote.decoded.count = 0
@@ -516,7 +596,7 @@ answer_read :: fn(remote: ptr[mut Remote], count: usize) {
 }
 
 /** Have the session manager end a connection's session, every program of it, once, if it was started. */
-stop_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+stop_session :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) {
     if !remote.started || remote.stopped {
         return void
     }
@@ -527,7 +607,7 @@ stop_session :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
 }
 
 /** End a connection's session: its terminal closed, which ends its programs, and its prompts and wait. */
-end_session :: fn(remote: ptr[mut Remote]) {
+end_session :: fn(remote : ptr[mut Remote]) {
     for end in slop_os.Channel.[remote.terminal_end, remote.prompts_end, remote.wait_end, remote.pipe_end] {
         if end != NONE {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))

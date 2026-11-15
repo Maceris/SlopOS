@@ -4,8 +4,8 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import log_line from "../../log_line"
-import trace from "../../protocols/trace"
 import events from "../../protocols/events"
+import trace from "../../protocols/trace"
 
 /*
  * Tracing the whole system for an administrator (decisions/0185, 12g): once one's allowed it on the trusted path, the
@@ -38,7 +38,7 @@ ThreadCount :: struct {
  * @param supervisor The supervisor, which keeps its end, bound to its port under TRACE_KEY.
  * @return The other end, for the terminal service; null if it couldn't be made.
  */
-trace_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[trace.Trace]? {
+trace_connection :: fn(supervisor : ptr[mut Supervisor]) -> os.Channel[trace.Trace]? {
     close_trace(supervisor)
     pair :: match os.channel_for[trace.Trace](supervisor.block.budget, ADMIN_RING_BYTES) {
         case Ok(made) => made
@@ -64,7 +64,7 @@ trace_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[trace.Trac
  *
  * @param supervisor The supervisor.
  */
-close_trace :: fn(supervisor: ptr[mut Supervisor]) {
+close_trace :: fn(supervisor : ptr[mut Supervisor]) {
     if supervisor.trace_end == NONE {
         return void
     }
@@ -79,7 +79,7 @@ close_trace :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor, from its loop, each time round.
  */
-serve_trace :: fn(supervisor: ptr[mut Supervisor]) {
+serve_trace :: fn(supervisor : ptr[mut Supervisor]) {
     if supervisor.trace_until != 0 {
         drain_counts(supervisor)
         now :: slop_os.clock_monotonic() or_else 0
@@ -111,7 +111,8 @@ serve_trace :: fn(supervisor: ptr[mut Supervisor]) {
                     answer_trace(supervisor, .Busy)
                     continue
                 }
-                if milliseconds == 0 || milliseconds > cast[u32](trace.MAX_MILLISECONDS)
+                if milliseconds == 0
+                    || milliseconds > cast[u32](trace.MAX_MILLISECONDS)
                     || (!supervisor.tracing && (slop_os.trace_set(supervisor.log, true) is_error)) {
                     answer_trace(supervisor, .Refused)
                     continue
@@ -134,8 +135,13 @@ serve_trace :: fn(supervisor: ptr[mut Supervisor]) {
  * @param deadline Its deadline otherwise.
  * @return The earlier of the two.
  */
-trace_deadline :: fn(supervisor: ptr[Supervisor], deadline: u64) -> u64 {
-    return if supervisor.trace_until != 0 && supervisor.trace_until < deadline { supervisor.trace_until } else { deadline }
+trace_deadline :: fn(supervisor : ptr[Supervisor], deadline : u64) -> u64 {
+    return if supervisor.trace_until != 0 && supervisor.trace_until < deadline {
+        supervisor.trace_until
+    }
+    else {
+        deadline
+    }
 }
 
 /**
@@ -143,7 +149,7 @@ trace_deadline :: fn(supervisor: ptr[Supervisor], deadline: u64) -> u64 {
  *
  * @param supervisor The supervisor, whose trace_counts grow.
  */
-drain_counts :: fn(supervisor: ptr[mut Supervisor]) {
+drain_counts :: fn(supervisor : ptr[mut Supervisor]) {
     events : slop_os.TraceEvent[TRACE_BATCH]
     loop {
         taken :: slop_os.trace_read(supervisor.log, events) or_else 0
@@ -171,7 +177,7 @@ drain_counts :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor.
  */
-discard_ring :: fn(supervisor: ptr[mut Supervisor]) {
+discard_ring :: fn(supervisor : ptr[mut Supervisor]) {
     events : slop_os.TraceEvent[TRACE_BATCH]
     loop {
         taken :: slop_os.trace_read(supervisor.log, events) or_else 0
@@ -188,7 +194,7 @@ discard_ring :: fn(supervisor: ptr[mut Supervisor]) {
  * @param thread The thread's ID.
  * @return Its counts, good until the next is made.
  */
-count_of :: fn(supervisor: ptr[mut Supervisor], thread: u64) -> ptr[mut ThreadCount] {
+count_of :: fn(supervisor : ptr[mut Supervisor], thread : u64) -> ptr[mut ThreadCount] {
     for &each in supervisor.trace_counts {
         if each.thread == thread {
             return each
@@ -207,7 +213,7 @@ count_of :: fn(supervisor: ptr[mut Supervisor], thread: u64) -> ptr[mut ThreadCo
  *
  * @param supervisor The supervisor.
  */
-stop_tracing :: fn(supervisor: ptr[mut Supervisor]) {
+stop_tracing :: fn(supervisor : ptr[mut Supervisor]) {
     if supervisor.trace_until != 0 && !supervisor.tracing {
         _ = slop_os.trace_set(supervisor.log, false)
     }
@@ -220,7 +226,7 @@ stop_tracing :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor.
  */
-finish_trace :: fn(supervisor: ptr[mut Supervisor]) {
+finish_trace :: fn(supervisor : ptr[mut Supervisor]) {
     drain_counts(supervisor)
     stop_tracing(supervisor)
     rows : trace.Row[..]
@@ -268,7 +274,7 @@ finish_trace :: fn(supervisor: ptr[mut Supervisor]) {
  * @param switches The thread's switches.
  * @param wakes The thread's wakes.
  */
-add_to_row :: fn(rows: ptr[mut trace.Row[..]], name: string, switches: u32, wakes: u32) {
+add_to_row :: fn(rows : ptr[mut trace.Row[..]], name : string, switches : u32, wakes : u32) {
     bytes :: string_bytes(name)
     for &row in rows^ {
         if cast[usize](row.name_bytes) != bytes.count || bytes.count == 0 || bytes.count > row.name.count {
@@ -296,7 +302,7 @@ add_to_row :: fn(rows: ptr[mut trace.Row[..]], name: string, switches: u32, wake
  * @param supervisor The supervisor.
  * @param response The answer, without items.
  */
-answer_trace :: fn(supervisor: ptr[mut Supervisor], response: trace.Response) {
+answer_trace :: fn(supervisor : ptr[mut Supervisor], response : trace.Response) {
     out := os.Outgoing.{}
     os.begin[trace.Response](&out)^ = response
     _ = trace.send_response(supervisor.trace_end, supervisor.port, &out)
@@ -307,7 +313,7 @@ answer_trace :: fn(supervisor: ptr[mut Supervisor], response: trace.Response) {
  *
  * @param rows The rows, sorted in place.
  */
-sort_rows :: fn(rows: mut trace.Row[]) {
+sort_rows :: fn(rows : mut trace.Row[]) {
     for i in cast[usize](1)..<rows.count {
         j := i
         loop {
@@ -333,7 +339,7 @@ sort_rows :: fn(rows: mut trace.Row[]) {
  * @param supervisor The supervisor, whose own events connection asks.
  * @return The end for the terminal service; null without an events service, or if the channel couldn't be made.
  */
-admin_events_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[events.Events]? {
+admin_events_connection :: fn(supervisor : ptr[mut Supervisor]) -> os.Channel[events.Events]? {
     if supervisor.events_end == NONE {
         return null
     }
@@ -350,4 +356,3 @@ admin_events_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[eve
     log_line.write(supervisor.log, "supervisor: an events connection for an administrator")
     return os.Channel[events.Events].{end = pair.a}
 }
-

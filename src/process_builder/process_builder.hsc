@@ -12,7 +12,7 @@
  * Every segment is mapped from the image, the process's own: none from the memory its file is in, which its bundle
  * store's memory would be, so a store that ends takes no process's code with it (decisions/0186's chaos finding, as
  * 0181's F6 asks of every service).
-
+ *
  *
  * The startup block says the kernel's ABI version, unless a test asks for another (abi_version), to see a program
  * refuse it.
@@ -80,7 +80,7 @@ Grant :: struct {
  * @param handle The handle the grant gives; it isn't checked or duplicated.
  * @return The grant, its label padded with zeros.
  */
-grant :: fn(label: string, handle: slop_os.Handle) -> Grant {
+grant :: fn(label : string, handle : slop_os.Handle) -> Grant {
     made := Grant.{handle = handle}
     for byte, i in label {
         if i < made.label.count {
@@ -137,7 +137,7 @@ Staging :: struct {
  * @return The area's address, page aligned, with at least size bytes nothing else uses; null if the free range has no
  *     room left.
  */
-staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
+staged :: fn(staging : ptr[mut Staging]?, area : usize, size : u64) -> u64? {
     match staging {
         case Some(kept) => {
             if area >= kept.addresses.count || area >= kept.sizes.count {
@@ -190,8 +190,15 @@ staged :: fn(staging: ptr[mut Staging]?, area: usize, size: u64) -> u64? {
  * @error Failed A handle couldn't be duplicated or inspected, the staging couldn't be unmapped, the handles couldn't
  *     go to the process, or the thread couldn't be started.
  */
-build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: ptr[mut random_stream.Stream],
-    abi_version: u32 = slop_os.ABI_VERSION, staging: ptr[mut Staging]? = null) -> Result[Built, BuildError] {
+build :: fn(
+    target : Target,
+    file : u8[],
+    grants : Grant[],
+    seed : u8[32],
+    random : ptr[mut random_stream.Stream],
+    abi_version : u32 = slop_os.ABI_VERSION,
+    staging : ptr[mut Staging]? = null
+) -> Result[Built, BuildError] {
     if grants.count > MAX_GRANTS {
         return .Error(.TooManyGrants)
     }
@@ -201,7 +208,8 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     defer close_all(&made)
     // A handle to the space to work with, kept while the owning one goes to the process
     space_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_SPACE_MAP) | cast[u32](slop_os.RIGHT_SPACE_THREADS))
-    space :: cast[slop_os.AddressSpace](slop_os.handle_duplicate(cast[slop_os.Handle](target.space), space_rights) or_return .Error(.Failed))
+    space :: cast[slop_os.AddressSpace](slop_os.handle_duplicate(cast[slop_os.Handle](target.space), space_rights)
+        or_return .Error(.Failed))
     defer _ = slop_os.handle_close(cast[slop_os.Handle](space))
     grants_at :: (cast[u64](size_of(slop_os.StartupBlock)) + 7) & ~cast[u64](7)
     block_size :: page_up(grants_at + cast[u64](grants.count) * cast[u64](size_of(slop_os.Grant)))
@@ -226,13 +234,15 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     block_staging :: staged(staging, 1, block_size) or_return .Error(.NoAddresses)
     slop_os.memory_map(block_memory, own, block_staging, 0, block_size, read_write) or_return .Error(.NoMemory)
     defer _ = slop_os.memory_unmap(own, block_staging)
-    slop_os.memory_map(block_memory, space, layout.block, 0, block_size, slop_os.PROTECTION_READ) or_return .Error(.NoMemory)
+    slop_os.memory_map(block_memory, space, layout.block, 0, block_size, slop_os.PROTECTION_READ)
+        or_return .Error(.NoMemory)
 
     // Everything that goes to the process, its own handles first, and what kind each grant is
     self_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     self :: slop_os.handle_duplicate(cast[slop_os.Handle](target.process), self_rights) or_return .Error(.Failed)
     remember(&made, self)
-    budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_BUDGET_CHARGE) | cast[u32](slop_os.RIGHT_DUPLICATE)
+    budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_BUDGET_CHARGE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
     budget :: slop_os.handle_duplicate(cast[slop_os.Handle](target.budget), budget_rights) or_return .Error(.Failed)
     remember(&made, budget)
@@ -251,7 +261,8 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
     }
     count :: OWN_HANDLES + grants.count
     given : slop_os.Handle[OWN_HANDLES + MAX_GRANTS]
-    slop_os.process_give_handles(target.process, view_of(&handles[0], count), view_of(&given[0], count)) or_return .Error(.Failed)
+    slop_os.process_give_handles(target.process, view_of(&handles[0], count), view_of(&given[0], count))
+        or_return .Error(.Failed)
     // They're the process's now
     made.count = 0
 
@@ -278,11 +289,23 @@ build :: fn(target: Target, file: u8[], grants: Grant[], seed: u8[32], random: p
         }
     }
     // What its code was built for, and its shadow stacks' region, before its first thread (decisions/0186)
-    slop_os.process_set_control_flow(target.process, executable.control_flow, layout.free + FREE_SIZE - SHADOW_REGION_SIZE,
-        SHADOW_REGION_SIZE) or_return .Error(.Failed)
+    slop_os.process_set_control_flow(
+        target.process,
+        executable.control_flow,
+        layout.free + FREE_SIZE - SHADOW_REGION_SIZE,
+        SHADOW_REGION_SIZE
+    )
+        or_return .Error(.Failed)
     // As a call leaves it: 8 below a multiple of 16
-    thread :: slop_os.thread_create_in(target.process, target.budget, space, layout.image + executable.entry, layout.stack + STACK_SIZE - 8,
-        layout.block) or_return .Error(.Failed)
+    thread :: slop_os.thread_create_in(
+        target.process,
+        target.budget,
+        space,
+        layout.image + executable.entry,
+        layout.stack + STACK_SIZE - 8,
+        layout.block
+    )
+        or_return .Error(.Failed)
     return .Ok(Built.{thread = thread, image = layout.image})
 }
 
@@ -308,7 +331,7 @@ Made :: struct {
  * @param made Where it's remembered.
  * @param handle The handle, owning; when made is full it isn't remembered, and wouldn't be closed.
  */
-remember :: fn(made: ptr[mut Made], handle: slop_os.Handle) {
+remember :: fn(made : ptr[mut Made], handle : slop_os.Handle) {
     if made.count < made.handles.count {
         made.handles[made.count] = handle
         made.count += 1
@@ -320,7 +343,7 @@ remember :: fn(made: ptr[mut Made], handle: slop_os.Handle) {
  *
  * @param made The handles; its count is 0 after, so closing again closes nothing.
  */
-close_all :: fn(made: ptr[mut Made]) {
+close_all :: fn(made : ptr[mut Made]) {
     for handle, i in made.handles {
         if i >= made.count {
             break
@@ -339,7 +362,7 @@ close_all :: fn(made: ptr[mut Made]) {
  * @return An owning handle to the memory object, zeroed as memory_create makes it.
  * @error NoMemory The budget couldn't pay, or memory_create failed for another reason.
  */
-memory :: fn(made: ptr[mut Made], budget: slop_os.MemoryBudget, size: u64) -> Result[slop_os.Memory, BuildError] {
+memory :: fn(made : ptr[mut Made], budget : slop_os.MemoryBudget, size : u64) -> Result[slop_os.Memory, BuildError] {
     created :: slop_os.memory_create(budget, size) or_return .Error(.NoMemory)
     remember(made, cast[slop_os.Handle](created))
     return .Ok(created)
@@ -358,8 +381,12 @@ memory :: fn(made: ptr[mut Made], budget: slop_os.MemoryBudget, size: u64) -> Re
  * @param base Where the image's base goes in space, page-aligned.
  * @error NoMemory A mapping from image couldn't be made; segments before it stay mapped.
  */
-map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory, space: slop_os.AddressSpace, base: u64)
-    -> Result[void, BuildError] {
+map_segments :: fn(
+    executable : ptr[elf_loader.Executable],
+    image : slop_os.Memory,
+    space : slop_os.AddressSpace,
+    base : u64
+) -> Result[void, BuildError] {
     relro_start :: executable.relro_address & ~(PAGE - 1)
     relro_end :: (executable.relro_address + executable.relro_size) & ~(PAGE - 1)
     for i in 0..<executable.segment_count {
@@ -396,8 +423,14 @@ map_segments :: fn(executable: ptr[elf_loader.Executable], image: slop_os.Memory
  * @param protection What the pages are mapped with.
  * @error NoMemory The mapping couldn't be made.
  */
-map_part :: fn(image: slop_os.Memory, space: slop_os.AddressSpace, base: u64, start: u64, end: u64, protection: slop_os.Protection)
-    -> Result[void, BuildError] {
+map_part :: fn(
+    image : slop_os.Memory,
+    space : slop_os.AddressSpace,
+    base : u64,
+    start : u64,
+    end : u64,
+    protection : slop_os.Protection
+) -> Result[void, BuildError] {
     if end <= start {
         return .Ok
     }
@@ -416,7 +449,7 @@ map_part :: fn(image: slop_os.Memory, space: slop_os.AddressSpace, base: u64, st
  * @param block_size The startup block's size in bytes, a whole number of pages.
  * @return The layout, every address page-aligned.
  */
-choose_layout :: fn(random: ptr[mut random_stream.Stream], image_size: u64, block_size: u64) -> Layout {
+choose_layout :: fn(random : ptr[mut random_stream.Stream], image_size : u64, block_size : u64) -> Layout {
     quarter :: ((USER_HIGH - USER_LOW) / 4) & ~(PAGE - 1)
     stack :: random_place(random, USER_LOW + quarter, quarter, STACK_SIZE + PAGE + block_size)
     return Layout.{
@@ -438,7 +471,7 @@ choose_layout :: fn(random: ptr[mut random_stream.Stream], image_size: u64, bloc
  * @return An address from start up to start + room - size, a whole number of pages past start, each as likely; start
  *     itself when size is room or more, so the range may then run past the region.
  */
-random_place :: fn(random: ptr[mut random_stream.Stream], start: u64, room: u64, size: u64) -> u64 {
+random_place :: fn(random : ptr[mut random_stream.Stream], start : u64, room : u64, size : u64) -> u64 {
     if size >= room {
         return start
     }
@@ -451,7 +484,7 @@ random_place :: fn(random: ptr[mut random_stream.Stream], start: u64, room: u64,
  * @param value The bytes to round up; at most 2^64 - 4096, or the result wraps.
  * @return value rounded up to a multiple of PAGE, value itself if it's one already.
  */
-page_up :: fn(value: u64) -> u64 {
+page_up :: fn(value : u64) -> u64 {
     return (value + PAGE - 1) & ~(PAGE - 1)
 }
 
@@ -462,7 +495,7 @@ page_up :: fn(value: u64) -> u64 {
  * @param b The other number, any value; it's what comes back when the two are equal.
  * @return The smaller, b when they're equal.
  */
-min_u64 :: fn(a: u64, b: u64) -> u64 {
+min_u64 :: fn(a : u64, b : u64) -> u64 {
     return if a < b { a } else { b }
 }
 
@@ -473,6 +506,6 @@ min_u64 :: fn(a: u64, b: u64) -> u64 {
  * @param b The other number, any value; it's what comes back when the two are equal.
  * @return The larger, b when they're equal.
  */
-max_u64 :: fn(a: u64, b: u64) -> u64 {
+max_u64 :: fn(a : u64, b : u64) -> u64 {
     return if a > b { a } else { b }
 }

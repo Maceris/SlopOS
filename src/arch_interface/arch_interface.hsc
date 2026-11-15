@@ -9,9 +9,9 @@
 package arch_interface
 
 import runtime from "base:runtime"
-import boot_info from "../boot_info"
 // The system ABI's types, like CpuFeatures (0019)
 import slop_os from "std:os/slop_os"
+import boot_info from "../boot_info"
 
 /** A physical address, as BootInfo gives them. */
 PhysicalAddress :: boot_info.PhysicalAddress
@@ -90,7 +90,7 @@ detect_features : fn() -> slop_os.CpuFeatures : ---
  * @param features The features detect_features read.
  * @return The missing feature's name, or null when the CPU has the whole baseline.
  */
-missing_baseline_feature : fn(features: ptr[slop_os.CpuFeatures]) -> string? : ---
+missing_baseline_feature : fn(features : ptr[slop_os.CpuFeatures]) -> string? : ---
 
 /**
  * Set up the state shared by every CPU. Called once, on the boot CPU, before init_cpu.
@@ -101,7 +101,7 @@ missing_baseline_feature : fn(features: ptr[slop_os.CpuFeatures]) -> string? : -
  * @param direct_map_offset The virtual address of physical 0 in the bootloader's direct map, through which the
  *     tables are reached.
  */
-init_system : fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) : ---
+init_system : fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) : ---
 
 /**
  * Set up the calling CPU: descriptor tables, entry points, the stacks entries use, user-access protection,
@@ -118,11 +118,11 @@ init_system : fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTa
  * @param stacks The stacks entries run on; the stacks themselves have to stay while the CPU runs.
  */
 init_cpu : fn(
-    system: ptr[ArchSystem],
-    cpu: ptr[mut ArchCpu],
+    system : ptr[ArchSystem],
+    cpu : ptr[mut ArchCpu],
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
-    stacks: ptr[CpuStacks],
+    stacks : ptr[CpuStacks]
 ) : ---
 
 /** W^X: a mapping is never both writable and executable. */
@@ -236,7 +236,7 @@ UnmapError :: enum #backed_by(u8) {
  * @return low The lowest user-mode address.
  * @return high One past the highest user-mode address.
  */
-user_address_range : fn() -> (low, high: VirtualAddress) : ---
+user_address_range : fn() -> (low, high : VirtualAddress) : ---
 
 /**
  * Count the address-space tags the CPU supports.
@@ -251,7 +251,7 @@ address_space_tag_count : fn() -> u32 : ---
  * @param size Any of the sizes; one the CPU lacks gives false rather than failing.
  * @return Whether map can map pages of that size; Size4K always can.
  */
-supports_page_size : fn(size: PageSize) -> bool : ---
+supports_page_size : fn(size : PageSize) -> bool : ---
 
 /**
  * Count the zeroed frames the kernel's own table needs besides its root.
@@ -274,11 +274,11 @@ kernel_half_frames : fn() -> u32 : ---
  * @param direct_map_offset The virtual address of physical 0 in the direct map, through which every table is reached.
  */
 init_kernel_page_table : fn(
-    table: ptr[mut PageTable],
-    root: PhysicalAddress,
-    half: PhysicalAddress,
-    tag: AddressSpaceTag,
-    direct_map_offset: u64,
+    table : ptr[mut PageTable],
+    root : PhysicalAddress,
+    half : PhysicalAddress,
+    tag : AddressSpaceTag,
+    direct_map_offset : u64
 ) : ---
 
 /**
@@ -290,10 +290,10 @@ init_kernel_page_table : fn(
  * @param kernel The kernel's own table, set up by init_kernel_page_table, whose kernel half it shares.
  */
 init_page_table : fn(
-    table: ptr[mut PageTable],
-    root: PhysicalAddress,
-    tag: AddressSpaceTag,
-    kernel: ptr[PageTable],
+    table : ptr[mut PageTable],
+    root : PhysicalAddress,
+    tag : AddressSpaceTag,
+    kernel : ptr[PageTable]
 ) : ---
 
 /**
@@ -314,12 +314,12 @@ init_page_table : fn(
  * @error UnsupportedPageSize The CPU doesn't support size.
  */
 map : fn(
-    table: ptr[mut PageTable],
-    virtual_address: VirtualAddress,
-    physical_address: PhysicalAddress,
-    size: PageSize,
-    mapping: Mapping,
-    tables: ptr[mut TableFrames],
+    table : ptr[mut PageTable],
+    virtual_address : VirtualAddress,
+    physical_address : PhysicalAddress,
+    size : PageSize,
+    mapping : Mapping,
+    tables : ptr[mut TableFrames]
 ) -> Result[void, MapError] : ---
 
 /**
@@ -339,11 +339,11 @@ map : fn(
  * @error NeedFreedSpace freed hasn't room for the tables the call would empty; nothing was changed.
  */
 unmap : fn(
-    table: ptr[mut PageTable],
-    virtual_address: VirtualAddress,
-    size: PageSize,
-    freed: ptr[mut FreedTables],
-    flush: ptr[mut TlbBatch],
+    table : ptr[mut PageTable],
+    virtual_address : VirtualAddress,
+    size : PageSize,
+    freed : ptr[mut FreedTables],
+    flush : ptr[mut TlbBatch]
 ) -> Result[PhysicalAddress, UnmapError] : ---
 
 /**
@@ -359,11 +359,11 @@ unmap : fn(
  * @error PartOfLargerPage A larger page covers the address.
  */
 protect : fn(
-    table: ptr[mut PageTable],
-    virtual_address: VirtualAddress,
-    size: PageSize,
-    mapping: Mapping,
-    flush: ptr[mut TlbBatch],
+    table : ptr[mut PageTable],
+    virtual_address : VirtualAddress,
+    size : PageSize,
+    mapping : Mapping,
+    flush : ptr[mut TlbBatch]
 ) -> Result[void, UnmapError] : ---
 
 /** Where a virtual address is mapped, and how. */
@@ -384,7 +384,7 @@ Translation :: struct {
  * @param freed Where the freed tables' frames go.
  * @return True once only the root is left; false when freed filled first, so L2 empties it and calls again.
  */
-release_user_tables : fn(table: ptr[mut PageTable], freed: ptr[mut FreedTables]) -> bool : ---
+release_user_tables : fn(table : ptr[mut PageTable], freed : ptr[mut FreedTables]) -> bool : ---
 
 /**
  * Find where a virtual address is mapped.
@@ -393,7 +393,7 @@ release_user_tables : fn(table: ptr[mut PageTable], freed: ptr[mut FreedTables])
  * @param virtual_address Any address, not necessarily page-aligned.
  * @return The physical address and the mapping, or null if nothing is mapped there.
  */
-translate : fn(table: ptr[PageTable], virtual_address: VirtualAddress) -> Translation? : ---
+translate : fn(table : ptr[PageTable], virtual_address : VirtualAddress) -> Translation? : ---
 
 /**
  * Tell whether a 4 KiB page was touched since this last asked, clearing the mark that says so, without a TLB flush.
@@ -403,28 +403,28 @@ translate : fn(table: ptr[PageTable], virtual_address: VirtualAddress) -> Transl
  * @return Whether the hardware marked the page accessed; false where nothing's mapped there as a 4 KiB page, or the
  *     hardware doesn't keep the mark.
  */
-take_accessed : fn(table: ptr[mut PageTable], virtual_address: VirtualAddress) -> bool : ---
+take_accessed : fn(table : ptr[mut PageTable], virtual_address : VirtualAddress) -> bool : ---
 
 /**
  * Switch the calling CPU to an address space. The first switch from the bootloader's tables flushes the whole TLB.
  *
  * @param table The address space, which stays in use by this CPU until it switches away.
  */
-activate : fn(table: ptr[PageTable]) : ---
+activate : fn(table : ptr[PageTable]) : ---
 
 /**
  * Flush entries from the calling CPU's TLB; other CPUs' are L2's to flush, with send_ipi.
  *
  * @param batch The entries, not changed: its addresses for its tag, or the whole tag when all is set or it's full.
  */
-flush_tlb : fn(batch: ptr[TlbBatch]) : ---
+flush_tlb : fn(batch : ptr[TlbBatch]) : ---
 
 /**
  * Flush every non-global entry for a tag from the calling CPU's TLB, before the tag is reused.
  *
  * @param tag The address-space tag.
  */
-flush_tlb_tag : fn(tag: AddressSpaceTag) : ---
+flush_tlb_tag : fn(tag : AddressSpaceTag) : ---
 
 /** An interrupt the CPU can receive, local to each CPU: the vector on x86-64, the INTID on AArch64. */
 InterruptId :: distinct alias u32
@@ -453,7 +453,7 @@ MsiMessage :: struct {
  * @return first The first of them.
  * @return count How many there are, contiguous from first.
  */
-device_interrupt_range : fn() -> (first: InterruptId, count: u32) : ---
+device_interrupt_range : fn() -> (first : InterruptId, count : u32) : ---
 
 /**
  * Give the bytes of memory the interrupt controller keeps for each device's MSIs (an ITS's translation table).
@@ -478,7 +478,7 @@ msi_controller_memory : fn() -> u64 : ---
  * @param memory The physical address of msi_controller_memory()'s bytes, zeroed and contiguous, aligned to their size
  *     rounded up to a power of two; the controller keeps it for good. Unused when that size is 0.
  */
-init_msi : fn(memory: PhysicalAddress) : ---
+init_msi : fn(memory : PhysicalAddress) : ---
 
 /**
  * Make a device's MSIs known to the interrupt controller.
@@ -488,14 +488,14 @@ init_msi : fn(memory: PhysicalAddress) : ---
  *     until remove_msi_device. Unused when that size is 0.
  * @param events How many events the device has, numbered from 0.
  */
-add_msi_device : fn(source: u32, memory: PhysicalAddress, events: u32) : ---
+add_msi_device : fn(source : u32, memory : PhysicalAddress, events : u32) : ---
 
 /**
  * Forget a device's MSIs, every event of them; its memory is the caller's again afterwards.
  *
  * @param source The device's source, as add_msi_device took it.
  */
-remove_msi_device : fn(source: u32) : ---
+remove_msi_device : fn(source : u32) : ---
 
 /**
  * Route a device's event to a CPU as an interrupt.
@@ -506,7 +506,7 @@ remove_msi_device : fn(source: u32) : ---
  * @param id The interrupt it arrives as, from device_interrupt_range.
  * @return The message the device sends to raise it, for its driver to program.
  */
-route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+route_msi : fn(source : u32, event : u32, cpu_hardware_id : u64, id : InterruptId) -> MsiMessage : ---
 
 /**
  * Deliver an event route_msi routed to another CPU, or as another interrupt, instead.
@@ -518,7 +518,7 @@ route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -
  * @param id The interrupt it arrives as now.
  * @return The message the device sends to raise it now, which may be the one it had; if not, the driver programs it.
  */
-move_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -> MsiMessage : ---
+move_msi : fn(source : u32, event : u32, cpu_hardware_id : u64, id : InterruptId) -> MsiMessage : ---
 
 /**
  * Stop delivering a device's event.
@@ -527,7 +527,7 @@ move_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) ->
  *     and one that isn't routed is ignored.
  * @param event The event, routed by route_msi.
  */
-unroute_msi : fn(source: u32, event: u32) : ---
+unroute_msi : fn(source : u32, event : u32) : ---
 
 /**
  * Give the page devices write their MSIs to as memory.
@@ -544,7 +544,7 @@ msi_doorbell : fn() -> PhysicalAddress? : ---
  *
  * @param id The interrupt, one the calling CPU took.
  */
-end_of_interrupt : fn(id: InterruptId) : ---
+end_of_interrupt : fn(id : InterruptId) : ---
 
 /**
  * Send an inter-processor interrupt. It doesn't wait for the CPU to take it.
@@ -552,7 +552,7 @@ end_of_interrupt : fn(id: InterruptId) : ---
  * @param cpu_hardware_id The target CPU's hardware ID (BootCpu.hardware_id).
  * @param kind What it asks of the CPU.
  */
-send_ipi : fn(cpu_hardware_id: u64, kind: IpiKind) : ---
+send_ipi : fn(cpu_hardware_id : u64, kind : IpiKind) : ---
 
 /**
  * Tell whether an interrupt is waiting, for preemption points. Interrupts stay disabled.
@@ -614,9 +614,9 @@ ControllerError :: enum #backed_by(u8) {
  * @error NotFound The registers don't identify a controller of that kind.
  */
 init_interrupt_controller : fn(
-    controller: ptr[mut InterruptController],
-    kind: ControllerKind,
-    registers: VirtualAddress,
+    controller : ptr[mut InterruptController],
+    kind : ControllerKind,
+    registers : VirtualAddress
 ) -> Result[u32, ControllerError] : ---
 
 /**
@@ -630,12 +630,12 @@ init_interrupt_controller : fn(
  * @param polarity Which level is active.
  */
 route_wired : fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    cpu_hardware_id: u64,
-    id: InterruptId,
-    trigger: Trigger,
-    polarity: Polarity,
+    controller : ptr[mut InterruptController],
+    line : u32,
+    cpu_hardware_id : u64,
+    id : InterruptId,
+    trigger : Trigger,
+    polarity : Polarity
 ) : ---
 
 /**
@@ -651,12 +651,12 @@ route_wired : fn(
  * @param polarity Which level is active.
  */
 route_wired_remapped : fn(
-    controller: ptr[mut InterruptController],
-    line: u32,
-    message: MsiMessage,
-    id: InterruptId,
-    trigger: Trigger,
-    polarity: Polarity,
+    controller : ptr[mut InterruptController],
+    line : u32,
+    message : MsiMessage,
+    id : InterruptId,
+    trigger : Trigger,
+    polarity : Polarity
 ) : ---
 
 /**
@@ -666,7 +666,7 @@ route_wired_remapped : fn(
  *     registers written; the rest of the line's routing is kept.
  * @param line The line, from 0, below the controller's count of lines; it isn't checked. It needn't be routed.
  */
-mask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
+mask_wired : fn(controller : ptr[mut InterruptController], line : u32) : ---
 /**
  * Unmask a wired line, so it raises its interrupt again.
  *
@@ -675,7 +675,7 @@ mask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
  * @param line The line, from 0, below the controller's count of lines and routed by route_wired; neither is
  *     checked.
  */
-unmask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
+unmask_wired : fn(controller : ptr[mut InterruptController], line : u32) : ---
 
 /**
  * Calibrate the counter and start the timer, on the calling CPU.
@@ -684,7 +684,7 @@ unmask_wired : fn(controller: ptr[mut InterruptController], line: u32) : ---
  *     find it another way.
  * @return The counter's frequency in Hz.
  */
-init_timer : fn(hint: u64?) -> u64 : ---
+init_timer : fn(hint : u64?) -> u64 : ---
 
 /**
  * Read the calling CPU's counter.
@@ -698,7 +698,7 @@ counter : fn() -> u64 : ---
  *
  * @param value The counter value to fire at; one already past fires at once.
  */
-set_deadline : fn(value: u64) : ---
+set_deadline : fn(value : u64) : ---
 
 /** Cancel the calling CPU's deadline, so no timer interrupt comes. */
 cancel_deadline : fn() : ---
@@ -733,7 +733,7 @@ VectorConfig :: struct {
  * @param registers The thread's registers, all overwritten.
  * @param start Where it starts, and its argument.
  */
-init_user_registers : fn(registers: ptr[mut UserRegisters], start: ptr[UserStart]) : ---
+init_user_registers : fn(registers : ptr[mut UserRegisters], start : ptr[UserStart]) : ---
 
 /**
  * Read which system call a thread made.
@@ -741,7 +741,7 @@ init_user_registers : fn(registers: ptr[mut UserRegisters], start: ptr[UserStart
  * @param registers The thread's registers, saved at the system call's entry.
  * @return The call's number, from the system ABI's number register.
  */
-syscall_number : fn(registers: ptr[UserRegisters]) -> u64 : ---
+syscall_number : fn(registers : ptr[UserRegisters]) -> u64 : ---
 /**
  * Read one of a system call's arguments.
  *
@@ -749,7 +749,7 @@ syscall_number : fn(registers: ptr[UserRegisters]) -> u64 : ---
  * @param index Which argument, from 0, in the system ABI's order.
  * @return The value of the argument's register.
  */
-syscall_argument : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
+syscall_argument : fn(registers : ptr[UserRegisters], index : u32) -> u64 : ---
 /**
  * Set a system call's result, for when the thread returns to user mode.
  *
@@ -757,7 +757,7 @@ syscall_argument : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
  *     registers change.
  * @param result The result, written to the system ABI's result registers.
  */
-set_syscall_result : fn(registers: ptr[mut UserRegisters], result: ptr[SyscallResult]) : ---
+set_syscall_result : fn(registers : ptr[mut UserRegisters], result : ptr[SyscallResult]) : ---
 /**
  * Read where a thread is in user mode.
  *
@@ -765,7 +765,7 @@ set_syscall_result : fn(registers: ptr[mut UserRegisters], result: ptr[SyscallRe
  *     read.
  * @return The user-mode instruction pointer it returns to.
  */
-instruction_pointer : fn(registers: ptr[UserRegisters]) -> VirtualAddress : ---
+instruction_pointer : fn(registers : ptr[UserRegisters]) -> VirtualAddress : ---
 
 /**
  * Go back to the system call instruction, so returning to user mode makes the call again.
@@ -774,7 +774,7 @@ instruction_pointer : fn(registers: ptr[UserRegisters]) -> VirtualAddress : ---
  *
  * @param registers The registers of a thread that entered the kernel by a system call.
  */
-restart_syscall : fn(registers: ptr[mut UserRegisters]) : ---
+restart_syscall : fn(registers : ptr[mut UserRegisters]) : ---
 
 /*
  * A thread's registers as a debugger sees them, by index, in the order the system ABI gives for this
@@ -794,7 +794,7 @@ user_register_count : fn() -> u32 : ---
  * @param index The register's index in slop_os.THREAD_REGISTERS' order, below user_register_count().
  * @return The register's value as user mode sees it; 0 for an index at user_register_count() or past it.
  */
-get_user_register : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
+get_user_register : fn(registers : ptr[UserRegisters], index : u32) -> u64 : ---
 /**
  * Set one of a thread's registers, as a debugger sets it.
  *
@@ -808,7 +808,7 @@ get_user_register : fn(registers: ptr[UserRegisters], index: u32) -> u64 : ---
  * @return False, changing nothing, for a value user mode can't have (an instruction or stack pointer outside user
  *     addresses); true once it's set.
  */
-set_user_register : fn(registers: ptr[mut UserRegisters], index: u32, value: u64) -> bool : ---
+set_user_register : fn(registers : ptr[mut UserRegisters], index : u32, value : u64) -> bool : ---
 
 /**
  * Set a thread's debugging state from what a debugger asks (thread_set_debug), and its saved registers for stepping.
@@ -824,7 +824,12 @@ set_user_register : fn(registers: ptr[mut UserRegisters], index: u32, value: u64
  * @param slots The breakpoints and watchpoints, slop_os.DEBUG_SLOTS of them at most.
  * @return True once it's set; false, with nothing changed, if a slot is one the CPU can't set.
  */
-set_debug : fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters], step: bool, slots: slop_os.DebugSlot[]) -> bool : ---
+set_debug : fn(
+    debug : ptr[mut DebugRegisters],
+    registers : ptr[mut UserRegisters],
+    step : bool,
+    slots : slop_os.DebugSlot[]
+) -> bool : ---
 
 /**
  * Load a thread's debugging state into the calling CPU, as it returns to user mode; one with none loads nothing.
@@ -832,7 +837,7 @@ set_debug : fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters]
  * @param debug The thread's state.
  * @param registers The thread's registers, about to be loaded, which AArch64 marks to step one instruction.
  */
-debug_on : fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) : ---
+debug_on : fn(debug : ptr[DebugRegisters], registers : ptr[mut UserRegisters]) : ---
 
 /**
  * Have the calling CPU trap user mode's reads of its counter, or let them run, for the thread about to return to user
@@ -840,7 +845,7 @@ debug_on : fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) : -
  *
  * @param trapped Whether they trap.
  */
-set_counter_trap : fn(trapped: bool) : ---
+set_counter_trap : fn(trapped : bool) : ---
 
 /**
  * Run a trapped read of the counter, if that's what a thread's instruction is: its value put where the instruction
@@ -851,7 +856,7 @@ set_counter_trap : fn(trapped: bool) : ---
  *     couldn't be.
  * @return The value read; null if the instruction isn't a counter read, with the registers left as they were.
  */
-emulate_counter_read : fn(registers: ptr[mut UserRegisters], instruction: u32) -> u64? : ---
+emulate_counter_read : fn(registers : ptr[mut UserRegisters], instruction : u32) -> u64? : ---
 
 /**
  * Turn the calling CPU's breakpoints and watchpoints off, if a thread's are loaded, as it enters the kernel from user
@@ -864,7 +869,7 @@ debug_off : fn() : ---
  *
  * @param registers The thread's registers, loaded into the CPU.
  */
-return_to_user #never_returns : fn(registers: ptr[UserRegisters]) : ---
+return_to_user #never_returns : fn(registers : ptr[UserRegisters]) : ---
 
 /**
  * Give the bytes a thread's vector state takes.
@@ -872,7 +877,7 @@ return_to_user #never_returns : fn(registers: ptr[UserRegisters]) : ---
  * @param config Which state the thread uses.
  * @return The VectorState's size in bytes, for L2 to allocate.
  */
-vector_state_size : fn(config: VectorConfig) -> usize : ---
+vector_state_size : fn(config : VectorConfig) -> usize : ---
 /**
  * Give the alignment a VectorState needs.
  *
@@ -885,14 +890,14 @@ vector_state_alignment : fn() -> usize : ---
  * @param state The state, vector_state_size(config) bytes aligned to vector_state_alignment().
  * @param config Which state the thread uses.
  */
-init_vector_state : fn(state: ptr[mut VectorState], config: VectorConfig) : ---
+init_vector_state : fn(state : ptr[mut VectorState], config : VectorConfig) : ---
 
 /**
  * Save the calling CPU's vector registers into a thread's state.
  *
  * @param state The state, set up with the config the CPU has loaded.
  */
-save_vector_state : fn(state: ptr[mut VectorState]) : ---
+save_vector_state : fn(state : ptr[mut VectorState]) : ---
 
 /**
  * Load a thread's state into the calling CPU's vector registers, switching which state components are
@@ -900,7 +905,7 @@ save_vector_state : fn(state: ptr[mut VectorState]) : ---
  *
  * @param state The state, set up by init_vector_state.
  */
-restore_vector_state : fn(state: ptr[VectorState]) : ---
+restore_vector_state : fn(state : ptr[VectorState]) : ---
 
 /** What kind of access faulted. */
 Access :: enum #backed_by(u8) {
@@ -996,7 +1001,7 @@ has_io_ports : fn() -> bool : ---
  * @param width How many bytes to read: 1, 2 or 4.
  * @return The value read, zero-extended; null for another width, or where there are no I/O ports.
  */
-port_read : fn(port: u16, width: u32) -> u32? : ---
+port_read : fn(port : u16, width : u32) -> u32? : ---
 
 /**
  * Write to an I/O port.
@@ -1006,7 +1011,7 @@ port_read : fn(port: u16, width: u32) -> u32? : ---
  * @param value The value, of which the low width bytes are written.
  * @return True once written; false for another width, or where there are no I/O ports.
  */
-port_write : fn(port: u16, width: u32, value: u32) -> bool : ---
+port_write : fn(port : u16, width : u32, value : u32) -> bool : ---
 
 /**
  * Set up the architecture's early console. Called once, by L0, before anything is written to it.
@@ -1015,14 +1020,14 @@ port_write : fn(port: u16, width: u32, value: u32) -> bool : ---
  *     (AArch64's PL011) is reached, in the bootloader's tables and then in the kernel's own (init_kernel_page_table).
  * @param firmware The firmware's tables, which say where the console is.
  */
-early_console_init : fn(direct_map_offset: u64, firmware: ptr[boot_info.FirmwareTables]) : ---
+early_console_init : fn(direct_map_offset : u64, firmware : ptr[boot_info.FirmwareTables]) : ---
 
 /**
  * Write to the architecture's early console, before any driver exists.
  *
  * @param text The text, written as it is.
  */
-early_console_write : fn(text: string) : ---
+early_console_write : fn(text : string) : ---
 
 /**
  * Ask the emulator the kernel runs in to exit, for tests that boot the kernel.
@@ -1032,7 +1037,7 @@ early_console_write : fn(text: string) : ---
  *
  * @param code The exit code to ask for; how the emulator reports it is the emulator's.
  */
-test_exit : fn(code: u32) : ---
+test_exit : fn(code : u32) : ---
 
 /**
  * Choose how the machine resets and turns off, for reset and power_off to use later. Called once, at boot.
@@ -1041,14 +1046,14 @@ test_exit : fn(code: u32) : ---
  * @param direct_map_offset Where physical address 0 is in the bootloader's direct map; 0 means there's none.
  * @return The architecture's method, opaque to L2, which only passes it back; 0 where it found none.
  */
-reset_method : fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u8 : ---
+reset_method : fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> u8 : ---
 
 /**
  * Reset the machine, warm, keeping RAM where the hardware does, so the next boot can read the panic record.
  *
  * @param method What reset_method chose. Returns only if the machine didn't reset, as without a method.
  */
-reset : fn(method: u8) : ---
+reset : fn(method : u8) : ---
 
 /**
  * Tell whether power_off turns the machine off by itself, without what the firmware's tables say (decisions/0182).
@@ -1057,14 +1062,14 @@ reset : fn(method: u8) : ---
  * @return True where the architecture's own means turn it off (AArch64's PSCI); false where L2 has to be told how
  *     (x86-64's ACPI, power_set_off) or there's no way.
  */
-can_power_off : fn(method: u8) -> bool : ---
+can_power_off : fn(method : u8) -> bool : ---
 
 /**
  * Turn the machine off by the architecture's own means, as can_power_off says there are.
  *
  * @param method What reset_method chose. Returns only if the machine didn't turn off.
  */
-power_off : fn(method: u8) : ---
+power_off : fn(method : u8) : ---
 
 /**
  * Raise an NMI on the calling CPU, for tests of the critical-event entry that resumes what it
@@ -1078,7 +1083,7 @@ test_nmi : fn() : ---
  * @param cpu_hardware_id The CPU's hardware ID.
  * @return True if it was sent; false where the architecture has no NMI to send, or none set up.
  */
-send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
+send_nmi : fn(cpu_hardware_id : u64) -> bool : ---
 
 /**
  * Name a register of those the architecture's NMI entry passes kernel_entry.nmi, for a lockup's report.
@@ -1086,7 +1091,7 @@ send_nmi : fn(cpu_hardware_id: u64) -> bool : ---
  * @param index The register's place among them, from 0.
  * @return Its name, a constant, like "rax" or "x29"; "?" past them.
  */
-nmi_register_name : fn(index: usize) -> string : ---
+nmi_register_name : fn(index : usize) -> string : ---
 
 /**
  * Log, once at boot, what the CPU has against exploits and transient execution (decisions/0186, 0097): its
@@ -1094,7 +1099,7 @@ nmi_register_name : fn(index: usize) -> string : ---
  *
  * @param features The boot CPU's features, from detect_features.
  */
-log_hardening : fn(features: ptr[slop_os.CpuFeatures]) : ---
+log_hardening : fn(features : ptr[slop_os.CpuFeatures]) : ---
 
 /**
  * Give the kernel's pointer authentication key, once at boot, after init_system (decisions/0186): each CPU loads it,
@@ -1104,7 +1109,7 @@ log_hardening : fn(features: ptr[slop_os.CpuFeatures]) : ---
  * @param system The shared state.
  * @param key The key's 128 bits, random.
  */
-set_kernel_pointer_key : fn(system: ptr[mut ArchSystem], key: u64[2]) : ---
+set_kernel_pointer_key : fn(system : ptr[mut ArchSystem], key : u64[2]) : ---
 
 /**
  * Say which pointer authentication key the calling CPU returns to user mode with, the thread's process's
@@ -1113,7 +1118,7 @@ set_kernel_pointer_key : fn(system: ptr[mut ArchSystem], key: u64[2]) : ---
  *
  * @param key The key's 128 bits.
  */
-set_user_pointer_key : fn(key: u64[2]) : ---
+set_user_pointer_key : fn(key : u64[2]) : ---
 
 /**
  * Tell whether the calling CPU gives user threads shadow stacks (decisions/0186): x86-64's CET shadow stacks.
@@ -1129,7 +1134,7 @@ has_user_shadow_stacks : fn() -> bool : ---
  * @param landing_pads Whether its indirect branches must land on landing pads.
  * @param shadow_stack Its shadow-stack pointer; 0 for no shadow stack.
  */
-load_user_control_flow : fn(landing_pads: bool, shadow_stack: u64) : ---
+load_user_control_flow : fn(landing_pads : bool, shadow_stack : u64) : ---
 
 /**
  * Read the calling CPU's user-mode shadow-stack pointer, as a thread that has a shadow stack enters the kernel.
@@ -1139,7 +1144,8 @@ load_user_control_flow : fn(landing_pads: bool, shadow_stack: u64) : ---
 read_user_shadow_stack : fn() -> u64 : ---
 
 /**
- * Tell whether the kernel's own code runs on shadow stacks on the calling CPU's kind (decisions/0186, Hd): AArch64's GCS
+ * Tell whether the kernel's own code runs on shadow stacks on the calling CPU's kind (decisions/0186, Hd): AArch64's
+ * GCS
  * at EL1, x86-64's supervisor shadow stacks. Where it does, L2 gives each CPU one (set_kernel_shadow_stack) before it
  * first goes idle; called after the CPU has switched to the kernel's own tables (activate).
  *
@@ -1157,7 +1163,7 @@ has_kernel_shadow_stacks : fn() -> bool : ---
  * @param base The shadow stack's lowest kernel virtual address, page aligned.
  * @param size Its size in bytes, a multiple of a page.
  */
-set_kernel_shadow_stack : fn(cpu: ptr[mut ArchCpu], base: u64, size: u64) : ---
+set_kernel_shadow_stack : fn(cpu : ptr[mut ArchCpu], base : u64, size : u64) : ---
 
 /** What hardware control-flow integrity the kernel's own code runs under (decisions/0186, Hd). */
 KernelControlFlow :: struct {
@@ -1207,4 +1213,4 @@ test_device : fn() -> TestDevice : ---
  *
  * @param on True to start them, false to stop them.
  */
-test_device_interrupts : fn(on: bool) : ---
+test_device_interrupts : fn(on : bool) : ---

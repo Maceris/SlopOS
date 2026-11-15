@@ -44,25 +44,239 @@ Keymap :: struct {
  * where 0x32, the non-US hash key, types what an ISO layout's does. Enter, Escape, Backspace and Tab are typed by
  * typed, not the table.
  */
-US :: Keymap.{name = "us", title = "US",
-    plain = string.["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
-        "w", "x", "y", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "", "", "", "", " ", "-", "=", "[", "]", "\\", "#",
-        ";", "'", "`", ",", ".", "/"],
-    shifted = string.["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
-        "W", "X", "Y", "Z", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "", "", "", "", " ", "_", "+", "{", "}", "|", "~",
-        ":", "\"", "~", "<", ">", "?"]}
+US :: Keymap.{
+    name = "us",
+    title = "US",
+    plain = string.[
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "w",
+        "x",
+        "y",
+        "z",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "0",
+        "",
+        "",
+        "",
+        "",
+        " ",
+        "-",
+        "=",
+        "[",
+        "]",
+        "\\",
+        "#",
+        ";",
+        "'",
+        "`",
+        ",",
+        ".",
+        "/"
+    ],
+    shifted = string.[
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "P",
+        "Q",
+        "R",
+        "S",
+        "T",
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z",
+        "!",
+        "@",
+        "#",
+        "$",
+        "%",
+        "^",
+        "&",
+        "*",
+        "(",
+        ")",
+        "",
+        "",
+        "",
+        "",
+        " ",
+        "_",
+        "+",
+        "{",
+        "}",
+        "|",
+        "~",
+        ":",
+        "\"",
+        "~",
+        "<",
+        ">",
+        "?"
+    ],
+}
 
 /**
  * The UK layout: as the US one but for shifted 2 and 3, the quote key's shift, grave's shift, and hash and tilde by
  * Enter.
  */
-UK :: Keymap.{name = "uk", title = "UK",
-    plain = string.["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
-        "w", "x", "y", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "", "", "", "", " ", "-", "=", "[", "]", "#", "#",
-        ";", "'", "`", ",", ".", "/"],
-    shifted = string.["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
-        "W", "X", "Y", "Z", "!", "\"", "£", "$", "%", "^", "&", "*", "(", ")", "", "", "", "", " ", "_", "+", "{", "}", "~", "~",
-        ":", "@", "¬", "<", ">", "?"]}
+UK :: Keymap.{
+    name = "uk",
+    title = "UK",
+    plain = string.[
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "w",
+        "x",
+        "y",
+        "z",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "0",
+        "",
+        "",
+        "",
+        "",
+        " ",
+        "-",
+        "=",
+        "[",
+        "]",
+        "#",
+        "#",
+        ";",
+        "'",
+        "`",
+        ",",
+        ".",
+        "/"
+    ],
+    shifted = string.[
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "P",
+        "Q",
+        "R",
+        "S",
+        "T",
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z",
+        "!",
+        "\"",
+        "£",
+        "$",
+        "%",
+        "^",
+        "&",
+        "*",
+        "(",
+        ")",
+        "",
+        "",
+        "",
+        "",
+        " ",
+        "_",
+        "+",
+        "{",
+        "}",
+        "~",
+        "~",
+        ":",
+        "@",
+        "¬",
+        "<",
+        ">",
+        "?"
+    ],
+}
 
 /** Every layout, in the order the login screen goes through them. */
 LAYOUTS :: Keymap.[US, UK]
@@ -73,7 +287,7 @@ LAYOUTS :: Keymap.[US, UK]
  * @param name The layout's name, as Keymap's name has it; it's compared exactly, so case matters.
  * @return The layout, or null if none has that name.
  */
-find :: fn(name: string) -> Keymap? {
+find :: fn(name : string) -> Keymap? {
     for layout in LAYOUTS {
         if layout.name == name {
             return layout
@@ -88,7 +302,7 @@ find :: fn(name: string) -> Keymap? {
  * @param name The current layout's name.
  * @return The layout after it, going round to the first after the last; the first, too, for a name no layout has.
  */
-next :: fn(name: string) -> Keymap {
+next :: fn(name : string) -> Keymap {
     for layout, i in LAYOUTS {
         if layout.name == name {
             return LAYOUTS[(i + 1) % LAYOUTS.count]
@@ -110,7 +324,7 @@ next :: fn(name: string) -> Keymap {
  * @return The bytes of its text, UTF-8, a static string; empty for a key that types nothing, or one outside the
  *     layout's table.
  */
-typed :: fn(keymap: Keymap, usage: u16, shifted: bool) -> string {
+typed :: fn(keymap : Keymap, usage : u16, shifted : bool) -> string {
     if usage == USAGE_ENTER {
         return "\n"
     }
@@ -135,7 +349,7 @@ typed :: fn(keymap: Keymap, usage: u16, shifted: bool) -> string {
  * @param usage The key, by its USB HID usage on the keyboard page (7).
  * @return The digit, 0 to 9, or null if the key doesn't type one without shift.
  */
-digit_of :: fn(keymap: Keymap, usage: u16) -> u32? {
+digit_of :: fn(keymap : Keymap, usage : u16) -> u32? {
     bytes :: string_bytes(typed(keymap, usage, false))
     if bytes.count == 1 && bytes[0] >= cast[u8]('0') && bytes[0] <= cast[u8]('9') {
         return cast[u32](bytes[0] - cast[u8]('0'))

@@ -165,7 +165,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for every request: a buffer shown again shows the same, and the cursor set again is as it was.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Describe => true
         case GetBuffer(_) => true
@@ -191,7 +191,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Display]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Display]? {
     pair :: os.channel_for[Display](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

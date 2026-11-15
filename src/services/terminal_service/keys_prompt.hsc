@@ -9,12 +9,12 @@ package terminal_service
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import read_only_dir from "std:os/slop_os/read_only_dir"
 import text_buffer from "std:text_buffer"
 import account_records from "../../account_records"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
 import prompt from "../../protocols/prompt"
-import read_only_dir from "std:os/slop_os/read_only_dir"
 
 /**
  * Tell whether a request's kind changes the user's keys, which the elevation screen confirms.
@@ -22,19 +22,20 @@ import read_only_dir from "std:os/slop_os/read_only_dir"
  * @param kind The kind.
  * @return True for AddKey and RemoveKey.
  */
-is_keys :: fn(kind: prompt.Kind) -> bool {
+is_keys :: fn(kind : prompt.Kind) -> bool {
     return kind == .AddKey || kind == .RemoveKey
 }
 
 /**
- * Ask the account service one thing on a connection of its own, dialed for it and closed after, and wait for its answer.
+ * Ask the account service one thing on a connection of its own, dialed for it and closed after, and wait for its
+ * answer.
  *
  * @param service The service, whose connector to the account service is dialed.
  * @param out The request.
  * @param into Where the answer's received.
  * @return True if it's answered, the answer in into; false without the account service, or if it couldn't be asked.
  */
-ask_accounts_now :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> bool {
+ask_accounts_now :: fn(service : ptr[mut Service], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> bool {
     if service.accounts_connector == NONE {
         return false
     }
@@ -62,7 +63,7 @@ ask_accounts_now :: fn(service: ptr[mut Service], out: ptr[mut os.Outgoing], int
  * @param index The view whose prompt connection asked.
  * @param home The request's home, which is closed here.
  */
-list_keys :: fn(service: ptr[mut Service], index: usize, home: slop_os.Channel) {
+list_keys :: fn(service : ptr[mut Service], index : usize, home : slop_os.Channel) {
     if home != NONE {
         _ = slop_os.handle_close(cast[slop_os.Handle](home))
     }
@@ -96,18 +97,24 @@ list_keys :: fn(service: ptr[mut Service], index: usize, home: slop_os.Channel) 
  * @param service The service, its elevation screen up for the active view's AddKey or RemoveKey.
  * @return True once it's done; false if the account service refused it or isn't there, which is logged.
  */
-change_key :: fn(service: ptr[mut Service]) -> bool {
+change_key :: fn(service : ptr[mut Service]) -> bool {
     shown :: view(service)
     if !shown.logged_in || shown.user_count == 0 {
         return false
     }
     adding :: shown.ask.kind == .AddKey
-    key :: if adding { first_of(shown.ask.key_line[0..<shown.ask.key_line.count], shown.ask.key_line_count) }
-        else { first_of(shown.ask.suggested[0..<shown.ask.suggested.count], shown.ask.suggested_count) }
+    key :: if adding {
+        first_of(shown.ask.key_line[0..<shown.ask.key_line.count], shown.ask.key_line_count)
+    }
+    else {
+        first_of(shown.ask.suggested[0..<shown.ask.suggested.count], shown.ask.suggested_count)
+    }
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    change :: accounts.KeyChange.{name = os.append(&out, first_of(shown.user[0..<shown.user.count], shown.user_count)),
-        key = os.append(&out, key)}
+    change :: accounts.KeyChange.{
+        name = os.append(&out, first_of(shown.user[0..<shown.user.count], shown.user_count)),
+        key = os.append(&out, key),
+    }
     request^ = if adding { accounts.Request.AddKey(change) } else { accounts.Request.RemoveKey(change) }
     into := os.Incoming.{}
     if !ask_accounts_now(service, &out, &into) {
@@ -134,7 +141,7 @@ change_key :: fn(service: ptr[mut Service]) -> bool {
  * @param line The key's line.
  * @param into Where the description's appended.
  */
-describe_key :: fn(line: u8[], into: ptr[mut text_buffer.TextBuffer]) {
+describe_key :: fn(line : u8[], into : ptr[mut text_buffer.TextBuffer]) {
     match account_records.key_fingerprint(line) {
         case Some(printed) => text_buffer.append(into, string_of(&printed[0], 50))
         case None => {
@@ -157,7 +164,7 @@ describe_key :: fn(line: u8[], into: ptr[mut text_buffer.TextBuffer]) {
  * @param service The service.
  * @return The fingerprint, SHA256:...; null without the directory or the file, or if it isn't a key's line.
  */
-ssh_host_line :: fn(service: ptr[mut Service]) -> u8[50]? {
+ssh_host_line :: fn(service : ptr[mut Service]) -> u8[50]? {
     public :: service.ssh_public or_return null
     port :: os.port_for(slop_os.startup_block().budget, public.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))

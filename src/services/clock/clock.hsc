@@ -12,7 +12,8 @@
  * 0x32, where PCs keep it, if what's there is a century from 19 to 21, or taken as 20.
  *
  * The clock has a floor (decisions/0188, 13e): it starts no earlier than when the running generation was built, which
- * the kernel's command line says (built=<seconds>), nor than the time it saved last. A real-time clock behind its floor,
+ * the kernel's command line says (built=<seconds>), nor than the time it saved last. A real-time clock behind its
+ * floor,
  * as one whose battery's flat is, is set forward to it, so certificates are checked against a time that may be late,
  * but never decades early. The time's saved in the directory a Keep gives, once the system volume's there, as a file
  * of its seconds (SAVED_FILE): read then, every clock_setting.SAVE_MINUTES, after each Set, and as the service stops.
@@ -20,17 +21,20 @@
  * And it keeps the time from an NTS server (13g, nts.hsc), once the supervisor's Synchronize has given it one, with a
  * network connection allowing it and the trust store: stepped to it, or slewed.
  */
-//SPEC: Motorola MC146818A data sheet (registers 0x00 to 0x0b, update-in-progress, SET, DM and 24/12)
-//SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
+/*
+ * SPEC: Motorola MC146818A data sheet (registers 0x00 to 0x0b, update-in-progress, SET, DM and 24/12)
+ * SPEC: Arm PrimeCell Real Time Clock (PL031) Technical Reference Manual, §3 (RTCDR, RTCLR, RTCCR)
+ */
+
 package clock
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import time from "std:time"
 import slop_os from "std:os/slop_os"
-import text_buffer from "std:text_buffer"
 import dir from "std:os/slop_os/dir"
+import text_buffer from "std:text_buffer"
+import time from "std:time"
 import service_kit from "../../libraries/service_kit"
 import clock_setting from "../../protocols/clock_setting"
 
@@ -142,8 +146,13 @@ SAVE_INTERVAL : u64 : cast[u64](clock_setting.SAVE_MINUTES) * 60 * 1_000_000_000
  * @return Only on failing to start: 1 if the clock page can't be mapped, 2 if the PL031's registers can't be, 3 without
  *     a real-time clock, 4 without a port, and 5 if its first client can't be added. Serving, it doesn't return.
  */
-main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, clock: slop_os.Memory,
-    clients: os.Listener[clock_setting.ClockSetting], command_line: slop_os.Memory?) -> int {
+main :: fn(
+    rtc_ports : slop_os.IoPortRange?,
+    rtc_registers : slop_os.Memory?,
+    clock : slop_os.Memory,
+    clients : os.Listener[clock_setting.ClockSetting],
+    command_line : slop_os.Memory?
+) -> int {
     block :: slop_os.startup_block()
     service := Clock.{}
     service.rtc.ports = rtc_ports
@@ -166,8 +175,12 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
         return 3
     }
     built :: match command_line {
-        case Some(memory) => cast[i64](service_kit.number_of(service_kit.word_after(service_kit.text_of(block, memory) or_else "", "built=")
-            or_else "") or_else 0)
+        case Some(
+            memory
+        ) => cast[i64](service_kit.number_of(
+            service_kit.word_after(service_kit.text_of(block, memory) or_else "", "built=") or_else ""
+        )
+            or_else 0)
         case None => cast[i64](0)
     }
     match read_rtc(&service.rtc) {
@@ -221,7 +234,7 @@ main :: fn(rtc_ports: slop_os.IoPortRange?, rtc_registers: slop_os.Memory?, cloc
  * @param service The clock service's state.
  * @param utc The time, in nanoseconds since 1970 UTC.
  */
-put_time :: fn(service: ptr[mut Clock], utc: i64) {
+put_time :: fn(service : ptr[mut Clock], utc : i64) {
     at :: slop_os.clock_monotonic() or_else 0
     publish(service.page, utc, at)
     service.utc = utc
@@ -235,7 +248,7 @@ put_time :: fn(service: ptr[mut Clock], utc: i64) {
  * @param service The clock service's state.
  * @return Nanoseconds since 1970 UTC; null if no time's been put on the page.
  */
-time_now :: fn(service: ptr[Clock]) -> i64? {
+time_now :: fn(service : ptr[Clock]) -> i64? {
     if !service.published {
         return null
     }
@@ -244,14 +257,15 @@ time_now :: fn(service: ptr[Clock]) -> i64? {
 }
 
 /**
- * Set the clock forward to a floor, if it's behind it: the page, and the real-time clock, which is logged if it won't take
+ * Set the clock forward to a floor, if it's behind it: the page, and the real-time clock, which is logged if it won't
+ * take
  * it.
  *
  * @param service The clock service's state.
  * @param floor The floor, in seconds since 1970 UTC; 0 for none, which changes nothing.
  * @param what What the floor is, as a phrase to follow "when", "the time", or the like: "this generation was built".
  */
-raise_to :: fn(service: ptr[mut Clock], floor: i64, what: string) {
+raise_to :: fn(service : ptr[mut Clock], floor : i64, what : string) {
     if floor <= 0 {
         return void
     }
@@ -267,8 +281,12 @@ raise_to :: fn(service: ptr[mut Clock], floor: i64, what: string) {
     append_time(&shown, floor)
     put_time(service, floor * NANOSECONDS)
     written :: write_rtc(&service.rtc, floor)
-    runtime.log_info("the clock was behind when %, %: set forward to it%", what, text_buffer.as_string(&shown),
-        if written { "" } else { ", but the real-time clock won't take it" })
+    runtime.log_info(
+        "the clock was behind when %, %: set forward to it%",
+        what,
+        text_buffer.as_string(&shown),
+        if written { "" } else { ", but the real-time clock won't take it" }
+    )
 }
 
 /**
@@ -279,7 +297,7 @@ raise_to :: fn(service: ptr[mut Clock], floor: i64, what: string) {
  * @param end The directory's end, which the service takes over, even when it fails.
  * @return True if it's kept there; false if a port for it couldn't be made, the directory before kept.
  */
-keep :: fn(service: ptr[mut Clock], port: slop_os.Port, end: slop_os.Channel) -> bool {
+keep :: fn(service : ptr[mut Clock], port : slop_os.Port, end : slop_os.Channel) -> bool {
     directory, error :: os.directory_on(end)
     if error != null {
         return false
@@ -301,7 +319,7 @@ keep :: fn(service: ptr[mut Clock], port: slop_os.Port, end: slop_os.Channel) ->
  * @param service The clock service's state, keeping the time.
  * @return The seconds since 1970 UTC saved; 0 if there's no file, or it isn't a number.
  */
-read_saved :: fn(service: ptr[mut Clock]) -> i64 {
+read_saved :: fn(service : ptr[mut Clock]) -> i64 {
     file :: os.open_in(service.directory, SAVED_FILE, .READ) or_return 0
     defer os.close(file)
     storage : u8[32]
@@ -319,7 +337,7 @@ read_saved :: fn(service: ptr[mut Clock]) -> i64 {
  *
  * @param service The clock service's state.
  */
-save :: fn(service: ptr[mut Clock]) {
+save :: fn(service : ptr[mut Clock]) {
     if !service.keeping {
         return void
     }
@@ -341,7 +359,7 @@ save :: fn(service: ptr[mut Clock]) {
  * @param service The clock service's state.
  * @param port The port.
  */
-schedule_save :: fn(service: ptr[mut Clock], port: slop_os.Port) {
+schedule_save :: fn(service : ptr[mut Clock], port : slop_os.Port) {
     service.next_save = (slop_os.clock_monotonic() or_else 0) + SAVE_INTERVAL
     _ = slop_os.port_set_timer(port, SAVE_KEY, service.next_save)
 }
@@ -359,7 +377,13 @@ schedule_save :: fn(service: ptr[mut Clock], port: slop_os.Port) {
  * @param port The port every client's end is bound to.
  * @param into Where each request is received; overwritten by each.
  */
-serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], index: usize, port: slop_os.Port, into: ptr[mut os.Incoming]) {
+serve :: fn(
+    service : ptr[mut Clock],
+    connected : ptr[mut service_kit.Clients],
+    index : usize,
+    port : slop_os.Port,
+    into : ptr[mut os.Incoming]
+) {
     if index >= connected.ends.count {
         return void
     }
@@ -427,7 +451,7 @@ serve :: fn(service: ptr[mut Clock], connected: ptr[mut service_kit.Clients], in
  * @return True if it's set; false, logged, with nothing changed, if the year is out of range or the clock wouldn't take
  *     it.
  */
-set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
+set :: fn(service : ptr[mut Clock], utc : i64) -> bool {
     seconds :: time.floor_divide(utc, NANOSECONDS)
     year :: time.utc(time.Instant.{seconds = seconds}).year
     if year < FIRST_YEAR || year > LAST_YEAR || !write_rtc(&service.rtc, seconds) {
@@ -450,7 +474,11 @@ set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
         other : u8[32]
         read := text_buffer.make(other)
         append_time(&read, back)
-        runtime.log_warn("set to %, but the real-time clock reads %", text_buffer.as_string(&shown), text_buffer.as_string(&read))
+        runtime.log_warn(
+            "set to %, but the real-time clock reads %",
+            text_buffer.as_string(&shown),
+            text_buffer.as_string(&read)
+        )
     }
     return true
 }
@@ -463,7 +491,7 @@ set :: fn(service: ptr[mut Clock], utc: i64) -> bool {
  * @param utc The time, in nanoseconds since 1970 UTC.
  * @param at The monotonic clock's reading, in nanoseconds, that utc was the time at; readers count on from it.
  */
-publish :: fn(page: ptr[mut runtime.SlopOsClockPage], utc: i64, at: u64) {
+publish :: fn(page : ptr[mut runtime.SlopOsClockPage], utc : i64, at : u64) {
     sequence :: intrinsics.atomic_load_u64_no_fence(&page.sequence)
     // Odd while it's written; from 0 to 1 the first time
     writing :: if (sequence & 1) == 0 { sequence + 1 } else { sequence + 2 }
@@ -483,7 +511,7 @@ publish :: fn(page: ptr[mut runtime.SlopOsClockPage], utc: i64, at: u64) {
  * @return Its time in seconds since 1970 UTC; or null, only for an MC146818, if its ports fail, it's always updating,
  *     its reads never agree, or it holds no date and time. A PL031's count is always taken as it is.
  */
-read_rtc :: fn(rtc: ptr[Rtc]) -> i64? {
+read_rtc :: fn(rtc : ptr[Rtc]) -> i64? {
     match rtc.ports {
         case Some(ports) => return read_mc146818(ports)
         case None => return cast[i64](read_register(rtc.registers, PL031_DATA))
@@ -499,7 +527,7 @@ read_rtc :: fn(rtc: ptr[Rtc]) -> i64? {
  * @return True if the clock took it; false if it's out of a PL031's range, or an MC146818's ports failed, which may
  *     leave some of its fields written.
  */
-write_rtc :: fn(rtc: ptr[Rtc], seconds: i64) -> bool {
+write_rtc :: fn(rtc : ptr[Rtc], seconds : i64) -> bool {
     match rtc.ports {
         case Some(ports) => return write_mc146818(ports, seconds)
         case None => {
@@ -514,12 +542,12 @@ write_rtc :: fn(rtc: ptr[Rtc], seconds: i64) -> bool {
 
 /** The MC146818's fields, which hold a date and time, each as read: BCD or binary, as status register B says. */
 Fields :: struct {
-    second : u32, /**< The second, 0 to 59. */
-    minute : u32, /**< The minute, 0 to 59. */
-    hour : u32, /**< The hour, 0 to 23, or 1 to 12 with HOURS_PM in 12-hour mode. */
-    day : u32, /**< The day of the month, 1 to 31. */
-    month : u32, /**< The month, 1 to 12. */
-    year : u32, /**< The year of the century, 0 to 99. */
+    second  : u32, /**< The second, 0 to 59. */
+    minute  : u32, /**< The minute, 0 to 59. */
+    hour    : u32, /**< The hour, 0 to 23, or 1 to 12 with HOURS_PM in 12-hour mode. */
+    day     : u32, /**< The day of the month, 1 to 31. */
+    month   : u32, /**< The month, 1 to 12. */
+    year    : u32, /**< The year of the century, 0 to 99. */
     century : u32, /**< What register 0x32 holds: the century on PCs that keep it there, anything on others. */
 }
 
@@ -534,7 +562,7 @@ Fields :: struct {
  * @return Its time in seconds since 1970 UTC; null if a port fails, no two reads agree, or what it holds isn't a date
  *     and time.
  */
-read_mc146818 :: fn(ports: slop_os.IoPortRange) -> i64? {
+read_mc146818 :: fn(ports : slop_os.IoPortRange) -> i64? {
     status :: cmos_read(ports, CMOS_STATUS_B) or_return null
     last := Fields.{}
     for attempt in 0..<10 {
@@ -559,7 +587,7 @@ read_mc146818 :: fn(ports: slop_os.IoPortRange) -> i64? {
  * @param ports The MC146818's index port then its data port.
  * @return The fields, or null if a port fails.
  */
-read_fields :: fn(ports: slop_os.IoPortRange) -> Fields? {
+read_fields :: fn(ports : slop_os.IoPortRange) -> Fields? {
     return Fields.{
         second = cmos_read(ports, CMOS_SECONDS) or_return null,
         minute = cmos_read(ports, CMOS_MINUTES) or_return null,
@@ -580,7 +608,7 @@ read_fields :: fn(ports: slop_os.IoPortRange) -> Fields? {
  * @return Their time in seconds since 1970 UTC, the century as century_of says; null if a field isn't valid BCD, or
  *     isn't in its range (the day isn't checked against its month).
  */
-seconds_of :: fn(fields: Fields, status: u32) -> i64? {
+seconds_of :: fn(fields : Fields, status : u32) -> i64? {
     binary :: (status & STATUS_B_BINARY) != 0
     pm :: (status & STATUS_B_24_HOUR) == 0 && (fields.hour & HOURS_PM) != 0
     hour := decode(fields.hour & ~HOURS_PM, binary) or_return null
@@ -597,7 +625,12 @@ seconds_of :: fn(fields: Fields, status: u32) -> i64? {
         minute = cast[int](decode(fields.minute, binary) or_return null),
         second = cast[int](decode(fields.second, binary) or_return null),
     }
-    if moment.month < 1 || moment.month > 12 || moment.day < 1 || moment.day > 31 || moment.hour > 23 || moment.minute > 59
+    if moment.month < 1
+        || moment.month > 12
+        || moment.day < 1
+        || moment.day > 31
+        || moment.hour > 23
+        || moment.minute > 59
         || moment.second > 59 {
         return null
     }
@@ -611,7 +644,7 @@ seconds_of :: fn(fields: Fields, status: u32) -> i64? {
  * @param binary Whether the fields are binary, not BCD.
  * @return The century, 19 to 21, if that's what it holds; 20 otherwise, as for a PC without a century register.
  */
-century_of :: fn(stored: u32, binary: bool) -> u32 {
+century_of :: fn(stored : u32, binary : bool) -> u32 {
     century :: decode(stored, binary) or_return 20
     return if century >= 19 && century <= 21 { century } else { cast[u32](20) }
 }
@@ -628,7 +661,7 @@ century_of :: fn(stored: u32, binary: bool) -> u32 {
  *     century register.
  * @return True if every field was written; false if a port failed, which may leave some written.
  */
-write_mc146818 :: fn(ports: slop_os.IoPortRange, seconds: i64) -> bool {
+write_mc146818 :: fn(ports : slop_os.IoPortRange, seconds : i64) -> bool {
     status :: cmos_read(ports, CMOS_STATUS_B) or_return false
     binary :: (status & STATUS_B_BINARY) != 0
     moment :: time.utc(time.Instant.{seconds = seconds})
@@ -662,7 +695,7 @@ write_mc146818 :: fn(ports: slop_os.IoPortRange, seconds: i64) -> bool {
  * @param binary Whether it's binary, kept as it is, not BCD.
  * @return Its value; null for BCD with a digit above 9.
  */
-decode :: fn(stored: u32, binary: bool) -> u32? {
+decode :: fn(stored : u32, binary : bool) -> u32? {
     if binary {
         return stored
     }
@@ -679,7 +712,7 @@ decode :: fn(stored: u32, binary: bool) -> u32? {
  * @param binary Whether it's stored binary, as it is, not BCD.
  * @return What's written to the field.
  */
-encode :: fn(value: u32, binary: bool) -> u32 {
+encode :: fn(value : u32, binary : bool) -> u32 {
     return if binary { value } else { (value / 10) << 4 | value % 10 }
 }
 
@@ -690,7 +723,7 @@ encode :: fn(value: u32, binary: bool) -> u32 {
  * @param index The register's index, CMOS_SECONDS to CMOS_CENTURY.
  * @return The register's byte, or null if a port fails.
  */
-cmos_read :: fn(ports: slop_os.IoPortRange, index: u32) -> u32? {
+cmos_read :: fn(ports : slop_os.IoPortRange, index : u32) -> u32? {
     if (slop_os.io_port_write(ports, 0, 1, index) is_error) {
         return null
     }
@@ -707,7 +740,7 @@ cmos_read :: fn(ports: slop_os.IoPortRange, index: u32) -> u32? {
  * @error InvalidHandle The ports' handle isn't the service's, or was closed.
  * @error MissingRight The ports' handle can't access them.
  */
-cmos_write :: fn(ports: slop_os.IoPortRange, index: u32, value: u32) -> Result[void, slop_os.DeviceError] {
+cmos_write :: fn(ports : slop_os.IoPortRange, index : u32, value : u32) -> Result[void, slop_os.DeviceError] {
     slop_os.io_port_write(ports, 0, 1, index)?
     return slop_os.io_port_write(ports, 1, 1, value)
 }
@@ -719,7 +752,7 @@ cmos_write :: fn(ports: slop_os.IoPortRange, index: u32, value: u32) -> Result[v
  * @param offset The register's offset in bytes, PL031_DATA to PL031_CONTROL.
  * @return The register's 32 bits as the device gives them; for PL031_DATA, the time in seconds since 1970 UTC.
  */
-read_register :: fn(base: u64, offset: u64) -> u32 {
+read_register :: fn(base : u64, offset : u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](base + offset))
 }
 
@@ -730,7 +763,7 @@ read_register :: fn(base: u64, offset: u64) -> u32 {
  * @param offset The register's offset in bytes, PL031_DATA to PL031_CONTROL.
  * @param value The 32 bits written, as the register takes them; for PL031_LOAD, the time in seconds since 1970 UTC.
  */
-write_register :: fn(base: u64, offset: u64, value: u32) {
+write_register :: fn(base : u64, offset : u64, value : u32) {
     intrinsics.volatile_store_u32(cast[ptr[mut u32]](base + offset), value)
 }
 
@@ -740,7 +773,7 @@ write_register :: fn(base: u64, offset: u64, value: u32) {
  * @param line Where it's appended; what doesn't fit is cut off, as text_buffer cuts it.
  * @param seconds The time, in seconds since 1970 UTC.
  */
-append_time :: fn(line: ptr[mut text_buffer.TextBuffer], seconds: i64) {
+append_time :: fn(line : ptr[mut text_buffer.TextBuffer], seconds : i64) {
     moment :: time.utc(time.Instant.{seconds = seconds})
     text_buffer.append_format(line, "%-", moment.year)
     append_two_digits(line, moment.month)
@@ -761,7 +794,7 @@ append_time :: fn(line: ptr[mut text_buffer.TextBuffer], seconds: i64) {
  * @param line Where it's appended.
  * @param value The field, 0 or more; one above 99 is appended whole.
  */
-append_two_digits :: fn(line: ptr[mut text_buffer.TextBuffer], value: int) {
+append_two_digits :: fn(line : ptr[mut text_buffer.TextBuffer], value : int) {
     if value < 10 {
         text_buffer.append_format(line, "0")
     }

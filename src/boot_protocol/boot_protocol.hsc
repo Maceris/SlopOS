@@ -188,6 +188,6 @@ Handoff :: struct {
  * @return True if its magic is MAGIC and its size is this Handoff's, false if either isn't, as for one from another
  *     version of this protocol.
  */
-is_handoff :: fn(handoff: ptr[Handoff]) -> bool {
+is_handoff :: fn(handoff : ptr[Handoff]) -> bool {
     return handoff.magic == MAGIC && handoff.size == cast[u64](size_of(Handoff))
 }

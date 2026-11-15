@@ -9,8 +9,8 @@ package virtio_rng
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import service_kit from "../../libraries/service_kit"
 import driver_kit from "../../driver_kit"
+import service_kit from "../../libraries/service_kit"
 import pci from "../../pci"
 import entropy from "../../protocols/entropy"
 import rng from "../../protocols/rng"
@@ -67,9 +67,19 @@ Driver :: struct {
  *     its DMA memory couldn't be made or mapped, 8 if its queue couldn't be set up, 9 if its channel couldn't be made,
  *     10 if the AddSource couldn't be sent.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    entropy_service: os.Channel[entropy.Entropy]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    entropy_service : os.Channel[entropy.Entropy]?
+) -> int {
     block :: slop_os.startup_block()
     driver := Driver.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)}
     config_at :: driver_kit.map_device(config) or_return 2
@@ -84,7 +94,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) or_return 6
+    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+        or_return 6
 
     // Its queue and the buffer the device fills, in DMA memory
     memory :: slop_os.dma_memory_create(domain, block.budget, 2 * PAGE, 0) or_return 7
@@ -92,7 +103,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, block.space, pages, 0, 2 * PAGE, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.queue = virtio.setup_queue(&driver.transport, 0, pages, device_address,virtio.QUEUE_PAGE, 0) or_return 8
+    driver.queue = virtio.setup_queue(&driver.transport, 0, pages, device_address, virtio.QUEUE_PAGE, 0) or_return 8
     driver.buffer = pages + PAGE
     driver.buffer_device = device_address + PAGE
     virtio.ready(&driver.transport)
@@ -102,8 +113,14 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
 
     // A source of the entropy service's, on a channel of its own
     pair :: os.channel_for[rng.Rng](block.budget, 0) or_return 9
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](pair.b), cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE)
-        | cast[u32](slop_os.SIGNAL_PEER_CLOSED)), REQUESTS_KEY, .Persistent) or_return 9
+    slop_os.port_bind(
+        driver.port,
+        cast[slop_os.Handle](pair.b),
+        cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED)),
+        REQUESTS_KEY,
+        .Persistent
+    )
+        or_return 9
     match entropy_service {
         case Some(service) => {
             entropy_port :: os.port_for(block.budget, service.end) or_return 10
@@ -131,7 +148,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  * @param driver The driver, its queue set up and ready.
  * @param end The driver's end of the rng channel, bound to its port, kept by the caller.
  */
-serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
+serve :: fn(driver : ptr[mut Driver], end : slop_os.Channel) {
     into := os.Incoming.{}
     loop {
         match rng.receive_request(end, driver.port, &into, false) {
@@ -173,7 +190,7 @@ serve :: fn(driver: ptr[mut Driver], end: slop_os.Channel) {
  * @return How many bytes the device wrote at the buffer's start, at most count; 0 if it didn't finish in time, or no
  *     descriptor was free. A buffer the device finishes late is taken by the next fill instead.
  */
-fill :: fn(driver: ptr[mut Driver], count: u32) -> u32 {
+fill :: fn(driver : ptr[mut Driver], count : u32) -> u32 {
     _ = virtio.offer(&driver.queue, driver.buffer_device, count, true)
     deadline :: (slop_os.clock_monotonic() or_else 0) + FILL_NANOSECONDS
     loop {

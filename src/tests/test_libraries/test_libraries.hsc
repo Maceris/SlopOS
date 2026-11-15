@@ -8,9 +8,9 @@ package test_libraries
 
 import compiler from "base:compiler"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import greeting from "../../libraries/greeting"
 import test_kit from "../../test_kit"
 
@@ -29,11 +29,16 @@ Given :: struct {
  * @param t The test's state.
  * @return Ok once it's run.
  */
-a_library_bound_before_main_gives_what_its_exports_should #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_library_bound_before_main_gives_what_its_exports_should #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     testing.expect_eq(t, greeting.add(40, 2), 42, "add's sum is computed in the library and returned across the call")
     repeated :: greeting.repeat("ab", 3)
     testing.expect_eq(t, repeated, "ababab", "repeat makes its text with this program's context, which it's handed")
-    testing.expect_eq(t, greeting.greeting(), "hello from a library", "greeting's string is in the library's own data, which was mapped with it")
+    testing.expect_eq(
+        t,
+        greeting.greeting(),
+        "hello from a library",
+        "greeting's string is in the library's own data, which was mapped with it"
+    )
     return .Ok
 }
 
@@ -53,8 +58,16 @@ a_library_bound_before_main_gives_what_its_exports_should #test :: fn(t: ptr[mut
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

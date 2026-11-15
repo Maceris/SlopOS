@@ -38,12 +38,12 @@ import files from "std:os/slop_os/files"
 import grant from "std:os/slop_os/grant"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
-import slopfs from "../../slopfs"
 import log_line from "../../log_line"
 import block from "../../protocols/block"
 import container from "../../protocols/container"
 import links from "../../protocols/links"
 import volume as volume_protocol from "../../protocols/volume"
+import slopfs from "../../slopfs"
 
 /** The most connections at once, of every kind; one past them is closed at once, and an open answered NoSpace. */
 MAX_CONNECTIONS :: 64
@@ -144,7 +144,8 @@ Connection :: struct {
 
 /**
  * How a tree's blocks are reached: a connection to the container service for its volume, or a snapshot of it, and the
- * block connection that gives, with its buffer mapped here. The live volume's and each snapshot's served (snapshots.hsc)
+ * block connection that gives, with its buffer mapped here. The live volume's and each snapshot's served
+ * (snapshots.hsc)
  * have one each; a Device's context is one.
  */
 Reach :: struct {
@@ -242,8 +243,13 @@ Server :: struct {
  *     listeners or links couldn't be added, 6 if the storage manager went before unlocking it, 7 if the volume
  *     couldn't be attached, and 8 if a new volume couldn't be filled. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clients: os.Listener[dir.Dir],
-    control: os.Listener[volume_protocol.Volume], stored_links: os.Channel[links.Links]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    volume : os.Channel[container.Container],
+    clients : os.Listener[dir.Dir],
+    control : os.Listener[volume_protocol.Volume],
+    stored_links : os.Channel[links.Links]
+) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     server_made, server_error :: runtime.new_aligned(Server, align_of(Server))
@@ -257,10 +263,20 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
         case Ok(made) => made
         case Error(code) => return cast[int](code)
     }
-    device :: slopfs.Device.{context = cast[rawptr](&server.own), block_count = server.own.block_count, read = read_blocks,
-        write = write_blocks, flush = no_flush}
-    server.nodes = slopfs.Nodes.{device = device, transaction = described.transaction, space = cast[rawptr](server), allocate = allocate,
-        release = release}
+    device :: slopfs.Device.{
+        context = cast[rawptr](&server.own),
+        block_count = server.own.block_count,
+        read = read_blocks,
+        write = write_blocks,
+        flush = no_flush,
+    }
+    server.nodes = slopfs.Nodes.{
+        device = device,
+        transaction = described.transaction,
+        space = cast[rawptr](server),
+        allocate = allocate,
+        release = release,
+    }
     server.described = described
     // An encrypted volume is served once it's unlocked
     keys : ptr[mut slopfs.Keys]? = null
@@ -291,9 +307,22 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
         resume_floor(server)
     }
     name :: string_of(&described.record.name[0], cast[usize](cast[u16](described.record.name_bytes)))
-    log_line.write(server.log, "volume_server: serving volume % (%), from transaction %", described.id, name, described.transaction)
+    log_line.write(
+        server.log,
+        "volume_server: serving volume % (%), from transaction %",
+        described.id,
+        name,
+        described.transaction
+    )
     // The listener is a connection to the root, as any client's Connect on it gives another
-    if add(server, if described.read_only { Kind.ReadOnlyDir } else { Kind.Dir }, clients.end, slopfs.ROOT_OBJECT, described.read_only, "") is_none {
+    if add(
+        server,
+        if described.read_only { Kind.ReadOnlyDir } else { Kind.Dir },
+        clients.end,
+        slopfs.ROOT_OBJECT,
+        described.read_only,
+        ""
+    ) is_none {
         return 5
     }
     if add(server, .Control, control.end, 0, false, "") is_none {
@@ -343,10 +372,15 @@ main :: fn(log: slop_os.DebugLog?, volume: os.Channel[container.Container], clie
  *     if it couldn't be described, 3 if no block connection could be had, 4 if the block connection's description or
  *     buffer couldn't be had.
  */
-reach :: fn(into: ptr[mut Reach], end: slop_os.Channel) -> Result[container.Described, u32] {
+reach :: fn(into : ptr[mut Reach], end : slop_os.Channel) -> Result[container.Described, u32] {
     startup :: slop_os.startup_block()
-    into^ = Reach.{container = end, container_port = cast[slop_os.Port](slop_os.NO_HANDLE), blocks = cast[slop_os.Channel](slop_os.NO_HANDLE),
-        blocks_port = cast[slop_os.Port](slop_os.NO_HANDLE), window = cast[slop_os.Memory](slop_os.NO_HANDLE)}
+    into^ = Reach.{
+        container = end,
+        container_port = cast[slop_os.Port](slop_os.NO_HANDLE),
+        blocks = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        blocks_port = cast[slop_os.Port](slop_os.NO_HANDLE),
+        window = cast[slop_os.Memory](slop_os.NO_HANDLE),
+    }
     into.container_port = os.port_for(startup.budget, end) or_return .Error(1)
     described := container.Described.{}
     match ask_on(into, .Describe) {
@@ -377,16 +411,25 @@ reach :: fn(into: ptr[mut Reach], end: slop_os.Channel) -> Result[container.Desc
  *
  * @param reached What reach made, or began to; each part not made is NO_HANDLE, and left. It's left with nothing.
  */
-let_go_of_reach :: fn(reached: ptr[mut Reach]) {
-    for handle in slop_os.Handle.[cast[slop_os.Handle](reached.window), cast[slop_os.Handle](reached.blocks_port),
-        cast[slop_os.Handle](reached.blocks), cast[slop_os.Handle](reached.container_port), cast[slop_os.Handle](reached.container)] {
+let_go_of_reach :: fn(reached : ptr[mut Reach]) {
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](reached.window),
+        cast[slop_os.Handle](reached.blocks_port),
+        cast[slop_os.Handle](reached.blocks),
+        cast[slop_os.Handle](reached.container_port),
+        cast[slop_os.Handle](reached.container)
+    ] {
         if handle != slop_os.NO_HANDLE && handle != 0 {
             _ = slop_os.handle_close(handle)
         }
     }
-    reached^ = Reach.{container = cast[slop_os.Channel](slop_os.NO_HANDLE), container_port = cast[slop_os.Port](slop_os.NO_HANDLE),
-        blocks = cast[slop_os.Channel](slop_os.NO_HANDLE), blocks_port = cast[slop_os.Port](slop_os.NO_HANDLE),
-        window = cast[slop_os.Memory](slop_os.NO_HANDLE)}
+    reached^ = Reach.{
+        container = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        container_port = cast[slop_os.Port](slop_os.NO_HANDLE),
+        blocks = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        blocks_port = cast[slop_os.Port](slop_os.NO_HANDLE),
+        window = cast[slop_os.Memory](slop_os.NO_HANDLE),
+    }
 }
 
 // The container service, a request at a time
@@ -400,7 +443,7 @@ let_go_of_reach :: fn(reached: ptr[mut Reach]) {
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-ask :: fn(server: ptr[mut Server], request: container.Request) -> container.Response {
+ask :: fn(server : ptr[mut Server], request : container.Request) -> container.Response {
     return ask_on(&server.own, request)
 }
 
@@ -413,7 +456,7 @@ ask :: fn(server: ptr[mut Server], request: container.Request) -> container.Resp
  * @return The answer, a copy, whose handles the caller owns, and which holds no Relatives the caller reads; Unsupported
  *     if it couldn't be sent or the connection failed.
  */
-ask_on :: fn(reached: ptr[Reach], request: container.Request) -> container.Response {
+ask_on :: fn(reached : ptr[Reach], request : container.Request) -> container.Response {
     out := os.Outgoing.{}
     made :: os.begin[container.Request](&out)
     made^ = request
@@ -431,7 +474,7 @@ ask_on :: fn(reached: ptr[Reach], request: container.Request) -> container.Respo
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-ask_built :: fn(reached: ptr[Reach], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> container.Response {
+ask_built :: fn(reached : ptr[Reach], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> container.Response {
     if container.send_request(reached.container, reached.container_port, out) is_some {
         return .Unsupported
     }
@@ -454,7 +497,7 @@ ask_built :: fn(reached: ptr[Reach], out: ptr[mut os.Outgoing], into: ptr[mut os
  * @param data Whether it's a file's bytes, which the volume's quota and the reserve hold back, or a tree's nodes.
  * @return Its first block; null if the container refused it, as a full container or a quota does.
  */
-allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
+allocate :: fn(context : rawptr, blocks : u64, owner : u64, data : bool) -> u64? {
     server :: cast[ptr[mut Server]](context)
     return match ask(server, .Allocate(container.Allocation.{blocks = blocks, data = data})) {
         case Allocated(first) => first
@@ -472,7 +515,7 @@ allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
  * @param owner Unused: the container service knows whose volume it is.
  * @param birth The transaction it was written in, which says whether a snapshot or a clone's origin holds it.
  */
-release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64) {
+release :: fn(context : rawptr, address : u64, blocks : u64, owner : u64, birth : u64) {
     server :: cast[ptr[mut Server]](context)
     _ = ask(server, .Release(container.Released.{first = address, blocks = blocks, birth = birth}))
 }
@@ -484,7 +527,7 @@ release :: fn(context: rawptr, address: u64, blocks: u64, owner: u64, birth: u64
  * @param server The server, whose commit_at is cleared and whose next transaction is the one the container gives.
  * @return Whether it was committed; a failure marks the volume failed, logged, and every later commit fails too.
  */
-commit :: fn(server: ptr[mut Server]) -> bool {
+commit :: fn(server : ptr[mut Server]) -> bool {
     server.commit_at = 0
     record := slopfs.VolumeRecord.{}
     match slopfs.write_volume(server.volume) {
@@ -519,7 +562,7 @@ commit :: fn(server: ptr[mut Server]) -> bool {
  * @return The answer, a copy, whose handles the caller owns; Unsupported if it couldn't be sent or the connection
  *     failed.
  */
-call :: fn(reached: ptr[Reach], request: block.Request) -> block.Response {
+call :: fn(reached : ptr[Reach], request : block.Request) -> block.Response {
     out := os.Outgoing.{}
     made :: os.begin[block.Request](&out)
     made^ = request
@@ -543,7 +586,7 @@ call :: fn(reached: ptr[Reach], request: block.Request) -> block.Response {
  *     couldn't be sent or answered, is false like any other.
  * @return Whether it's Finished with Done.
  */
-done :: fn(response: block.Response) -> bool {
+done :: fn(response : block.Response) -> bool {
     return match response {
         case Finished(completion) => completion.status == .Done
         case _ => false
@@ -560,7 +603,7 @@ done :: fn(response: block.Response) -> bool {
  * @param into Where they go, at least count blocks long.
  * @return Whether they were all read.
  */
-read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+read_blocks :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     reached :: cast[ptr[Reach]](context)
     return move(reached, first, count, into, false)
 }
@@ -576,7 +619,7 @@ read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
  * @param from What's written, at least count blocks long.
  * @return Whether they were all written.
  */
-write_blocks :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
+write_blocks :: fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool {
     reached :: cast[ptr[Reach]](context)
     return move(reached, first, count, view_of(cast[ptr[mut u8]](from.data), from.count), true)
 }
@@ -588,7 +631,7 @@ write_blocks :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool 
  * @param context Unused.
  * @return True.
  */
-no_flush :: fn(context: rawptr) -> bool {
+no_flush :: fn(context : rawptr) -> bool {
     return true
 }
 
@@ -607,7 +650,7 @@ no_flush :: fn(context: rawptr) -> bool {
  * @return Whether all of them moved; false if bytes is too short, the buffer holds no block, a copy through the buffer
  *     failed, or a transfer did, what was moved before it moved.
  */
-move :: fn(reached: ptr[Reach], first: u64, count: u64, bytes: mut u8[], writing: bool) -> bool {
+move :: fn(reached : ptr[Reach], first : u64, count : u64, bytes : mut u8[], writing : bool) -> bool {
     per :: reached.buffer_bytes / slopfs.BLOCK_BYTES
     if per == 0 || count * slopfs.BLOCK_BYTES > cast[u64](bytes.count) {
         return false
@@ -628,7 +671,12 @@ move :: fn(reached: ptr[Reach], first: u64, count: u64, bytes: mut u8[], writing
         if writing && (slop_os.memory_write(reached.window, 0, part) is_error) {
             return false
         }
-        transfer :: block.Transfer.{tag = 1, first = (first + moved) * SECTORS_PER_BLOCK, count = cast[u32](now * SECTORS_PER_BLOCK), offset = 0}
+        transfer :: block.Transfer.{
+            tag = 1,
+            first = (first + moved) * SECTORS_PER_BLOCK,
+            count = cast[u32](now * SECTORS_PER_BLOCK),
+            offset = 0,
+        }
         if !done(call(reached, if writing { block.Request.Write(transfer) } else { block.Request.Read(transfer) })) {
             return false
         }
@@ -644,7 +692,8 @@ move :: fn(reached: ptr[Reach], first: u64, count: u64, bytes: mut u8[], writing
 /**
  * Add a connection, in the first free slot, bound to the port under its slot.
  *
- * It's linked if it's added while serving a linked connection, in the snapshot pasting names, and has a copy of the loan
+ * It's linked if it's added while serving a linked connection, in the snapshot pasting names, and has a copy of the
+ * loan
  * of the connection being served, if that has one, at its priority.
  *
  * @param server The server, whose added is set.
@@ -656,7 +705,14 @@ move :: fn(reached: ptr[Reach], first: u64, count: u64, bytes: mut u8[], writing
  * @param name The path it was opened at, a set's pattern, or a name in a target; cut to files.PATH_BYTES.
  * @return Its slot; null, with end closed, if there are MAX_CONNECTIONS already or it couldn't be bound.
  */
-add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, object: u64, read_only: bool, name: string) -> usize? {
+add :: fn(
+    server : ptr[mut Server],
+    kind : Kind,
+    end : slop_os.Channel,
+    object : u64,
+    read_only : bool,
+    name : string
+) -> usize? {
     slot := server.count
     for connection, i in server.connections {
         if i < server.count && connection.kind == .Free {
@@ -677,11 +733,19 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, object: u64
             return null
         }
     }
-    connection := Connection.{kind = kind, end = end, object = object, read_only = read_only, linked = server.linking,
-        past = server.pasting, loan = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
+    connection := Connection.{
+        kind = kind,
+        end = end,
+        object = object,
+        read_only = read_only,
+        linked = server.linking,
+        past = server.pasting,
+        loan = cast[slop_os.CpuBudget](slop_os.NO_HANDLE),
+    }
     // What's opened through a connection with a loan has a copy of it
     serving :: server.serving
-    if serving < server.connections.count && serving < server.count
+    if serving < server.connections.count
+        && serving < server.count
         && cast[slop_os.Handle](server.connections[serving].loan) != slop_os.NO_HANDLE {
         match slop_os.handle_duplicate(cast[slop_os.Handle](server.connections[serving].loan), LOAN_RIGHTS) {
             case Ok(copy) => {
@@ -717,7 +781,13 @@ add :: fn(server: ptr[mut Server], kind: Kind, end: slop_os.Channel, object: u64
  * @param name The path it was opened at, or a set's pattern.
  * @return The other end, the client's, which the caller sends; null if a channel or a slot couldn't be had.
  */
-open_connection :: fn[P](server: ptr[mut Server], kind: Kind, object: u64, read_only: bool, name: string) -> os.Channel[P]? {
+open_connection :: fn[P](
+    server : ptr[mut Server],
+    kind : Kind,
+    object : u64,
+    read_only : bool,
+    name : string
+) -> os.Channel[P]? {
     startup :: slop_os.startup_block()
     pair :: os.channel_for[P](startup.budget, 0) or_return null
     if add(server, kind, pair.a, object, read_only, name) is_none {
@@ -737,7 +807,7 @@ open_connection :: fn[P](server: ptr[mut Server], kind: Kind, object: u64, read_
  *     a file's gives back an orphan nothing else has open.
  * @param index The connection's slot; one past them is ignored.
  */
-drop :: fn(server: ptr[mut Server], index: usize) {
+drop :: fn(server : ptr[mut Server], index : usize) {
     if index >= server.connections.count {
         return void
     }
@@ -778,7 +848,7 @@ drop :: fn(server: ptr[mut Server], index: usize) {
  * @param connection The connection, whose buffer's memory, if it has one, is closed, buffer_bytes left 0; one without
  *     a buffer is left alone.
  */
-release_buffer :: fn(connection: ptr[mut Connection]) {
+release_buffer :: fn(connection : ptr[mut Connection]) {
     if connection.buffer_bytes != 0 {
         _ = slop_os.handle_close(cast[slop_os.Handle](connection.buffer_memory))
         connection.buffer_bytes = 0
@@ -791,8 +861,16 @@ release_buffer :: fn(connection: ptr[mut Connection]) {
  * @param connection The connection, read; a name_length past files.PATH_BYTES is cut to it.
  * @return A view of its name's bytes, good while the connection is unchanged.
  */
-name_of :: fn(connection: ptr[Connection]) -> string {
-    return string_of(&connection.name[0], cast[usize](if connection.name_length > files.PATH_BYTES { cast[u32](files.PATH_BYTES) } else { connection.name_length }))
+name_of :: fn(connection : ptr[Connection]) -> string {
+    return string_of(
+        &connection.name[0],
+        cast[usize](if connection.name_length > files.PATH_BYTES {
+            cast[u32](files.PATH_BYTES)
+        }
+        else {
+            connection.name_length
+        })
+    )
 }
 
 /**
@@ -805,15 +883,19 @@ name_of :: fn(connection: ptr[Connection]) -> string {
  * @param into Where each message is read into, reused.
  * @return Whether a client's request was served; false once no connection has one waiting.
  */
-serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
+serve_one :: fn(server : ptr[mut Server], into : ptr[mut os.Incoming]) -> bool {
     tried : bool[MAX_CONNECTIONS]
     loop {
         // Ties go round, from the one after the last served
         best := server.connections.count
         for k in 0..<server.count {
             i :: (server.next_first + k) % server.count
-            if i < server.connections.count && i < tried.count && !tried[i] && server.connections[i].kind != .Free
-                && (best >= server.connections.count || server.connections[i].priority > server.connections[best].priority) {
+            if i < server.connections.count
+                && i < tried.count
+                && !tried[i]
+                && server.connections[i].kind != .Free
+                && (best >= server.connections.count
+                    || server.connections[i].priority > server.connections[best].priority) {
                 best = i
             }
         }
@@ -843,7 +925,7 @@ serve_one :: fn(server: ptr[mut Server], into: ptr[mut os.Incoming]) -> bool {
  * @param server The server, whose handled, and on_loan if the loan could be used, are set.
  * @param index The connection's slot, whose loan, if it has one, the thread runs on; one past them sets only handled.
  */
-received :: fn(server: ptr[mut Server], index: usize) {
+received :: fn(server : ptr[mut Server], index : usize) {
     server.handled = true
     if index < server.connections.count && cast[slop_os.Handle](server.connections[index].loan) != slop_os.NO_HANDLE {
         server.on_loan = runtime.bind_cpu_budget(cast[u64](server.connections[index].loan))
@@ -858,7 +940,7 @@ received :: fn(server: ptr[mut Server], index: usize) {
  * @param budget The CPU budget lent, which the server takes over; its priority orders the connection's requests, 0
  *     if it can't be read.
  */
-lend :: fn(server: ptr[mut Server], index: usize, budget: slop_os.CpuBudget) {
+lend :: fn(server : ptr[mut Server], index : usize, budget : slop_os.CpuBudget) {
     if index >= server.connections.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](budget))
         return void
@@ -878,7 +960,7 @@ lend :: fn(server: ptr[mut Server], index: usize, budget: slop_os.CpuBudget) {
  * @param index The connection's slot; a free one, or one past them, is left alone.
  * @param into Where each message is read into, reused.
  */
-serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -924,7 +1006,7 @@ serve :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
  * @param path Where the path's bytes are in it.
  * @return The path, a view into the message, good while it is; null if it's empty or longer than files.PATH_BYTES.
  */
-path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
+path_of :: fn(into : ptr[os.Incoming], path : slop_os.Relative[u8]) -> string? {
     bytes :: os.items(into, path)
     if bytes.count == 0 || bytes.count > files.PATH_BYTES {
         return null
@@ -940,7 +1022,7 @@ path_of :: fn(into: ptr[os.Incoming], path: slop_os.Relative[u8]) -> string? {
  *     NoMemory for OutOfMemory, and DeviceError for Failed and for those no file's request meets (Locked, WrongKey,
  *     InUse).
  */
-file_error :: fn(error: slopfs.Error) -> files.FileError {
+file_error :: fn(error : slopfs.Error) -> files.FileError {
     return match error {
         case .DeviceError => files.FileError.DeviceError
         case .Corrupt => files.FileError.Corrupt
@@ -986,8 +1068,13 @@ file_error :: fn(error: slopfs.Error) -> files.FileError {
  * @error DeviceError A block couldn't be read or written.
  * @error Corrupt The tree couldn't be read as one.
  */
-open_file_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string, creation: files.Creation, schema: u8[32])
-    -> Result[u64, slopfs.Error] {
+open_file_object :: fn(
+    volume : ptr[mut slopfs.Volume],
+    directory : u64,
+    path : string,
+    creation : files.Creation,
+    schema : u8[32]
+) -> Result[u64, slopfs.Error] {
     leaf :: slopfs.leaf_of(volume, directory, path)?
     existing :: slopfs.lookup(volume, leaf.directory, leaf.name)?
     match existing {
@@ -1039,7 +1126,7 @@ no_schema :: fn() -> u8[32] {
  * @param schema A schema hash, as a request or a file's record carries it.
  * @return Whether it's all zeros.
  */
-untyped :: fn(schema: u8[32]) -> bool {
+untyped :: fn(schema : u8[32]) -> bool {
     for byte in schema {
         if byte != 0 {
             return false
@@ -1063,7 +1150,12 @@ untyped :: fn(schema: u8[32]) -> bool {
  * @error DeviceError A block couldn't be read or written.
  * @error Corrupt The tree couldn't be read as one.
  */
-open_directory_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path: string, create: bool) -> Result[u64, slopfs.Error] {
+open_directory_object :: fn(
+    volume : ptr[mut slopfs.Volume],
+    directory : u64,
+    path : string,
+    create : bool
+) -> Result[u64, slopfs.Error] {
     current := directory
     start : usize = 0
     for i in 0..<path.count + 1 {
@@ -1103,7 +1195,13 @@ open_directory_object :: fn(volume: ptr[mut slopfs.Volume], directory: u64, path
  * @error Corrupt A name longer than a name may be, or a tree that couldn't be read as one.
  * @error DeviceError A block couldn't be read.
  */
-listing_of :: fn(volume: ptr[mut slopfs.Volume], directory: u64, cursor: u64, pattern: string, out: ptr[mut os.Outgoing]) -> Result[files.Listing?, slopfs.Error] {
+listing_of :: fn(
+    volume : ptr[mut slopfs.Volume],
+    directory : u64,
+    cursor : u64,
+    pattern : string,
+    out : ptr[mut os.Outgoing]
+) -> Result[files.Listing?, slopfs.Error] {
     name : u8[slopfs.NAME_BYTES]
     at := cursor
     loop {
@@ -1117,8 +1215,13 @@ listing_of :: fn(volume: ptr[mut slopfs.Volume], directory: u64, cursor: u64, pa
             continue
         }
         info :: slopfs.info(volume, listed.object)?
-        kind :: if listed.kind == .Directory { files.Kind.Directory } else if listed.kind == .Link { files.Kind.Link } else { files.Kind.File }
-        return .Ok(files.Listing.{name = os.append(out, name[0..<listed.name_bytes]), kind = kind, size = info.size, next = at})
+        kind :: if listed.kind == .Directory {
+            files.Kind.Directory
+        }
+        else if listed.kind == .Link { files.Kind.Link } else { files.Kind.File }
+        return .Ok(
+            files.Listing.{name = os.append(out, name[0..<listed.name_bytes]), kind = kind, size = info.size, next = at}
+        )
     }
 }
 
@@ -1129,7 +1232,7 @@ listing_of :: fn(volume: ptr[mut slopfs.Volume], directory: u64, cursor: u64, pa
  * @param b A byte of the other name, compared with a as it is, case and all.
  * @return Whether they're equal.
  */
-same_byte :: fn(a: u8, b: u8) -> bool {
+same_byte :: fn(a : u8, b : u8) -> bool {
     return a == b
 }
 
@@ -1143,7 +1246,7 @@ same_byte :: fn(a: u8, b: u8) -> bool {
  * @return The description, without a type: kind and size as given, and name as the bytes appended to out, so it's
  *     good in out's answer only.
  */
-info_of :: fn(out: ptr[mut os.Outgoing], kind: files.Kind, size: u64, name: string) -> files.Info {
+info_of :: fn(out : ptr[mut os.Outgoing], kind : files.Kind, size : u64, name : string) -> files.Info {
     return files.Info.{kind = kind, size = size, name = os.append(out, string_bytes(name))}
 }
 
@@ -1163,7 +1266,7 @@ features :: fn() -> files.Features {
  *     is cleared.
  * @return Whether it's committed; false after any failed commit.
  */
-synced :: fn(server: ptr[mut Server]) -> bool {
+synced :: fn(server : ptr[mut Server]) -> bool {
     return commit(server)
 }
 
@@ -1185,7 +1288,7 @@ synced :: fn(server: ptr[mut Server]) -> bool {
  *     runs the thread while a request is served.
  * @param into Where each request is read into, reused.
  */
-serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_dir :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1225,8 +1328,12 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 path :: path_of(into, open.path) or_else ""
                 // A typed open stays on this volume: a link on its way is refused (IsALink), not followed untyped
                 typed :: !untyped(open.schema)
-                followed :: if in_transaction || typed { Followed.Local }
-                    else { follow(server, index, directory, path, links.Opening.{kind = .File, creation = open.creation}) }
+                followed :: if in_transaction || typed {
+                    Followed.Local
+                }
+                else {
+                    follow(server, index, directory, path, links.Opening.{kind = .File, creation = open.creation})
+                }
                 failed : files.FileError? = null
                 match followed {
                     case Asked => return void
@@ -1257,7 +1364,13 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             }
             case OpenReadOnlyFile(at) => {
                 path :: path_of(into, at) or_else ""
-                match follow(server, index, directory, path, links.Opening.{kind = .ReadOnlyFile, creation = .Existing}) {
+                match follow(
+                    server,
+                    index,
+                    directory,
+                    path,
+                    links.Opening.{kind = .ReadOnlyFile, creation = .Existing}
+                ) {
                     case Asked => return void
                     case Failed(error) => response^ = .Failed(error)
                     case Local => response^ = read_only_open(server, directory, path)
@@ -1265,7 +1378,13 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             }
             case OpenDirectory(open) => {
                 path :: path_of(into, open.path) or_else ""
-                match follow(server, index, directory, path, links.Opening.{kind = .Directory, creation = .Existing, create = open.create}) {
+                match follow(
+                    server,
+                    index,
+                    directory,
+                    path,
+                    links.Opening.{kind = .Directory, creation = .Existing, create = open.create}
+                ) {
                     case Asked => return void
                     case Failed(error) => response^ = .Failed(error)
                     case Local => {
@@ -1297,7 +1416,8 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 path :: path_of(into, at) or_else ""
                 response^ = .Done
                 if in_transaction {
-                    if !note_versions(server, transaction, path) || !log_op(server, transaction, .Remove, 0, 0, path, "", nothing()) {
+                    if !note_versions(server, transaction, path)
+                        || !log_op(server, transaction, .Remove, 0, 0, path, "", nothing()) {
                         response^ = .Failed(.NoSpace)
                     }
                 }
@@ -1313,7 +1433,8 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 to :: path_of(into, rename.to) or_else ""
                 response^ = .Done
                 if in_transaction {
-                    if !note_versions(server, transaction, from) || !note_versions(server, transaction, to)
+                    if !note_versions(server, transaction, from)
+                        || !note_versions(server, transaction, to)
                         || !log_op(server, transaction, .Rename, 0, 0, from, to, nothing()) {
                         response^ = .Failed(.NoSpace)
                     }
@@ -1326,7 +1447,13 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
                 }
             }
             case Narrow => {
-                match open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, directory, true, name_of(&server.connections[index])) {
+                match open_connection[read_only_dir.ReadOnlyDir](
+                    server,
+                    .ReadOnlyDir,
+                    directory,
+                    true,
+                    name_of(&server.connections[index])
+                ) {
                     case Some(made) => response^ = .Narrowed(made)
                     case None => response^ = .Failed(.NoSpace)
                 }
@@ -1373,7 +1500,13 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
             case Changes(cursor) => response^ = changes_of(server, directory, cursor, &out)
             case Grant(granting) => {
                 if !in_transaction {
-                    response^ = grant_of(server, index, directory, path_of(into, granting.path) or_else "", granting.write)
+                    response^ = grant_of(
+                        server,
+                        index,
+                        directory,
+                        path_of(into, granting.path) or_else "",
+                        granting.write
+                    )
                 }
             }
             case Link(linking) => {
@@ -1428,7 +1561,7 @@ serve_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming
  * @param to Where it goes; the directory that holds it must exist.
  * @return Null once it's moved; why not, otherwise.
  */
-moved :: fn(volume: ptr[mut slopfs.Volume], directory: u64, from: string, to: string) -> slopfs.Error? {
+moved :: fn(volume : ptr[mut slopfs.Volume], directory : u64, from : string, to : string) -> slopfs.Error? {
     source := slopfs.Leaf.{}
     match slopfs.leaf_of(volume, directory, from) {
         case Ok(leaf) => source = leaf
@@ -1451,7 +1584,7 @@ moved :: fn(volume: ptr[mut slopfs.Volume], directory: u64, from: string, to: st
  * @param request The request, only read.
  * @return True for Select and Changes.
  */
-is_set_or_changes :: fn(request: read_only_dir.Request) -> bool {
+is_set_or_changes :: fn(request : read_only_dir.Request) -> bool {
     return match request {
         case Select(_) => true
         case Changes(_) => true
@@ -1469,7 +1602,7 @@ is_set_or_changes :: fn(request: read_only_dir.Request) -> bool {
  * @return OpenedReadOnlyFile with the connection's other end, which the caller sends; Failed with IsADirectory,
  *     IsALink, NoSpace without a slot, or why it couldn't be found.
  */
-read_only_open :: fn(server: ptr[mut Server], directory: u64, path: string) -> dir.Response {
+read_only_open :: fn(server : ptr[mut Server], directory : u64, path : string) -> dir.Response {
     if path.count == 0 {
         return .Failed(.InvalidPath)
     }
@@ -1505,7 +1638,7 @@ read_only_open :: fn(server: ptr[mut Server], directory: u64, path: string) -> d
  *     thread while a request is served.
  * @param into Where each request is read into, reused.
  */
-serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_read_only_dir :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1546,7 +1679,13 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
         match request {
             case OpenReadOnlyFile(at) => {
                 path :: path_of(into, at) or_else ""
-                match follow(server, index, directory, path, links.Opening.{kind = .ReadOnlyFile, creation = .Existing}) {
+                match follow(
+                    server,
+                    index,
+                    directory,
+                    path,
+                    links.Opening.{kind = .ReadOnlyFile, creation = .Existing}
+                ) {
                     case Asked => return void
                     case Failed(error) => response^ = .Failed(error)
                     case Local => {
@@ -1560,13 +1699,25 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
             }
             case OpenDirectory(at) => {
                 path :: path_of(into, at) or_else ""
-                match follow(server, index, directory, path, links.Opening.{kind = .ReadOnlyDirectory, creation = .Existing}) {
+                match follow(
+                    server,
+                    index,
+                    directory,
+                    path,
+                    links.Opening.{kind = .ReadOnlyDirectory, creation = .Existing}
+                ) {
                     case Asked => return void
                     case Failed(error) => response^ = .Failed(error)
                     case Local => {
                         match open_directory_object(volume, directory, path, false) {
                             case Ok(object) => {
-                                match open_connection[read_only_dir.ReadOnlyDir](server, .ReadOnlyDir, object, true, path) {
+                                match open_connection[read_only_dir.ReadOnlyDir](
+                                    server,
+                                    .ReadOnlyDir,
+                                    object,
+                                    true,
+                                    path
+                                ) {
                                     case Some(made) => response^ = .OpenedDirectory(made)
                                     case None => response^ = .Failed(.NoSpace)
                                 }
@@ -1625,7 +1776,7 @@ serve_read_only_dir :: fn(server: ptr[mut Server], index: usize, into: ptr[mut o
  *     it has one, runs the thread while a request is served.
  * @param into Where each request is read into, reused.
  */
-serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_file_set :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1717,7 +1868,7 @@ serve_file_set :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inc
  * @param name A name a client gave, any bytes; one with a '/' is never in a set.
  * @return Whether it's one component, not empty, matching the pattern exactly.
  */
-in_set :: fn(pattern: string, name: string) -> bool {
+in_set :: fn(pattern : string, name : string) -> bool {
     for character in name {
         if character == '/' {
             return false
@@ -1736,7 +1887,7 @@ in_set :: fn(pattern: string, name: string) -> bool {
  * @param memory The memory, which the server takes over: kept, or closed when it's refused.
  * @return Null once it's kept; NoBuffer if it's empty, its size can't be had, or it's larger than MAX_BUFFER_BYTES.
  */
-use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> files.FileError? {
+use_buffer :: fn(connection : ptr[mut Connection], memory : slop_os.Memory) -> files.FileError? {
     release_buffer(connection)
     size :: slop_os.memory_size(memory) or_else 0
     if size == 0 || size > MAX_BUFFER_BYTES {
@@ -1756,8 +1907,9 @@ use_buffer :: fn(connection: ptr[mut Connection], memory: slop_os.Memory) -> fil
  *     checked.
  * @return Whether it has a buffer and the transfer's offset and count, in bytes, are inside it.
  */
-fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
-    return connection.buffer_bytes != 0 && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
+fits :: fn(connection : ptr[Connection], transfer : files.Transfer) -> bool {
+    return connection.buffer_bytes != 0
+        && cast[u64](transfer.buffer_offset) + cast[u64](transfer.count) <= connection.buffer_bytes
 }
 
 /**
@@ -1770,7 +1922,7 @@ fits :: fn(connection: ptr[Connection], transfer: files.Transfer) -> bool {
  * @error NoMemory The server hadn't the memory for them.
  * @error NoBuffer The buffer couldn't be read: its client ended, or the memory's gone.
  */
-client_bytes :: fn(connection: ptr[Connection], transfer: files.Transfer) -> Result[mut u8[], files.FileError] {
+client_bytes :: fn(connection : ptr[Connection], transfer : files.Transfer) -> Result[mut u8[], files.FileError] {
     bytes, error :: runtime.new_array(u8, cast[usize](transfer.count))
     if error != null {
         return .Error(.NoMemory)
@@ -1797,7 +1949,11 @@ client_bytes :: fn(connection: ptr[Connection], transfer: files.Transfer) -> Res
  * @error DeviceError A block couldn't be read.
  * @error Corrupt The tree, or the file's chunk, couldn't be read as one.
  */
-read_file :: fn(server: ptr[mut Server], connection: ptr[Connection], transfer: files.Transfer) -> Result[u32, files.FileError] {
+read_file :: fn(
+    server : ptr[mut Server],
+    connection : ptr[Connection],
+    transfer : files.Transfer
+) -> Result[u32, files.FileError] {
     if !fits(connection, transfer) {
         return .Error(.NoBuffer)
     }
@@ -1832,7 +1988,11 @@ read_file :: fn(server: ptr[mut Server], connection: ptr[Connection], transfer: 
  * @error DeviceError A block couldn't be read.
  * @error Corrupt The tree couldn't be read as one.
  */
-file_info :: fn(server: ptr[mut Server], connection: ptr[Connection], out: ptr[mut os.Outgoing]) -> Result[files.Info, files.FileError] {
+file_info :: fn(
+    server : ptr[mut Server],
+    connection : ptr[Connection],
+    out : ptr[mut os.Outgoing]
+) -> Result[files.Info, files.FileError] {
     match slopfs.info(volume_of_past(server, connection.past), connection.object) {
         case Ok(info) => {
             described := info_of(out, .File, info.size, name_of(connection))
@@ -1856,7 +2016,7 @@ file_info :: fn(server: ptr[mut Server], connection: ptr[Connection], out: ptr[m
  *     loan, if it has one, runs the thread while a request is served.
  * @param into Where each request is read into, reused.
  */
-serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_file :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -1885,7 +2045,14 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
         response :: os.begin[file.Response](&out)
         response^ = .Unsupported
         match os.message_of[file.Request](into)^ {
-            case UseBuffer(memory) => response^ = if use_buffer(connection, memory) is_none { file.Response.Done } else { file.Response.Failed(.NoBuffer) }
+            case UseBuffer(
+                memory
+            ) => response^ = if use_buffer(connection, memory) is_none {
+                file.Response.Done
+            }
+            else {
+                file.Response.Failed(.NoBuffer)
+            }
             case Read(transfer) => {
                 if logged && connection.object == 0 {
                     response^ = .Transferred(0)
@@ -1907,7 +2074,16 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
                         case Ok(bytes) => {
                             defer runtime.free_array(bytes)
                             if logged {
-                                response^ = if log_op(server, connection.transaction, .Write, 0, transfer.offset, name_of(connection), "", bytes) {
+                                response^ = if log_op(
+                                    server,
+                                    connection.transaction,
+                                    .Write,
+                                    0,
+                                    transfer.offset,
+                                    name_of(connection),
+                                    "",
+                                    bytes
+                                ) {
                                     file.Response.Transferred(transfer.count)
                                 }
                                 else {
@@ -1926,8 +2102,21 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
             }
             case SetSize(size) => {
                 if logged {
-                    response^ = if log_op(server, connection.transaction, .SetSize, 0, size, name_of(connection), "", nothing()) { file.Response.Done }
-                        else { file.Response.Failed(.NoSpace) }
+                    response^ = if log_op(
+                        server,
+                        connection.transaction,
+                        .SetSize,
+                        0,
+                        size,
+                        name_of(connection),
+                        "",
+                        nothing()
+                    ) {
+                        file.Response.Done
+                    }
+                    else {
+                        file.Response.Failed(.NoSpace)
+                    }
                 }
                 else {
                     match slopfs.set_size(server.volume, connection.object, size) {
@@ -1947,10 +2136,21 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
                     }
                 }
             }
-            case Sync => response^ = if logged || synced(server) { file.Response.Done } else { file.Response.Failed(.DeviceError) }
+            case Sync => response^ = if logged || synced(server) {
+                file.Response.Done
+            }
+            else {
+                file.Response.Failed(.DeviceError)
+            }
             case Narrow => {
                 if connection.kind == .File {
-                    match open_connection[read_only_file.ReadOnlyFile](server, .ReadOnlyFile, connection.object, true, name_of(connection)) {
+                    match open_connection[read_only_file.ReadOnlyFile](
+                        server,
+                        .ReadOnlyFile,
+                        connection.object,
+                        true,
+                        name_of(connection)
+                    ) {
                         case Some(made) => response^ = .Narrowed(made)
                         case None => response^ = .Failed(.NoSpace)
                     }
@@ -1988,7 +2188,7 @@ serve_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incomin
  *     thread while a request is served.
  * @param into Where each request is read into, reused.
  */
-serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_read_only_file :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -2018,8 +2218,14 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
         response :: os.begin[read_only_file.Response](&out)
         response^ = .Unsupported
         match os.message_of[read_only_file.Request](into)^ {
-            case UseBuffer(memory) => response^ = if use_buffer(connection, memory) is_none { read_only_file.Response.Done }
-                else { read_only_file.Response.Failed(.NoBuffer) }
+            case UseBuffer(
+                memory
+            ) => response^ = if use_buffer(connection, memory) is_none {
+                read_only_file.Response.Done
+            }
+            else {
+                read_only_file.Response.Failed(.NoBuffer)
+            }
             case Read(transfer) => {
                 match read_file(server, connection, transfer) {
                     case Ok(count) => response^ = .Transferred(count)
@@ -2054,7 +2260,7 @@ serve_read_only_file :: fn(server: ptr[mut Server], index: usize, into: ptr[mut 
  * @return The keys, on the heap, the volume's from then on; null if the storage manager goes, or a port or keys
  *     couldn't be made.
  */
-wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut slopfs.Keys]? {
+wait_for_unlock :: fn(server : ptr[mut Server], end : slop_os.Channel) -> ptr[mut slopfs.Keys]? {
     startup :: slop_os.startup_block()
     port :: os.port_for(startup.budget, end) or_return null
     defer _ = slop_os.handle_close(cast[slop_os.Handle](port))
@@ -2075,8 +2281,12 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
         match os.message_of[volume_protocol.Request](&into)^ {
             case Unlock(given) => {
                 // A volume made with nothing in it yet (decisions/0141) has no keys to unwrap: they're made here
-                unlocked = if slopfs.is_unfilled(&server.described.record) { make_first_keys(server, os.items(&into, given), keys) }
-                    else { unlock_keys(server, os.items(&into, given), keys) }
+                unlocked = if slopfs.is_unfilled(&server.described.record) {
+                    make_first_keys(server, os.items(&into, given), keys)
+                }
+                else {
+                    unlock_keys(server, os.items(&into, given), keys)
+                }
                 response = if unlocked { .Unlocked } else { .WrongKey }
             }
             case Rotate => response = .Failed
@@ -2107,11 +2317,22 @@ wait_for_unlock :: fn(server: ptr[mut Server], end: slop_os.Channel) -> ptr[mut 
  * @param keys Where the keys are made, new; the caller frees them with free_keys if this fails.
  * @return Whether they were made and kept by the container service.
  */
-make_first_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopfs.Keys]) -> bool {
+make_first_keys :: fn(server : ptr[mut Server], passphrase : u8[], keys : ptr[mut slopfs.Keys]) -> bool {
     cipher :: server.described.record.cipher
-    keys.cipher = if cipher == cast[u8](slopfs.Cipher.Aes256Gcm) { slopfs.Cipher.Aes256Gcm } else { slopfs.Cipher.ChaCha20Poly1305 }
-    made :: match slopfs.first_keys(keys, passphrase, slopfs.MADE_PASSPHRASE, server.described.container, server.described.id,
-        server.described.transaction) {
+    keys.cipher = if cipher == cast[u8](slopfs.Cipher.Aes256Gcm) {
+        slopfs.Cipher.Aes256Gcm
+    }
+    else {
+        slopfs.Cipher.ChaCha20Poly1305
+    }
+    made :: match slopfs.first_keys(
+        keys,
+        passphrase,
+        slopfs.MADE_PASSPHRASE,
+        server.described.container,
+        server.described.id,
+        server.described.transaction
+    ) {
         case Ok(first) => first
         case Error(error) => return false
     }
@@ -2136,7 +2357,7 @@ make_first_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut s
  * @param keys Where the keys go, new; for free_keys either way.
  * @return Whether they were unwrapped; false if it isn't the passphrase, or the records can't be read, which is logged.
  */
-unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopfs.Keys]) -> bool {
+unlock_keys :: fn(server : ptr[mut Server], passphrase : u8[], keys : ptr[mut slopfs.Keys]) -> bool {
     wraps : slopfs.WrapRecord[..]
     defer runtime.array_free(&wraps)
     for index in 0..<cast[u64](16) {
@@ -2155,7 +2376,15 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
     if !listed_generations(server, &generations) {
         return false
     }
-    match slopfs.unlock(server.described.container, key_owner(server), server.described.record, wraps, generations, passphrase, keys) {
+    match slopfs.unlock(
+        server.described.container,
+        key_owner(server),
+        server.described.record,
+        wraps,
+        generations,
+        passphrase,
+        keys
+    ) {
         case Ok => return true
         case Error(error) => {
             if error != .WrongKey {
@@ -2177,7 +2406,7 @@ unlock_keys :: fn(server: ptr[mut Server], passphrase: u8[], keys: ptr[mut slopf
  * @param index The control connection's slot.
  * @param into Where each request is read into, reused.
  */
-serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Incoming]) {
+serve_control :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]) {
     if index >= server.connections.count {
         return void
     }
@@ -2201,10 +2430,18 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
         match os.message_of[volume_protocol.Request](into)^ {
             case Unlock(given) => {
                 if server.volume.tree.keys is_some {
-                    // Unlocked already: the passphrase checked, for whoever asks the storage manager for the volume again
+                    /*
+                     * Unlocked already: the passphrase checked, for whoever asks the storage manager for the volume
+                     * again
+                     */
                     match slopfs.new_keys(.None) {
                         case Ok(checked) => {
-                            response = if unlock_keys(server, os.items(into, given), checked) { .Unlocked } else { .WrongKey }
+                            response = if unlock_keys(server, os.items(into, given), checked) {
+                                .Unlocked
+                            }
+                            else {
+                                .WrongKey
+                            }
                             slopfs.free_keys(checked)
                         }
                         case Error(error) => response = .Failed
@@ -2214,10 +2451,20 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
             case Rotate => response = rotate(server)
             case Rekey(given) => response = rekey(server, os.items(into, given))
             case Commit => {
-                response = if server.described.read_only || !server.volume.dirty || commit(server) { .Committed } else { .Failed }
+                response = if server.described.read_only || !server.volume.dirty || commit(server) {
+                    .Committed
+                }
+                else {
+                    .Failed
+                }
             }
             case IssueTo(to) => {
-                response = if server.described.read_only { volume_protocol.Response.Refused(.ReadOnly) } else { issue_to(server, to) }
+                response = if server.described.read_only {
+                    volume_protocol.Response.Refused(.ReadOnly)
+                }
+                else {
+                    issue_to(server, to)
+                }
             }
             case OpenIssued(asked) => {
                 bytes :: os.items(into, asked.path)
@@ -2225,7 +2472,11 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
                     response = .Refused(.InvalidPath)
                 }
                 else {
-                    response = open_issued(server, asked, if bytes.count == 0 { "" } else { string_of(&bytes[0], bytes.count) })
+                    response = open_issued(
+                        server,
+                        asked,
+                        if bytes.count == 0 { "" } else { string_of(&bytes[0], bytes.count) }
+                    )
                 }
             }
         }
@@ -2245,7 +2496,7 @@ serve_control :: fn(server: ptr[mut Server], index: usize, into: ptr[mut os.Inco
  *     its origin; NotEncrypted for a plain volume; Failed for a snapshot, a commit that failed, or a generation that
  *     couldn't be made or kept, the one before still sealing.
  */
-rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
+rotate :: fn(server : ptr[mut Server]) -> volume_protocol.Response {
     keys :: server.volume.tree.keys or_return .NotEncrypted
     if server.described.read_only {
         return .Failed
@@ -2277,7 +2528,12 @@ rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
     }
     match ask(server, .AddGeneration(container.AddedGeneration.{number = keys.current, record = record})) {
         case Done => {
-            log_line.write(server.log, "volume_server: volume % sealing with key generation %", server.described.id, keys.current)
+            log_line.write(
+                server.log,
+                "volume_server: volume % sealing with key generation %",
+                server.described.id,
+                keys.current
+            )
             server.described.record.generation = cast[u32le](keys.current)
             return .Rotated(keys.current)
         }
@@ -2296,7 +2552,7 @@ rotate :: fn(server: ptr[mut Server]) -> volume_protocol.Response {
  * @param found Where they're added, with context's allocator; the caller's to free either way.
  * @return Whether they were all listed; false if one couldn't be read or kept.
  */
-listed_generations :: fn(server: ptr[mut Server], found: ptr[mut slopfs.NumberedGeneration[..]]) -> bool {
+listed_generations :: fn(server : ptr[mut Server], found : ptr[mut slopfs.NumberedGeneration[..]]) -> bool {
     number : u32 = 1
     loop {
         match ask(server, .GenerationFrom(number)) {
@@ -2324,7 +2580,7 @@ listed_generations :: fn(server: ptr[mut Server], found: ptr[mut slopfs.Numbered
  * @return Rotated with the new generation, the floor; NotEncrypted for a plain volume; Failed for a snapshot, a
  *     clone, a commit that failed, or keys that couldn't be made again or kept, the old ones still opening it.
  */
-rekey :: fn(server: ptr[mut Server], passphrase: u8[]) -> volume_protocol.Response {
+rekey :: fn(server : ptr[mut Server], passphrase : u8[]) -> volume_protocol.Response {
     keys :: server.volume.tree.keys or_return .NotEncrypted
     if server.described.read_only || key_owner(server) != server.described.id {
         return .Failed
@@ -2339,15 +2595,29 @@ rekey :: fn(server: ptr[mut Server], passphrase: u8[]) -> volume_protocol.Respon
     }
     made := slopfs.Rekeyed.{}
     defer slopfs.free_rekeyed(&made)
-    if !slopfs.rekey(keys, generations, passphrase, slopfs.MADE_PASSPHRASE, server.nodes.transaction, server.described.container,
-        server.described.id, &made) {
+    if !slopfs.rekey(
+        keys,
+        generations,
+        passphrase,
+        slopfs.MADE_PASSPHRASE,
+        server.nodes.transaction,
+        server.described.container,
+        server.described.id,
+        &made
+    ) {
         log_line.write(server.log, "volume_server: volume %'s keys couldn't be made again", server.described.id)
         return .Failed
     }
     out := os.Outgoing.{}
     request :: os.begin[container.Request](&out)
-    request^ = .Rekey(container.Rekeying.{wrap = made.wrap, generations = os.append(&out, made.generations[0..<made.generations.count]),
-        number = made.added.number, added = made.record})
+    request^ = .Rekey(
+        container.Rekeying.{
+            wrap = made.wrap,
+            generations = os.append(&out, made.generations[0..<made.generations.count]),
+            number = made.added.number,
+            added = made.record,
+        }
+    )
     into := os.Incoming.{}
     match ask_built(&server.own, &out, &into) {
         case Done => {}
@@ -2363,7 +2633,12 @@ rekey :: fn(server: ptr[mut Server], passphrase: u8[]) -> volume_protocol.Respon
     server.described.record.generation = cast[u32le](made.added.number)
     server.resealing = made.added.number
     server.reseal_from = slopfs.Key.{}
-    log_line.write(server.log, "volume_server: volume % given a new volume key, sealing with key generation %", server.described.id, made.added.number)
+    log_line.write(
+        server.log,
+        "volume_server: volume % given a new volume key, sealing with key generation %",
+        server.described.id,
+        made.added.number
+    )
     return .Rotated(made.added.number)
 }
 
@@ -2373,13 +2648,18 @@ rekey :: fn(server: ptr[mut Server], passphrase: u8[]) -> volume_protocol.Respon
  *
  * @param server The server, whose volume is served, writable and unlocked; its resealing is set from its floor.
  */
-resume_floor :: fn(server: ptr[mut Server]) {
+resume_floor :: fn(server : ptr[mut Server]) {
     match ask(server, .KeyFloor) {
         case Floor(floor) => {
             if cast[u32](floor.state) == cast[u32](slopfs.FloorState.Sealing) {
                 server.resealing = cast[u32](floor.floor)
                 server.reseal_from = slopfs.Key.{}
-                log_line.write(server.log, "volume_server: volume % goes on sealing again with key generation %", server.described.id, server.resealing)
+                log_line.write(
+                    server.log,
+                    "volume_server: volume % goes on sealing again with key generation %",
+                    server.described.id,
+                    server.resealing
+                )
             }
             else {
                 drop_old(server)
@@ -2396,7 +2676,7 @@ resume_floor :: fn(server: ptr[mut Server]) {
  * @param server The server, sealing again: its reseal_from advances, and its resealing is 0 once it's done or failed,
  *     which is logged.
  */
-reseal_some :: fn(server: ptr[mut Server]) {
+reseal_some :: fn(server : ptr[mut Server]) {
     floor :: server.resealing
     match slopfs.reseal_step(server.volume, floor, server.reseal_from, RESEAL_BLOCKS) {
         case Ok(next) => {
@@ -2410,17 +2690,31 @@ reseal_some :: fn(server: ptr[mut Server]) {
                     server.resealing = 0
                     match ask(server, .SealedAgain(floor)) {
                         case Done => {
-                            log_line.write(server.log, "volume_server: volume % sealed again with key generation %", server.described.id, floor)
+                            log_line.write(
+                                server.log,
+                                "volume_server: volume % sealed again with key generation %",
+                                server.described.id,
+                                floor
+                            )
                             drop_old(server)
                         }
-                        case _ => log_line.write(server.log, "volume_server: volume % sealed again, but its floor wasn't kept", server.described.id)
+                        case _ => log_line.write(
+                            server.log,
+                            "volume_server: volume % sealed again, but its floor wasn't kept",
+                            server.described.id
+                        )
                     }
                 }
             }
         }
         case Error(error) => {
             server.resealing = 0
-            log_line.write(server.log, "volume_server: volume % couldn't be sealed again: %", server.described.id, error)
+            log_line.write(
+                server.log,
+                "volume_server: volume % couldn't be sealed again: %",
+                server.described.id,
+                error
+            )
         }
     }
 }
@@ -2431,7 +2725,7 @@ reseal_some :: fn(server: ptr[mut Server]) {
  *
  * @param server The server, whose volume is served, unlocked.
  */
-drop_old :: fn(server: ptr[mut Server]) {
+drop_old :: fn(server : ptr[mut Server]) {
     match ask(server, .DropOldGenerations) {
         case Dropped(floor) => {
             match server.volume.tree.keys {
@@ -2440,10 +2734,18 @@ drop_old :: fn(server: ptr[mut Server]) {
             }
             server.volume.dirty = true
             _ = commit(server)
-            log_line.write(server.log, "volume_server: volume % deleted its key generations before %", server.described.id, floor)
+            log_line.write(
+                server.log,
+                "volume_server: volume % deleted its key generations before %",
+                server.described.id,
+                floor
+            )
         }
-        case _ => log_line.write(server.log, "volume_server: volume % keeps its key generations before its floor while a snapshot from before may need them",
-            server.described.id)
+        case _ => log_line.write(
+            server.log,
+            "volume_server: volume % keeps its key generations before its floor while a snapshot from before may need them",
+            server.described.id
+        )
     }
 }
 
@@ -2453,7 +2755,7 @@ drop_old :: fn(server: ptr[mut Server]) {
  * @param server The server, read for its volume's ID and record.
  * @return The volume's ID, or a clone's origin's.
  */
-key_owner :: fn(server: ptr[Server]) -> u64 {
+key_owner :: fn(server : ptr[Server]) -> u64 {
     record := server.described.record
     return slopfs.key_owner_of(server.described.id, &record)
 }

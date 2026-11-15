@@ -10,15 +10,15 @@ package test_shell_calls
 
 import intrinsics from "base:intrinsics"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
+import lifecycle from "std:os/slop_os/lifecycle"
+import stream from "std:os/slop_os/stream"
+import terminal as protocol from "std:os/slop_os/terminal"
 import strings from "std:strings"
 import terminal from "std:terminal"
 import text_buffer from "std:text_buffer"
 import time from "std:time"
-import slop_os from "std:os/slop_os"
-import lifecycle from "std:os/slop_os/lifecycle"
-import dir from "std:os/slop_os/dir"
-import stream from "std:os/slop_os/stream"
-import terminal as protocol from "std:os/slop_os/terminal"
 
 /** A choice the shell passes by name. */
 Speed :: enum {
@@ -63,8 +63,20 @@ Row :: struct {
  *     opened; 3 if the line couldn't be made; 9 if there's an input but no output; 10 if it was asked to stop while it
  *     slept; otherwise what write_rows gives.
  */
-main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, label: string, loud: bool, speed: Speed?, wait: time.Duration?,
-    tags: string[]?, place: os.Channel[dir.Dir]?, input: os.Stream[Row]?, output: os.Sink[Row]?, sleep: time.Duration?, stubborn: bool) -> int {
+main :: fn(
+    session_terminal : os.Channel[protocol.Terminal]?,
+    count : u64,
+    label : string,
+    loud : bool,
+    speed : Speed?,
+    wait : time.Duration?,
+    tags : string[]?,
+    place : os.Channel[dir.Dir]?,
+    input : os.Stream[Row]?,
+    output : os.Sink[Row]?,
+    sleep : time.Duration?,
+    stubborn : bool
+) -> int {
     match sleep {
         case Some(given) => {
             if !slept(given.seconds * 1000000000 + cast[i64](given.nanos), stubborn) {
@@ -112,8 +124,17 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, label: 
         case Some(given) => "a directory"
         case None => "none"
     }
-    line :: strings.format("called with %, %, loud %, speed %, wait %, tags %, place %", label, count, loud, speed_text, wait_text, tags_text,
-        place_text) or_return 3
+    line :: strings.format(
+        "called with %, %, loud %, speed %, wait %, tags %, place %",
+        label,
+        count,
+        loud,
+        speed_text,
+        wait_text,
+        tags_text,
+        place_text
+    )
+        or_return 3
     match console {
         case Some(opened) => {
             shown := opened
@@ -141,7 +162,7 @@ main :: fn(session_terminal: os.Channel[protocol.Terminal]?, count: u64, label: 
  * @param stubborn Whether to sleep on when it's asked to stop; if not, a stop wakes it and ends the sleep.
  * @return True once it's slept; false if it was asked to stop first, and wasn't stubborn.
  */
-slept :: fn(nanoseconds: i64, stubborn: bool) -> bool {
+slept :: fn(nanoseconds : i64, stubborn : bool) -> bool {
     port :: slop_os.port_create(slop_os.startup_block().budget) or_return true
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     if !stubborn {
@@ -176,7 +197,7 @@ slept :: fn(nanoseconds: i64, stubborn: bool) -> bool {
  *     the input, couldn't be opened; 6 if a row couldn't be written; 7 if a row's name couldn't be made; 8 if the
  *     output couldn't be ended.
  */
-write_rows :: fn(sink: os.Sink[Row], input: os.Stream[Row]?, count: u64, label: string) -> int {
+write_rows :: fn(sink : os.Sink[Row], input : os.Stream[Row]?, count : u64, label : string) -> int {
     writer := stream.writer_on(sink) or_return 4
     match input {
         case Some(source) => {

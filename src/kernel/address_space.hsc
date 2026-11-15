@@ -2,9 +2,9 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
-import concurrency from "std:concurrency"
 import frames from "frames"
 
 #if TARGET_ARCH == .x86_64 {
@@ -34,7 +34,12 @@ DIRECT_MAP_DATA :: arch_interface.Mapping.{protection = .ReadWrite, cache = .Wri
 /** How the kernel image's frames are mapped in the direct map: read only, so none is both writable and executable. */
 DIRECT_MAP_READ_ONLY :: arch_interface.Mapping.{protection = .Read, cache = .WriteBack, user = false, global = true}
 /** How a framebuffer is mapped in the direct map: readable and writable, write-combining, for drawing. */
-DIRECT_MAP_FRAMEBUFFER :: arch_interface.Mapping.{protection = .ReadWrite, cache = .WriteCombining, user = false, global = true}
+DIRECT_MAP_FRAMEBUFFER :: arch_interface.Mapping.{
+    protection = .ReadWrite,
+    cache = .WriteCombining,
+    user = false,
+    global = true,
+}
 
 /** What mapping into the kernel's tables keeps between mappings: spare table frames, and what's been mapped. */
 Mapper :: struct {
@@ -62,8 +67,9 @@ Mapper :: struct {
  * @param info The boot information: the memory map, the direct map's offset, which the bootloader chose and the new
  *     tables keep, and the kernel image's segments. It's read here, in boot memory, which is still mapped.
  */
-start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
-    root :: frames.allocate_zeroed(&kernel.frames, 0) or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
+start_address_space :: fn(kernel : ptr[mut Kernel], info : ptr[boot_info.BootInfo]) {
+    root :: frames.allocate_zeroed(&kernel.frames, 0)
+        or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
     half_count :: cast[u64](arch.kernel_half_frames())
     half := cast[boot_info.PhysicalAddress](0)
     if half_count > 0 {
@@ -83,8 +89,12 @@ start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]
         frames.give_frame(&per_cpu().frame_cache, &kernel.frames, mapper.tables.frames[i])
     }
     arch.activate(&kernel.page_table)
-    runtime.log_info("kernel page tables active: % MiB of RAM in the direct map at %{#018x}, the image in % segments",
-        mapper.direct_bytes >> 20, info.direct_map_offset, info.kernel_image.segments.count)
+    runtime.log_info(
+        "kernel page tables active: % MiB of RAM in the direct map at %{#018x}, the image in % segments",
+        mapper.direct_bytes >> 20,
+        info.direct_map_offset,
+        info.kernel_image.segments.count
+    )
     start_window(kernel, info, mapper.direct_end)
 }
 
@@ -99,7 +109,12 @@ start_address_space :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]
  * @param offset The direct map's offset: physical address p is mapped at offset plus p.
  * @param mapper The mapping state, whose direct_bytes grows by each run mapped.
  */
-map_direct :: fn(kernel: ptr[mut Kernel], memory_map: boot_info.MemoryRegion[], offset: u64, mapper: ptr[mut Mapper]) {
+map_direct :: fn(
+    kernel : ptr[mut Kernel],
+    memory_map : boot_info.MemoryRegion[],
+    offset : u64,
+    mapper : ptr[mut Mapper]
+) {
     run_start : u64 = 0
     run_end : u64 = 0
     run_mapping := DIRECT_MAP_DATA
@@ -129,9 +144,17 @@ map_direct :: fn(kernel: ptr[mut Kernel], memory_map: boot_info.MemoryRegion[], 
  * @param start The run's first physical address.
  * @param end The physical address just past the run; at or below start maps nothing.
  * @param mapping How the whole run is mapped.
- * @param mapper The mapping state, whose direct_bytes grows by the run's size, and whose direct_end is at least its end.
+ * @param mapper The mapping state, whose direct_bytes grows by the run's size, and whose direct_end is at least its
+ *     end.
  */
-map_direct_run :: fn(kernel: ptr[mut Kernel], offset: u64, start: u64, end: u64, mapping: arch_interface.Mapping, mapper: ptr[mut Mapper]) {
+map_direct_run :: fn(
+    kernel : ptr[mut Kernel],
+    offset : u64,
+    start : u64,
+    end : u64,
+    mapping : arch_interface.Mapping,
+    mapper : ptr[mut Mapper]
+) {
     if end > start {
         map_range(kernel, offset + start, start, end - start, mapping, mapper)
         mapper.direct_bytes += end - start
@@ -147,7 +170,7 @@ map_direct_run :: fn(kernel: ptr[mut Kernel], offset: u64, start: u64, end: u64,
  * @param kind The memory map region's kind.
  * @return False for Reserved and Defective; true for every other kind.
  */
-is_direct_mapped :: fn(kind: boot_info.MemoryKind) -> bool {
+is_direct_mapped :: fn(kind : boot_info.MemoryKind) -> bool {
     return kind != .Reserved && kind != .Defective
 }
 
@@ -161,7 +184,7 @@ is_direct_mapped :: fn(kind: boot_info.MemoryKind) -> bool {
  * @return DIRECT_MAP_READ_ONLY for the kernel image, DIRECT_MAP_FRAMEBUFFER for a framebuffer, and DIRECT_MAP_DATA for
  *     everything else.
  */
-direct_mapping :: fn(kind: boot_info.MemoryKind) -> arch_interface.Mapping {
+direct_mapping :: fn(kind : boot_info.MemoryKind) -> arch_interface.Mapping {
     if kind == .KernelImage {
         return DIRECT_MAP_READ_ONLY
     }
@@ -178,7 +201,7 @@ direct_mapping :: fn(kind: boot_info.MemoryKind) -> arch_interface.Mapping {
  * @param b The other mapping, compared field by field with a.
  * @return True if their protection, cache mode, user and global flags are all the same.
  */
-same_mapping :: fn(a, b: arch_interface.Mapping) -> bool {
+same_mapping :: fn(a, b : arch_interface.Mapping) -> bool {
     return a.protection == b.protection && a.cache == b.cache && a.user == b.user && a.global == b.global
 }
 
@@ -195,27 +218,33 @@ same_mapping :: fn(a, b: arch_interface.Mapping) -> bool {
  *     image contiguous in physical memory.
  * @param mapper The mapping state, whose spare table frames are used and refilled; direct_bytes isn't changed.
  */
-map_image :: fn(kernel: ptr[mut Kernel], image: ptr[boot_info.KernelImage], mapper: ptr[mut Mapper]) {
+map_image :: fn(kernel : ptr[mut Kernel], image : ptr[boot_info.KernelImage], mapper : ptr[mut Mapper]) {
     image_base :: cast[u64](image.virtual_base)
     physical_base :: cast[u64](image.physical.base)
     segments :: image.segments
     for segment in segments {
-        runtime.assert(!(segment.writable && segment.executable), "no segment of the kernel image is both writable and executable (W^X)")
+        runtime.assert(
+            !(segment.writable && segment.executable),
+            "no segment of the kernel image is both writable and executable (W^X)"
+        )
         start :: cast[u64](segment.virtual_base) & ~(frames.FRAME_SIZE - 1)
         end :: frames.round_up(cast[u64](segment.virtual_base) + segment.size, frames.FRAME_SIZE)
-        runtime.assert(start >= image_base && end - image_base <= image.physical.size, "each segment is inside the kernel image")
+        runtime.assert(
+            start >= image_base && end - image_base <= image.physical.size,
+            "each segment is inside the kernel image"
+        )
         protection :: if segment.writable {
             arch_interface.Protection.ReadWrite
         }
-        else if segment.executable {
-            arch_interface.Protection.ReadExecute
-        }
-        else {
-            arch_interface.Protection.Read
-        }
+        else if segment.executable { arch_interface.Protection.ReadExecute } else { arch_interface.Protection.Read }
         // Its code guarded, as it's built with landing pads (decisions/0186, Hd)
-        mapping :: arch_interface.Mapping.{protection = protection, cache = .WriteBack, user = false, global = true,
-            guarded = segment.executable}
+        mapping :: arch_interface.Mapping.{
+            protection = protection,
+            cache = .WriteBack,
+            user = false,
+            global = true,
+            guarded = segment.executable,
+        }
         map_range(kernel, start, physical_base + (start - image_base), end - start, mapping, mapper)
     }
 }
@@ -232,7 +261,14 @@ map_image :: fn(kernel: ptr[mut Kernel], image: ptr[boot_info.KernelImage], mapp
  * @param mapping How every page of it is mapped.
  * @param mapper The mapping state, which says whether 1 GiB pages may be used.
  */
-map_range :: fn(kernel: ptr[mut Kernel], virtual_address: u64, physical: u64, size: u64, mapping: arch_interface.Mapping, mapper: ptr[mut Mapper]) {
+map_range :: fn(
+    kernel : ptr[mut Kernel],
+    virtual_address : u64,
+    physical : u64,
+    size : u64,
+    mapping : arch_interface.Mapping,
+    mapper : ptr[mut Mapper]
+) {
     offset : u64 = 0
     loop {
         page :: largest_page(virtual_address + offset, physical + offset, size - offset, mapper.pages_1g)
@@ -251,7 +287,7 @@ map_range :: fn(kernel: ptr[mut Kernel], virtual_address: u64, physical: u64, si
  * @param pages_1g Whether 1 GiB pages may be used.
  * @return Size1G or Size2M where both addresses are aligned to it and at least that much is left; else Size4K.
  */
-largest_page :: fn(virtual_address: u64, physical: u64, left: u64, pages_1g: bool) -> arch_interface.PageSize {
+largest_page :: fn(virtual_address : u64, physical : u64, left : u64, pages_1g : bool) -> arch_interface.PageSize {
     if pages_1g && fits(virtual_address, physical, left, page_bytes(.Size1G)) {
         return .Size1G
     }
@@ -270,7 +306,7 @@ largest_page :: fn(virtual_address: u64, physical: u64, left: u64, pages_1g: boo
  * @param bytes The page's size in bytes, a power of two.
  * @return True if both addresses are aligned to bytes and left is at least bytes.
  */
-fits :: fn(virtual_address: u64, physical: u64, left: u64, bytes: u64) -> bool {
+fits :: fn(virtual_address : u64, physical : u64, left : u64, bytes : u64) -> bool {
     return virtual_address % bytes == 0 && physical % bytes == 0 && left >= bytes
 }
 
@@ -280,7 +316,7 @@ fits :: fn(virtual_address: u64, physical: u64, left: u64, bytes: u64) -> bool {
  * @param size The page size, one of the three the kernel's tables use.
  * @return 4 KiB, 2 MiB or 1 GiB.
  */
-page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
+page_bytes :: fn(size : arch_interface.PageSize) -> u64 {
     return match size {
         case .Size4K => frames.FRAME_SIZE
         case .Size2M => frames.FRAME_SIZE << 9
@@ -301,16 +337,32 @@ page_bytes :: fn(size: arch_interface.PageSize) -> u64 {
  * @param mapping How it's mapped.
  * @param mapper The mapping state, whose table frames are used and refilled from this CPU's frame cache.
  */
-map_page :: fn(kernel: ptr[mut Kernel], virtual_address: u64, physical: u64, size: arch_interface.PageSize, mapping: arch_interface.Mapping, mapper: ptr[mut Mapper]) {
+map_page :: fn(
+    kernel : ptr[mut Kernel],
+    virtual_address : u64,
+    physical : u64,
+    size : arch_interface.PageSize,
+    mapping : arch_interface.Mapping,
+    mapper : ptr[mut Mapper]
+) {
     lock_at(&kernel.page_table_lock, .PageTable)
     defer unlock_at(&kernel.page_table_lock, .PageTable)
     loop {
-        result :: arch.map(&kernel.page_table, cast[arch_interface.VirtualAddress](virtual_address),
-            cast[arch_interface.PhysicalAddress](physical), size, mapping, &mapper.tables)
+        result :: arch.map(
+            &kernel.page_table,
+            cast[arch_interface.VirtualAddress](virtual_address),
+            cast[arch_interface.PhysicalAddress](physical),
+            size,
+            mapping,
+            &mapper.tables
+        )
         match result {
             case Ok => return void
             case Error(error) => {
-                runtime.assert(error == .NeedTableFrames, "the kernel's own mappings are aligned, supported and don't overlap")
+                runtime.assert(
+                    error == .NeedTableFrames,
+                    "the kernel's own mappings are aligned, supported and don't overlap"
+                )
                 refill_tables(kernel, &mapper.tables)
             }
         }
@@ -325,10 +377,11 @@ map_page :: fn(kernel: ptr[mut Kernel], virtual_address: u64, physical: u64, siz
  * @param kernel The kernel, whose frame allocator they come from.
  * @param tables The table frames to fill; its count is 4 after.
  */
-refill_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.TableFrames]) {
+refill_tables :: fn(kernel : ptr[mut Kernel], tables : ptr[mut arch_interface.TableFrames]) {
     cache :: &per_cpu().frame_cache
     for i in cast[usize](tables.count)..<4 {
-        frame :: frames.take_frame(cache, &kernel.frames) or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
+        frame :: frames.take_frame(cache, &kernel.frames)
+            or_else out_of_memory(&kernel.options, "no memory for the kernel's page tables")
         intrinsics.mem_zero(cast[mut rawptr](frames.virtual_of(&kernel.frames, frame)), cast[usize](frames.FRAME_SIZE))
         tables.frames[i] = frame
     }
@@ -346,7 +399,7 @@ refill_tables :: fn(kernel: ptr[mut Kernel], tables: ptr[mut arch_interface.Tabl
  * @param kernel The kernel, whose cpus, per_cpus, boot_memory, modules, command_line, boot_seed and ram are set.
  * @param info The boot information, in boot memory, still mapped.
  */
-keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
+keep_boot_info :: fn(kernel : ptr[mut Kernel], info : ptr[boot_info.BootInfo]) {
     cpus :: info.cpus
     cpus_address :: allocate_kept(kernel, cpus.count * size_of(boot_info.BootCpu))
     kept_cpus :: view_of(cast[ptr[mut boot_info.BootCpu]](cpus_address), cpus.count)
@@ -363,7 +416,10 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
             count += 1
         }
     }
-    boot_memory :: view_of(cast[ptr[mut boot_info.PhysicalRange]](allocate_kept(kernel, count * size_of(boot_info.PhysicalRange))), count)
+    boot_memory :: view_of(
+        cast[ptr[mut boot_info.PhysicalRange]](allocate_kept(kernel, count * size_of(boot_info.PhysicalRange))),
+        count
+    )
     kernel.boot_memory = boot_memory
     kept : usize = 0
     for region in memory_map {
@@ -374,19 +430,33 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
     }
 
     // The boot modules, their names copied out of boot memory
-    modules :: view_of(cast[ptr[mut boot_info.BootModule]](allocate_kept(kernel, info.modules.count * size_of(boot_info.BootModule))),
-        info.modules.count)
+    modules :: view_of(
+        cast[ptr[mut boot_info.BootModule]](allocate_kept(kernel, info.modules.count * size_of(boot_info.BootModule))),
+        info.modules.count
+    )
     for module, i in info.modules {
         if i < modules.count {
             name :: cast[ptr[mut u8]](allocate_kept(kernel, module.name.count))
-            intrinsics.mem_copy_non_overlapping(cast[mut rawptr](name), cast[rawptr](module.name.data), module.name.count)
-            modules[i] = boot_info.BootModule.{name = string_of(name, module.name.count), command_line = "", contents = module.contents}
+            intrinsics.mem_copy_non_overlapping(
+                cast[mut rawptr](name),
+                cast[rawptr](module.name.data),
+                module.name.count
+            )
+            modules[i] = boot_info.BootModule.{
+                name = string_of(name, module.name.count),
+                command_line = "",
+                contents = module.contents,
+            }
         }
     }
     kernel.modules = modules
     // The command line, for the root task too
     command_line :: cast[ptr[mut u8]](allocate_kept(kernel, info.command_line.count))
-    intrinsics.mem_copy_non_overlapping(cast[mut rawptr](command_line), cast[rawptr](info.command_line.data), info.command_line.count)
+    intrinsics.mem_copy_non_overlapping(
+        cast[mut rawptr](command_line),
+        cast[rawptr](info.command_line.data),
+        info.command_line.count
+    )
     kernel.command_line = string_of(command_line, info.command_line.count)
     // The boot's random seed, for the root task: the bootloader's, mixed with the CPU's
     match info.bootloader_entropy {
@@ -407,7 +477,6 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
         }
     }
 
-
     // The RAM the kernel owns, which device memory can't be made over (memory.hsc)
     owned : usize = 0
     for region in memory_map {
@@ -415,7 +484,10 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
             owned += 1
         }
     }
-    ram :: view_of(cast[ptr[mut boot_info.PhysicalRange]](allocate_kept(kernel, owned * size_of(boot_info.PhysicalRange))), owned)
+    ram :: view_of(
+        cast[ptr[mut boot_info.PhysicalRange]](allocate_kept(kernel, owned * size_of(boot_info.PhysicalRange))),
+        owned
+    )
     kernel.ram = ram
     kept_ram : usize = 0
     for region in memory_map {
@@ -436,7 +508,7 @@ keep_boot_info :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
  * @param kind The memory map region's kind.
  * @return True for Usable, BootReclaimable, KernelImage and BootModule; false for every other kind.
  */
-is_kernel_ram :: fn(kind: boot_info.MemoryKind) -> bool {
+is_kernel_ram :: fn(kind : boot_info.MemoryKind) -> bool {
     return kind == .Usable || kind == .BootReclaimable || kind == .KernelImage || kind == .BootModule
 }
 
@@ -450,7 +522,7 @@ is_kernel_ram :: fn(kind: boot_info.MemoryKind) -> bool {
  * @param size How many bytes, rounded up to a power-of-two number of frames; 0 still takes a frame.
  * @return Their kernel virtual address in the direct map, frame aligned.
  */
-allocate_kept :: fn(kernel: ptr[mut Kernel], size: usize) -> u64 {
+allocate_kept :: fn(kernel : ptr[mut Kernel], size : usize) -> u64 {
     address :: frames.allocate_zeroed(&kernel.frames, frames.order_for(cast[u64](size)))
         or_else out_of_memory(&kernel.options, "no memory for what the kernel keeps of the boot information")
     return frames.virtual_of(&kernel.frames, address)
@@ -466,7 +538,7 @@ allocate_kept :: fn(kernel: ptr[mut Kernel], size: usize) -> u64 {
  *
  * @param kernel The kernel, whose online CPUs are counted.
  */
-leave_boot_stacks :: fn(kernel: ptr[mut Kernel]) {
+leave_boot_stacks :: fn(kernel : ptr[mut Kernel]) {
     if cast[usize](kernel.online_cpus) < kernel.cpus.count {
         runtime.log_warn("boot memory isn't reclaimed: CPUs that didn't start may still be using it")
         return void
@@ -508,7 +580,7 @@ left_boot_stack :: fn() {
  *
  * @param kernel The kernel, whose kept boot_memory ranges go to its frame allocator.
  */
-reclaim_boot_memory :: fn(kernel: ptr[mut Kernel]) {
+reclaim_boot_memory :: fn(kernel : ptr[mut Kernel]) {
     boot_memory :: kernel.boot_memory
     for range in boot_memory {
         start :: cast[u64](range.base)

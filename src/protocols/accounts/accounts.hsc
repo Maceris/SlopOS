@@ -176,11 +176,14 @@ Request :: union {
     /** List an account's public keys, by its name. Answered with KeysListed, NoSuchAccount, or Failed. */
     ListKeys(slop_os.Relative[u8]),
     /**
-     * Add a public key to an account. Answered with Done; KeyRefused for a line that isn't a key; AlreadyExists for a key
+     * Add a public key to an account. Answered with Done; KeyRefused for a line that isn't a key; AlreadyExists for a
+     * key
      * it has, whatever its comment; Refused when it has account_records.MAX_KEYS; NoSuchAccount; or Failed.
      */
     AddKey(KeyChange),
-    /** Remove a public key from an account, by its fingerprint. Answered with Done, NoSuchKey, NoSuchAccount, or Failed. */
+    /**
+     * Remove a public key from an account, by its fingerprint. Answered with Done, NoSuchKey, NoSuchAccount, or Failed.
+     */
     RemoveKey(KeyChange),
     /**
      * Open an account's home volume for one of its public keys (decisions/0042, 0191), its key as SSH sends it (its
@@ -190,7 +193,8 @@ Request :: union {
      */
     OpenHomeByKey(KeyChange),
     /**
-     * Mark this connection as a remote front end's, the SSH service's (decisions/0191): its wrong passwords count against
+     * Mark this connection as a remote front end's, the SSH service's (decisions/0191): its wrong passwords count
+     * against
      * an account apart from the console's, so guessing remotely slows only remote logins. Answered with Done.
      */
     Remote,
@@ -204,7 +208,9 @@ Response :: union {
     Created(RecoveryText),
     /** OpenHome's answer: a connection to the home volume's root, which moves to the client. */
     OpenedHome(os.Channel[dir.Dir]),
-    /** ChangePassword's or Recover's answer: the password's replaced; CheckAdministrator's: they're the administrator's. */
+    /**
+     * ChangePassword's or Recover's answer: the password's replaced; CheckAdministrator's: they're the administrator's.
+     */
     Done,
     /**
      * The answer when the password's refused, why as account_records.PasswordProblem: 1 too short, 2 too long, 3
@@ -258,10 +264,11 @@ Response :: union {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return True for Describe, CheckAdministrator, OpenHome, Connect and ListKeys; false for the rest, which make or change
+ * @return True for Describe, CheckAdministrator, OpenHome, Connect and ListKeys; false for the rest, which make or
+ *     change
  *     something.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Describe => true
         case Create(_) => false
@@ -296,7 +303,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Accounts]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Accounts]? {
     pair :: os.channel_for[Accounts](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

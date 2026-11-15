@@ -26,7 +26,7 @@ SYDNEY_ZONE :: "zoneinfo/Australia/Sydney"
  * @return Ok once it's run; Error if the buffer or a port couldn't be made, or a zone's file couldn't be read or
  *     parsed.
  */
-time_zones_read_from_the_system_volume #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+time_zones_read_from_the_system_volume #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     system :: system_of(t, given)?
     buffer :: buffer_of(t, given)?
@@ -35,18 +35,32 @@ time_zones_read_from_the_system_volume #test :: fn(t: ptr[mut testing.T]) -> tes
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     london_bytes : u8[..]
     defer runtime.array_free(&london_bytes)
-    testing.require(t, read_whole(system.end, port, LONDON_ZONE, buffer, &london_bytes),
-        "the image builder copies tzdata's zoneinfo to the system volume, London's among it")?
+    testing.require(
+        t,
+        read_whole(system.end, port, LONDON_ZONE, buffer, &london_bytes),
+        "the image builder copies tzdata's zoneinfo to the system volume, London's among it"
+    )?
     london_parsed :: time_zones.parse_zone(london_bytes[0..<london_bytes.count])
     london := testing.require_ok(t, london_parsed, "a zoneinfo file from tzdata parses")?
     defer time_zones.free_zone(&london)
     expect_zone(t, &london, 2026, 1, 0, "GMT", "London keeps GMT in January")
     expect_zone(t, &london, 2026, 7, 3600, "BST", "London keeps BST in July, by its transitions")
-    expect_zone(t, &london, 2100, 7, 3600, "BST", "London keeps BST in July 2100 too, past its transitions, by its footer's rule")
+    expect_zone(
+        t,
+        &london,
+        2100,
+        7,
+        3600,
+        "BST",
+        "London keeps BST in July 2100 too, past its transitions, by its footer's rule"
+    )
     sydney_bytes : u8[..]
     defer runtime.array_free(&sydney_bytes)
-    testing.require(t, read_whole(system.end, port, SYDNEY_ZONE, buffer, &sydney_bytes),
-        "the image builder copies tzdata's zoneinfo to the system volume, Sydney's among it")?
+    testing.require(
+        t,
+        read_whole(system.end, port, SYDNEY_ZONE, buffer, &sydney_bytes),
+        "the image builder copies tzdata's zoneinfo to the system volume, Sydney's among it"
+    )?
     sydney_parsed :: time_zones.parse_zone(sydney_bytes[0..<sydney_bytes.count])
     sydney := testing.require_ok(t, sydney_parsed, "a zoneinfo file from tzdata parses")?
     defer time_zones.free_zone(&sydney)
@@ -67,9 +81,20 @@ time_zones_read_from_the_system_volume #test :: fn(t: ptr[mut testing.T]) -> tes
  * @param message Why the zone keeps them then, for whoever reads a failure.
  * @param location Where the test asked, which a failure is recorded at: the caller's own.
  */
-expect_zone :: fn(t: ptr[mut testing.T], zone: ptr[time_zones.Zone], year: i64, month: int, offset: i32, abbreviation: string, message: string,
-    location := #caller_location) {
-    found, dst, name :: time_zones.offset_of(zone, time.from_utc(time.DateTime.{year = year, month = month, day = 15, hour = 12}))
+expect_zone :: fn(
+    t : ptr[mut testing.T],
+    zone : ptr[time_zones.Zone],
+    year : i64,
+    month : int,
+    offset : i32,
+    abbreviation : string,
+    message : string,
+    location := #caller_location
+) {
+    found, dst, name :: time_zones.offset_of(
+        zone,
+        time.from_utc(time.DateTime.{year = year, month = month, day = 15, hour = 12})
+    )
     testing.expect_eq(t, found, offset, message, location)
     testing.expect_eq(t, name, abbreviation, message, location)
 }

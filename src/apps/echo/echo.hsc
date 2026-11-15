@@ -16,16 +16,16 @@
 package echo
 
 import runtime from "base:runtime"
-import os from "std:os"
-import text_buffer from "std:text_buffer"
-import unicode from "std:unicode"
 import locale from "std:locale"
-import time from "std:time"
-import terminal from "std:terminal"
+import os from "std:os"
 import slop_os from "std:os/slop_os"
-import terminal as protocol from "std:os/slop_os/terminal"
 import dir from "std:os/slop_os/dir"
 import read_only_dir from "std:os/slop_os/read_only_dir"
+import terminal as protocol from "std:os/slop_os/terminal"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import time from "std:time"
+import unicode from "std:unicode"
 import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** The most bytes of a line that fit in echo's answer to it; what's past them is cut. */
@@ -65,8 +65,12 @@ Echo :: struct {
  *     powerbox couldn't be made; 3 when its terminal goes.
  */
 
-main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Terminal], home: os.Channel[dir.Dir]?,
-    powerbox: os.Channel[powerbox_protocol.Powerbox]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    session_terminal : os.Channel[protocol.Terminal],
+    home : os.Channel[dir.Dir]?,
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?
+) -> int {
     echo := Echo.{console = terminal.open(session_terminal) or_return 2, box_end = NONE}
     match powerbox {
         case Some(given) => {
@@ -108,7 +112,7 @@ main :: fn(log: slop_os.DebugLog?, session_terminal: os.Channel[protocol.Termina
  *
  * @param echo The program's state, whose terminal the line is written to.
  */
-show_locale :: fn(echo: ptr[mut Echo]) {
+show_locale :: fn(echo : ptr[mut Echo]) {
     storage : u8[96]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "Numbers here look like ")
@@ -129,7 +133,7 @@ show_locale :: fn(echo: ptr[mut Echo]) {
  * @param echo The program's state, whose terminal the line is written to.
  * @param root The home volume's root, which stays the grant's: the directory opened on it is closed, not the root.
  */
-greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
+greet :: fn(echo : ptr[mut Echo], root : os.Channel[dir.Dir]) {
     directory, error :: os.directory_on(root.end)
     if error != null {
         return void
@@ -160,7 +164,7 @@ greet :: fn(echo: ptr[mut Echo], root: os.Channel[dir.Dir]) {
  * @param line The line typed, which stays the caller's; an empty line isn't answered. Only as much of it as fits
  *     LINE_BYTES is in the answer.
  */
-answer :: fn(echo: ptr[mut Echo], line: string) {
+answer :: fn(echo : ptr[mut Echo], line : string) {
     if line.count == 0 {
         return void
     }
@@ -180,7 +184,7 @@ answer :: fn(echo: ptr[mut Echo], line: string) {
  *     outcome; without a powerbox, a command only says there's none.
  * @param line The line typed; one that's none of the commands, or "save " without text, does nothing.
  */
-command :: fn(echo: ptr[mut Echo], line: string) {
+command :: fn(echo : ptr[mut Echo], line : string) {
     if line == "open" {
         open_chosen(echo)
     }
@@ -203,11 +207,16 @@ command :: fn(echo: ptr[mut Echo], line: string) {
  *
  * @param echo The program's state, whose powerbox is asked and whose terminal shows the line or the refusal.
  */
-open_chosen :: fn(echo: ptr[mut Echo]) {
+open_chosen :: fn(echo : ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestFile(powerbox_protocol.FileRequest.{
-        purpose = os.append(&out, string_bytes("to show what's in it")), suggested = os.append(&out, string_bytes("")), write = false})
+    request^ = .RequestFile(
+        powerbox_protocol.FileRequest.{
+            purpose = os.append(&out, string_bytes("to show what's in it")),
+            suggested = os.append(&out, string_bytes("")),
+            write = false,
+        }
+    )
     into := os.Incoming.{}
     if !ask_box(echo, &out, &into, true) {
         return void
@@ -221,10 +230,12 @@ open_chosen :: fn(echo: ptr[mut Echo]) {
  *
  * @param echo The program's state, whose powerbox is asked and whose terminal shows the line or the refusal.
  */
-reopen_kept :: fn(echo: ptr[mut Echo]) {
+reopen_kept :: fn(echo : ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .Reopen(powerbox_protocol.Reopening.{key = os.append(&out, string_bytes("notes")), kind = .File, write = false})
+    request^ = .Reopen(
+        powerbox_protocol.Reopening.{key = os.append(&out, string_bytes("notes")), kind = .File, write = false}
+    )
     into := os.Incoming.{}
     if !ask_box(echo, &out, &into, false) {
         return void
@@ -240,7 +251,7 @@ reopen_kept :: fn(echo: ptr[mut Echo]) {
  * @param echo The program's state, whose terminal shows the line.
  * @param into The powerbox's answer: GrantedReadOnlyFile for a file to read; any other answer is a refusal.
  */
-show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
+show_first_line :: fn(echo : ptr[mut Echo], into : ptr[mut os.Incoming]) {
     match os.message_of[powerbox_protocol.Response](into)^ {
         case GrantedReadOnlyFile(given) => {
             file, error :: os.file_on(given.end, false)
@@ -282,12 +293,17 @@ show_first_line :: fn(echo: ptr[mut Echo], into: ptr[mut os.Incoming]) {
  * @param echo The program's state, whose powerbox is asked and whose terminal says whether it was saved.
  * @param text The text written, from the file's start; the file is closed after.
  */
-save_chosen :: fn(echo: ptr[mut Echo], text: string) {
+save_chosen :: fn(echo : ptr[mut Echo], text : string) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestFile(powerbox_protocol.FileRequest.{
-        purpose = os.append(&out, string_bytes("to save a line in it")), suggested = os.append(&out, string_bytes("notes.txt")), write = true,
-        keep = os.append(&out, string_bytes("notes"))})
+    request^ = .RequestFile(
+        powerbox_protocol.FileRequest.{
+            purpose = os.append(&out, string_bytes("to save a line in it")),
+            suggested = os.append(&out, string_bytes("notes.txt")),
+            write = true,
+            keep = os.append(&out, string_bytes("notes")),
+        }
+    )
     into := os.Incoming.{}
     if !ask_box(echo, &out, &into, true) {
         return void
@@ -316,11 +332,15 @@ save_chosen :: fn(echo: ptr[mut Echo], text: string) {
  *
  * @param echo The program's state, whose powerbox is asked and whose terminal shows the entries or the refusal.
  */
-list_chosen :: fn(echo: ptr[mut Echo]) {
+list_chosen :: fn(echo : ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestDirectory(powerbox_protocol.DirectoryRequest.{
-        purpose = os.append(&out, string_bytes("to list what's in it")), write = false})
+    request^ = .RequestDirectory(
+        powerbox_protocol.DirectoryRequest.{
+            purpose = os.append(&out, string_bytes("to list what's in it")),
+            write = false,
+        }
+    )
     into := os.Incoming.{}
     if !ask_box(echo, &out, &into, true) {
         return void
@@ -380,10 +400,14 @@ list_chosen :: fn(echo: ptr[mut Echo]) {
  *
  * @param echo The program's state, whose powerbox is asked and whose terminal shows the account's name or the refusal.
  */
-add_user :: fn(echo: ptr[mut Echo]) {
+add_user :: fn(echo : ptr[mut Echo]) {
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestAccount(powerbox_protocol.AccountRequest.{purpose = os.append(&out, string_bytes("to let someone else use this computer"))})
+    request^ = .RequestAccount(
+        powerbox_protocol.AccountRequest.{
+            purpose = os.append(&out, string_bytes("to let someone else use this computer")),
+        }
+    )
     into := os.Incoming.{}
     if !ask_box(echo, &out, &into, true) {
         return void
@@ -415,7 +439,7 @@ add_user :: fn(echo: ptr[mut Echo]) {
  * @return True with the answer in into; false without a powerbox, or if the request couldn't be sent or the answer
  *     received, each said on the terminal.
  */
-ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming], asks_user: bool) -> bool {
+ask_box :: fn(echo : ptr[mut Echo], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming], asks_user : bool) -> bool {
     if echo.box_end == NONE {
         say(echo, "There's no powerbox to ask.")
         return false
@@ -443,7 +467,7 @@ ask_box :: fn(echo: ptr[mut Echo], out: ptr[mut os.Outgoing], into: ptr[mut os.I
  *
  * @param echo The program's state, whose terminal it's said on.
  */
-refused :: fn(echo: ptr[mut Echo]) {
+refused :: fn(echo : ptr[mut Echo]) {
     say(echo, "The powerbox gave nothing.")
     runtime.log_info("the powerbox gave nothing")
 }
@@ -454,6 +478,6 @@ refused :: fn(echo: ptr[mut Echo]) {
  * @param echo The program's state, whose terminal it's written on.
  * @param text The line, without its line feed.
  */
-say :: fn(echo: ptr[mut Echo], text: string) {
+say :: fn(echo : ptr[mut Echo], text : string) {
     _ = terminal.write_line(&echo.console, text)
 }

@@ -14,45 +14,45 @@ RING_BYTES :: 65536
 /** The port the second stack listens on. */
 LISTEN_PORT : u16 : 7000
 /** The two stacks' IPv4 addresses. */
-FIRST_V4 :: net_stack.Ipv4.{bytes = u8.[10, 0, 0, 1]}
-SECOND_V4 :: net_stack.Ipv4.{bytes = u8.[10, 0, 0, 2]}
-FIRST_MAC :: net_stack.Mac.{bytes = u8.[2, 0, 0, 0, 0, 1]}
+FIRST_V4   :: net_stack.Ipv4.{bytes = u8.[10, 0, 0, 1]}
+SECOND_V4  :: net_stack.Ipv4.{bytes = u8.[10, 0, 0, 2]}
+FIRST_MAC  :: net_stack.Mac.{bytes = u8.[2, 0, 0, 0, 0, 1]}
 SECOND_MAC :: net_stack.Mac.{bytes = u8.[2, 0, 0, 0, 0, 2]}
 
 /** An application's end of a connection. */
 App :: struct {
     connection : u32,
-    open : bool,
-    send : u8[RING_BYTES],
-    receive : u8[RING_BYTES],
+    open       : bool,
+    send       : u8[RING_BYTES],
+    receive    : u8[RING_BYTES],
     /** How many bytes it writes in all, then finishes. */
-    to_send : u64,
-    written : u64,
+    to_send  : u64,
+    written  : u64,
     finished : bool,
-    read : u64,
+    read     : u64,
     /** The seed of the pattern it writes, and of the one it expects. */
     sends_seed : u64,
     expects_seed : u64,
     /** Bytes read that weren't the pattern. */
     wrong : u64,
     /** Whether, and why, its connection ended, and what it had delivered. */
-    ended : bool,
+    ended           : bool,
     final_delivered : u64,
-    why : net_stack.TcpEnding,
-    peer_finished : bool,
+    why             : net_stack.TcpEnding,
+    peer_finished   : bool,
     /** Whether it reads at all; a stalled one tests the zero window. */
     reading : bool,
 }
 
 /** Two stacks on a link, and an application each. */
 Pair :: struct {
-    a : net_stack.Stack,
-    b : net_stack.Stack,
-    apps : App[2],
-    flying : Flying[IN_FLIGHT],
-    now : u64,
-    random : u64,
-    faults : Faults,
+    a        : net_stack.Stack,
+    b        : net_stack.Stack,
+    apps     : App[2],
+    flying   : Flying[IN_FLIGHT],
+    now      : u64,
+    random   : u64,
+    faults   : Faults,
     listener : u32,
     /** The one frame from the first stack to drop, by its number, from 1; 0 for none. */
     drop_nth : u64,
@@ -67,7 +67,7 @@ Pair :: struct {
  * @param offset The offset.
  * @return The byte.
  */
-pattern :: fn(seed: u64, offset: u64) -> u8 {
+pattern :: fn(seed : u64, offset : u64) -> u8 {
     return cast[u8]((offset * 131 + seed * 7 + (offset >> 8)) & 0xff)
 }
 
@@ -77,7 +77,7 @@ pattern :: fn(seed: u64, offset: u64) -> u8 {
  * @param bytes The ring's first byte.
  * @return Its address.
  */
-address_of :: fn(bytes: ptr[mut u8]) -> u64 {
+address_of :: fn(bytes : ptr[mut u8]) -> u64 {
     return cast[u64](cast[uintptr](bytes))
 }
 
@@ -87,9 +87,11 @@ address_of :: fn(bytes: ptr[mut u8]) -> u64 {
  * @param app The application.
  * @return Its rings, by address.
  */
-rings_of :: fn(app: ptr[mut App]) -> net_stack.TcpRings {
-    return net_stack.TcpRings.{send = net_stack.Ring.{at = address_of(&app.send[0]), bytes = RING_BYTES},
-        receive = net_stack.Ring.{at = address_of(&app.receive[0]), bytes = RING_BYTES}}
+rings_of :: fn(app : ptr[mut App]) -> net_stack.TcpRings {
+    return net_stack.TcpRings.{
+        send = net_stack.Ring.{at = address_of(&app.send[0]), bytes = RING_BYTES},
+        receive = net_stack.Ring.{at = address_of(&app.receive[0]), bytes = RING_BYTES},
+    }
 }
 
 /**
@@ -99,7 +101,7 @@ rings_of :: fn(app: ptr[mut App]) -> net_stack.TcpRings {
  * @param faults How the link misbehaves.
  * @return The pair, on the heap, the caller's to free.
  */
-make_pair :: fn(seed: u64, faults: Faults) -> ptr[mut Pair] {
+make_pair :: fn(seed : u64, faults : Faults) -> ptr[mut Pair] {
     pair :: runtime.new(Pair)
     pair.random = seed | 1
     pair.faults = faults
@@ -122,7 +124,7 @@ make_pair :: fn(seed: u64, faults: Faults) -> ptr[mut Pair] {
  * @param pair The pair.
  * @return The number.
  */
-draw_pair :: fn(pair: ptr[mut Pair]) -> u64 {
+draw_pair :: fn(pair : ptr[mut Pair]) -> u64 {
     x := pair.random
     x = x ~ (x >> 12)
     x = x ~ (x << 25)
@@ -138,7 +140,7 @@ draw_pair :: fn(pair: ptr[mut Pair]) -> u64 {
  * @param bytes The frame.
  * @param to 0 for the first stack, 1 for the second.
  */
-send_pair :: fn(pair: ptr[mut Pair], bytes: u8[], to: u32) {
+send_pair :: fn(pair : ptr[mut Pair], bytes : u8[], to : u32) {
     if to == 1 {
         pair.sent_by_first += 1
         if pair.sent_by_first == pair.drop_nth {
@@ -152,7 +154,12 @@ send_pair :: fn(pair: ptr[mut Pair], bytes: u8[], to: u32) {
     for copy in 0..<copies {
         for &slot in pair.flying {
             if slot.length == 0 {
-                delay :: if pair.faults.most_delay == 0 { cast[u64](0) } else { draw_pair(pair) % pair.faults.most_delay }
+                delay :: if pair.faults.most_delay == 0 {
+                    cast[u64](0)
+                }
+                else {
+                    draw_pair(pair) % pair.faults.most_delay
+                }
                 slot.length = bytes.count
                 slot.to = to
                 slot.arrives = pair.now + delay
@@ -168,7 +175,7 @@ send_pair :: fn(pair: ptr[mut Pair], bytes: u8[], to: u32) {
  *
  * @param pair The pair.
  */
-pair_frames :: fn(pair: ptr[mut Pair]) {
+pair_frames :: fn(pair : ptr[mut Pair]) {
     frame : u8[net_stack.MAX_FRAME]
     into :: view_of(&frame[0], frame.count)
     loop {
@@ -197,11 +204,13 @@ pair_frames :: fn(pair: ptr[mut Pair]) {
  *
  * @param pair The pair.
  */
-pair_deliver :: fn(pair: ptr[mut Pair]) {
+pair_deliver :: fn(pair : ptr[mut Pair]) {
     loop {
         soonest := cast[usize](IN_FLIGHT)
         for slot, i in pair.flying {
-            if slot.length > 0 && slot.arrives <= pair.now && (soonest >= pair.flying.count || slot.arrives < pair.flying[soonest].arrives) {
+            if slot.length > 0
+                && slot.arrives <= pair.now
+                && (soonest >= pair.flying.count || slot.arrives < pair.flying[soonest].arrives) {
                 soonest = i
             }
         }
@@ -229,7 +238,7 @@ pair_deliver :: fn(pair: ptr[mut Pair]) {
  * @param app The application.
  * @param accepting Whether it accepts incoming connections.
  */
-run_app :: fn(stack: ptr[mut net_stack.Stack], app: ptr[mut App], accepting: bool) {
+run_app :: fn(stack : ptr[mut net_stack.Stack], app : ptr[mut App], accepting : bool) {
     loop {
         happened :: net_stack.take_event(stack) or_break
         match happened {
@@ -297,7 +306,7 @@ run_app :: fn(stack: ptr[mut net_stack.Stack], app: ptr[mut App], accepting: boo
  * @param nanoseconds How long.
  * @param until_ended Whether to stop once both applications' connections have ended.
  */
-run_pair :: fn(pair: ptr[mut Pair], nanoseconds: u64, until_ended: bool) {
+run_pair :: fn(pair : ptr[mut Pair], nanoseconds : u64, until_ended : bool) {
     end :: pair.now + nanoseconds
     loop {
         pair.now += MILLISECOND
@@ -324,7 +333,7 @@ run_pair :: fn(pair: ptr[mut Pair], nanoseconds: u64, until_ended: bool) {
  * @param bytes How many bytes each way.
  * @param v6 Whether over IPv6, between link-local addresses; else IPv4.
  */
-exchange :: fn(t: ptr[mut testing.T], seed: u64, faults: Faults, bytes: u64, v6: bool) {
+exchange :: fn(t : ptr[mut testing.T], seed : u64, faults : Faults, bytes : u64, v6 : bool) {
     pair :: make_pair(seed, faults)
     defer runtime.free(pair)
     // IPv6's link-local addresses, past their duplicate checks
@@ -347,7 +356,17 @@ exchange :: fn(t: ptr[mut testing.T], seed: u64, faults: Faults, bytes: u64, v6:
     run_pair(pair, 600 * net_stack.SECOND, true)
     for app, i in pair.apps {
         if app.why != .Closed || app.read != bytes {
-            testing.note(t, "seed % app %: ended %, why %, read %, written %, open %", seed, i, app.ended, app.why, app.read, app.written, app.open)
+            testing.note(
+                t,
+                "seed % app %: ended %, why %, read %, written %, open %",
+                seed,
+                i,
+                app.ended,
+                app.why,
+                app.read,
+                app.written,
+                app.open
+            )
         }
         check(t, app.ended, "each connection ends", seed)
         check(t, app.why == .Closed, "each closes, rather than failing", seed)
@@ -357,13 +376,13 @@ exchange :: fn(t: ptr[mut testing.T], seed: u64, faults: Faults, bytes: u64, v6:
     }
 }
 
-exchanges_bytes_on_a_clean_link #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+exchanges_bytes_on_a_clean_link #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     exchange(t, 1, Faults.{}, 200_000, false)
     exchange(t, 2, Faults.{}, 200_000, true)
     return .Ok
 }
 
-exchanges_bytes_on_a_lossy_link #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+exchanges_bytes_on_a_lossy_link #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     for seed in cast[u64](1)..<11 {
         exchange(t, seed, Faults.{drop = 5, duplicate = 5, most_delay = 20 * MILLISECOND}, 200_000, seed % 2 == 0)
     }
@@ -371,7 +390,7 @@ exchanges_bytes_on_a_lossy_link #test :: fn(t: ptr[mut testing.T]) -> testing.Ou
 }
 
 /** A connection to a port nobody listens on is refused. */
-refuses_a_closed_port #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+refuses_a_closed_port #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(3, Faults.{})
     defer runtime.free(pair)
     first :: &pair.apps[0]
@@ -384,7 +403,7 @@ refuses_a_closed_port #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** A connection to a peer that answers nothing times out, after its SYN's tries. */
-times_out_without_answers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+times_out_without_answers #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(4, Faults.{drop = 100})
     defer runtime.free(pair)
     first :: &pair.apps[0]
@@ -397,7 +416,7 @@ times_out_without_answers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
 }
 
 /** A connection aborted is reset at its peer. */
-resets_the_peer_on_abort #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+resets_the_peer_on_abort #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(5, Faults.{})
     defer runtime.free(pair)
     // Each with more to send than a second takes, so neither has closed when it's aborted
@@ -416,7 +435,7 @@ resets_the_peer_on_abort #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** A reader that stops reading closes its window; the writer waits, probing, and goes on once it reads again. */
-waits_on_a_closed_window #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+waits_on_a_closed_window #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(6, Faults.{})
     defer runtime.free(pair)
     pair.apps[0].to_send = 300_000
@@ -437,7 +456,7 @@ waits_on_a_closed_window #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** A listener's SYN-ACK carries the MSS, SACK permitted, timestamps and a window scale, as the SYN offered them. */
-answers_a_syn_with_its_options #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+answers_a_syn_with_its_options #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(7, Faults.{})
     defer runtime.free(pair)
     first :: &pair.apps[0]
@@ -464,7 +483,7 @@ answers_a_syn_with_its_options #test :: fn(t: ptr[mut testing.T]) -> testing.Out
 }
 
 /** Datagrams go between sockets over both families, and an answer finds its way back to the sender's port. */
-exchanges_datagrams #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+exchanges_datagrams #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(8, Faults.{})
     defer runtime.free(pair)
     run_pair(pair, 2 * net_stack.SECOND, false)
@@ -474,7 +493,12 @@ exchanges_datagrams #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     testing.expect(t, net_stack.udp_open(&pair.b, 9000) is_none, "a port has one socket")
     message :: "a datagram"
     for family in 0..<2 {
-        to :: if family == 0 { net_stack.IpAddress.V4(SECOND_V4) } else { net_stack.IpAddress.V6(pair.b.link_local.address) }
+        to :: if family == 0 {
+            net_stack.IpAddress.V4(SECOND_V4)
+        }
+        else {
+            net_stack.IpAddress.V6(pair.b.link_local.address)
+        }
         testing.expect(t, net_stack.udp_send(&pair.a, client, to, 9000, string_bytes(message)), "sent")
         run_pair(pair, 100 * MILLISECOND, false)
         testing.expect_eq(t, net_stack.take_ready(&pair.b) or_else 0, server, "the server's socket is ready")
@@ -483,16 +507,21 @@ exchanges_datagrams #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
         testing.expect_eq(t, string_of(&into[0], got.length), message, "the datagram arrives whole")
         testing.expect_eq(t, got.from_port, net_stack.udp_port(&pair.a, client), "from the client's port")
         // Answered to where it came from
-        testing.expect(t, net_stack.udp_send(&pair.b, server, got.from, got.from_port, string_bytes("an answer")), "answered")
+        testing.expect(
+            t,
+            net_stack.udp_send(&pair.b, server, got.from, got.from_port, string_bytes("an answer")),
+            "answered"
+        )
         run_pair(pair, 100 * MILLISECOND, false)
-        answer :: net_stack.take_datagram(&pair.a, client, view_of(&into[0], into.count)) or_else net_stack.DatagramFrom.{}
+        answer :: net_stack.take_datagram(&pair.a, client, view_of(&into[0], into.count))
+            or_else net_stack.DatagramFrom.{}
         testing.expect_eq(t, string_of(&into[0], answer.length), "an answer", "the answer arrives")
     }
     return .Ok
 }
 
 /** One data segment lost is sent again on the receiver's duplicate acknowledgements, not on the timer. */
-recovers_a_lost_segment_without_the_timer #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+recovers_a_lost_segment_without_the_timer #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(9, Faults.{})
     defer runtime.free(pair)
     // Past the handshake and some data, into a full window
@@ -514,7 +543,7 @@ recovers_a_lost_segment_without_the_timer #test :: fn(t: ptr[mut testing.T]) -> 
  * A flood of SYNs to a listener takes no more than its backlog, and leaves room to connect out (13h): each SYN from
  * another port, as a flood from made-up addresses would be, none accepted.
  */
-keeps_room_under_a_syn_flood #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+keeps_room_under_a_syn_flood #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(17, Faults.{})
     defer runtime.free(pair)
     for port in cast[u16](20000)..<20100 {
@@ -544,7 +573,7 @@ keeps_room_under_a_syn_flood #test :: fn(t: ptr[mut testing.T]) -> testing.Outco
 }
 
 /** A peer that acknowledges the FIN, then goes quiet without finishing, has the connection let go in a minute (13h). */
-ends_a_quiet_fin_wait_2 #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+ends_a_quiet_fin_wait_2 #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(19, Faults.{})
     defer runtime.free(pair)
     first :: &pair.apps[0]

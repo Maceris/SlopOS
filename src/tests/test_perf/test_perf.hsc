@@ -18,9 +18,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
@@ -75,7 +75,7 @@ takes_nothing :: fn() -> int {
  *
  * @param echo The end and its port, which have to outlive the thread.
  */
-echo #calling_convention(.c) #no_context :: fn(echo: ptr[Echo]) #never_returns {
+echo #calling_convention(.c) #no_context :: fn(echo : ptr[Echo]) #never_returns {
     data : u8[8]
     loop {
         match slop_os.channel_read(echo.end, data, cast[ptr[mut u32]](0)) {
@@ -96,7 +96,7 @@ echo #calling_convention(.c) #no_context :: fn(echo: ptr[Echo]) #never_returns {
  *
  * @param argument Ignored.
  */
-ends #calling_convention(.c) #no_context :: fn(argument: u64) #never_returns {
+ends #calling_convention(.c) #no_context :: fn(argument : u64) #never_returns {
     slop_os.thread_exit()
 }
 
@@ -117,18 +117,34 @@ Given :: struct {
  * @return Ok once it's measured and logged; Error if setting up failed or a round trip did, or an answer wasn't what
  *     was sent.
  */
-ipc_round_trip_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+ipc_round_trip_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 8 << 20), "a budget for what's measured")?
+    budget :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 8 << 20),
+        "a budget for what's measured"
+    )?
     pair :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "a channel to the echoing thread")?
     echoing :: runtime.new(Echo)
     echoing.end = pair.b
     echoing.port = testing.require_ok(t, slop_os.port_create(budget), "a port for the echoing thread")?
-    testing.require_ok(t, slop_os.port_bind(echoing.port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, ECHO_KEY, .Persistent), "the echoing thread's end wakes its port")?
+    testing.require_ok(
+        t,
+        slop_os.port_bind(echoing.port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, ECHO_KEY, .Persistent),
+        "the echoing thread's end wakes its port"
+    )?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port for the answers")?
-    testing.require_ok(t, slop_os.port_bind(port, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, ANSWER_KEY, .Persistent), "the measuring end wakes its port")?
-    thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](echo), cast[u64](echoing)), "the echoing thread starts")?
+    testing.require_ok(
+        t,
+        slop_os.port_bind(port, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, ANSWER_KEY, .Persistent),
+        "the measuring end wakes its port"
+    )?
+    thread :: testing.require_ok(
+        t,
+        test_kit.start_thread(budget, cast[u64](echo), cast[u64](echoing)),
+        "the echoing thread starts"
+    )?
     for i in cast[u64](0)..<WARM_UP {
         round_trip(t, pair.a, port, i)?
     }
@@ -156,17 +172,31 @@ ipc_round_trip_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome
  * @return Ok once the answer came back as value; Error(Failed), recorded, if writing failed, reading failed other than
  *     finding nothing, or the answer wasn't value.
  */
-round_trip :: fn(t: ptr[mut testing.T], end: slop_os.Channel, port: slop_os.Port, value: u64) -> testing.Outcome {
+round_trip :: fn(t : ptr[mut testing.T], end : slop_os.Channel, port : slop_os.Port, value : u64) -> testing.Outcome {
     sent : u64[1]
     sent[0] = value
-    testing.require_ok(t, slop_os.channel_write(end, view_of(cast[ptr[u8]](&sent[0]), 8), slop_os.NO_BATCH), "a message is written to the echoing thread")?
+    testing.require_ok(
+        t,
+        slop_os.channel_write(end, view_of(cast[ptr[u8]](&sent[0]), 8), slop_os.NO_BATCH),
+        "a message is written to the echoing thread"
+    )?
     answer : u64[1]
     loop {
         read :: slop_os.channel_read(end, view_of(cast[ptr[mut u8]](&answer[0]), 8), cast[ptr[mut u32]](0))
         if read is_ok {
-            return testing.require_eq(t, answer[0], value, "the echoing thread answers each message with itself, in order")
+            return testing.require_eq(
+                t,
+                answer[0],
+                value,
+                "the echoing thread answers each message with itself, in order"
+            )
         }
-        testing.require_error(t, read, slop_os.ChannelError.Empty, "reading the answer fails only by finding nothing yet")?
+        testing.require_error(
+            t,
+            read,
+            slop_os.ChannelError.Empty,
+            "reading the answer fails only by finding nothing yet"
+        )?
         packets : slop_os.Packet[1]
         _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
     }
@@ -178,14 +208,22 @@ round_trip :: fn(t: ptr[mut testing.T], end: slop_os.Channel, port: slop_os.Port
  * @param t The test's state.
  * @return Ok once it's measured and logged; Error if the budget or the memory couldn't be made or mapped.
  */
-page_fault_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+page_fault_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 8 << 20), "a budget for what's measured")?
+    budget :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 8 << 20),
+        "a budget for what's measured"
+    )?
     memory :: testing.require_ok(t, slop_os.memory_create(budget, PAGES * PAGE), "anonymous memory to touch")?
     address :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGES * PAGE)), "addresses to map it at")?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    testing.require_ok(t, slop_os.memory_map(memory, block.space, address, 0, PAGES * PAGE, read_write), "the memory is mapped to write")?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(memory, block.space, address, 0, PAGES * PAGE, read_write),
+        "the memory is mapped to write"
+    )?
     start :: test_kit.clock_now()
     for page in cast[u64](0)..<PAGES {
         intrinsics.volatile_store_u8(cast[ptr[mut u8]](address + page * PAGE), 1)
@@ -205,22 +243,37 @@ page_fault_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
  * @return Ok once it's measured and logged; Error if the budget, the port or a thread couldn't be made, or a thread
  *     couldn't be watched.
  */
-thread_create_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+thread_create_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
-    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 8 << 20), "a budget for what's measured")?
+    budget :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 8 << 20),
+        "a budget for what's measured"
+    )?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port to watch the threads end on")?
     start :: test_kit.clock_now()
     for i in cast[u64](0)..<THREADS {
         thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](ends), 0), "each thread starts")?
         // A key of its own, a fired Once binding keeping its key; gone already, it ended before it could be watched
-        watched :: slop_os.port_bind(port, cast[slop_os.Handle](thread), slop_os.SIGNAL_TERMINATED, ENDED_KEY + i, .Once)
+        watched :: slop_os.port_bind(
+            port,
+            cast[slop_os.Handle](thread),
+            slop_os.SIGNAL_TERMINATED,
+            ENDED_KEY + i,
+            .Once
+        )
         if watched is_ok {
             packets : slop_os.Packet[1]
             _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
         }
         else {
-            testing.require_error(t, watched, slop_os.PortError.ObjectGone, "a thread's end is watched, unless it has ended already")?
+            testing.require_error(
+                t,
+                watched,
+                slop_os.PortError.ObjectGone,
+                "a thread's end is watched, unless it has ended already"
+            )?
         }
         _ = slop_os.handle_close(cast[slop_os.Handle](thread))
     }
@@ -241,17 +294,29 @@ thread_create_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
  * @return Ok once it's measured and logged; Error if main wasn't given the process manager or its module, or a port
  *     or a launch failed.
  */
-process_create_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+process_create_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
-    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(block.budget, loader.end),
+        "a port for the process manager's replies"
+    )?
     port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to watch the copies end on")?
     start :: test_kit.clock_now()
     for i in cast[u64](0)..<PROCESSES {
-        launch :: os.launch(loader, manager_port, "test_perf copy", executable, COPY_BUDGET, takes_nothing, NoGrants.{},
-            os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = ENDED_KEY + i}})
+        launch :: os.launch(
+            loader,
+            manager_port,
+            "test_perf copy",
+            executable,
+            COPY_BUDGET,
+            takes_nothing,
+            NoGrants.{},
+            os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = ENDED_KEY + i}}
+        )
         launched :: testing.require_ok(t, launch, "the process manager launches each copy")?
         packets : slop_os.Packet[1]
         _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
@@ -278,8 +343,16 @@ process_create_is_measured #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every benchmark was measured and logged; it holds them to nothing itself.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log, manager = manager, program = program}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }
@@ -291,6 +364,6 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  * @param name The benchmark's name, one word.
  * @param nanoseconds What one of it took, in nanoseconds, or instructions under -icount.
  */
-report :: fn(log: slop_os.DebugLog, name: string, nanoseconds: u64) {
+report :: fn(log : slop_os.DebugLog, name : string, nanoseconds : u64) {
     log_line.write(log, "%: perf: % %", NAME, name, nanoseconds)
 }

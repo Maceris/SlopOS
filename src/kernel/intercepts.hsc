@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../arch_interface"
 import concurrency from "std:concurrency"
 import maps from "std:maps"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -88,12 +88,29 @@ Intercept :: struct #align(16) {
  * @error WrongKind A binding on the port has the key already.
  * @error AlreadyIntercepted The process has an intercept already; the binding is dropped again.
  */
-create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process: ptr[mut Process], port: ptr[mut Port], key: u64,
-    calls: u64, points: u32) -> Result[ptr[mut Intercept], slop_os.ControlError] {
+create_intercept :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    process : ptr[mut Process],
+    port : ptr[mut Port],
+    key : u64,
+    calls : u64,
+    points : u32
+) -> Result[ptr[mut Intercept], slop_os.ControlError] {
     object := cast[u64](0)
     match new_object(kernel, .Intercept, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.ControlError.BudgetExceeded } else { slop_os.ControlError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded {
+                slop_os.ControlError.BudgetExceeded
+            }
+            else {
+                slop_os.ControlError.OutOfMemory
+            }
+        )
     }
     intercept :: cast[ptr[mut Intercept]](object)
     intercept.process = cast[u64](process)
@@ -118,7 +135,12 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
                 intercept.binding = cast[u64](binding)
                 intercept.binding_generation = binding.generation
             }
-            case None => failure = cast[u32](if port.short_of_budget { slop_os.ControlError.BudgetExceeded } else { slop_os.ControlError.OutOfMemory })
+            case None => failure = cast[u32](if port.short_of_budget {
+                slop_os.ControlError.BudgetExceeded
+            }
+            else {
+                slop_os.ControlError.OutOfMemory
+            })
         }
     }
     unlock_at(&port.lock, .Port)
@@ -153,7 +175,7 @@ create_intercept :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, process
  *     destroy_object, on any CPU, with interrupts off.
  * @param intercept The intercept being destroyed, already dying.
  */
-destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
+destroy_intercept :: fn(kernel : ptr[mut Kernel], intercept : ptr[mut Intercept]) {
     free_samples(intercept)
     // Unless the process was destroyed first, when it let go of its intercept itself
     if intercept.process != 0 && is_live(intercept.process, intercept.process_generation) {
@@ -192,8 +214,7 @@ destroy_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) 
  * @param kernel Unused: the intercept holds nothing of the kernel's by now.
  * @param intercept The destroyed intercept, whose memory release_object frees after this.
  */
-release_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
-}
+release_intercept :: fn(kernel : ptr[mut Kernel], intercept : ptr[mut Intercept]) {}
 
 /**
  * Let go of a process's intercept, as the process is destroyed, if it has one; the intercept itself lives on until
@@ -202,7 +223,7 @@ release_intercept :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) 
  * @param kernel The kernel, whose count of intercepts goes down.
  * @param process The process being destroyed.
  */
-forget_intercept :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
+forget_intercept :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) {
     held :: intrinsics.atomic_load_u64_acquire(&process.intercept)
     if held == 0 {
         return void
@@ -222,7 +243,7 @@ forget_intercept :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
  * @param thread The thread, whose owner chain is walked; it may be running on this CPU, at a system call or fault.
  * @return The Intercept, as its address, or 0 for none.
  */
-intercept_of :: fn(kernel: ptr[Kernel], thread: ptr[Thread]) -> u64 {
+intercept_of :: fn(kernel : ptr[Kernel], thread : ptr[Thread]) -> u64 {
     if intrinsics.atomic_load_u32_acquire(&kernel.intercepts) == 0 {
         return 0
     }
@@ -255,7 +276,14 @@ intercept_of :: fn(kernel: ptr[Kernel], thread: ptr[Thread]) -> u64 {
  * @param current Whether it's this CPU's current thread, whose vector state is still in the CPU and is saved.
  * @return True if it stopped, when the caller takes it off the CPU; false if it goes on.
  */
-stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_os.StopPoint, number: u64, address: u64, current: bool) -> bool {
+stop_thread :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    point : slop_os.StopPoint,
+    number : u64,
+    address : u64,
+    current : bool
+) -> bool {
     if is_dying(cast[u64](thread)) {
         return false
     }
@@ -302,9 +330,13 @@ stop_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], point: slop_
         thread.fault_stops += 1
         thread.fault_timer.kind = .FaultStop
         thread.fault_timer.owner = cast[u64](thread)
-        thread.fault_timer.owner_generation = (cast[u64](thread.header.generation) << 32) | cast[u64](thread.fault_stops)
+        thread.fault_timer.owner_generation = (cast[u64](thread.header.generation) << 32)
+            | cast[u64](thread.fault_stops)
         thread.fault_timer.port = 0
-        _ = arm_timer(&thread.fault_timer, arch.counter() + FAULT_STOP_LIMIT_MILLISECONDS * kernel.counter_frequency / 1000)
+        _ = arm_timer(
+            &thread.fault_timer,
+            arch.counter() + FAULT_STOP_LIMIT_MILLISECONDS * kernel.counter_frequency / 1000
+        )
     }
     report_stop(kernel, intercept)
     return true
@@ -324,7 +356,7 @@ FAULT_STOP_LIMIT_MILLISECONDS : u64 : 1000
  * @param fired A copy of the fault timer's entry: its owner is the thread, its owner_generation the thread's
  *     generation in the high 32 bits and its count of fault stops in the low.
  */
-fire_fault_stop :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
+fire_fault_stop :: fn(kernel : ptr[mut Kernel], fired : ptr[TimerEntry]) {
     thread :: cast[ptr[mut Thread]](fired.owner)
     address :: thread.stop_intercept
     if address == 0 {
@@ -333,10 +365,17 @@ fire_fault_stop :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
     intercept :: cast[ptr[mut Intercept]](address)
     lock_at(&intercept.lock, .Intercept)
     expected :: (cast[u64](thread.header.generation) << 32) | cast[u64](thread.fault_stops)
-    still :: expected == fired.owner_generation && thread.stop_linked && thread.stop_intercept == address
+    still :: expected == fired.owner_generation
+        && thread.stop_linked
+        && thread.stop_intercept == address
         && thread.stop_point == cast[u32](slop_os.StopPoint.Fault)
     owner :: thread.header.owner
-    generation :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[ObjectHeader]](owner).generation) } else { 0 }
+    generation :: if owner != 0 {
+        intrinsics.atomic_load_u32_acquire(&cast[ptr[ObjectHeader]](owner).generation)
+    }
+    else {
+        0
+    }
     id :: thread.id
     unlock_at(&intercept.lock, .Intercept)
     if !still || owner == 0 {
@@ -353,7 +392,7 @@ fire_fault_stop :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
  * @param number The system call's number, from the stopping thread's registers; any value.
  * @return True with STOP_ALL_CALLS among its points; otherwise if number is below 64 and its bit is in its calls.
  */
-wants_call :: fn(intercept: ptr[Intercept], number: u64) -> bool {
+wants_call :: fn(intercept : ptr[Intercept], number : u64) -> bool {
     if intercept.points & slop_os.STOP_ALL_CALLS != 0 {
         return true
     }
@@ -367,7 +406,7 @@ wants_call :: fn(intercept: ptr[Intercept], number: u64) -> bool {
  * @param kernel The kernel; only the port's queue changes, under the port's lock.
  * @param intercept The intercept, whose lock the caller holds.
  */
-report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
+report_stop :: fn(kernel : ptr[mut Kernel], intercept : ptr[mut Intercept]) {
     if intercept.binding == 0 {
         return void
     }
@@ -388,7 +427,12 @@ report_stop :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept]) {
  * @return Null once written; Empty if every stop has been reported; BadBuffer if the buffer isn't writable user
  *     memory, when the stop counts as reported all the same.
  */
-intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
+intercept_next :: fn(
+    kernel : ptr[mut Kernel],
+    intercept : ptr[mut Intercept],
+    space : ptr[mut AddressSpace],
+    buffer : u64
+) -> slop_os.ControlError? {
     info := slop_os.StopInfo.{}
     found := false
     lock_at(&intercept.lock, .Intercept)
@@ -402,8 +446,12 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
         thread :: cast[ptr[mut Thread]](address)
         if !thread.stop_reported {
             thread.stop_reported = true
-            info = slop_os.StopInfo.{thread = thread.id, point = cast[slop_os.StopPoint](thread.stop_point), number = thread.stop_number,
-                address = thread.stop_address}
+            info = slop_os.StopInfo.{
+                thread = thread.id,
+                point = cast[slop_os.StopPoint](thread.stop_point),
+                number = thread.stop_number,
+                address = thread.stop_address,
+            }
             found = true
             break
         }
@@ -431,7 +479,12 @@ intercept_next :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], spa
  * @return Null once it's let go; NoSuchThread if the intercept stopped no thread with that ID; NotStopped for Skip
  *     at a point other than a call's entry, when the thread stays stopped.
  */
-intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], id: u64, action: slop_os.InterceptAction) -> slop_os.ControlError? {
+intercept_resume :: fn(
+    kernel : ptr[mut Kernel],
+    intercept : ptr[mut Intercept],
+    id : u64,
+    action : slop_os.InterceptAction
+) -> slop_os.ControlError? {
     lock_at(&intercept.lock, .Intercept)
     found := cast[ptr[mut Thread]](0)
     with {
@@ -474,7 +527,7 @@ intercept_resume :: fn(kernel: ptr[mut Kernel], intercept: ptr[mut Intercept], i
  * @param thread The thread, already off its intercept's list.
  * @param action What it does.
  */
-let_go :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], action: slop_os.InterceptAction) {
+let_go :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], action : slop_os.InterceptAction) {
     if action == .Kill {
         _ = destroy_object(kernel, cast[u64](thread))
         return void
@@ -492,7 +545,7 @@ let_go :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], action: slop_os.I
  *
  * @param thread The thread being destroyed.
  */
-forget_stop :: fn(thread: ptr[mut Thread]) {
+forget_stop :: fn(thread : ptr[mut Thread]) {
     address :: thread.stop_intercept
     if address == 0 {
         return void
@@ -510,7 +563,7 @@ forget_stop :: fn(thread: ptr[mut Thread]) {
  * @param intercept The intercept, whose lock the caller holds.
  * @param thread The thread, on no intercept's list.
  */
-link_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
+link_stopped :: fn(intercept : ptr[mut Intercept], thread : ptr[mut Thread]) {
     thread.stop_next = 0
     thread.stop_previous = intercept.last_stopped
     if intercept.last_stopped != 0 {
@@ -529,7 +582,7 @@ link_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
  * @param intercept The intercept, whose lock the caller holds.
  * @param thread The thread; one not on the list, or on another intercept's, is left alone.
  */
-unlink_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
+unlink_stopped :: fn(intercept : ptr[mut Intercept], thread : ptr[mut Thread]) {
     if !thread.stop_linked || thread.stop_intercept != cast[u64](intercept) {
         return void
     }
@@ -556,7 +609,7 @@ unlink_stopped :: fn(intercept: ptr[mut Intercept], thread: ptr[mut Thread]) {
  * @param calls The system calls it stops at, a bit per call number below 64.
  * @param points slop_os.STOP_ bits.
  */
-set_intercept :: fn(intercept: ptr[mut Intercept], calls: u64, points: u32) {
+set_intercept :: fn(intercept : ptr[mut Intercept], calls : u64, points : u32) {
     intrinsics.atomic_store_u64_release(&intercept.calls, calls)
     intrinsics.atomic_store_u32_release(&intercept.points, points)
 }

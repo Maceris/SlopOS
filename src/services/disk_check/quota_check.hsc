@@ -30,7 +30,7 @@ LARGE_BYTES : usize : 65536
  * @return Ok once it's run; Error if the clone wasn't made, the buffer or a port couldn't be made, or the clone's
  *     usage couldn't be had or its quota set.
  */
-a_quota_refuses_what_is_past_it #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_quota_refuses_what_is_past_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     // Beside the system volume, so skipped without it
     _ = system_of(t, given)?
@@ -50,14 +50,26 @@ a_quota_refuses_what_is_past_it #test :: fn(t: ptr[mut testing.T]) -> testing.Ou
         case Done => {}
         case _ => return stopped(t, "the storage manager sets a quota on a volume it serves")
     }
-    testing.expect(t, !write_new_bytes(clone.end, clone_port, QUOTA_FILE, "", LARGE_BYTES, buffer),
-        "a file's 16 blocks aren't written past a quota 8 blocks above what the volume uses")
-    testing.expect(t, write_new(clone.end, clone_port, SMALL_FILE, SMALL_TEXT, buffer) && holds(clone.end, clone_port, SMALL_FILE, SMALL_TEXT, buffer),
-        "a small file, kept in the volume's tree, is still written within the quota, and reads back")
+    testing.expect(
+        t,
+        !write_new_bytes(clone.end, clone_port, QUOTA_FILE, "", LARGE_BYTES, buffer),
+        "a file's 16 blocks aren't written past a quota 8 blocks above what the volume uses"
+    )
+    testing.expect(
+        t,
+        write_new(clone.end, clone_port, SMALL_FILE, SMALL_TEXT, buffer)
+            && holds(clone.end, clone_port, SMALL_FILE, SMALL_TEXT, buffer),
+        "a small file, kept in the volume's tree, is still written within the quota, and reads back"
+    )
     after_usage :: usage_of(manager.end, manager.port, container, CLONE)
     after :: testing.require_some(t, after_usage, "the storage manager says the usage of a volume it serves")?
     testing.expect_eq(t, after.quota, quota, "a volume's usage says the quota set on it")
-    testing.expect_le(t, after.used, quota + 16, "a volume uses at most a chunk past its quota, as only the chunk being written can go past it")
+    testing.expect_le(
+        t,
+        after.used,
+        quota + 16,
+        "a volume uses at most a chunk past its quota, as only the chunk being written can go past it"
+    )
     return .Ok
 }
 
@@ -70,7 +82,7 @@ a_quota_refuses_what_is_past_it #test :: fn(t: ptr[mut testing.T]) -> testing.Ou
  * @param volume The volume's name in the container; one no volume has is refused, giving null.
  * @return Its usage, in blocks, with its quota; null if it was refused or couldn't be asked.
  */
-usage_of :: fn(manager: slop_os.Channel, port: slop_os.Port, container: u32, volume: string) -> slopfs.Usage? {
+usage_of :: fn(manager : slop_os.Channel, port : slop_os.Port, container : u32, volume : string) -> slopfs.Usage? {
     out := os.Outgoing.{}
     asking :: os.begin[storage.Request](&out)
     asking^ = .Usage(storage.VolumeNamed.{partition = container, name = bytes_of(&out, volume)})

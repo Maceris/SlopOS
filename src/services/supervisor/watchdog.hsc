@@ -9,7 +9,8 @@ import watchdog from "../../protocols/watchdog"
 /*
  * The hardware watchdog (decisions/0182, P5, design/lessons.md §6.2): armed once the supervisor's start is done, and
  * reset a few times each timeout from its steady loop, but only while every service it started answers a Ping on its
- * lifecycle channel; a hung supervisor, or a service that stops answering, lets the watchdog reset the machine, and boot
+ * lifecycle channel; a hung supervisor, or a service that stops answering, lets the watchdog reset the machine, and
+ * boot
  * counting does the rest. A shutdown disarms it first.
  */
 
@@ -24,7 +25,7 @@ WATCHDOG_PING : u32 : 0x77d
  *
  * @param supervisor The supervisor, whose watchdog_end, watchdog_port and next_pet are set.
  */
-arm_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
+arm_watchdog :: fn(supervisor : ptr[mut Supervisor]) {
     if !supervisor.steady || supervisor.watchdog_listener == NONE {
         return void
     }
@@ -42,7 +43,8 @@ arm_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
         case Some(response) => match response {
             case Armed(seconds) => {
                 log_line.write(supervisor.log, "supervisor: the watchdog's armed, % seconds", seconds)
-                supervisor.next_pet = (slop_os.clock_monotonic() or_else 0) + cast[u64](seconds) * 1_000_000_000 / PETS_EACH_TIMEOUT
+                supervisor.next_pet = (slop_os.clock_monotonic() or_else 0)
+                    + cast[u64](seconds) * 1_000_000_000 / PETS_EACH_TIMEOUT
             }
             case _ => log_line.write(supervisor.log, "supervisor: the watchdog didn't arm")
         }
@@ -56,7 +58,7 @@ arm_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor, whose next_pet moves on, and whose entries' pinged are set.
  */
-tend_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
+tend_watchdog :: fn(supervisor : ptr[mut Supervisor]) {
     if supervisor.watchdog_end == NONE {
         return void
     }
@@ -105,7 +107,7 @@ tend_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
  *
  * @param supervisor The supervisor; without a watchdog, nothing's done.
  */
-disarm_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
+disarm_watchdog :: fn(supervisor : ptr[mut Supervisor]) {
     if supervisor.watchdog_end == NONE {
         return void
     }
@@ -121,7 +123,7 @@ disarm_watchdog :: fn(supervisor: ptr[mut Supervisor]) {
  * @param request The request.
  * @return The answer; null if the connection failed.
  */
-ask_watchdog :: fn(supervisor: ptr[mut Supervisor], request #escaping : watchdog.Request) -> watchdog.Response? {
+ask_watchdog :: fn(supervisor : ptr[mut Supervisor], request #escaping : watchdog.Request) -> watchdog.Response? {
     out := os.Outgoing.{}
     made :: os.begin[watchdog.Request](&out)
     made^ = request

@@ -65,7 +65,7 @@ MIN_KERNEL_RESERVE : u64 : 8 * MIB
  * @param kernel The kernel, whose frame allocator's free frames, now, are what's shared out.
  * @return The root budget's object address, or 0 if there was no memory for its slot.
  */
-make_root_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
+make_root_budget :: fn(kernel : ptr[mut Kernel]) -> u64 {
     object :: new_object(kernel, .MemoryBudget, 0, 0) or_else 0
     if object == 0 {
         return 0
@@ -91,7 +91,7 @@ make_root_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
  * @param mib What was asked for, in MiB, or 0 for the default: a sixteenth of free, and at least MIN_KERNEL_RESERVE.
  * @return The bytes kept, never more than half of free.
  */
-kernel_reserve :: fn(free: u64, mib: u64) -> u64 {
+kernel_reserve :: fn(free : u64, mib : u64) -> u64 {
     asked :: if mib != 0 { mib * MIB } else { max_u64(free / 16, MIN_KERNEL_RESERVE) }
     return min_u64(asked, free / 2)
 }
@@ -104,7 +104,7 @@ kernel_reserve :: fn(free: u64, mib: u64) -> u64 {
  * @param object The object's address, which must stay valid meanwhile.
  * @return The budget, locked, or null for an object charged to no budget (the kernel's own), with nothing locked.
  */
-lock_budget_of :: fn(object: u64) -> ptr[mut MemoryBudget]? {
+lock_budget_of :: fn(object : u64) -> ptr[mut MemoryBudget]? {
     header :: cast[ptr[mut ObjectHeader]](object)
     loop {
         address :: intrinsics.atomic_load_u64_acquire(&header.budget)
@@ -133,7 +133,7 @@ lock_budget_of :: fn(object: u64) -> ptr[mut MemoryBudget]? {
  * @return True if it's charged, or the budget is 0; false if the budget is closed or has less than bytes left, or
  *     fault injection failed the Budget point.
  */
-charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
+charge_new :: fn(budget_address : u64, object : u64, bytes : u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     header.charge = 0
     header.budget = 0
@@ -173,7 +173,7 @@ charge_new :: fn(budget_address: u64, object: u64, bytes: u64) -> bool {
  * @return True if they're charged, or the object is charged to no budget; false if its budget is closed or has less
  *     than bytes left, or fault injection failed the Budget point, with nothing charged.
  */
-charge_more :: fn(object: u64, bytes: u64) -> bool {
+charge_more :: fn(object : u64, bytes : u64) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return true
     if fails(.Budget) || budget.closed || bytes > room_of(budget) {
@@ -200,7 +200,7 @@ charge_more :: fn(object: u64, bytes: u64) -> bool {
  * @param generation The generation it had when it grew; another means the slot was destroyed or reused.
  * @param bytes The bytes to give back; more than the object's charge gives back nothing.
  */
-uncharge :: fn(object: u64, generation: u32, bytes: u64) {
+uncharge :: fn(object : u64, generation : u32, bytes : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return void
     defer unlock_at(&budget.lock, .MemoryBudget)
@@ -219,7 +219,7 @@ uncharge :: fn(object: u64, generation: u32, bytes: u64) {
  *
  * @param object The object's address; one charged to no budget is left alone.
  */
-return_charge :: fn(object: u64) {
+return_charge :: fn(object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     budget :: lock_budget_of(object) or_return void
     defer unlock_at(&budget.lock, .MemoryBudget)
@@ -243,7 +243,12 @@ return_charge :: fn(object: u64) {
  * @error BudgetExceeded The parent is closed, or can't take the limit and the slot.
  * @error OwnerGone The owner is being destroyed, so the new budget is destroyed.
  */
-create_budget :: fn(kernel: ptr[mut Kernel], owner: u64, parent: u64, limit: u64) -> Result[ptr[mut MemoryBudget], ObjectError] {
+create_budget :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    parent : u64,
+    limit : u64
+) -> Result[ptr[mut MemoryBudget], ObjectError] {
     object :: new_object(kernel, .MemoryBudget, parent, limit)?
     budget :: cast[ptr[mut MemoryBudget]](object)
     budget.limit = limit
@@ -269,7 +274,7 @@ create_budget :: fn(kernel: ptr[mut Kernel], owner: u64, parent: u64, limit: u64
  *     hold it or any budget's lock.
  * @param budget The budget, being destroyed; it's closed afterwards, its limit and used 0.
  */
-destroy_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
+destroy_memory_budget :: fn(kernel : ptr[mut Kernel], budget : ptr[mut MemoryBudget]) {
     lock_at(&kernel.budgets_lock, .Budgets)
     defer unlock_at(&kernel.budgets_lock, .Budgets)
     // Its parent doesn't change with budgets_lock held; the two locks by address (lock_budgets)
@@ -305,8 +310,7 @@ destroy_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudge
  * @param kernel Unused, as there's nothing to free.
  * @param budget The budget, closed.
  */
-release_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudget]) {
-}
+release_memory_budget :: fn(kernel : ptr[mut Kernel], budget : ptr[mut MemoryBudget]) {}
 
 /**
  * Move the charges of objects, whose owning handles a process takes, to a budget: all of them, or, if the budget can't
@@ -325,7 +329,7 @@ release_memory_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut MemoryBudge
  * @return True if every charge moved; false if the budget is closed or couldn't take one, with those moved before it
  *     moved back.
  */
-move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, to_address: u64) -> bool {
+move_charges :: fn(kernel : ptr[mut Kernel], objects : ptr[u64[64]], count : u32, to_address : u64) -> bool {
     lock_at(&kernel.budgets_lock, .Budgets)
     defer unlock_at(&kernel.budgets_lock, .Budgets)
     from : u64[64]
@@ -374,7 +378,7 @@ move_charges :: fn(kernel: ptr[mut Kernel], objects: ptr[u64[64]], count: u32, t
  * @param budget The budget, its lock held by the caller.
  * @return Its limit less what's charged to it, in bytes; 0 when it's at or over its limit.
  */
-room_of :: fn(budget: ptr[MemoryBudget]) -> u64 {
+room_of :: fn(budget : ptr[MemoryBudget]) -> u64 {
     return if budget.used >= budget.limit { cast[u64](0) } else { budget.limit - budget.used }
 }
 
@@ -387,7 +391,7 @@ room_of :: fn(budget: ptr[MemoryBudget]) -> u64 {
  * @param checked Whether the receiver's limit and closedness are checked; false only to move a charge back.
  * @return True if it moved; false, with nothing changed, if checked and the receiver is closed or can't take it.
  */
-move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool) -> bool {
+move_locked :: fn(object : u64, from_address : u64, to_address : u64, checked : bool) -> bool {
     header :: cast[ptr[mut ObjectHeader]](object)
     charge :: header.charge
     to :: cast[ptr[mut MemoryBudget]](to_address)
@@ -414,7 +418,7 @@ move_locked :: fn(object: u64, from_address: u64, to_address: u64, checked: bool
  * @param first One budget's address, or 0 for none.
  * @param second The other's, or 0 for none; with both 0, nothing is locked.
  */
-lock_budgets :: fn(first: u64, second: u64) {
+lock_budgets :: fn(first : u64, second : u64) {
     low :: if first < second { first } else { second }
     high :: if first < second { second } else { first }
     if low == high || low == 0 {
@@ -430,7 +434,7 @@ lock_budgets :: fn(first: u64, second: u64) {
  *
  * @param address The budget's address, or 0 for none, when nothing is locked.
  */
-lock_budget :: fn(address: u64) {
+lock_budget :: fn(address : u64) {
     if address != 0 {
         lock_at(&cast[ptr[mut MemoryBudget]](address).lock, .MemoryBudget)
     }
@@ -441,7 +445,7 @@ lock_budget :: fn(address: u64) {
  *
  * @param address The budget's address, or 0 for none.
  */
-unlock_budget :: fn(address: u64) {
+unlock_budget :: fn(address : u64) {
     if address != 0 {
         unlock_at(&cast[ptr[mut MemoryBudget]](address).lock, .MemoryBudget)
     }
@@ -456,7 +460,7 @@ unlock_budget :: fn(address: u64) {
  * @return True if it has a threshold, used has reached it, and it wasn't raised since it last fell below; the caller
  *     then calls raise_pressure after letting the lock go.
  */
-pressing :: fn(budget: ptr[mut MemoryBudget]) -> bool {
+pressing :: fn(budget : ptr[mut MemoryBudget]) -> bool {
     if budget.threshold == 0 || budget.pressured || budget.used < budget.threshold {
         return false
     }
@@ -469,7 +473,7 @@ pressing :: fn(budget: ptr[mut MemoryBudget]) -> bool {
  *
  * @param budget The budget, its lock held by the caller.
  */
-ease :: fn(budget: ptr[mut MemoryBudget]) {
+ease :: fn(budget : ptr[mut MemoryBudget]) {
     if budget.used < budget.threshold {
         budget.pressured = false
     }
@@ -483,9 +487,15 @@ ease :: fn(budget: ptr[mut MemoryBudget]) {
  * @param budget The budget whose watchers are signalled; its lock mustn't be held. Its used is read atomically, without
  *     the lock, so it may be a moment stale.
  */
-raise_pressure :: fn(budget: ptr[mut MemoryBudget]) {
-    raise_watchers(per_cpu().kernel, &budget.watchers, &budget.watch_lock, .Watchers, cast[u32](slop_os.SIGNAL_PRESSURE),
-        intrinsics.atomic_load_u64(&budget.used))
+raise_pressure :: fn(budget : ptr[mut MemoryBudget]) {
+    raise_watchers(
+        per_cpu().kernel,
+        &budget.watchers,
+        &budget.watch_lock,
+        .Watchers,
+        cast[u32](slop_os.SIGNAL_PRESSURE),
+        intrinsics.atomic_load_u64(&budget.used)
+    )
 }
 
 /**
@@ -497,7 +507,7 @@ raise_pressure :: fn(budget: ptr[mut MemoryBudget]) {
  *     mark is cleared, so the new threshold can be raised at once.
  * @param threshold The threshold, in bytes charged, or 0 for none.
  */
-set_threshold :: fn(budget: ptr[mut MemoryBudget], threshold: u64) {
+set_threshold :: fn(budget : ptr[mut MemoryBudget], threshold : u64) {
     lock_at(&budget.lock, .MemoryBudget)
     budget.threshold = threshold
     budget.pressured = false
@@ -516,7 +526,7 @@ set_threshold :: fn(budget: ptr[mut MemoryBudget], threshold: u64) {
  * @return limit What it may charge, in bytes; 0 once it's closed.
  * @return used What it has charged, in bytes, its child budgets' limits included.
  */
-budget_info :: fn(budget: ptr[mut MemoryBudget]) -> (limit: u64, used: u64) {
+budget_info :: fn(budget : ptr[mut MemoryBudget]) -> (limit : u64, used : u64) {
     lock_at(&budget.lock, .MemoryBudget)
     defer unlock_at(&budget.lock, .MemoryBudget)
     return budget.limit, budget.used
@@ -529,7 +539,7 @@ budget_info :: fn(budget: ptr[mut MemoryBudget]) -> (limit: u64, used: u64) {
  * @param budget The budget; its lock is taken, at LockRank MemoryBudget, while its list is walked.
  * @return The bytes.
  */
-charged_by_others :: fn(budget: ptr[mut MemoryBudget]) -> u64 {
+charged_by_others :: fn(budget : ptr[mut MemoryBudget]) -> u64 {
     lock_at(&budget.lock, .MemoryBudget)
     defer unlock_at(&budget.lock, .MemoryBudget)
     total : u64 = 0
@@ -554,7 +564,7 @@ charged_by_others :: fn(budget: ptr[mut MemoryBudget]) -> u64 {
  * @param budget The budget, its lock held by the caller.
  * @param object The object's address, on no budget's list.
  */
-link_charged :: fn(budget: ptr[mut MemoryBudget], object: u64) {
+link_charged :: fn(budget : ptr[mut MemoryBudget], object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     header.charged_previous = 0
     header.charged_next = budget.first_charged
@@ -570,7 +580,7 @@ link_charged :: fn(budget: ptr[mut MemoryBudget], object: u64) {
  * @param budget The budget, its lock held by the caller.
  * @param object The object's address, on that budget's list.
  */
-unlink_charged :: fn(budget: ptr[mut MemoryBudget], object: u64) {
+unlink_charged :: fn(budget : ptr[mut MemoryBudget], object : u64) {
     header :: cast[ptr[mut ObjectHeader]](object)
     if header.charged_previous != 0 {
         cast[ptr[mut ObjectHeader]](header.charged_previous).charged_next = header.charged_next

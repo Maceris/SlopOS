@@ -9,7 +9,7 @@ import pci from "../../pci"
  * the kernel, which otherwise resets x86-64 through 0xcf9. Turning it off needs `\_S5`, which is AML, so the ACPI
  * service gives that (P3). A devicetree machine says nothing here: the kernel finds PSCI itself.
  */
-//SPEC: ACPI 6.5, §5.2.9 (FADT: Flags' RESET_REG_SUP, RESET_REG, RESET_VALUE), §5.2.3.2 (Generic Address Structure)
+// SPEC: ACPI 6.5, §5.2.9 (FADT: Flags' RESET_REG_SUP, RESET_REG, RESET_VALUE), §5.2.3.2 (Generic Address Structure)
 
 /** The byte offset of the FADT's Flags, a u32. */
 FADT_FLAGS : u64 : 112
@@ -32,7 +32,7 @@ SPACE_SYSTEM_IO : u8 : 1
  * @param tables Where the firmware tables' copy is mapped, readable.
  * @param size How many bytes of it there are.
  */
-give_reset :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, tables: u64, size: u64) {
+give_reset :: fn(to : slop_os.DebugLog, platform : slop_os.Platform, tables : u64, size : u64) {
     fadt :: pci.firmware_table(tables, size, "FACP") or_return void
     if fadt.size < FADT_WITH_RESET {
         return void

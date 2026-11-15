@@ -10,13 +10,13 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
+import concurrency from "std:concurrency"
+import slop_os from "std:os/slop_os"
 import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
-import slop_os from "std:os/slop_os"
 import console from "console"
 import frames from "frames"
 import slab from "slab"
-import concurrency from "std:concurrency"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -119,7 +119,9 @@ Kernel :: struct {
     shootdown_test : u64,
     /** test_binding_reuse's state, as an address, while CPUs read its slot (binding_reuse_test.hsc), else 0. */
     binding_reuse_test : u64,
-    /** test_ownership_race's state, as an address, while a CPU destroys its objects (ownership_race_test.hsc), else 0. */
+    /**
+     * test_ownership_race's state, as an address, while a CPU destroys its objects (ownership_race_test.hsc), else 0.
+     */
     ownership_race_test : u64,
     /** How many interrupts test_ioapic's device has raised so far (device_test.hsc). */
     test_device_count : u64,
@@ -356,7 +358,7 @@ per_cpu :: fn() -> ptr[mut PerCpu] {
  * @param info The boot information, in boot memory: read while boot memory is there, and what the kernel needs of
  *     it is copied out (keep_boot_info) before boot memory is reclaimed.
  */
-boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
+boot #never_returns :: fn(info : ptr[boot_info.BootInfo]) {
     options :: parse_command_line(info.command_line)
     log_boot_info(info)
     features :: arch.detect_features()
@@ -422,8 +424,10 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
         }
         start_msis(kernel)
         leave_boot_stacks(kernel)
-        // Of the memory free once boot memory is back
-        // Everything the root task's processes are charged to, and the hardware: without them, nothing can run
+        /*
+         * Of the memory free once boot memory is back
+         * Everything the root task's processes are charged to, and the hardware: without them, nothing can run
+         */
         kernel.root_budget = make_root_budget(kernel)
         kernel.platform = new_object(kernel, .Platform, 0, 0) or_else 0
         if kernel.root_budget == 0 || kernel.platform == 0 {
@@ -493,7 +497,7 @@ boot #never_returns :: fn(info: ptr[boot_info.BootInfo]) {
  *
  * @param kernel The kernel, whose options say which tests run; called on the boot CPU at boot.
  */
-memory_tests :: fn(kernel: ptr[mut Kernel]) {
+memory_tests :: fn(kernel : ptr[mut Kernel]) {
     if kernel.options.test_fault {
         runtime.log_info("test_fault: running an invalid instruction")
         intrinsics.trap()
@@ -519,7 +523,7 @@ memory_tests :: fn(kernel: ptr[mut Kernel]) {
  *     in boot memory.
  * @return True if it did.
  */
-has_last_panic :: fn(info: ptr[boot_info.BootInfo]) -> bool {
+has_last_panic :: fn(info : ptr[boot_info.BootInfo]) -> bool {
     for module in info.modules {
         if module.name == boot_info.LAST_PANIC_MODULE {
             return true
@@ -535,7 +539,7 @@ has_last_panic :: fn(info: ptr[boot_info.BootInfo]) -> bool {
  * @param info The boot information, whose modules are searched for boot_info.LAST_PANIC_MODULE; it has to still be
  *     in boot memory.
  */
-test_panic_once :: fn(info: ptr[boot_info.BootInfo]) {
+test_panic_once :: fn(info : ptr[boot_info.BootInfo]) {
     if has_last_panic(info) {
         return void
     }
@@ -555,7 +559,7 @@ test_panic_once :: fn(info: ptr[boot_info.BootInfo]) {
  * @return The T, zeroed, in the smallest power-of-two block of frames that holds it.
  * @error OutOfMemory No block that size was free, or fault injection failed this pass; nothing was taken.
  */
-allocate_object :: fn[T](allocator: ptr[mut frames.FrameAllocator]) -> Result[ptr[mut T], frames.FrameError] {
+allocate_object :: fn[T](allocator : ptr[mut frames.FrameAllocator]) -> Result[ptr[mut T], frames.FrameError] {
     address :: frames.allocate_zeroed(allocator, frames.order_for(cast[u64](size_of(T))))?
     return .Ok(cast[ptr[mut T]](frames.virtual_of(allocator, address)))
 }
@@ -566,7 +570,7 @@ allocate_object :: fn[T](allocator: ptr[mut frames.FrameAllocator]) -> Result[pt
  * @param allocator The frame allocator, read without its lock, so the numbers are a moment's; its frames are taken
  *     to be 4 KiB, 256 to a MiB.
  */
-log_memory :: fn(allocator: ptr[frames.FrameAllocator]) {
+log_memory :: fn(allocator : ptr[frames.FrameAllocator]) {
     runtime.log_info("frames: % MiB free of % MiB", allocator.free_frames / 256, allocator.total_frames / 256)
 }
 
@@ -579,7 +583,7 @@ log_memory :: fn(allocator: ptr[frames.FrameAllocator]) {
  *     kernel; once there is one, its own options are used instead.
  * @param message What there was no memory for, logged as fatal.
  */
-out_of_memory :: fn(options: ptr[Options], message: string) #never_returns {
+out_of_memory :: fn(options : ptr[Options], message : string) #never_returns {
     runtime.log_fatal(message)
     // Once there's a kernel, every CPU stops, as for any other reason
     if intrinsics.carrier().program_data != null {
@@ -594,7 +598,7 @@ out_of_memory :: fn(options: ptr[Options], message: string) #never_returns {
  * @param kernel The kernel, for the counter's frequency.
  * @param cpu The calling CPU's PerCpu, whose nmi_count the NMI handler increments.
  */
-test_nmi :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu]) {
+test_nmi :: fn(kernel : ptr[Kernel], cpu : ptr[mut PerCpu]) {
     runtime.log_info("test_nmi: raising an NMI")
     arch.test_nmi()
     deadline :: arch.counter() + kernel.counter_frequency
@@ -617,7 +621,7 @@ test_nmi :: fn(kernel: ptr[Kernel], cpu: ptr[mut PerCpu]) {
  * @param options The command line's options, which say how to stop.
  * @param features The boot CPU's features, as arch.detect_features found them.
  */
-check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) {
+check_baseline :: fn(options : ptr[Options], features : ptr[slop_os.CpuFeatures]) {
     missing :: arch.missing_baseline_feature(features) or_return void
     #if TARGET_ARCH == .x86_64 {
         runtime.log_fatal("SlopOS needs an x86-64-v3 CPU, and this one lacks %", missing)
@@ -638,7 +642,7 @@ check_baseline :: fn(options: ptr[Options], features: ptr[slop_os.CpuFeatures]) 
  *     framebuffer_size are set when the console is.
  * @param info The boot information, whose first framebuffer is used; read through the direct map.
  */
-start_framebuffer_console :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
+start_framebuffer_console :: fn(kernel : ptr[mut Kernel], info : ptr[boot_info.BootInfo]) {
     if info.framebuffers.count == 0 {
         runtime.log_info("no framebuffer: the log stays on the serial console")
         return void
@@ -665,9 +669,14 @@ start_framebuffer_console :: fn(kernel: ptr[mut Kernel], info: ptr[boot_info.Boo
  *
  * @param screen The console, set up.
  */
-log_framebuffer :: fn(screen: ptr[console.Console]) {
-    runtime.log_info("framebuffer console: %x% characters on %x% pixels", screen.columns, screen.rows, screen.width,
-        screen.height)
+log_framebuffer :: fn(screen : ptr[console.Console]) {
+    runtime.log_info(
+        "framebuffer console: %x% characters on %x% pixels",
+        screen.columns,
+        screen.rows,
+        screen.width,
+        screen.height
+    )
 }
 
 /**
@@ -677,7 +686,7 @@ log_framebuffer :: fn(screen: ptr[console.Console]) {
  * @param size The stack's size in bytes.
  * @return The range from low to low plus size, its high end one past the last byte, where the stack starts.
  */
-range_of :: fn(low: ptr[u8], size: u64) -> arch_interface.StackRange {
+range_of :: fn(low : ptr[u8], size : u64) -> arch_interface.StackRange {
     base :: cast[u64](low)
     return arch_interface.StackRange.{
         low = cast[arch_interface.VirtualAddress](base),

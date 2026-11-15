@@ -10,23 +10,23 @@ package terminal_window
 
 import runtime from "base:runtime"
 import os from "std:os"
-import ui from "std:ui"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import network from "std:os/slop_os/network"
 import process_manager from "std:os/slop_os/process_manager"
 import read_only_file from "std:os/slop_os/read_only_file"
-import network from "std:os/slop_os/network"
 import terminal from "std:os/slop_os/terminal"
+import ui from "std:ui"
+import unicode from "std:unicode"
 import gui_kit from "../../gui_kit"
 import gui_programs from "../../gui_programs"
 import installations from "../../installations"
+import service_kit from "../../libraries/service_kit"
 import programs from "../../protocols/programs"
 import surface from "../../protocols/surface"
 import safe_text from "../../safe_text"
 import screen from "../../screen"
 import shell from "../shell"
-import service_kit from "../../libraries/service_kit"
 
 /** The text's size, in pixels to the em. */
 TEXT_SIZE : f32 : 15
@@ -113,8 +113,13 @@ Term :: struct {
  * @return 0 once the shell's ended or the window's closed; 2 without a compositor, process manager or programs, or when
  *     the window or the shell can't start.
  */
-main :: fn(log: slop_os.DebugLog?, surface: os.Channel[surface.Surface]?, home: os.Channel[dir.Dir]?,
-    manager: os.Channel[process_manager.ProcessManager]?, programs: os.Channel[programs.Programs]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    surface : os.Channel[surface.Surface]?,
+    home : os.Channel[dir.Dir]?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    programs : os.Channel[programs.Programs]?
+) -> int {
     term :: runtime.new(Term)
     term.cursor_shown = true
     columns :: cast[f32](screen.COLUMNS) * COLUMN_WIDTH + 16
@@ -146,7 +151,7 @@ main :: fn(log: slop_os.DebugLog?, surface: os.Channel[surface.Surface]?, home: 
 }
 
 /** Whether every client's gone: the shell, and whatever it started. */
-every_client_gone :: fn(term: ptr[Term]) -> bool {
+every_client_gone :: fn(term : ptr[Term]) -> bool {
     for end in term.clients.ends {
         if cast[slop_os.Handle](end) != slop_os.NO_HANDLE {
             return false
@@ -156,8 +161,12 @@ every_client_gone :: fn(term: ptr[Term]) -> bool {
 }
 
 /** Find the shell and launch it, on a terminal channel the window serves. */
-start_shell :: fn(term: ptr[mut Term], log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessManager],
-    finder: os.Channel[programs.Programs]) -> bool {
+start_shell :: fn(
+    term : ptr[mut Term],
+    log : slop_os.DebugLog?,
+    manager : os.Channel[process_manager.ProcessManager],
+    finder : os.Channel[programs.Programs]
+) -> bool {
     startup :: slop_os.startup_block()
     finder_port :: os.port_for(startup.budget, finder.end) or_return false
     out := os.Outgoing.{}
@@ -190,7 +199,7 @@ start_shell :: fn(term: ptr[mut Term], log: slop_os.DebugLog?, manager: os.Chann
 }
 
 /** Take the window's keys as the terminal's input: Ctrl+C an interrupt, the rest keys with their text. */
-take_keys :: fn(term: ptr[mut Term]) {
+take_keys :: fn(term : ptr[mut Term]) {
     window :: term.window
     raw_text :: window.raw_text[0..<window.raw_text.count]
     for key in window.raw_keys {
@@ -215,7 +224,7 @@ take_keys :: fn(term: ptr[mut Term]) {
 }
 
 /** Queue an input event for the reader, with its text; past what's kept, dropped. */
-queue :: fn(term: ptr[mut Term], made: terminal.Event, text: u8[]) {
+queue :: fn(term : ptr[mut Term], made : terminal.Event, text : u8[]) {
     if term.count >= term.events.count || text.count > term.text.count - term.text_count {
         return void
     }
@@ -235,20 +244,30 @@ queue :: fn(term: ptr[mut Term], made: terminal.Event, text: u8[]) {
 }
 
 /** Answer the reader's held Read with what's waiting. */
-deliver :: fn(term: ptr[mut Term]) {
+deliver :: fn(term : ptr[mut Term]) {
     reader :: term.reader or_return void
     if term.count == 0 || term.held == 0 || reader >= term.clients.ends.count {
         return void
     }
     count :: if term.count < cast[usize](term.held) { term.count } else { cast[usize](term.held) }
     // Those given are the first; their text's the queue's up to the next's start
-    text_end :: if count < term.count && count < term.events.count { cast[usize](term.events[count].text_start) } else { term.text_count }
+    text_end :: if count < term.count && count < term.events.count {
+        cast[usize](term.events[count].text_start)
+    }
+    else {
+        term.text_count
+    }
     if count > term.events.count || text_end > term.text.count {
         return void
     }
     out := os.Outgoing.{}
     response :: os.begin[terminal.Response](&out)
-    response^ = .Input(terminal.Events.{events = os.append(&out, term.events[0..<count]), text = os.append(&out, term.text[0..<text_end])})
+    response^ = .Input(
+        terminal.Events.{
+            events = os.append(&out, term.events[0..<count]),
+            text = os.append(&out, term.text[0..<text_end]),
+        }
+    )
     if terminal.send_response(term.clients.ends[reader], term.window.port, &out) is_some {
         return void
     }
@@ -272,7 +291,7 @@ deliver :: fn(term: ptr[mut Term]) {
 }
 
 /** Take every request a client has sent, until there are none left, or it's gone. */
-serve :: fn(term: ptr[mut Term], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(term : ptr[mut Term], index : usize, into : ptr[mut os.Incoming]) {
     if index >= term.clients.ends.count {
         return void
     }
@@ -325,8 +344,14 @@ serve :: fn(term: ptr[mut Term], index: usize, into: ptr[mut os.Incoming]) {
             case Describe => {
                 out := os.Outgoing.{}
                 response :: os.begin[terminal.Response](&out)
-                response^ = .Described(terminal.Features.{columns = screen.COLUMNS, rows = screen.PROGRAM_ROWS, colors = .Palette16,
-                    unicode = 15})
+                response^ = .Described(
+                    terminal.Features.{
+                        columns = screen.COLUMNS,
+                        rows = screen.PROGRAM_ROWS,
+                        colors = .Palette16,
+                        unicode = 15,
+                    }
+                )
                 _ = terminal.send_response(end, term.window.port, &out)
             }
             case Read(most) => {
@@ -358,7 +383,12 @@ serve :: fn(term: ptr[mut Term], index: usize, into: ptr[mut os.Incoming]) {
                     if term.held > 0 {
                         out := os.Outgoing.{}
                         response :: os.begin[terminal.Response](&out)
-                        response^ = .Input(terminal.Events.{events = os.append(&out, term.events[0..<0]), text = os.append(&out, term.text[0..<0])})
+                        response^ = .Input(
+                            terminal.Events.{
+                                events = os.append(&out, term.events[0..<0]),
+                                text = os.append(&out, term.text[0..<0]),
+                            }
+                        )
                         _ = terminal.send_response(end, term.window.port, &out)
                     }
                     term.reader = null
@@ -372,7 +402,7 @@ serve :: fn(term: ptr[mut Term], index: usize, into: ptr[mut os.Incoming]) {
 }
 
 /** Write text into the grid where the cursor is, a grapheme cluster at a time, made safe, in its runs' styles. */
-write :: fn(term: ptr[mut Term], into: ptr[os.Incoming], text: terminal.Text) {
+write :: fn(term : ptr[mut Term], into : ptr[os.Incoming], text : terminal.Text) {
     bytes :: os.items(into, text.text)
     runs :: os.items(into, text.runs)
     run_index : usize = 0
@@ -419,11 +449,15 @@ write :: fn(term: ptr[mut Term], into: ptr[os.Incoming], text: terminal.Text) {
 }
 
 /** A frame: each row of the grid a line of text, the reader's line and the cursor where the cursor is. */
-frame :: fn(term: ptr[mut Term]) {
+frame :: fn(term : ptr[mut Term]) {
     term.changed = false
     u :: gui_kit.begin(term.window)
     u.theme.background = ui.rgb(30, 30, 30)
-    _ = ui.open(u, "rows", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 8, padding_y = 6, background = ui.rgb(30, 30, 30)})
+    _ = ui.open(
+        u,
+        "rows",
+        ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 8, padding_y = 6, background = ui.rgb(30, 30, 30)}
+    )
     grid :: screen.current(&term.screen)
     row_text : u8[..]
     defer runtime.array_free(&row_text)
@@ -451,7 +485,12 @@ frame :: fn(term: ptr[mut Term]) {
                     }
                     else if cell.width > 0 {
                         kept :: cell.bytes[0..<screen.CELL_BYTES]
-                        cluster :: if cast[usize](cell.count) <= kept.count { kept[0..<cast[usize](cell.count)] } else { kept }
+                        cluster :: if cast[usize](cell.count) <= kept.count {
+                            kept[0..<cast[usize](cell.count)]
+                        }
+                        else {
+                            kept
+                        }
                         for byte in cluster {
                             runtime.array_add(&row_text, byte)
                         }
@@ -461,8 +500,12 @@ frame :: fn(term: ptr[mut Term]) {
             }
         }
         _ = ui.open(u, "row", ui.Box.{key = cast[u64](row), width = ui.grow(), height = ui.fixed(ROW_HEIGHT)})
-        _ = ui.label(u, string_of_bytes(row_text[0..<row_text.count]), ui.TextStyle.{size = TEXT_SIZE, mono = true, wrap = false,
-            colour = ui.rgb(230, 230, 230)}, key = cast[u64](row))
+        _ = ui.label(
+            u,
+            string_of_bytes(row_text[0..<row_text.count]),
+            ui.TextStyle.{size = TEXT_SIZE, mono = true, wrap = false, colour = ui.rgb(230, 230, 230)},
+            key = cast[u64](row)
+        )
         ui.close(u)
     }
     ui.close(u)
@@ -470,6 +513,6 @@ frame :: fn(term: ptr[mut Term]) {
 }
 
 /** Bytes as text. */
-string_of_bytes :: fn(bytes: u8[]) -> string {
+string_of_bytes :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }

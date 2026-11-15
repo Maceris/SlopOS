@@ -3,8 +3,8 @@ package kernel
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
-import arch_interface from "../arch_interface"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
 import boot_info from "../boot_info"
 import frames from "frames"
 
@@ -34,7 +34,7 @@ import frames from "frames"
  *
  * @param registers The user registers the entry saved, which are copied into the thread.
  */
-handle_syscall :: fn(registers: ptr[arch.UserRegisters]) #never_returns {
+handle_syscall :: fn(registers : ptr[arch.UserRegisters]) #never_returns {
     save_user_registers(registers)
     cpu :: per_cpu()
     kernel :: cpu.kernel
@@ -68,7 +68,7 @@ handle_syscall :: fn(registers: ptr[arch.UserRegisters]) #never_returns {
  *
  * @param cpu The calling CPU's PerCpu.
  */
-leave_cpu :: fn(cpu: ptr[mut PerCpu]) {
+leave_cpu :: fn(cpu : ptr[mut PerCpu]) {
     cpu.current = 0
     intrinsics.atomic_store_u32_release(&cpu.current_level, IDLE_LEVEL)
 }
@@ -86,7 +86,7 @@ leave_cpu :: fn(cpu: ptr[mut PerCpu]) {
  * @param fault What faulted: a page fault's address and access, or another kind, reported to a debugger as its
  *     slop_os.FAULT_ kind, with address 0.
  */
-handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interface.Fault) #never_returns {
+handle_user_fault :: fn(registers : ptr[arch.UserRegisters], fault : arch_interface.Fault) #never_returns {
     save_user_registers(registers)
     cpu :: per_cpu()
     kernel :: cpu.kernel
@@ -149,7 +149,12 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
              * what faulted, code whose pager ended or memory whose owner did, and a process left with some of its
              * threads would go on half done, with nobody watching it told.
              */
-            generation :: if owner != 0 { intrinsics.atomic_load_u32_acquire(&cast[ptr[ObjectHeader]](owner).generation) } else { 0 }
+            generation :: if owner != 0 {
+                intrinsics.atomic_load_u32_acquire(&cast[ptr[ObjectHeader]](owner).generation)
+            }
+            else {
+                0
+            }
             _ = destroy_object(kernel, cast[u64](thread))
             if owner != 0 {
                 destroy_later(kernel, owner, generation)
@@ -168,7 +173,7 @@ handle_user_fault :: fn(registers: ptr[arch.UserRegisters], fault: arch_interfac
  *     tag; HandleError.NoSuchCall for a number the table hasn't. A call that blocked or ended the thread gives a result
  *     that isn't written.
  */
-dispatch_syscall :: fn(thread: ptr[mut Thread]) -> arch_interface.SyscallResult {
+dispatch_syscall :: fn(thread : ptr[mut Thread]) -> arch_interface.SyscallResult {
     registers :: &thread.registers
     number :: arch.syscall_number(registers)
     #insert slop_os.syscall_dispatch()
@@ -182,7 +187,7 @@ dispatch_syscall :: fn(thread: ptr[mut Thread]) -> arch_interface.SyscallResult 
  * @param index The argument's index, from 0, as the architecture's calling convention numbers them.
  * @return The argument, as the caller passed it: untrusted, unchecked.
  */
-word :: fn(registers: ptr[arch.UserRegisters], index: u64) -> u64 {
+word :: fn(registers : ptr[arch.UserRegisters], index : u64) -> u64 {
     return arch.syscall_argument(registers, cast[u32](index))
 }
 
@@ -193,7 +198,7 @@ word :: fn(registers: ptr[arch.UserRegisters], index: u64) -> u64 {
  * @param index The index of the address's word; the count is the next one.
  * @return The slice, its address a user virtual address and its count in elements, both untrusted and unchecked.
  */
-buffer :: fn(registers: ptr[arch.UserRegisters], index: u64) -> slop_os.UserBuffer {
+buffer :: fn(registers : ptr[arch.UserRegisters], index : u64) -> slop_os.UserBuffer {
     return slop_os.UserBuffer.{address = word(registers, index), count = word(registers, index + 1)}
 }
 
@@ -205,7 +210,7 @@ buffer :: fn(registers: ptr[arch.UserRegisters], index: u64) -> slop_os.UserBuff
  * @param second The second result word.
  * @return The result, for the thread's result registers.
  */
-answered :: fn(tag: u64, first: u64, second: u64) -> arch_interface.SyscallResult {
+answered :: fn(tag : u64, first : u64, second : u64) -> arch_interface.SyscallResult {
     return arch_interface.SyscallResult.{tag = tag, values = u64.[first, second]}
 }
 
@@ -220,7 +225,7 @@ answered :: fn(tag: u64, first: u64, second: u64) -> arch_interface.SyscallResul
  * @param handle The handle to close.
  * @error InvalidHandle Not a handle in the caller's table, or one already closed.
  */
-sys_handle_close :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Result[void, slop_os.HandleError] {
+sys_handle_close :: fn(thread : ptr[mut Thread], handle : slop_os.Handle) -> Result[void, slop_os.HandleError] {
     removed :: remove(&process_of(thread).table, handle)?
     if removed.owning && is_live(removed.object, removed.generation) {
         _ = destroy_object(per_cpu().kernel, removed.object)
@@ -246,7 +251,11 @@ sys_handle_close :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Resul
  * @error BudgetExceeded The caller's process's budget can't pay for another page of its table.
  * @error OutOfMemory No frame for another page of its table.
  */
-sys_handle_duplicate :: fn(thread: ptr[mut Thread], handle: slop_os.Handle, rights: slop_os.Rights) -> Result[slop_os.Handle, slop_os.HandleError] {
+sys_handle_duplicate :: fn(
+    thread : ptr[mut Thread],
+    handle : slop_os.Handle,
+    rights : slop_os.Rights
+) -> Result[slop_os.Handle, slop_os.HandleError] {
     process :: process_of(thread)
     found :: lookup(&process.table, handle)?
     held :: cast[u32](found.rights)
@@ -269,7 +278,10 @@ sys_handle_duplicate :: fn(thread: ptr[mut Thread], handle: slop_os.Handle, righ
  * @error InvalidHandle Not a handle in the caller's table, or one already closed.
  * @error ObjectGone The object was destroyed.
  */
-sys_handle_info :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Result[slop_os.HandleInfo, slop_os.HandleError] {
+sys_handle_info :: fn(
+    thread : ptr[mut Thread],
+    handle : slop_os.Handle
+) -> Result[slop_os.HandleInfo, slop_os.HandleError] {
     found :: lookup(&process_of(thread).table, handle)?
     return .Ok(slop_os.HandleInfo.{kind = found.kind, rights = found.rights})
 }
@@ -289,7 +301,12 @@ sys_handle_info :: fn(thread: ptr[mut Thread], handle: slop_os.Handle) -> Result
  * @return The object's address; or InvalidHandle if the handle isn't in the table or is closed, ObjectGone if the
  *     object was destroyed, WrongKind if it isn't of kind, or MissingRight if the handle lacks one of rights.
  */
-object_of :: fn[E](process: ptr[mut Process], handle: slop_os.Handle, kind: slop_os.ObjectKind, rights: slop_os.Rights) -> Result[u64, E] {
+object_of :: fn[E](
+    process : ptr[mut Process],
+    handle : slop_os.Handle,
+    kind : slop_os.ObjectKind,
+    rights : slop_os.Rights
+) -> Result[u64, E] {
     match lookup(&process.table, handle) {
         case Ok(found) => {
             if found.kind != kind {
@@ -311,7 +328,7 @@ object_of :: fn[E](process: ptr[mut Process], handle: slop_os.Handle, kind: slop
  * @param error What a handle lookup or install failed with.
  * @return The same tag, as E.
  */
-converted :: fn[E](error: slop_os.HandleError) -> E {
+converted :: fn[E](error : slop_os.HandleError) -> E {
     return cast[E](cast[u32](error))
 }
 
@@ -324,7 +341,7 @@ converted :: fn[E](error: slop_os.HandleError) -> E {
  * @return The object, its generation, kind and rights, and whether the handle owns it; or InvalidHandle if the handle
  *     isn't in the table or is closed, or ObjectGone if the object was destroyed.
  */
-found_of :: fn[E](process: ptr[mut Process], handle: slop_os.Handle) -> Result[Resolved, E] {
+found_of :: fn[E](process : ptr[mut Process], handle : slop_os.Handle) -> Result[Resolved, E] {
     match lookup(&process.table, handle) {
         case Ok(found) => return .Ok(found)
         case Error(error) => return .Error(converted[E](error))
@@ -344,7 +361,12 @@ found_of :: fn[E](process: ptr[mut Process], handle: slop_os.Handle) -> Result[R
  * @return The handle, with every right; or ObjectGone if the table is closed as process is being destroyed, TableFull
  *     if it has no room, or BudgetExceeded or OutOfMemory if another page of it couldn't be paid for or had.
  */
-owning_handle :: fn[E](kernel: ptr[mut Kernel], process: ptr[mut Process], object: u64, start: bool) -> Result[slop_os.Handle, E] {
+owning_handle :: fn[E](
+    kernel : ptr[mut Kernel],
+    process : ptr[mut Process],
+    object : u64,
+    start : bool
+) -> Result[slop_os.Handle, E] {
     match install_owning(kernel, process, object) {
         case Ok(handle) => {
             if start {
@@ -369,8 +391,13 @@ owning_handle :: fn[E](kernel: ptr[mut Kernel], process: ptr[mut Process], objec
  *     ObjectGone if the budget was destroyed, WrongKind if it isn't a memory budget's, or MissingRight if it lacks
  *     RIGHT_BUDGET_CHARGE.
  */
-paying_budget :: fn[E](process: ptr[mut Process], budget: slop_os.MemoryBudget) -> Result[u64, E] {
-    return object_of[E](process, cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget, slop_os.RIGHT_BUDGET_CHARGE)
+paying_budget :: fn[E](process : ptr[mut Process], budget : slop_os.MemoryBudget) -> Result[u64, E] {
+    return object_of[E](
+        process,
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.MemoryBudget,
+        slop_os.RIGHT_BUDGET_CHARGE
+    )
 }
 
 /**
@@ -380,7 +407,7 @@ paying_budget :: fn[E](process: ptr[mut Process], budget: slop_os.MemoryBudget) 
  * @return OutOfMemory or BudgetExceeded as error says, or ObjectGone for OwnerGone: the caller's process is being
  *     destroyed.
  */
-object_failure :: fn(error: ObjectError) -> slop_os.HandleError {
+object_failure :: fn(error : ObjectError) -> slop_os.HandleError {
     if error == .OutOfMemory {
         return .OutOfMemory
     }
@@ -396,7 +423,7 @@ object_failure :: fn(error: ObjectError) -> slop_os.HandleError {
  *
  * @param thread The calling thread, the CPU's current one, destroyed here; it never runs again.
  */
-sys_thread_exit :: fn(thread: ptr[mut Thread]) {
+sys_thread_exit :: fn(thread : ptr[mut Thread]) {
     _ = destroy_object(per_cpu().kernel, cast[u64](thread))
 }
 
@@ -423,24 +450,52 @@ sys_thread_exit :: fn(thread: ptr[mut Thread]) {
  * @error BudgetExceeded The budget can't pay for the thread, or the caller's for a page of its table.
  * @error TableFull The caller's table has no room.
  */
-sys_thread_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, space: slop_os.AddressSpace, entry: u64, stack: u64,
-    argument: u64) -> Result[slop_os.Thread, slop_os.HandleError] {
+sys_thread_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget,
+    space : slop_os.AddressSpace,
+    entry : u64,
+    stack : u64,
+    argument : u64
+) -> Result[slop_os.Thread, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.HandleError](process, budget)?
-    target :: object_of[slop_os.HandleError](process, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_THREADS)
-       ?
+    target :: object_of[slop_os.HandleError](
+        process,
+        cast[slop_os.Handle](space),
+        slop_os.ObjectKind.AddressSpace,
+        slop_os.RIGHT_SPACE_THREADS
+    )?
     start :: arch_interface.UserStart.{
         instruction_pointer = cast[arch_interface.VirtualAddress](entry),
         stack_pointer = cast[arch_interface.VirtualAddress](stack),
         argument = argument,
     }
     made := cast[ptr[mut Thread]](0)
-    match create_thread(kernel, cast[u64](process), cast[ptr[mut AddressSpace]](target), &start,
-        arch_interface.VectorConfig.{extended = false}, 0, paying) {
+    match create_thread(
+        kernel,
+        cast[u64](process),
+        cast[ptr[mut AddressSpace]](target),
+        &start,
+        arch_interface.VectorConfig.{extended = false},
+        0,
+        paying
+    ) {
         case Ok(created) => made = created
-        case Error(error) => return .Error(if error == .OutOfMemory { slop_os.HandleError.OutOfMemory }
-            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.ObjectGone })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .OutOfMemory {
+                slop_os.HandleError.OutOfMemory
+            }
+            else if error == .BudgetExceeded {
+                slop_os.HandleError.BudgetExceeded
+            }
+            else {
+                slop_os.HandleError.ObjectGone
+            }
+        )
     }
     handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), true)?
     return .Ok(cast[slop_os.Thread](handle))
@@ -460,7 +515,10 @@ sys_thread_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, s
  * @error BudgetExceeded The budget can't pay for the process, or the caller's for a page of its table.
  * @error TableFull The caller's table has no room.
  */
-sys_process_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.Process, slop_os.HandleError] {
+sys_process_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget
+) -> Result[slop_os.Process, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.HandleError](process, budget)?
@@ -489,15 +547,29 @@ sys_process_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) 
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
  * @error TableFull The caller's table has no room.
  */
-sys_address_space_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.AddressSpace, slop_os.HandleError] {
+sys_address_space_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget
+) -> Result[slop_os.AddressSpace, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.HandleError](process, budget)?
     made := cast[ptr[mut AddressSpace]](0)
     match create_address_space(kernel, cast[u64](process), paying) {
         case Ok(created) => made = created
-        case Error(error) => return .Error(if error == .OwnerGone { slop_os.HandleError.ObjectGone }
-            else if error == .BudgetExceeded { slop_os.HandleError.BudgetExceeded } else { slop_os.HandleError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .OwnerGone {
+                slop_os.HandleError.ObjectGone
+            }
+            else if error == .BudgetExceeded {
+                slop_os.HandleError.BudgetExceeded
+            }
+            else {
+                slop_os.HandleError.OutOfMemory
+            }
+        )
     }
     handle :: owning_handle[slop_os.HandleError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.AddressSpace](handle))
@@ -509,7 +581,7 @@ sys_address_space_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBu
  * @param thread The calling thread; unused.
  * @return The time in nanoseconds. It always succeeds.
  */
-sys_clock_monotonic :: fn(thread: ptr[mut Thread]) -> Result[u64, slop_os.HandleError] {
+sys_clock_monotonic :: fn(thread : ptr[mut Thread]) -> Result[u64, slop_os.HandleError] {
     return .Ok(cast[u64](kernel_monotonic(cast[mut rawptr](per_cpu().kernel))))
 }
 
@@ -530,7 +602,10 @@ sys_clock_monotonic :: fn(thread: ptr[mut Thread]) -> Result[u64, slop_os.Handle
  * @error BudgetExceeded The budget can't pay for the port, or the caller's for a page of its table.
  * @error TableFull The caller's table has no room.
  */
-sys_port_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.Port, slop_os.HandleError] {
+sys_port_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget
+) -> Result[slop_os.Port, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.HandleError](process, budget)?
@@ -556,8 +631,17 @@ sys_port_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> 
  * @error WrongKind Not a port's handle.
  * @error MissingRight The handle lacks right.
  */
-port_of :: fn(thread: ptr[mut Thread], port: slop_os.Port, right: slop_os.Rights) -> Result[ptr[mut Port], slop_os.PortError] {
-    object :: object_of[slop_os.PortError](process_of(thread), cast[slop_os.Handle](port), slop_os.ObjectKind.Port, right)?
+port_of :: fn(
+    thread : ptr[mut Thread],
+    port : slop_os.Port,
+    right : slop_os.Rights
+) -> Result[ptr[mut Port], slop_os.PortError] {
+    object :: object_of[slop_os.PortError](
+        process_of(thread),
+        cast[slop_os.Handle](port),
+        slop_os.ObjectKind.Port,
+        right
+    )?
     return .Ok(cast[ptr[mut Port]](object))
 }
 
@@ -567,7 +651,7 @@ port_of :: fn(thread: ptr[mut Thread], port: slop_os.Port, right: slop_os.Rights
  * @param error The operation's error, or null if it succeeded.
  * @return Ok for null, or Error with that error, whichever variant it is.
  */
-port_done :: fn(error: slop_os.PortError?) -> Result[void, slop_os.PortError] {
+port_done :: fn(error : slop_os.PortError?) -> Result[void, slop_os.PortError] {
     match error {
         case Some(failure) => return .Error(failure)
         case None => return .Ok
@@ -589,7 +673,7 @@ port_done :: fn(error: slop_os.PortError?) -> Result[void, slop_os.PortError] {
  * @error BudgetExceeded The port's budget can't pay for the binding.
  * @error OutOfMemory No slot for the binding, or no room in the port's map.
  */
-sys_port_bind_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> Result[void, slop_os.PortError] {
+sys_port_bind_wake :: fn(thread : ptr[mut Thread], port : slop_os.Port, key : u64) -> Result[void, slop_os.PortError] {
     found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
     return port_done(port_bind_wake(per_cpu().kernel, found, key))
 }
@@ -608,7 +692,12 @@ sys_port_bind_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) 
  * @error MissingRight The handle lacks RIGHT_PORT_BIND.
  * @error NoSuchKey No wake binding has the key.
  */
-sys_port_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, bits: u64) -> Result[void, slop_os.PortError] {
+sys_port_wake :: fn(
+    thread : ptr[mut Thread],
+    port : slop_os.Port,
+    key : u64,
+    bits : u64
+) -> Result[void, slop_os.PortError] {
     found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
     return port_done(port_wake(per_cpu().kernel, found, key, bits))
 }
@@ -630,7 +719,12 @@ sys_port_wake :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, bits:
  * @error BudgetExceeded The port's budget can't pay for a new binding.
  * @error OutOfMemory No slot for a new binding, or no memory to arm the timer.
  */
-sys_port_set_timer :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, deadline: u64) -> Result[void, slop_os.PortError] {
+sys_port_set_timer :: fn(
+    thread : ptr[mut Thread],
+    port : slop_os.Port,
+    key : u64,
+    deadline : u64
+) -> Result[void, slop_os.PortError] {
     found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
     return port_done(port_set_timer(per_cpu().kernel, found, key, deadline))
 }
@@ -648,7 +742,7 @@ sys_port_set_timer :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64, 
  * @error MissingRight The handle lacks RIGHT_PORT_BIND.
  * @error NoSuchKey No binding has the key.
  */
-sys_port_unbind :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> Result[void, slop_os.PortError] {
+sys_port_unbind :: fn(thread : ptr[mut Thread], port : slop_os.Port, key : u64) -> Result[void, slop_os.PortError] {
     found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
     return port_done(port_unbind(per_cpu().kernel, found, key))
 }
@@ -671,11 +765,24 @@ sys_port_unbind :: fn(thread: ptr[mut Thread], port: slop_os.Port, key: u64) -> 
  * @error BufferTooSmall The packets are empty: a wait that could take nothing is refused, not waited (decisions/0184).
  * @error BadBuffer The packets aren't mapped writable user memory; packets taken when writing them failed are lost.
  */
-sys_port_wait :: fn(thread: ptr[mut Thread], port: slop_os.Port, packets: slop_os.UserBuffer, deadline: u64) -> Result[u32, slop_os.PortError] {
+sys_port_wait :: fn(
+    thread : ptr[mut Thread],
+    port : slop_os.Port,
+    packets : slop_os.UserBuffer,
+    deadline : u64
+) -> Result[u32, slop_os.PortError] {
     kernel :: per_cpu().kernel
     found :: port_of(thread, port, slop_os.RIGHT_PORT_WAIT)?
-    return wait_result[slop_os.PortError](port_wait_begin(kernel, thread, found, packets.address, cast[u32](min_u64(packets.count, 0xffffffff)),
-        ticks_at(kernel, deadline)))
+    return wait_result[slop_os.PortError](
+        port_wait_begin(
+            kernel,
+            thread,
+            found,
+            packets.address,
+            cast[u32](min_u64(packets.count, 0xffffffff)),
+            ticks_at(kernel, deadline)
+        )
+    )
 }
 
 /**
@@ -686,7 +793,7 @@ sys_port_wait :: fn(thread: ptr[mut Thread], port: slop_os.Port, packets: slop_o
  * @return How many packets were taken: 0 when the deadline passed, or when the thread blocked, which isn't written;
  *     or ObjectGone if the port was destroyed, or BadBuffer if the packets aren't writable user memory.
  */
-wait_result :: fn[E](outcome: WaitOutcome) -> Result[u32, E] {
+wait_result :: fn[E](outcome : WaitOutcome) -> Result[u32, E] {
     match outcome {
         case Done(taken) => return .Ok(taken)
         case Failed(error) => return .Error(cast[E](cast[u32](error)))
@@ -720,8 +827,14 @@ wait_result :: fn[E](outcome: WaitOutcome) -> Result[u32, E] {
  * @error BudgetExceeded The port's budget can't pay for the binding.
  * @error OutOfMemory No slot for the binding, or no room in the port's map.
  */
-sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os.Handle, signals: slop_os.Signals, key: u64,
-    mode: slop_os.BindMode) -> Result[void, slop_os.PortError] {
+sys_port_bind :: fn(
+    thread : ptr[mut Thread],
+    port : slop_os.Port,
+    object : slop_os.Handle,
+    signals : slop_os.Signals,
+    key : u64,
+    mode : slop_os.BindMode
+) -> Result[void, slop_os.PortError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     found_port :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
@@ -732,18 +845,54 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
             return .Error(.MissingRight)
         }
         watched :: cast[ptr[mut Process]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
+        return port_done(
+            watch_bind(
+                kernel,
+                found_port,
+                found.object,
+                &watched.watchers,
+                &watched.watch_lock,
+                .Watchers,
+                signals,
+                key,
+                once
+            )
+        )
     }
     if found.kind == .Thread {
         watched :: cast[ptr[mut Thread]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.control, .ThreadControl, signals, key, once))
+        return port_done(
+            watch_bind(
+                kernel,
+                found_port,
+                found.object,
+                &watched.watchers,
+                &watched.control,
+                .ThreadControl,
+                signals,
+                key,
+                once
+            )
+        )
     }
     if found.kind == .Irq {
         return port_done(irq_bind(kernel, found_port, cast[ptr[mut Irq]](found.object), key, once))
     }
     if found.kind == .Device {
         watched :: cast[ptr[mut Device]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
+        return port_done(
+            watch_bind(
+                kernel,
+                found_port,
+                found.object,
+                &watched.watchers,
+                &watched.watch_lock,
+                .Watchers,
+                signals,
+                key,
+                once
+            )
+        )
     }
     // A budget's holder, who may charge it, watches it for pressure (decisions/0111)
     if found.kind == .MemoryBudget {
@@ -751,7 +900,19 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
             return .Error(.MissingRight)
         }
         watched :: cast[ptr[mut MemoryBudget]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
+        return port_done(
+            watch_bind(
+                kernel,
+                found_port,
+                found.object,
+                &watched.watchers,
+                &watched.watch_lock,
+                .Watchers,
+                signals,
+                key,
+                once
+            )
+        )
     }
     // Its owner watches it for no one else holding it (decisions/0178)
     if found.kind == .Memory {
@@ -759,7 +920,19 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
             return .Error(.MissingRight)
         }
         watched :: cast[ptr[mut Memory]](found.object)
-        return port_done(watch_bind(kernel, found_port, found.object, &watched.watchers, &watched.watch_lock, .Watchers, signals, key, once))
+        return port_done(
+            watch_bind(
+                kernel,
+                found_port,
+                found.object,
+                &watched.watchers,
+                &watched.watch_lock,
+                .Watchers,
+                signals,
+                key,
+                once
+            )
+        )
     }
     if found.kind != .Channel {
         return .Error(.WrongKind)
@@ -782,8 +955,17 @@ sys_port_bind :: fn(thread: ptr[mut Thread], port: slop_os.Port, object: slop_os
  * @error WrongKind Not a channel end's handle.
  * @error MissingRight The handle lacks one of rights.
  */
-end_of :: fn(thread: ptr[mut Thread], end: slop_os.Channel, rights: slop_os.Rights) -> Result[ptr[mut Channel], slop_os.ChannelError] {
-    object :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](end), slop_os.ObjectKind.Channel, rights)?
+end_of :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    rights : slop_os.Rights
+) -> Result[ptr[mut Channel], slop_os.ChannelError] {
+    object :: object_of[slop_os.ChannelError](
+        process_of(thread),
+        cast[slop_os.Handle](end),
+        slop_os.ObjectKind.Channel,
+        rights
+    )?
     return .Ok(cast[ptr[mut Channel]](object))
 }
 
@@ -793,7 +975,7 @@ end_of :: fn(thread: ptr[mut Thread], end: slop_os.Channel, rights: slop_os.Righ
  * @param error The operation's error, or null if it succeeded.
  * @return Ok for null, or Error with that error, whichever variant it is.
  */
-channel_done :: fn(error: slop_os.ChannelError?) -> Result[void, slop_os.ChannelError] {
+channel_done :: fn(error : slop_os.ChannelError?) -> Result[void, slop_os.ChannelError] {
     match error {
         case Some(failure) => return .Error(failure)
         case None => return .Ok
@@ -819,8 +1001,12 @@ channel_done :: fn(error: slop_os.ChannelError?) -> Result[void, slop_os.Channel
  * @error OutOfMemory No slot, core or ring memory, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room for both handles.
  */
-sys_channel_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, ring_bytes: u32, tag: u64)
-    -> Result[slop_os.ChannelPair, slop_os.ChannelError] {
+sys_channel_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget,
+    ring_bytes : u32,
+    tag : u64
+) -> Result[slop_os.ChannelPair, slop_os.ChannelError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.ChannelError](process, budget)?
@@ -864,9 +1050,19 @@ sys_channel_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, 
  * @error OutOfMemory No frame for a page table.
  * @error BudgetExceeded The space's budget can't pay for a page table.
  */
-sys_channel_map :: fn(thread: ptr[mut Thread], end: slop_os.Channel, space: slop_os.AddressSpace, address: u64) -> Result[void, slop_os.ChannelError] {
+sys_channel_map :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    space : slop_os.AddressSpace,
+    address : u64
+) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, slop_os.RIGHT_CHANNEL_MAP)?
-    target :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
+    target :: object_of[slop_os.ChannelError](
+        process_of(thread),
+        cast[slop_os.Handle](space),
+        slop_os.ObjectKind.AddressSpace,
+        slop_os.RIGHT_SPACE_MAP
+    )?
     return channel_done(channel_map(per_cpu().kernel, found, cast[ptr[mut AddressSpace]](target), address))
 }
 
@@ -881,7 +1077,7 @@ sys_channel_map :: fn(thread: ptr[mut Thread], end: slop_os.Channel, space: slop
  * @error WrongKind Not a channel end's handle.
  * @error BadAddress The end isn't mapped, or is being mapped or unmapped.
  */
-sys_channel_unmap :: fn(thread: ptr[mut Thread], end: slop_os.Channel) -> Result[void, slop_os.ChannelError] {
+sys_channel_unmap :: fn(thread : ptr[mut Thread], end : slop_os.Channel) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
     return channel_done(channel_unmap(per_cpu().kernel, found))
 }
@@ -899,7 +1095,11 @@ sys_channel_unmap :: fn(thread: ptr[mut Thread], end: slop_os.Channel) -> Result
  * @error WrongKind Not a channel end's handle.
  * @error PeerClosed The other end is closed.
  */
-sys_channel_notify :: fn(thread: ptr[mut Thread], end: slop_os.Channel, signals: slop_os.Signals) -> Result[void, slop_os.ChannelError] {
+sys_channel_notify :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    signals : slop_os.Signals
+) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
     return channel_done(channel_notify(per_cpu().kernel, found, signals))
 }
@@ -923,9 +1123,23 @@ sys_channel_notify :: fn(thread: ptr[mut Thread], end: slop_os.Channel, signals:
  * @error Full The ring has no room for the message now; wait for Writable.
  * @error BadBuffer The payload isn't mapped readable user memory.
  */
-sys_channel_write :: fn(thread: ptr[mut Thread], end: slop_os.Channel, payload: slop_os.UserBuffer, batch: u32) -> Result[void, slop_os.ChannelError] {
+sys_channel_write :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    payload : slop_os.UserBuffer,
+    batch : u32
+) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
-    return channel_done(channel_write(per_cpu().kernel, thread, found, payload.address, cast[u32](min_u64(payload.count, 0xffffffff)), batch))
+    return channel_done(
+        channel_write(
+            per_cpu().kernel,
+            thread,
+            found,
+            payload.address,
+            cast[u32](min_u64(payload.count, 0xffffffff)),
+            batch
+        )
+    )
 }
 
 /**
@@ -949,7 +1163,12 @@ sys_channel_write :: fn(thread: ptr[mut Thread], end: slop_os.Channel, payload: 
  * @error BadBuffer The buffer isn't mapped writable user memory, when the message stays; or size isn't, after the
  *     message was read, when it's consumed.
  */
-sys_channel_read :: fn(thread: ptr[mut Thread], end: slop_os.Channel, buffer: slop_os.UserBuffer, size: u64) -> Result[slop_os.MessageInfo, slop_os.ChannelError] {
+sys_channel_read :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    buffer : slop_os.UserBuffer,
+    size : u64
+) -> Result[slop_os.MessageInfo, slop_os.ChannelError] {
     kernel :: per_cpu().kernel
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
     match channel_read(kernel, thread, found, buffer.address, cast[u32](min_u64(buffer.count, 0xffffffff))) {
@@ -977,7 +1196,7 @@ sys_channel_read :: fn(thread: ptr[mut Thread], end: slop_os.Channel, buffer: sl
  * @param value What to write: 4 bytes, in the CPU's byte order.
  * @return True if it was written, or address is 0; false if the 4 bytes there aren't writable user memory.
  */
-tell :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], address: u64, value: u32) -> bool {
+tell :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], address : u64, value : u32) -> bool {
     kept :: value
     return address == 0 || copy_to_user(kernel, thread.space, address, cast[u64](&kept), 4)
 }
@@ -1006,9 +1225,23 @@ tell :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], address: u64, value
  * @error BatchInUse The batch is in use.
  * @error Mapped A handle is to a channel end whose rings are mapped.
  */
-sys_channel_send_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, handles: slop_os.UserBuffer, batch: u32) -> Result[void, slop_os.ChannelError] {
+sys_channel_send_handles :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    handles : slop_os.UserBuffer,
+    batch : u32
+) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
-    return channel_done(channel_send_handles(per_cpu().kernel, thread, found, handles.address, cast[u32](min_u64(handles.count, 0xffffffff)), batch))
+    return channel_done(
+        channel_send_handles(
+            per_cpu().kernel,
+            thread,
+            found,
+            handles.address,
+            cast[u32](min_u64(handles.count, 0xffffffff)),
+            batch
+        )
+    )
 }
 
 /**
@@ -1033,10 +1266,23 @@ sys_channel_send_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, ha
  * @error BadBuffer The handles aren't writable user memory, when the batch stays; or writing them or count failed
  *     after they were taken.
  */
-sys_channel_take_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, batch: u32, handles: slop_os.UserBuffer, count: u64) -> Result[u32, slop_os.ChannelError] {
+sys_channel_take_handles :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    batch : u32,
+    handles : slop_os.UserBuffer,
+    count : u64
+) -> Result[u32, slop_os.ChannelError] {
     kernel :: per_cpu().kernel
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
-    match channel_take_handles(kernel, thread, found, batch, handles.address, cast[u32](min_u64(handles.count, 0xffffffff))) {
+    match channel_take_handles(
+        kernel,
+        thread,
+        found,
+        batch,
+        handles.address,
+        cast[u32](min_u64(handles.count, 0xffffffff))
+    ) {
         case Taken(taken) => {
             if !tell(kernel, thread, count, taken) {
                 return .Error(.BadBuffer)
@@ -1071,11 +1317,22 @@ sys_channel_take_handles :: fn(thread: ptr[mut Thread], end: slop_os.Channel, ba
  * @error BufferTooSmall The packets are empty, as port_wait's; nothing is raised or waited for.
  * @error BadBuffer The packets aren't writable user memory.
  */
-sys_channel_notify_and_wait :: fn(thread: ptr[mut Thread], end: slop_os.Channel, signals: slop_os.Signals, port: slop_os.Port,
-    packets: slop_os.UserBuffer, deadline: u64) -> Result[u32, slop_os.ChannelError] {
+sys_channel_notify_and_wait :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    signals : slop_os.Signals,
+    port : slop_os.Port,
+    packets : slop_os.UserBuffer,
+    deadline : u64
+) -> Result[u32, slop_os.ChannelError] {
     kernel :: per_cpu().kernel
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
-    waited :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_WAIT)?
+    waited :: object_of[slop_os.ChannelError](
+        process_of(thread),
+        cast[slop_os.Handle](port),
+        slop_os.ObjectKind.Port,
+        slop_os.RIGHT_PORT_WAIT
+    )?
     // Refused before the notify, so a call that can't wait doesn't raise anything either
     if packets.count == 0 {
         return .Error(.BufferTooSmall)
@@ -1088,8 +1345,16 @@ sys_channel_notify_and_wait :: fn(thread: ptr[mut Thread], end: slop_os.Channel,
         case Some(error) => return .Error(error)
         case None => {}
     }
-    return wait_result[slop_os.ChannelError](port_wait_begin(kernel, thread, cast[ptr[mut Port]](waited), packets.address,
-        cast[u32](min_u64(packets.count, 0xffffffff)), ticks_at(kernel, deadline)))
+    return wait_result[slop_os.ChannelError](
+        port_wait_begin(
+            kernel,
+            thread,
+            cast[ptr[mut Port]](waited),
+            packets.address,
+            cast[u32](min_u64(packets.count, 0xffffffff)),
+            ticks_at(kernel, deadline)
+        )
+    )
 }
 
 // ---- Memory budgets and memory objects (memory_budgets.hsc, memory.hsc)
@@ -1100,7 +1365,7 @@ sys_channel_notify_and_wait :: fn(thread: ptr[mut Thread], end: slop_os.Channel,
  * @param error The operation's error, or null if it succeeded.
  * @return Ok for null, or Error with that error, whichever variant it is.
  */
-memory_done :: fn(error: slop_os.MemoryError?) -> Result[void, slop_os.MemoryError] {
+memory_done :: fn(error : slop_os.MemoryError?) -> Result[void, slop_os.MemoryError] {
     match error {
         case Some(failure) => return .Error(failure)
         case None => return .Ok
@@ -1123,7 +1388,11 @@ memory_done :: fn(error: slop_os.MemoryError?) -> Result[void, slop_os.MemoryErr
  *     table.
  * @error TableFull The caller's table has no room.
  */
-sys_memory_budget_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, limit: u64) -> Result[slop_os.MemoryBudget, slop_os.HandleError] {
+sys_memory_budget_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget,
+    limit : u64
+) -> Result[slop_os.MemoryBudget, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.HandleError](process, budget)?
@@ -1147,9 +1416,16 @@ sys_memory_budget_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBu
  * @error ObjectGone The budget was destroyed.
  * @error WrongKind Not a memory budget's handle.
  */
-sys_memory_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[slop_os.BudgetInfo, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget, cast[slop_os.Rights](0))
-       ?
+sys_memory_budget_info :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget
+) -> Result[slop_os.BudgetInfo, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.MemoryBudget,
+        cast[slop_os.Rights](0)
+    )?
     limit, used :: budget_info(cast[ptr[mut MemoryBudget]](object))
     return .Ok(slop_os.BudgetInfo.{limit = limit, used = used})
 }
@@ -1167,9 +1443,17 @@ sys_memory_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudg
  * @error WrongKind Not a memory budget's handle.
  * @error MissingRight The handle lacks RIGHT_BUDGET_CHARGE.
  */
-sys_memory_budget_set_threshold :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, threshold: u64) -> Result[void, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget,
-        slop_os.RIGHT_BUDGET_CHARGE)?
+sys_memory_budget_set_threshold :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget,
+    threshold : u64
+) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.MemoryBudget,
+        slop_os.RIGHT_BUDGET_CHARGE
+    )?
     set_threshold(cast[ptr[mut MemoryBudget]](object), threshold)
     return .Ok
 }
@@ -1192,7 +1476,11 @@ sys_memory_budget_set_threshold :: fn(thread: ptr[mut Thread], budget: slop_os.M
  * @error OutOfMemory No slot or page list for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_memory_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, size: u64) -> Result[slop_os.Memory, slop_os.MemoryError] {
+sys_memory_create :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget,
+    size : u64
+) -> Result[slop_os.Memory, slop_os.MemoryError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     paying :: paying_budget[slop_os.MemoryError](process, budget)?
@@ -1212,8 +1500,13 @@ sys_memory_create :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, s
  * @error ObjectGone The end was destroyed.
  * @error WrongKind Not a channel end's handle.
  */
-sys_channel_tag :: fn(thread: ptr[mut Thread], end: slop_os.Channel) -> Result[u64, slop_os.ChannelError] {
-    object :: object_of[slop_os.ChannelError](process_of(thread), cast[slop_os.Handle](end), slop_os.ObjectKind.Channel, cast[slop_os.Rights](0))?
+sys_channel_tag :: fn(thread : ptr[mut Thread], end : slop_os.Channel) -> Result[u64, slop_os.ChannelError] {
+    object :: object_of[slop_os.ChannelError](
+        process_of(thread),
+        cast[slop_os.Handle](end),
+        slop_os.ObjectKind.Channel,
+        cast[slop_os.Rights](0)
+    )?
     return .Ok(core_of(cast[ptr[Channel]](object)).tag)
 }
 
@@ -1228,8 +1521,13 @@ sys_channel_tag :: fn(thread: ptr[mut Thread], end: slop_os.Channel) -> Result[u
  * @error ObjectGone The memory was destroyed.
  * @error WrongKind Not a memory object's handle.
  */
-sys_memory_size :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
+sys_memory_size :: fn(thread : ptr[mut Thread], memory : slop_os.Memory) -> Result[u64, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        cast[slop_os.Rights](0)
+    )?
     return .Ok(cast[ptr[Memory]](object).size)
 }
 
@@ -1255,8 +1553,15 @@ sys_memory_size :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result
  * @error BudgetExceeded The space's budget can't pay for the mapping.
  * @error OutOfMemory No slot for the mapping.
  */
-sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slop_os.AddressSpace, address: u64, offset: u64, size: u64,
-    protection: slop_os.Protection) -> Result[void, slop_os.MemoryError] {
+sys_memory_map :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    space : slop_os.AddressSpace,
+    address : u64,
+    offset : u64,
+    size : u64,
+    protection : slop_os.Protection
+) -> Result[void, slop_os.MemoryError] {
     process :: process_of(thread)
     bits :: cast[u32](protection)
     // A shadow stack's protection is the kernel's to give (decisions/0186)
@@ -1270,9 +1575,29 @@ sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slo
     if bits & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
         needed |= cast[u32](slop_os.RIGHT_MEMORY_EXECUTE)
     }
-    found :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](needed))?
-    target :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
-    return memory_done(memory_map(per_cpu().kernel, cast[ptr[mut Memory]](found), cast[ptr[mut AddressSpace]](target), address, offset, size, bits))
+    found :: object_of[slop_os.MemoryError](
+        process,
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        cast[slop_os.Rights](needed)
+    )?
+    target :: object_of[slop_os.MemoryError](
+        process,
+        cast[slop_os.Handle](space),
+        slop_os.ObjectKind.AddressSpace,
+        slop_os.RIGHT_SPACE_MAP
+    )?
+    return memory_done(
+        memory_map(
+            per_cpu().kernel,
+            cast[ptr[mut Memory]](found),
+            cast[ptr[mut AddressSpace]](target),
+            address,
+            offset,
+            size,
+            bits
+        )
+    )
 }
 
 /**
@@ -1296,11 +1621,21 @@ sys_memory_map :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, space: slo
  * @error OutOfMemory No slot or page list for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_memory_create_paged :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget, port: slop_os.Port, key: u64, size: u64)
-    -> Result[slop_os.Memory, slop_os.MemoryError] {
+sys_memory_create_paged :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget,
+    port : slop_os.Port,
+    key : u64,
+    size : u64
+) -> Result[slop_os.Memory, slop_os.MemoryError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
-    pager :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_BIND)?
+    pager :: object_of[slop_os.MemoryError](
+        process,
+        cast[slop_os.Handle](port),
+        slop_os.ObjectKind.Port,
+        slop_os.RIGHT_PORT_BIND
+    )?
     paying :: paying_budget[slop_os.MemoryError](process, budget)?
     made :: create_paged_memory(kernel, cast[u64](process), paying, cast[ptr[mut Port]](pager), key, size)?
     handle :: owning_handle[slop_os.MemoryError](kernel, process, cast[u64](made), false)?
@@ -1322,8 +1657,13 @@ sys_memory_create_paged :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBud
  * @error NotPaged Not paged memory.
  * @error NothingWanted No page is waited for that hasn't been reported.
  */
-sys_memory_page_wanted :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.MemoryError] {
-    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+sys_memory_page_wanted :: fn(thread : ptr[mut Thread], memory : slop_os.Memory) -> Result[u64, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_WRITE
+    )?
     return page_wanted(cast[ptr[mut Memory]](found))
 }
 
@@ -1345,12 +1685,29 @@ sys_memory_page_wanted :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) ->
  * @error OutOfMemory No frame for the page.
  * @error BudgetExceeded The memory's budget can't pay for the page.
  */
-sys_memory_supply :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, source: slop_os.Memory, source_offset: u64)
-    -> Result[void, slop_os.MemoryError] {
+sys_memory_supply :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    offset : u64,
+    source : slop_os.Memory,
+    source_offset : u64
+) -> Result[void, slop_os.MemoryError] {
     process :: process_of(thread)
-    found :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
-    from :: object_of[slop_os.MemoryError](process, cast[slop_os.Handle](source), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
-    return memory_done(supply_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset, cast[ptr[Memory]](from), source_offset))
+    found :: object_of[slop_os.MemoryError](
+        process,
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_WRITE
+    )?
+    from :: object_of[slop_os.MemoryError](
+        process,
+        cast[slop_os.Handle](source),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_READ
+    )?
+    return memory_done(
+        supply_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset, cast[ptr[Memory]](from), source_offset)
+    )
 }
 
 /**
@@ -1370,8 +1727,17 @@ sys_memory_supply :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset:
  * @error MappedWidely More address spaces map the page than one call takes it from.
  * @error NotSupplied The page isn't there.
  */
-sys_memory_evict :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64) -> Result[void, slop_os.MemoryError] {
-    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+sys_memory_evict :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    offset : u64
+) -> Result[void, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_WRITE
+    )?
     return memory_done(evict_page(per_cpu().kernel, cast[ptr[mut Memory]](found), offset))
 }
 
@@ -1391,8 +1757,17 @@ sys_memory_evict :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: 
  * @error NotPaged Not paged memory.
  * @error InvalidSize The offset is past the memory's end.
  */
-sys_memory_page_accessed :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64) -> Result[u64, slop_os.MemoryError] {
-    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
+sys_memory_page_accessed :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    offset : u64
+) -> Result[u64, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_WRITE
+    )?
     return page_accessed(per_cpu().kernel, cast[ptr[mut Memory]](found), offset)
 }
 
@@ -1409,7 +1784,7 @@ sys_memory_page_accessed :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, 
  * @error WrongKind Not a memory object's handle.
  * @error MissingRight Not the owning handle: only its owner asks.
  */
-sys_memory_holders :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.MemoryError] {
+sys_memory_holders :: fn(thread : ptr[mut Thread], memory : slop_os.Memory) -> Result[u64, slop_os.MemoryError] {
     found :: found_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory))?
     if found.kind != .Memory {
         return .Error(.WrongKind)
@@ -1438,10 +1813,27 @@ sys_memory_holders :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Res
  * @error OutOfMemory No frame for a page of the memory not yet touched.
  * @error BadAddress The buffer isn't writable user memory.
  */
-sys_memory_read :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, buffer: slop_os.UserBuffer)
-    -> Result[void, slop_os.MemoryError] {
-    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_READ)?
-    error, blocked :: copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread, buffer.address, buffer.count, true)
+sys_memory_read :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    offset : u64,
+    buffer : slop_os.UserBuffer
+) -> Result[void, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_READ
+    )?
+    error, blocked :: copy_memory(
+        per_cpu().kernel,
+        cast[ptr[Memory]](found),
+        offset,
+        thread,
+        buffer.address,
+        buffer.count,
+        true
+    )
     if blocked {
         // Made again from the start once its page is supplied; this result isn't written
         leave_cpu(per_cpu())
@@ -1465,10 +1857,27 @@ sys_memory_read :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u
  * @error OutOfMemory No frame for a page of the memory not yet touched.
  * @error BadAddress The bytes aren't readable user memory.
  */
-sys_memory_write :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: u64, bytes: slop_os.UserBuffer)
-    -> Result[void, slop_os.MemoryError] {
-    found :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, slop_os.RIGHT_MEMORY_WRITE)?
-    error, blocked :: copy_memory(per_cpu().kernel, cast[ptr[Memory]](found), offset, thread, bytes.address, bytes.count, false)
+sys_memory_write :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    offset : u64,
+    bytes : slop_os.UserBuffer
+) -> Result[void, slop_os.MemoryError] {
+    found :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        slop_os.RIGHT_MEMORY_WRITE
+    )?
+    error, blocked :: copy_memory(
+        per_cpu().kernel,
+        cast[ptr[Memory]](found),
+        offset,
+        thread,
+        bytes.address,
+        bytes.count,
+        false
+    )
     return memory_done(error)
 }
 
@@ -1485,8 +1894,17 @@ sys_memory_write :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, offset: 
  * @error MissingRight The handle lacks RIGHT_SPACE_MAP.
  * @error NotMapped No mapping starts at that address.
  */
-sys_memory_unmap :: fn(thread: ptr[mut Thread], space: slop_os.AddressSpace, address: u64) -> Result[void, slop_os.MemoryError] {
-    target :: object_of[slop_os.MemoryError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_MAP)?
+sys_memory_unmap :: fn(
+    thread : ptr[mut Thread],
+    space : slop_os.AddressSpace,
+    address : u64
+) -> Result[void, slop_os.MemoryError] {
+    target :: object_of[slop_os.MemoryError](
+        process_of(thread),
+        cast[slop_os.Handle](space),
+        slop_os.ObjectKind.AddressSpace,
+        slop_os.RIGHT_SPACE_MAP
+    )?
     return memory_done(memory_unmap(per_cpu().kernel, cast[ptr[mut AddressSpace]](target), address))
 }
 
@@ -1510,8 +1928,13 @@ sys_memory_unmap :: fn(thread: ptr[mut Thread], space: slop_os.AddressSpace, add
  * @error OutOfMemory No slot for the window, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_memory_create_window :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, budget: slop_os.MemoryBudget, offset: u64, size: u64)
-    -> Result[slop_os.Memory, slop_os.MemoryError] {
+sys_memory_create_window :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory,
+    budget : slop_os.MemoryBudget,
+    offset : u64,
+    size : u64
+) -> Result[slop_os.Memory, slop_os.MemoryError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     found :: found_of[slop_os.MemoryError](process, cast[slop_os.Handle](memory))?
@@ -1530,7 +1953,15 @@ sys_memory_create_window :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, 
     if rights & cast[u32](slop_os.RIGHT_MEMORY_EXECUTE) != 0 {
         allowed |= cast[u32](slop_os.PROTECTION_EXECUTE)
     }
-    made :: create_window(kernel, cast[u64](process), paying, cast[ptr[mut Memory]](found.object), offset, size, allowed)?
+    made :: create_window(
+        kernel,
+        cast[u64](process),
+        paying,
+        cast[ptr[mut Memory]](found.object),
+        offset,
+        size,
+        allowed
+    )?
     handle :: owning_handle[slop_os.MemoryError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.Memory](handle))
 }
@@ -1547,8 +1978,13 @@ sys_memory_create_window :: fn(thread: ptr[mut Thread], memory: slop_os.Memory, 
  * @error ObjectGone The platform was destroyed.
  * @error WrongKind Not the platform's handle.
  */
-platform_of :: fn(thread: ptr[mut Thread], platform: slop_os.Platform) -> Result[u64, slop_os.DeviceError] {
-    return object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](platform), slop_os.ObjectKind.Platform, cast[slop_os.Rights](0))
+platform_of :: fn(thread : ptr[mut Thread], platform : slop_os.Platform) -> Result[u64, slop_os.DeviceError] {
+    return object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](platform),
+        slop_os.ObjectKind.Platform,
+        cast[slop_os.Rights](0)
+    )
 }
 
 /**
@@ -1568,8 +2004,12 @@ platform_of :: fn(thread: ptr[mut Thread], platform: slop_os.Platform) -> Result
  * @error TooManyControllers Every controller the kernel takes is registered.
  * @error OutOfMemory The registers couldn't be mapped.
  */
-sys_controller_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, kind: slop_os.ControllerKind, registers: u64)
-    -> Result[slop_os.ControllerInfo, slop_os.DeviceError] {
+sys_controller_register :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    kind : slop_os.ControllerKind,
+    registers : u64
+) -> Result[slop_os.ControllerInfo, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     _ = platform_of(thread, platform)?
     known :: controller_kind(cast[u32](kind)) or_return .Error(.NoController)
@@ -1577,9 +2017,22 @@ sys_controller_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platfor
         return .Error(.BadAddress)
     }
     match register_controller(kernel, known, cast[boot_info.PhysicalAddress](registers)) {
-        case Ok(index) => return .Ok(slop_os.ControllerInfo.{number = index, lines = kernel.controllers[cast[usize](index) % MAX_CONTROLLERS].lines})
-        case Error(error) => return .Error(if error == .TooManyControllers { slop_os.DeviceError.TooManyControllers }
-            else if error == .NoMapping { slop_os.DeviceError.OutOfMemory } else { slop_os.DeviceError.NoController })
+        case Ok(
+            index
+        ) => return .Ok(
+            slop_os.ControllerInfo.{
+                number = index,
+                lines = kernel.controllers[cast[usize](index) % MAX_CONTROLLERS].lines,
+            }
+        )
+        case Error(
+            error
+        ) => return .Error(
+            if error == .TooManyControllers {
+                slop_os.DeviceError.TooManyControllers
+            }
+            else if error == .NoMapping { slop_os.DeviceError.OutOfMemory } else { slop_os.DeviceError.NoController }
+        )
     }
 }
 
@@ -1609,14 +2062,25 @@ sys_controller_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platfor
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_irq_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, controller: u32, line: u32,
-    flags: u32) -> Result[slop_os.Irq, slop_os.DeviceError] {
+sys_irq_create :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    budget : slop_os.MemoryBudget,
+    controller : u32,
+    line : u32,
+    flags : u32
+) -> Result[slop_os.Irq, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
     paying :: paying_budget[slop_os.DeviceError](process, budget)?
     trigger :: if flags & slop_os.IRQ_LEVEL != 0 { arch_interface.Trigger.Level } else { arch_interface.Trigger.Edge }
-    polarity :: if flags & slop_os.IRQ_ACTIVE_LOW != 0 { arch_interface.Polarity.ActiveLow } else { arch_interface.Polarity.ActiveHigh }
+    polarity :: if flags & slop_os.IRQ_ACTIVE_LOW != 0 {
+        arch_interface.Polarity.ActiveLow
+    }
+    else {
+        arch_interface.Polarity.ActiveHigh
+    }
     made :: create_irq(kernel, cast[u64](process), paying, controller, line, trigger, polarity)?
     handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
     return .Ok(cast[slop_os.Irq](handle))
@@ -1633,8 +2097,13 @@ sys_irq_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget
  * @error WrongKind Not an IRQ's handle.
  * @error MissingRight The handle lacks RIGHT_IRQ_ACK.
  */
-sys_irq_ack :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[void, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](irq), slop_os.ObjectKind.Irq, slop_os.RIGHT_IRQ_ACK)?
+sys_irq_ack :: fn(thread : ptr[mut Thread], irq : slop_os.Irq) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](irq),
+        slop_os.ObjectKind.Irq,
+        slop_os.RIGHT_IRQ_ACK
+    )?
     irq_ack(per_cpu().kernel, cast[ptr[mut Irq]](object))
     return .Ok
 }
@@ -1661,8 +2130,14 @@ sys_irq_ack :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[void, slo
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_memory_create_physical :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, address: u64, size: u64,
-    cache: slop_os.CacheMode) -> Result[slop_os.Memory, slop_os.DeviceError] {
+sys_memory_create_physical :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    budget : slop_os.MemoryBudget,
+    address : u64,
+    size : u64,
+    cache : slop_os.CacheMode
+) -> Result[slop_os.Memory, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
@@ -1709,8 +2184,14 @@ sys_memory_create_physical :: fn(thread: ptr[mut Thread], platform: slop_os.Plat
  *     caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_device_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, address: u32, msi_source: u32,
-    config: u64) -> Result[slop_os.Device, slop_os.DeviceError] {
+sys_device_create :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    budget : slop_os.MemoryBudget,
+    address : u32,
+    msi_source : u32,
+    config : u64
+) -> Result[slop_os.Device, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
@@ -1736,12 +2217,26 @@ sys_device_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, bud
  * @error OutOfMemory No domain ID or translation table could be had.
  * @error BudgetExceeded The domain's budget can't pay for its translation tables.
  */
-sys_device_attach :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, device: slop_os.Device, domain: slop_os.DmaDomain)
-    -> Result[void, slop_os.DeviceError] {
+sys_device_attach :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    device : slop_os.Device,
+    domain : slop_os.DmaDomain
+) -> Result[void, slop_os.DeviceError] {
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
-    found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](device), slop_os.ObjectKind.Device, cast[slop_os.Rights](0))?
-    target :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](domain), slop_os.ObjectKind.DmaDomain, cast[slop_os.Rights](0))?
+    found :: object_of[slop_os.DeviceError](
+        process,
+        cast[slop_os.Handle](device),
+        slop_os.ObjectKind.Device,
+        cast[slop_os.Rights](0)
+    )?
+    target :: object_of[slop_os.DeviceError](
+        process,
+        cast[slop_os.Handle](domain),
+        slop_os.ObjectKind.DmaDomain,
+        cast[slop_os.Rights](0)
+    )?
     return attach_device(per_cpu().kernel, cast[ptr[mut Device]](found), cast[ptr[mut DmaDomain]](target))
 }
 
@@ -1765,10 +2260,19 @@ sys_device_attach :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, dev
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_irq_create_msi :: fn(thread: ptr[mut Thread], device: slop_os.Device, budget: slop_os.MemoryBudget) -> Result[slop_os.Irq, slop_os.DeviceError] {
+sys_irq_create_msi :: fn(
+    thread : ptr[mut Thread],
+    device : slop_os.Device,
+    budget : slop_os.MemoryBudget
+) -> Result[slop_os.Irq, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
-    found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](device), slop_os.ObjectKind.Device, cast[slop_os.Rights](0))?
+    found :: object_of[slop_os.DeviceError](
+        process,
+        cast[slop_os.Handle](device),
+        slop_os.ObjectKind.Device,
+        cast[slop_os.Rights](0)
+    )?
     paying :: paying_budget[slop_os.DeviceError](process, budget)?
     made :: create_msi_irq(kernel, cast[u64](process), paying, cast[ptr[mut Device]](found))?
     handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
@@ -1788,8 +2292,13 @@ sys_irq_create_msi :: fn(thread: ptr[mut Thread], device: slop_os.Device, budget
  * @error WrongKind Not an IRQ's handle.
  * @error NoMsi The IRQ is a wired line's.
  */
-sys_irq_message :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[slop_os.MsiMessage, slop_os.DeviceError] {
-    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](irq), slop_os.ObjectKind.Irq, cast[slop_os.Rights](0))?
+sys_irq_message :: fn(thread : ptr[mut Thread], irq : slop_os.Irq) -> Result[slop_os.MsiMessage, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](irq),
+        slop_os.ObjectKind.Irq,
+        cast[slop_os.Rights](0)
+    )?
     found :: cast[ptr[Irq]](object)
     if !found.msi {
         return .Error(.NoMsi)
@@ -1810,10 +2319,15 @@ sys_irq_message :: fn(thread: ptr[mut Thread], irq: slop_os.Irq) -> Result[slop_
  * @error InvalidArgument A CPU that isn't online, or isn't the caller's CPU budget's.
  * @error NoFreeInterrupt That CPU has no device interrupt free; the IRQ stays where it was.
  */
-sys_irq_set_cpu :: fn(thread: ptr[mut Thread], irq: slop_os.Irq, cpu: u32) -> Result[void, slop_os.DeviceError] {
+sys_irq_set_cpu :: fn(thread : ptr[mut Thread], irq : slop_os.Irq, cpu : u32) -> Result[void, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
-    object :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](irq), slop_os.ObjectKind.Irq, cast[slop_os.Rights](0))?
+    object :: object_of[slop_os.DeviceError](
+        process,
+        cast[slop_os.Handle](irq),
+        slop_os.ObjectKind.Irq,
+        cast[slop_os.Rights](0)
+    )?
     found :: cast[ptr[mut Irq]](object)
     if !found.msi {
         return .Error(.NoMsi)
@@ -1843,8 +2357,12 @@ sys_irq_set_cpu :: fn(thread: ptr[mut Thread], irq: slop_os.Irq, cpu: u32) -> Re
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_dma_domain_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, flags: u32)
-    -> Result[slop_os.DmaDomain, slop_os.DeviceError] {
+sys_dma_domain_create :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    budget : slop_os.MemoryBudget,
+    flags : u32
+) -> Result[slop_os.DmaDomain, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
@@ -1875,11 +2393,21 @@ sys_dma_domain_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform,
  *     a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_dma_memory_create :: fn(thread: ptr[mut Thread], domain: slop_os.DmaDomain, budget: slop_os.MemoryBudget, size: u64, limit: u64)
-    -> Result[slop_os.Memory, slop_os.DeviceError] {
+sys_dma_memory_create :: fn(
+    thread : ptr[mut Thread],
+    domain : slop_os.DmaDomain,
+    budget : slop_os.MemoryBudget,
+    size : u64,
+    limit : u64
+) -> Result[slop_os.Memory, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
-    found :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](domain), slop_os.ObjectKind.DmaDomain, cast[slop_os.Rights](0))?
+    found :: object_of[slop_os.DeviceError](
+        process,
+        cast[slop_os.Handle](domain),
+        slop_os.ObjectKind.DmaDomain,
+        cast[slop_os.Rights](0)
+    )?
     paying :: paying_budget[slop_os.DeviceError](process, budget)?
     made :: create_dma_memory(kernel, cast[u64](process), paying, cast[ptr[mut DmaDomain]](found), size, limit)?
     handle :: owning_handle[slop_os.DeviceError](kernel, process, cast[u64](made), false)?
@@ -1898,8 +2426,13 @@ sys_dma_memory_create :: fn(thread: ptr[mut Thread], domain: slop_os.DmaDomain, 
  * @error WrongKind Not a memory object's handle.
  * @error NotDmaMemory Not memory dma_memory_create made, or its domain is gone.
  */
-sys_memory_device_address :: fn(thread: ptr[mut Thread], memory: slop_os.Memory) -> Result[u64, slop_os.DeviceError] {
-    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](memory), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
+sys_memory_device_address :: fn(thread : ptr[mut Thread], memory : slop_os.Memory) -> Result[u64, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        cast[slop_os.Rights](0)
+    )?
     return device_address_of(cast[ptr[Memory]](object))
 }
 
@@ -1927,13 +2460,25 @@ sys_memory_device_address :: fn(thread: ptr[mut Thread], memory: slop_os.Memory)
  * @error OutOfMemory The registers couldn't be mapped.
  * @error TooManyIommus Every IOMMU the kernel takes is registered, or every range of requester IDs one covers.
  */
-sys_iommu_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, kind: slop_os.IommuKind, registers: slop_os.Memory, first: u32,
-    count: u32, stream: u32) -> Result[u32, slop_os.DeviceError] {
+sys_iommu_register :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    kind : slop_os.IommuKind,
+    registers : slop_os.Memory,
+    first : u32,
+    count : u32,
+    stream : u32
+) -> Result[u32, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
     known :: iommu_kind(cast[u32](kind)) or_return .Error(.NoIommu)
-    object :: object_of[slop_os.DeviceError](process, cast[slop_os.Handle](registers), slop_os.ObjectKind.Memory, cast[slop_os.Rights](0))?
+    object :: object_of[slop_os.DeviceError](
+        process,
+        cast[slop_os.Handle](registers),
+        slop_os.ObjectKind.Memory,
+        cast[slop_os.Rights](0)
+    )?
     memory :: cast[ptr[Memory]](object)
     if memory.physical == 0 || memory.parent != 0 || memory.cache != .Device {
         return .Error(.BadAddress)
@@ -1958,8 +2503,14 @@ sys_iommu_register :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, ki
  * @error WrongKind Not the platform's handle.
  * @error InvalidArgument A value out of its range, or an architecture without I/O ports or that turns off by itself.
  */
-sys_power_set_off :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, control_a: u32, control_b: u32, sleep_a: u32,
-    sleep_b: u32) -> Result[void, slop_os.DeviceError] {
+sys_power_set_off :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    control_a : u32,
+    control_b : u32,
+    sleep_a : u32,
+    sleep_b : u32
+) -> Result[void, slop_os.DeviceError] {
     _ = platform_of(thread, platform)?
     return set_power_off(per_cpu().kernel, control_a, control_b, sleep_a, sleep_b)
 }
@@ -1976,7 +2527,12 @@ sys_power_set_off :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, con
  * @error WrongKind Not the platform's handle.
  * @error InvalidArgument A value out of its range, or an architecture without I/O ports.
  */
-sys_power_set_reset :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, port: u32, value: u32) -> Result[void, slop_os.DeviceError] {
+sys_power_set_reset :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    port : u32,
+    value : u32
+) -> Result[void, slop_os.DeviceError] {
     _ = platform_of(thread, platform)?
     return set_power_reset(per_cpu().kernel, port, value)
 }
@@ -1994,7 +2550,11 @@ sys_power_set_reset :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, p
  * @error InvalidArgument Not one of PowerAction's values.
  * @error NoPowerOff Off, on a machine the kernel can't turn off yet.
  */
-sys_power_end_with :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, action: slop_os.PowerAction) -> Result[void, slop_os.DeviceError] {
+sys_power_end_with :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    action : slop_os.PowerAction
+) -> Result[void, slop_os.DeviceError] {
     _ = platform_of(thread, platform)?
     return set_power_end(per_cpu().kernel, cast[u32](action))
 }
@@ -2012,7 +2572,12 @@ sys_power_end_with :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, ac
  * @error WrongKind Not the platform's handle.
  * @error NoSuchController No controller is registered with that number.
  */
-sys_controller_set_source :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, controller: u32, source: u32) -> Result[void, slop_os.DeviceError] {
+sys_controller_set_source :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    controller : u32,
+    source : u32
+) -> Result[void, slop_os.DeviceError] {
     _ = platform_of(thread, platform)?
     return set_controller_source(per_cpu().kernel, controller, source)
 }
@@ -2033,8 +2598,17 @@ sys_controller_set_source :: fn(thread: ptr[mut Thread], platform: slop_os.Platf
  * @error WrongKind Not a process's handle.
  * @error MissingRight The handle lacks right.
  */
-target_of :: fn(thread: ptr[mut Thread], process: slop_os.Process, right: slop_os.Rights) -> Result[ptr[mut Process], slop_os.ControlError] {
-    object :: object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](process), slop_os.ObjectKind.Process, right)?
+target_of :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    right : slop_os.Rights
+) -> Result[ptr[mut Process], slop_os.ControlError] {
+    object :: object_of[slop_os.ControlError](
+        process_of(thread),
+        cast[slop_os.Handle](process),
+        slop_os.ObjectKind.Process,
+        right
+    )?
     return .Ok(cast[ptr[mut Process]](object))
 }
 
@@ -2044,7 +2618,7 @@ target_of :: fn(thread: ptr[mut Thread], process: slop_os.Process, right: slop_o
  * @param error The operation's error, or null if it succeeded.
  * @return Ok for null, or Error with that error, whichever variant it is.
  */
-control_done :: fn(error: slop_os.ControlError?) -> Result[void, slop_os.ControlError] {
+control_done :: fn(error : slop_os.ControlError?) -> Result[void, slop_os.ControlError] {
     match error {
         case Some(failure) => return .Error(failure)
         case None => return .Ok
@@ -2064,7 +2638,11 @@ control_done :: fn(error: slop_os.ControlError?) -> Result[void, slop_os.Control
  * @error MissingRight The handle lacks RIGHT_PROCESS_INSPECT.
  * @error BadBuffer The IDs aren't writable user memory.
  */
-sys_process_threads :: fn(thread: ptr[mut Thread], process: slop_os.Process, ids: slop_os.UserBuffer) -> Result[u32, slop_os.ControlError] {
+sys_process_threads :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    ids : slop_os.UserBuffer
+) -> Result[u32, slop_os.ControlError] {
     kernel :: per_cpu().kernel
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INSPECT)?
     found : u64[64]
@@ -2089,8 +2667,17 @@ sys_process_threads :: fn(thread: ptr[mut Thread], process: slop_os.Process, ids
  * @error WrongKind Not an address space's handle.
  * @error BadAddress The space isn't in target's subtree.
  */
-subtree_space :: fn(thread: ptr[mut Thread], target: ptr[mut Process], space: slop_os.AddressSpace) -> Result[ptr[mut AddressSpace], slop_os.ControlError] {
-    object :: object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, cast[slop_os.Rights](0))?
+subtree_space :: fn(
+    thread : ptr[mut Thread],
+    target : ptr[mut Process],
+    space : slop_os.AddressSpace
+) -> Result[ptr[mut AddressSpace], slop_os.ControlError] {
+    object :: object_of[slop_os.ControlError](
+        process_of(thread),
+        cast[slop_os.Handle](space),
+        slop_os.ObjectKind.AddressSpace,
+        cast[slop_os.Rights](0)
+    )?
     if !in_subtree(object, cast[u64](target)) {
         return .Error(.BadAddress)
     }
@@ -2111,8 +2698,13 @@ subtree_space :: fn(thread: ptr[mut Thread], target: ptr[mut Process], space: sl
  * @error MissingRight The process lacks RIGHT_PROCESS_READ_MEMORY.
  * @error BadAddress The space isn't in the subtree, or the range isn't mapped there or in the caller's memory.
  */
-sys_process_read_memory :: fn(thread: ptr[mut Thread], process: slop_os.Process, space: slop_os.AddressSpace, address: u64,
-    buffer: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+sys_process_read_memory :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    space : slop_os.AddressSpace,
+    address : u64,
+    buffer : slop_os.UserBuffer
+) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_READ_MEMORY)?
     other :: subtree_space(thread, target, space)?
     if !copy_between(per_cpu().kernel, other, address, thread.space, buffer.address, buffer.count) {
@@ -2135,8 +2727,13 @@ sys_process_read_memory :: fn(thread: ptr[mut Thread], process: slop_os.Process,
  * @error MissingRight The process lacks RIGHT_PROCESS_WRITE_STATE.
  * @error BadAddress The space isn't in the subtree, or the range isn't mapped there or in the caller's memory.
  */
-sys_process_write_memory :: fn(thread: ptr[mut Thread], process: slop_os.Process, space: slop_os.AddressSpace, address: u64,
-    buffer: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+sys_process_write_memory :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    space : slop_os.AddressSpace,
+    address : u64,
+    buffer : slop_os.UserBuffer
+) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
     other :: subtree_space(thread, target, space)?
     if !copy_between(per_cpu().kernel, thread.space, buffer.address, other, address, buffer.count) {
@@ -2159,7 +2756,12 @@ sys_process_write_memory :: fn(thread: ptr[mut Thread], process: slop_os.Process
  * @error MissingRight The handle lacks right.
  * @error NoSuchThread No live thread with that ID in the subtree.
  */
-subtree_thread :: fn(thread: ptr[mut Thread], process: slop_os.Process, right: slop_os.Rights, id: u64) -> Result[ptr[mut Thread], slop_os.ControlError] {
+subtree_thread :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    right : slop_os.Rights,
+    id : u64
+) -> Result[ptr[mut Thread], slop_os.ControlError] {
     target :: target_of(thread, process, right)?
     found :: thread_in(per_cpu().kernel, cast[u64](target), id) or_return .Error(.NoSuchThread)
     return .Ok(found)
@@ -2179,7 +2781,11 @@ subtree_thread :: fn(thread: ptr[mut Thread], process: slop_os.Process, right: s
  * @error MissingRight The handle lacks RIGHT_PROCESS_WRITE_STATE.
  * @error NoSuchThread No live thread with that ID in the subtree.
  */
-sys_thread_suspend :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64) -> Result[void, slop_os.ControlError] {
+sys_thread_suspend :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    id : u64
+) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
     hold_thread(per_cpu().kernel, found, HELD_SUSPEND)
     return .Ok
@@ -2198,7 +2804,11 @@ sys_thread_suspend :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: 
  * @error MissingRight The handle lacks RIGHT_PROCESS_WRITE_STATE.
  * @error NoSuchThread No live thread with that ID in the subtree.
  */
-sys_thread_resume :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64) -> Result[void, slop_os.ControlError] {
+sys_thread_resume :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    id : u64
+) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
     unhold_thread(per_cpu().kernel, found, HELD_SUSPEND)
     return .Ok
@@ -2222,7 +2832,12 @@ sys_thread_resume :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u
  * @error BadBuffer Fewer than slop_os.THREAD_REGISTERS words, or not writable user memory.
  * @error NotStopped The thread isn't parked, stopped or suspended and off its CPU, nor suspended while it waits.
  */
-sys_thread_read_registers :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, registers: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+sys_thread_read_registers :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    id : u64,
+    registers : slop_os.UserBuffer
+) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_INSPECT, id)?
     if registers.count < cast[u64](slop_os.THREAD_REGISTERS) {
         return .Error(.BadBuffer)
@@ -2258,7 +2873,12 @@ sys_thread_read_registers :: fn(thread: ptr[mut Thread], process: slop_os.Proces
  * @error NotStopped The thread isn't parked: stopped or suspended, and off its CPU.
  * @error BadRegisters A value user mode can't have, like a kernel address for the instruction pointer.
  */
-sys_thread_write_registers :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, registers: slop_os.UserBuffer) -> Result[void, slop_os.ControlError] {
+sys_thread_write_registers :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    id : u64,
+    registers : slop_os.UserBuffer
+) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
     if registers.count < cast[u64](slop_os.THREAD_REGISTERS) {
         return .Error(.BadBuffer)
@@ -2291,13 +2911,33 @@ sys_thread_write_registers :: fn(thread: ptr[mut Thread], process: slop_os.Proce
  * @error OutOfMemory No slot for the intercept or its binding, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_intercept_attach :: fn(thread: ptr[mut Thread], process: slop_os.Process, port: slop_os.Port, key: u64, calls: u64, points: u32)
-    -> Result[slop_os.Intercept, slop_os.ControlError] {
+sys_intercept_attach :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    port : slop_os.Port,
+    key : u64,
+    calls : u64,
+    points : u32
+) -> Result[slop_os.Intercept, slop_os.ControlError] {
     kernel :: per_cpu().kernel
     caller :: process_of(thread)
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INTERCEPT)?
-    reporting :: object_of[slop_os.ControlError](caller, cast[slop_os.Handle](port), slop_os.ObjectKind.Port, slop_os.RIGHT_PORT_BIND)?
-    made :: create_intercept(kernel, cast[u64](caller), caller.header.budget, target, cast[ptr[mut Port]](reporting), key, calls, points)?
+    reporting :: object_of[slop_os.ControlError](
+        caller,
+        cast[slop_os.Handle](port),
+        slop_os.ObjectKind.Port,
+        slop_os.RIGHT_PORT_BIND
+    )?
+    made :: create_intercept(
+        kernel,
+        cast[u64](caller),
+        caller.header.budget,
+        target,
+        cast[ptr[mut Port]](reporting),
+        key,
+        calls,
+        points
+    )?
     handle :: owning_handle[slop_os.ControlError](kernel, caller, cast[u64](made), false)?
     return .Ok(cast[slop_os.Intercept](handle))
 }
@@ -2313,8 +2953,16 @@ sys_intercept_attach :: fn(thread: ptr[mut Thread], process: slop_os.Process, po
  * @error ObjectGone The intercept was destroyed.
  * @error WrongKind Not an intercept's handle.
  */
-intercept_of_handle :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept) -> Result[ptr[mut Intercept], slop_os.ControlError] {
-    object :: object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](intercept), slop_os.ObjectKind.Intercept, cast[slop_os.Rights](0))?
+intercept_of_handle :: fn(
+    thread : ptr[mut Thread],
+    intercept : slop_os.Intercept
+) -> Result[ptr[mut Intercept], slop_os.ControlError] {
+    object :: object_of[slop_os.ControlError](
+        process_of(thread),
+        cast[slop_os.Handle](intercept),
+        slop_os.ObjectKind.Intercept,
+        cast[slop_os.Rights](0)
+    )?
     return .Ok(cast[ptr[mut Intercept]](object))
 }
 
@@ -2330,7 +2978,11 @@ intercept_of_handle :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept)
  * @error Empty No stop left to report.
  * @error BadBuffer The stop isn't writable user memory.
  */
-sys_intercept_next :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, stop: u64) -> Result[void, slop_os.ControlError] {
+sys_intercept_next :: fn(
+    thread : ptr[mut Thread],
+    intercept : slop_os.Intercept,
+    stop : u64
+) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
     return control_done(intercept_next(per_cpu().kernel, found, thread.space, stop))
 }
@@ -2350,8 +3002,12 @@ sys_intercept_next :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, 
  * @error NotStopped The thread isn't stopped, Skip somewhere other than a system call's entry, or an action that isn't
  *     one.
  */
-sys_intercept_resume :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, id: u64, action: slop_os.InterceptAction)
-    -> Result[void, slop_os.ControlError] {
+sys_intercept_resume :: fn(
+    thread : ptr[mut Thread],
+    intercept : slop_os.Intercept,
+    id : u64,
+    action : slop_os.InterceptAction
+) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
     if action != .Continue && action != .Skip && action != .Kill {
         return .Error(.NotStopped)
@@ -2366,7 +3022,7 @@ sys_intercept_resume :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept
  *     destroyed with its subtree.
  * @param code The exit code, for whoever watches it end: data[1] of the SIGNAL_TERMINATED packet.
  */
-sys_process_exit :: fn(thread: ptr[mut Thread], code: u32) {
+sys_process_exit :: fn(thread : ptr[mut Thread], code : u32) {
     process :: process_of(thread)
     process.exited = true
     process.exit_code = code
@@ -2384,7 +3040,7 @@ sys_process_exit :: fn(thread: ptr[mut Thread], code: u32) {
  * @error WrongKind Not a process's handle.
  * @error MissingRight The handle lacks RIGHT_PROCESS_KILL.
  */
-sys_process_kill :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Result[void, slop_os.ControlError] {
+sys_process_kill :: fn(thread : ptr[mut Thread], process : slop_os.Process) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_KILL)?
     _ = destroy_object(per_cpu().kernel, cast[u64](target))
     return .Ok
@@ -2411,13 +3067,25 @@ sys_process_kill :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Res
  * @error OutOfMemory No memory for the thread or its vector state.
  * @error BudgetExceeded The budget can't pay for the thread.
  */
-sys_thread_create_in :: fn(thread: ptr[mut Thread], process: slop_os.Process, budget: slop_os.MemoryBudget, space: slop_os.AddressSpace,
-    entry: u64, stack: u64, argument: u64) -> Result[u64, slop_os.ControlError] {
+sys_thread_create_in :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    budget : slop_os.MemoryBudget,
+    space : slop_os.AddressSpace,
+    entry : u64,
+    stack : u64,
+    argument : u64
+) -> Result[u64, slop_os.ControlError] {
     kernel :: per_cpu().kernel
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_THREADS)?
     caller :: process_of(thread)
     paying :: paying_budget[slop_os.ControlError](caller, budget)?
-    found :: object_of[slop_os.ControlError](caller, cast[slop_os.Handle](space), slop_os.ObjectKind.AddressSpace, slop_os.RIGHT_SPACE_THREADS)?
+    found :: object_of[slop_os.ControlError](
+        caller,
+        cast[slop_os.Handle](space),
+        slop_os.ObjectKind.AddressSpace,
+        slop_os.RIGHT_SPACE_THREADS
+    )?
     if !in_subtree(found, cast[u64](target)) {
         return .Error(.BadAddress)
     }
@@ -2426,15 +3094,33 @@ sys_thread_create_in :: fn(thread: ptr[mut Thread], process: slop_os.Process, bu
         stack_pointer = cast[arch_interface.VirtualAddress](stack),
         argument = argument,
     }
-    match create_thread(kernel, cast[u64](target), cast[ptr[mut AddressSpace]](found), &start,
-        arch_interface.VectorConfig.{extended = false}, 0, paying) {
+    match create_thread(
+        kernel,
+        cast[u64](target),
+        cast[ptr[mut AddressSpace]](found),
+        &start,
+        arch_interface.VectorConfig.{extended = false},
+        0,
+        paying
+    ) {
         case Ok(made) => {
             id :: made.id
             start_thread(kernel, made)
             return .Ok(id)
         }
-        case Error(error) => return .Error(if error == .OutOfMemory { slop_os.ControlError.OutOfMemory }
-            else if error == .BudgetExceeded { slop_os.ControlError.BudgetExceeded } else { slop_os.ControlError.ObjectGone })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .OutOfMemory {
+                slop_os.ControlError.OutOfMemory
+            }
+            else if error == .BudgetExceeded {
+                slop_os.ControlError.BudgetExceeded
+            }
+            else {
+                slop_os.ControlError.ObjectGone
+            }
+        )
     }
 }
 
@@ -2458,8 +3144,12 @@ sys_thread_create_in :: fn(thread: ptr[mut Thread], process: slop_os.Process, bu
  *     end whose rings are mapped.
  * @error BudgetExceeded The process's budget can't take over what the owning handles own.
  */
-sys_process_give_handles :: fn(thread: ptr[mut Thread], process: slop_os.Process, handles: slop_os.UserBuffer, given: slop_os.UserBuffer)
-    -> Result[void, slop_os.ControlError] {
+sys_process_give_handles :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    handles : slop_os.UserBuffer,
+    given : slop_os.UserBuffer
+) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_THREADS)?
     return control_done(give_handles(per_cpu().kernel, thread, target, handles, given))
 }
@@ -2473,7 +3163,7 @@ sys_process_give_handles :: fn(thread: ptr[mut Thread], process: slop_os.Process
  * @return The HandleError with the same meaning: ObjectGone for OwnerGone, and BudgetExceeded for TooMuch, a share
  *     past what the parent has left.
  */
-cpu_budget_failure :: fn(error: CpuBudgetError) -> slop_os.HandleError {
+cpu_budget_failure :: fn(error : CpuBudgetError) -> slop_os.HandleError {
     return match error {
         case .OutOfMemory => slop_os.HandleError.OutOfMemory
         case .OwnerGone => slop_os.HandleError.ObjectGone
@@ -2504,14 +3194,33 @@ cpu_budget_failure :: fn(error: CpuBudgetError) -> slop_os.HandleError {
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_cpu_budget_create :: fn(thread: ptr[mut Thread], parent: slop_os.CpuBudget, budget: slop_os.MemoryBudget, priority: u32, period: u64,
-    time: u64) -> Result[slop_os.CpuBudget, slop_os.HandleError] {
+sys_cpu_budget_create :: fn(
+    thread : ptr[mut Thread],
+    parent : slop_os.CpuBudget,
+    budget : slop_os.MemoryBudget,
+    priority : u32,
+    period : u64,
+    time : u64
+) -> Result[slop_os.CpuBudget, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
-    from :: object_of[slop_os.HandleError](process, cast[slop_os.Handle](parent), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SPLIT)?
+    from :: object_of[slop_os.HandleError](
+        process,
+        cast[slop_os.Handle](parent),
+        slop_os.ObjectKind.CpuBudget,
+        slop_os.RIGHT_CPU_BUDGET_SPLIT
+    )?
     paying :: paying_budget[slop_os.HandleError](process, budget)?
     made := cast[ptr[mut CpuBudget]](0)
-    match create_cpu_budget(kernel, cast[u64](process), paying, cast[ptr[mut CpuBudget]](from), priority, period, time) {
+    match create_cpu_budget(
+        kernel,
+        cast[u64](process),
+        paying,
+        cast[ptr[mut CpuBudget]](from),
+        priority,
+        period,
+        time
+    ) {
         case Ok(created) => made = created
         case Error(error) => return .Error(cpu_budget_failure(error))
     }
@@ -2536,8 +3245,19 @@ sys_cpu_budget_create :: fn(thread: ptr[mut Thread], parent: slop_os.CpuBudget, 
  * @error BudgetExceeded The new share would take its parent's children past the parent's own, or be less than its own
  *     children's.
  */
-sys_cpu_budget_set :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, priority: u32, period: u64, time: u64) -> Result[void, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SET)?
+sys_cpu_budget_set :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.CpuBudget,
+    priority : u32,
+    period : u64,
+    time : u64
+) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.CpuBudget,
+        slop_os.RIGHT_CPU_BUDGET_SET
+    )?
     match set_cpu_budget(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), priority, period, time) {
         case Ok => return .Ok
         case Error(error) => return .Error(cpu_budget_failure(error))
@@ -2558,8 +3278,17 @@ sys_cpu_budget_set :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, pri
  * @error InvalidArgument None of the CPUs online.
  * @error BudgetExceeded CPUs outside its parent's, or not covering one of its children's.
  */
-sys_cpu_budget_set_cpus :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, cpus: u64) -> Result[void, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_SET)?
+sys_cpu_budget_set_cpus :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.CpuBudget,
+    cpus : u64
+) -> Result[void, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.CpuBudget,
+        slop_os.RIGHT_CPU_BUDGET_SET
+    )?
     match set_cpu_budget_cpus(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), cpus) {
         case Ok => return .Ok
         case Error(error) => return .Error(cpu_budget_failure(error))
@@ -2577,15 +3306,30 @@ sys_cpu_budget_set_cpus :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget
  * @error WrongKind Not a CPU budget's handle.
  * @error BadBuffer Fewer than slop_os.CPU_BUDGET_INFO_WORDS words, or not writable user memory.
  */
-sys_cpu_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, info: slop_os.UserBuffer) -> Result[void, slop_os.HandleError] {
+sys_cpu_budget_info :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.CpuBudget,
+    info : slop_os.UserBuffer
+) -> Result[void, slop_os.HandleError] {
     kernel :: per_cpu().kernel
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, cast[slop_os.Rights](0))?
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.CpuBudget,
+        cast[slop_os.Rights](0)
+    )?
     if info.count < cast[u64](slop_os.CPU_BUDGET_INFO_WORDS) {
         return .Error(.BadBuffer)
     }
     words : u64[slop_os.CPU_BUDGET_INFO_WORDS]
     cpu_budget_words(kernel, cast[ptr[CpuBudget]](object), words)
-    if !copy_to_user(kernel, thread.space, info.address, cast[u64](&words[0]), cast[u64](size_of(u64[slop_os.CPU_BUDGET_INFO_WORDS]))) {
+    if !copy_to_user(
+        kernel,
+        thread.space,
+        info.address,
+        cast[u64](&words[0]),
+        cast[u64](size_of(u64[slop_os.CPU_BUDGET_INFO_WORDS]))
+    ) {
         return .Error(.BadBuffer)
     }
     return .Ok
@@ -2603,10 +3347,24 @@ sys_cpu_budget_info :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget, in
  * @error WrongKind A handle of another kind.
  * @error MissingRight The process lacks RIGHT_PROCESS_THREADS, or the budget RIGHT_CPU_BUDGET_BIND.
  */
-sys_process_set_cpu_budget :: fn(thread: ptr[mut Thread], process: slop_os.Process, budget: slop_os.CpuBudget) -> Result[void, slop_os.HandleError] {
+sys_process_set_cpu_budget :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    budget : slop_os.CpuBudget
+) -> Result[void, slop_os.HandleError] {
     caller :: process_of(thread)
-    target :: object_of[slop_os.HandleError](caller, cast[slop_os.Handle](process), slop_os.ObjectKind.Process, slop_os.RIGHT_PROCESS_THREADS)?
-    object :: object_of[slop_os.HandleError](caller, cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_BIND)?
+    target :: object_of[slop_os.HandleError](
+        caller,
+        cast[slop_os.Handle](process),
+        slop_os.ObjectKind.Process,
+        slop_os.RIGHT_PROCESS_THREADS
+    )?
+    object :: object_of[slop_os.HandleError](
+        caller,
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.CpuBudget,
+        slop_os.RIGHT_CPU_BUDGET_BIND
+    )?
     if !set_process_budget(per_cpu().kernel, cast[ptr[mut Process]](target), cast[ptr[mut CpuBudget]](object)) {
         return .Error(.ObjectGone)
     }
@@ -2625,14 +3383,22 @@ sys_process_set_cpu_budget :: fn(thread: ptr[mut Thread], process: slop_os.Proce
  * @error WrongKind Not a CPU budget's handle.
  * @error MissingRight The handle lacks RIGHT_CPU_BUDGET_BIND.
  */
-sys_thread_use_cpu_budget :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudget) -> Result[void, slop_os.HandleError] {
+sys_thread_use_cpu_budget :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.CpuBudget
+) -> Result[void, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
         _ = set_thread_budget(kernel, thread, process.cpu_budget)
         return .Ok
     }
-    object :: object_of[slop_os.HandleError](process, cast[slop_os.Handle](budget), slop_os.ObjectKind.CpuBudget, slop_os.RIGHT_CPU_BUDGET_BIND)?
+    object :: object_of[slop_os.HandleError](
+        process,
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.CpuBudget,
+        slop_os.RIGHT_CPU_BUDGET_BIND
+    )?
     if !set_thread_budget(kernel, thread, cast[u64](object)) {
         return .Error(.ObjectGone)
     }
@@ -2658,8 +3424,13 @@ sys_thread_use_cpu_budget :: fn(thread: ptr[mut Thread], budget: slop_os.CpuBudg
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
  */
-sys_io_ports_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, budget: slop_os.MemoryBudget, first: u32, count: u32)
-    -> Result[slop_os.IoPortRange, slop_os.DeviceError] {
+sys_io_ports_create :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    budget : slop_os.MemoryBudget,
+    first : u32,
+    count : u32
+) -> Result[slop_os.IoPortRange, slop_os.DeviceError] {
     kernel :: per_cpu().kernel
     process :: process_of(thread)
     _ = platform_of(thread, platform)?
@@ -2693,8 +3464,18 @@ sys_io_ports_create :: fn(thread: ptr[mut Thread], platform: slop_os.Platform, b
  * @error MissingRight The handle lacks RIGHT_IO_PORTS_ACCESS.
  * @error InvalidArgument A port outside the range, a width that isn't 1, 2 or 4, or an architecture without ports.
  */
-sys_io_port_read :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, offset: u32, width: u32) -> Result[u32, slop_os.DeviceError] {
-    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](ports), slop_os.ObjectKind.IoPortRange, slop_os.RIGHT_IO_PORTS_ACCESS)?
+sys_io_port_read :: fn(
+    thread : ptr[mut Thread],
+    ports : slop_os.IoPortRange,
+    offset : u32,
+    width : u32
+) -> Result[u32, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](ports),
+        slop_os.ObjectKind.IoPortRange,
+        slop_os.RIGHT_IO_PORTS_ACCESS
+    )?
     port :: port_at(cast[ptr[IoPortRange]](object), offset, width) or_return .Error(.InvalidArgument)
     value :: arch.port_read(port, width) or_return .Error(.InvalidArgument)
     return .Ok(value)
@@ -2715,8 +3496,19 @@ sys_io_port_read :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, offs
  * @error MissingRight The handle lacks RIGHT_IO_PORTS_ACCESS.
  * @error InvalidArgument A port outside the range, a width that isn't 1, 2 or 4, or an architecture without ports.
  */
-sys_io_port_write :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, offset: u32, width: u32, value: u32) -> Result[void, slop_os.DeviceError] {
-    object :: object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](ports), slop_os.ObjectKind.IoPortRange, slop_os.RIGHT_IO_PORTS_ACCESS)?
+sys_io_port_write :: fn(
+    thread : ptr[mut Thread],
+    ports : slop_os.IoPortRange,
+    offset : u32,
+    width : u32,
+    value : u32
+) -> Result[void, slop_os.DeviceError] {
+    object :: object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](ports),
+        slop_os.ObjectKind.IoPortRange,
+        slop_os.RIGHT_IO_PORTS_ACCESS
+    )?
     port :: port_at(cast[ptr[IoPortRange]](object), offset, width) or_return .Error(.InvalidArgument)
     if !arch.port_write(port, width, value) {
         return .Error(.InvalidArgument)
@@ -2743,10 +3535,21 @@ sys_io_port_write :: fn(thread: ptr[mut Thread], ports: slop_os.IoPortRange, off
  * @error NotStopped The thread isn't parked: stopped or suspended, and off its CPU.
  * @error BadRegisters A slot the CPU can't set (arch.set_debug).
  */
-sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id: u64, debug: u64) -> Result[void, slop_os.ControlError] {
+sys_thread_set_debug :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    id : u64,
+    debug : u64
+) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
     given := slop_os.ThreadDebug.{}
-    if !copy_from_user(per_cpu().kernel, thread.space, debug, cast[u64](&given), cast[u64](size_of(slop_os.ThreadDebug))) {
+    if !copy_from_user(
+        per_cpu().kernel,
+        thread.space,
+        debug,
+        cast[u64](&given),
+        cast[u64](size_of(slop_os.ThreadDebug))
+    ) {
         return .Error(.BadBuffer)
     }
     lock_at(&found.control, .ThreadControl)
@@ -2768,12 +3571,20 @@ sys_thread_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, id
  * @param process The process, with RIGHT_PROCESS_INSPECT.
  * @return Its threads' time, and the time run on its CPU budget by threads of processes not on it, in nanoseconds.
  */
-sys_process_cpu_info :: fn(thread: ptr[mut Thread], process: slop_os.Process) -> Result[slop_os.ProcessCpu, slop_os.ControlError] {
+sys_process_cpu_info :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process
+) -> Result[slop_os.ProcessCpu, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INSPECT)?
     kernel :: per_cpu().kernel
     own :: intrinsics.atomic_load_u64(&target.run_time)
     budget :: target.cpu_budget
-    lent :: if budget != 0 { intrinsics.atomic_load_u64(&cast[ptr[CpuBudget]](budget).run_by_others) } else { cast[u64](0) }
+    lent :: if budget != 0 {
+        intrinsics.atomic_load_u64(&cast[ptr[CpuBudget]](budget).run_by_others)
+    }
+    else {
+        cast[u64](0)
+    }
     return .Ok(slop_os.ProcessCpu.{run_ns = nanoseconds_of(kernel, own), lent_ns = nanoseconds_of(kernel, lent)})
 }
 
@@ -2784,8 +3595,16 @@ sys_process_cpu_info :: fn(thread: ptr[mut Thread], process: slop_os.Process) ->
  * @param budget The budget; no right is needed.
  * @return The bytes.
  */
-sys_memory_budget_others :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBudget) -> Result[u64, slop_os.HandleError] {
-    object :: object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](budget), slop_os.ObjectKind.MemoryBudget, cast[slop_os.Rights](0))?
+sys_memory_budget_others :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.MemoryBudget
+) -> Result[u64, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.MemoryBudget,
+        cast[slop_os.Rights](0)
+    )?
     return .Ok(charged_by_others(cast[ptr[mut MemoryBudget]](object)))
 }
 
@@ -2795,16 +3614,27 @@ sys_memory_budget_others :: fn(thread: ptr[mut Thread], budget: slop_os.MemoryBu
  *
  * @param thread The calling thread.
  * @param process The process, with RIGHT_PROCESS_WRITE_STATE.
- * @param debug A slop_os.ThreadDebug in the caller's memory: its slots, which replace the process's; step must be false.
+ * @param debug A slop_os.ThreadDebug in the caller's memory: its slots, which replace the process's; step must be
+ *     false.
  * @error BadBuffer debug isn't memory the caller can read.
  * @error BadRegisters step is set, or a slot the architecture can't set.
  */
 // sys_thread_set_page, system call 92, is in thread_pages.hsc; sys_process_set_control_flow, 93, in shadow_stacks.hsc
 
-sys_process_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, debug: u64) -> Result[void, slop_os.ControlError] {
+sys_process_set_debug :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    debug : u64
+) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
     given := slop_os.ThreadDebug.{}
-    if !copy_from_user(per_cpu().kernel, thread.space, debug, cast[u64](&given), cast[u64](size_of(slop_os.ThreadDebug))) {
+    if !copy_from_user(
+        per_cpu().kernel,
+        thread.space,
+        debug,
+        cast[u64](&given),
+        cast[u64](size_of(slop_os.ThreadDebug))
+    ) {
         return .Error(.BadBuffer)
     }
     // Made apart from any thread's registers, which a process's slots don't step
@@ -2837,7 +3667,12 @@ sys_process_set_debug :: fn(thread: ptr[mut Thread], process: slop_os.Process, d
  * @error ObjectGone The intercept was destroyed.
  * @error WrongKind Not an intercept's handle.
  */
-sys_intercept_set :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, calls: u64, points: u32) -> Result[void, slop_os.ControlError] {
+sys_intercept_set :: fn(
+    thread : ptr[mut Thread],
+    intercept : slop_os.Intercept,
+    calls : u64,
+    points : u32
+) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
     set_intercept(found, calls, points)
     return .Ok
@@ -2851,19 +3686,21 @@ sys_intercept_set :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, c
  * @param fault The fault: a protection fault on x86-64 (#GP), a trapped system instruction on AArch64.
  * @return The value read, the thread past the instruction; null if it isn't a trapped counter read.
  */
-counter_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch_interface.Fault) -> u64? {
+counter_read :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], fault : arch_interface.Fault) -> u64? {
     match fault {
         case Protection => {}
         case _ => return null
     }
     owner :: thread.header.owner
-    if owner == 0 || intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) & slop_os.TRAP_COUNTER == 0 {
+    if owner == 0
+        || intrinsics.atomic_load_u32_acquire(&cast[ptr[mut Process]](owner).traps) & slop_os.TRAP_COUNTER == 0 {
         return null
     }
     pc :: cast[u64](arch.instruction_pointer(&thread.registers))
     instruction : u32 = 0
     // Four bytes, or for an instruction at a page's end, the two RDTSC has
-    if !copy_from_user(kernel, thread.space, pc, cast[u64](&instruction), 4) && !copy_from_user(kernel, thread.space, pc, cast[u64](&instruction), 2) {
+    if !copy_from_user(kernel, thread.space, pc, cast[u64](&instruction), 4)
+        && !copy_from_user(kernel, thread.space, pc, cast[u64](&instruction), 2) {
         return null
     }
     return arch.emulate_counter_read(&thread.registers, instruction)
@@ -2880,7 +3717,11 @@ counter_read :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], fault: arch
  * @error WrongKind Not a process's handle.
  * @error MissingRight The handle lacks RIGHT_PROCESS_WRITE_STATE.
  */
-sys_process_set_traps :: fn(thread: ptr[mut Thread], process: slop_os.Process, traps: u32) -> Result[void, slop_os.ControlError] {
+sys_process_set_traps :: fn(
+    thread : ptr[mut Thread],
+    process : slop_os.Process,
+    traps : u32
+) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
     intrinsics.atomic_store_u32_release(&target.traps, traps)
     return .Ok
@@ -2898,8 +3739,13 @@ sys_process_set_traps :: fn(thread: ptr[mut Thread], process: slop_os.Process, t
  * @error MissingRight The handle lacks RIGHT_DEBUG_LOG_TRACE.
  * @error OutOfMemory A CPU's ring couldn't be made.
  */
-sys_trace_set :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, on: bool) -> Result[void, slop_os.DeviceError] {
-    _ = object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](log), .DebugLog, slop_os.RIGHT_DEBUG_LOG_TRACE)?
+sys_trace_set :: fn(thread : ptr[mut Thread], log : slop_os.DebugLog, on : bool) -> Result[void, slop_os.DeviceError] {
+    _ = object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](log),
+        .DebugLog,
+        slop_os.RIGHT_DEBUG_LOG_TRACE
+    )?
     if !set_tracing(per_cpu().kernel, on) {
         return .Error(.OutOfMemory)
     }
@@ -2919,8 +3765,17 @@ sys_trace_set :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, on: bool) ->
  * @error MissingRight The handle lacks RIGHT_DEBUG_LOG_TRACE.
  * @error BadAddress events isn't writable user memory.
  */
-sys_trace_read :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, events: slop_os.UserBuffer) -> Result[u32, slop_os.DeviceError] {
-    _ = object_of[slop_os.DeviceError](process_of(thread), cast[slop_os.Handle](log), .DebugLog, slop_os.RIGHT_DEBUG_LOG_TRACE)?
+sys_trace_read :: fn(
+    thread : ptr[mut Thread],
+    log : slop_os.DebugLog,
+    events : slop_os.UserBuffer
+) -> Result[u32, slop_os.DeviceError] {
+    _ = object_of[slop_os.DeviceError](
+        process_of(thread),
+        cast[slop_os.Handle](log),
+        .DebugLog,
+        slop_os.RIGHT_DEBUG_LOG_TRACE
+    )?
     count :: read_trace(per_cpu().kernel, thread.space, events.address, events.count) or_return .Error(.BadAddress)
     return .Ok(count)
 }
@@ -2936,7 +3791,11 @@ sys_trace_read :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, events: slo
  * @error WrongKind Not an intercept's handle.
  * @error OutOfMemory Its ring couldn't be made.
  */
-sys_intercept_sample :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, on: bool) -> Result[void, slop_os.ControlError] {
+sys_intercept_sample :: fn(
+    thread : ptr[mut Thread],
+    intercept : slop_os.Intercept,
+    on : bool
+) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
     if !set_sampling(found, on) {
         return .Error(.OutOfMemory)
@@ -2956,8 +3815,13 @@ sys_intercept_sample :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept
  * @error WrongKind Not an intercept's handle.
  * @error BadBuffer samples isn't writable user memory.
  */
-sys_intercept_samples :: fn(thread: ptr[mut Thread], intercept: slop_os.Intercept, samples: slop_os.UserBuffer) -> Result[u32, slop_os.ControlError] {
+sys_intercept_samples :: fn(
+    thread : ptr[mut Thread],
+    intercept : slop_os.Intercept,
+    samples : slop_os.UserBuffer
+) -> Result[u32, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
-    count :: read_samples(per_cpu().kernel, found, thread.space, samples.address, samples.count) or_return .Error(.BadBuffer)
+    count :: read_samples(per_cpu().kernel, found, thread.space, samples.address, samples.count)
+        or_return .Error(.BadBuffer)
     return .Ok(count)
 }

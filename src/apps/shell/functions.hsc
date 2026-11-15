@@ -1,11 +1,11 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import strings from "std:strings"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import strings from "std:strings"
+import shell_language as language from "../../shell_language"
 
 /*
  * Shell functions, errors as values, and the shell's directory (decisions/0171). A function is local to the session:
@@ -27,7 +27,7 @@ MAX_DEPTH :: 64
  * @param tree The Function node, kept by the shell for as long as it runs: its parameters, then its body.
  * @return Null.
  */
-define :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+define :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     if (builtin_named(tree.text) is_some) {
         return error_at(tree.at, message("% is built in", tree.text))
     }
@@ -65,7 +65,7 @@ define :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value,
  * @param name The name, compared exactly.
  * @return The function's Function node; null if there's none of that name.
  */
-function_named :: fn(shell: ptr[Shell], name: string) -> ptr[Node]? {
+function_named :: fn(shell : ptr[Shell], name : string) -> ptr[Node]? {
     for each in shell.functions {
         if each.text == name {
             return each
@@ -94,13 +94,20 @@ function_named :: fn(shell: ptr[Shell], name: string) -> ptr[Node]? {
  *     caller's scope.
  * @return The body's last statement's value, or what a return gave (shell.returned); an error as described above.
  */
-call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+call_function :: fn(
+    shell : ptr[mut Shell],
+    function #escaping : ptr[Node],
+    tree #escaping : ptr[Node]
+) -> Result[Value, EvalError] {
     if shell.depth >= MAX_DEPTH {
         return error_at(tree.at, message("% calls functions more than % deep", tree.text, MAX_DEPTH))
     }
     scope := runtime.new(Scope)
     scope.parent = shell.scope
-    // Each parameter's argument, by matching as a program's are; bound once they're all evaluated, in the caller's scope
+    /*
+     * Each parameter's argument, by matching as a program's are; bound once they're all evaluated, in the caller's
+     * scope
+     */
     matched : Matched[..]
     defer runtime.array_free(&matched)
     parameters : ptr[Node][..]
@@ -172,8 +179,11 @@ call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree 
         match argument {
             case Some(node) => {
                 if node.kind == .Word {
-                    value = word_as(type, node.text) or_return error_at(node.at, message("--%: % isn't %", parameter.text, node.text,
-                        type_article(type)))
+                    value = word_as(type, node.text)
+                        or_return error_at(
+                            node.at,
+                            message("--%: % isn't %", parameter.text, node.text, type_article(type))
+                        )
                 }
                 else {
                     value = evaluate(shell, node)?
@@ -197,8 +207,13 @@ call_function :: fn(shell: ptr[mut Shell], function #escaping : ptr[Node], tree 
             }
         }
         if !of_type(type, value) {
-            return error_at(match argument { case Some(node) => node.at case None => tree.at },
-                message("--% takes %, not %", parameter.text, type_article(type), type_name(value)))
+            return error_at(
+                match argument {
+                    case Some(node) => node.at
+                    case None => tree.at
+                },
+                message("--% takes %, not %", parameter.text, type_article(type), type_name(value))
+            )
         }
         bind(scope, parameter.text, if type == "path" { as_path(value) } else { value })
     }
@@ -239,7 +254,7 @@ Matched :: struct {
  * @param parameter A Parameter node of a Function, whose value is its type's name as Text when it's given one.
  * @return One of TYPE_NAMES; "" for a parameter of any type.
  */
-type_of_parameter :: fn(parameter: ptr[Node]) -> string {
+type_of_parameter :: fn(parameter : ptr[Node]) -> string {
     return match parameter.value {
         case Text(type) => type
         case _ => ""
@@ -271,7 +286,7 @@ error_record :: fn(error #escaping : EvalError) -> Value {
  * @param tree The Call node of cd, its one argument, if any, the path.
  * @return Null.
  */
-change_directory :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+change_directory :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count > 1 {
         return error_at(tree.at, "cd takes one path")
     }
@@ -322,7 +337,7 @@ change_directory :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, 
  * @param given The path, as written.
  * @return The path from the home, its parts separated by /, on the heap; "" for the home itself.
  */
-resolve_path :: fn(shell: ptr[Shell], given #escaping : string) -> Result[string, string] {
+resolve_path :: fn(shell : ptr[Shell], given #escaping : string) -> Result[string, string] {
     if given.count > 0 && language.slice(given, 0, 1) == "/" {
         return .Error("paths are beneath your home, written without a / first")
     }
@@ -355,7 +370,7 @@ resolve_path :: fn(shell: ptr[Shell], given #escaping : string) -> Result[string
  * @param path The path, its parts separated by /, viewed by the parts added.
  * @return "", once the parts are added.
  */
-add_parts :: fn(parts: ptr[mut string[..]], path #escaping : string) -> Result[string, string] {
+add_parts :: fn(parts : ptr[mut string[..]], path #escaping : string) -> Result[string, string] {
     start : usize = 0
     for i in 0..<path.count + 1 {
         if i < path.count && language.slice(path, i, i + 1) != "/" {

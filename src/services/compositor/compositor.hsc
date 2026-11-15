@@ -23,11 +23,11 @@ import fonts from "std:fonts"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
+import service_kit from "../../libraries/service_kit"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
 import seat from "../../protocols/seat"
 import surface from "../../protocols/surface"
-import service_kit from "../../libraries/service_kit"
 
 /** The band's typeface, Noto Sans (SIL Open Font License, assets/fonts/OFL.txt). */
 SANS :: #file_data("../../../assets/fonts/NotoSans-Regular.ttf")
@@ -201,8 +201,13 @@ Compositor :: struct {
  * @return 2 without a display, or when it can't be dialed, described or its buffers mapped; 3 when the font can't be
  *     read; 99 when its state can't be had. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Connector]?, seat_connector: os.Channel[connector.Connector]?,
-    clients: os.Listener[surface.Surface], trusted: os.Listener[surface.Surface]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    display_connector : os.Channel[connector.Connector]?,
+    seat_connector : os.Channel[connector.Connector]?,
+    clients : os.Listener[surface.Surface],
+    trusted : os.Listener[surface.Surface]?
+) -> int {
     startup :: slop_os.startup_block()
     made, error :: runtime.new_aligned(Compositor, align_of(Compositor))
     if error != null {
@@ -285,7 +290,7 @@ main :: fn(log: slop_os.DebugLog?, display_connector: os.Channel[connector.Conne
 }
 
 /** The whole screen, as a rectangle. */
-screen :: fn(compositor: ptr[Compositor]) -> canvas.Rect {
+screen :: fn(compositor : ptr[Compositor]) -> canvas.Rect {
     return canvas.Rect.{x1 = cast[i32](compositor.info.width), y1 = cast[i32](compositor.info.height)}
 }
 
@@ -294,7 +299,7 @@ screen :: fn(compositor: ptr[Compositor]) -> canvas.Rect {
  *
  * @return The answer; Unsupported if it couldn't be sent, or the channel failed.
  */
-ask :: fn(compositor: ptr[mut Compositor], request: display.Request) -> display.Response {
+ask :: fn(compositor : ptr[mut Compositor], request : display.Request) -> display.Response {
     out := os.Outgoing.{}
     begun :: os.begin[display.Request](&out)
     begun^ = request
@@ -310,7 +315,7 @@ ask :: fn(compositor: ptr[mut Compositor], request: display.Request) -> display.
 }
 
 /** Send the display a request that isn't answered. */
-tell :: fn(compositor: ptr[mut Compositor], request: display.Request) {
+tell :: fn(compositor : ptr[mut Compositor], request : display.Request) {
     out := os.Outgoing.{}
     begun :: os.begin[display.Request](&out)
     begun^ = request
@@ -322,7 +327,7 @@ tell :: fn(compositor: ptr[mut Compositor], request: display.Request) {
  *
  * @return It as an image; null if its window couldn't be had or mapped.
  */
-map_frame :: fn(compositor: ptr[mut Compositor], buffer: u32) -> canvas.Image? {
+map_frame :: fn(compositor : ptr[mut Compositor], buffer : u32) -> canvas.Image? {
     window :: match ask(compositor, .GetBuffer(buffer)) {
         case Buffer(memory) => memory
         case _ => return null
@@ -335,15 +340,19 @@ map_frame :: fn(compositor: ptr[mut Compositor], buffer: u32) -> canvas.Image? {
     if slop_os.memory_map(window, slop_os.startup_block().space, address, 0, mapped, read_write) is_error {
         return null
     }
-    return canvas.Image.{pixels = view_of(cast[ptr[mut u8]](address), cast[usize](bytes)), width = cast[usize](info.width),
-        height = cast[usize](info.height), stride = cast[usize](info.stride)}
+    return canvas.Image.{
+        pixels = view_of(cast[ptr[mut u8]](address), cast[usize](bytes)),
+        width = cast[usize](info.width),
+        height = cast[usize](info.height),
+        stride = cast[usize](info.stride),
+    }
 }
 
 /**
  * Draw the pointer's arrow on the cursor plane and show it where the pointer is; without a cursor plane, nothing, the
  * pointer then unseen (a framebuffer's display, 15c's As Built).
  */
-show_pointer :: fn(compositor: ptr[mut Compositor]) {
+show_pointer :: fn(compositor : ptr[mut Compositor]) {
     size :: compositor.info.cursor_size
     if size == 0 {
         return void
@@ -359,15 +368,19 @@ show_pointer :: fn(compositor: ptr[mut Compositor]) {
     if slop_os.memory_map(window, slop_os.startup_block().space, address, 0, mapped, read_write) is_error {
         return void
     }
-    compositor.cursor = canvas.Image.{pixels = view_of(cast[ptr[mut u8]](address), cast[usize](bytes)), width = cast[usize](size),
-        height = cast[usize](size), stride = cast[usize](4 * size)}
+    compositor.cursor = canvas.Image.{
+        pixels = view_of(cast[ptr[mut u8]](address), cast[usize](bytes)),
+        width = cast[usize](size),
+        height = cast[usize](size),
+        stride = cast[usize](4 * size),
+    }
     draw_arrow(compositor)
     tell(compositor, .SetCursor(display.Cursor.{hot_x = 1, hot_y = 1, visible = true}))
     tell(compositor, .MoveCursor(display.Position.{x = compositor.pointer_x, y = compositor.pointer_y}))
 }
 
 /** Dial the input service for the seat and hold a Read on it. */
-connect_seat :: fn(compositor: ptr[mut Compositor], dialer: os.Channel[connector.Connector]) {
+connect_seat :: fn(compositor : ptr[mut Compositor], dialer : os.Channel[connector.Connector]) {
     port :: os.port_for(slop_os.startup_block().budget, dialer.end) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     channel :: connector.dial[seat.Seat](dialer.end, port) or_return void
@@ -386,7 +399,7 @@ connect_seat :: fn(compositor: ptr[mut Compositor], dialer: os.Channel[connector
 }
 
 /** Hold a Read on the seat. */
-read_seat :: fn(compositor: ptr[mut Compositor]) {
+read_seat :: fn(compositor : ptr[mut Compositor]) {
     out := os.Outgoing.{}
     request :: os.begin[seat.Request](&out)
     request^ = .Read(seat.MAX_EVENTS)
@@ -394,7 +407,7 @@ read_seat :: fn(compositor: ptr[mut Compositor]) {
 }
 
 /** Whether a window has a frame waiting to be shown. */
-any_submitted :: fn(compositor: ptr[Compositor]) -> bool {
+any_submitted :: fn(compositor : ptr[Compositor]) -> bool {
     for window in compositor.windows {
         if window.used && window.submitted {
             return true
@@ -412,7 +425,7 @@ any_submitted :: fn(compositor: ptr[Compositor]) -> bool {
  * @param index The client's index; a freed place is passed over.
  * @param into Where each request is received.
  */
-serve :: fn(compositor: ptr[mut Compositor], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.Incoming]) {
     if index >= compositor.clients.ends.count || index >= compositor.states.count {
         return void
     }
@@ -444,14 +457,24 @@ serve :: fn(compositor: ptr[mut Compositor], index: usize, into: ptr[mut os.Inco
                     case Some(added) => {
                         // A trusted client's connections are trusted too
                         if added < compositor.states.count {
-                            compositor.states[added] = ClientState.{next_surface = 1, trusted = compositor.states[index].trusted}
+                            compositor.states[added] = ClientState.{
+                                next_surface = 1,
+                                trusted = compositor.states[index].trusted,
+                            }
                         }
                     }
                     case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
-            case Describe => response^ = .Described(surface.Output.{width = compositor.info.width, height = compositor.info.height,
-                scale = surface.SCALE_ONE, refresh_millihertz = compositor.info.refresh_millihertz, formats = 3})
+            case Describe => response^ = .Described(
+                surface.Output.{
+                    width = compositor.info.width,
+                    height = compositor.info.height,
+                    scale = surface.SCALE_ONE,
+                    refresh_millihertz = compositor.info.refresh_millihertz,
+                    formats = 3,
+                }
+            )
             case CreateWindow(spec) => response^ = create_window(compositor, index, spec, os.items(into, spec.title))
             case CreateSubsurface(_) => response^ = .Refused(.Unsupported)
             case AddBuffer(given) => response^ = add_buffer(compositor, index, given)
@@ -497,7 +520,7 @@ serve :: fn(compositor: ptr[mut Compositor], index: usize, into: ptr[mut os.Inco
 }
 
 /** End a client's windows and give back its buffers, as it's gone. */
-forget_client :: fn(compositor: ptr[mut Compositor], index: usize) {
+forget_client :: fn(compositor : ptr[mut Compositor], index : usize) {
     for i in cast[usize](0)..<MAX_WINDOWS {
         if compositor.windows[i].used && compositor.windows[i].client == index {
             destroy(compositor, i)
@@ -515,7 +538,7 @@ forget_client :: fn(compositor: ptr[mut Compositor], index: usize) {
 }
 
 /** A client's window by its number, or NO_WINDOW. */
-window_of :: fn(compositor: ptr[Compositor], client: usize, id: u32) -> usize {
+window_of :: fn(compositor : ptr[Compositor], client : usize, id : u32) -> usize {
     for window, i in compositor.windows {
         if window.used && window.client == client && window.surface == id {
             return i
@@ -529,8 +552,17 @@ window_of :: fn(compositor: ptr[Compositor], client: usize, id: u32) -> usize {
  *
  * @return Created with its number; Refused for a size or scale it doesn't take, or with every place taken.
  */
-create_window :: fn(compositor: ptr[mut Compositor], client: usize, spec: surface.WindowSpec, title: u8[]) -> surface.Response {
-    if spec.width == 0 || spec.height == 0 || spec.width > MOST_PIXELS || spec.height > MOST_PIXELS || spec.scale != surface.SCALE_ONE {
+create_window :: fn(
+    compositor : ptr[mut Compositor],
+    client : usize,
+    spec : surface.WindowSpec,
+    title : u8[]
+) -> surface.Response {
+    if spec.width == 0
+        || spec.height == 0
+        || spec.width > MOST_PIXELS
+        || spec.height > MOST_PIXELS
+        || spec.scale != surface.SCALE_ONE {
         return .Refused(.Unsupported)
     }
     free := NO_WINDOW
@@ -547,8 +579,16 @@ create_window :: fn(compositor: ptr[mut Compositor], client: usize, spec: surfac
     id :: state.next_surface
     state.next_surface += 1
     step :: cast[i32](compositor.order_count) * 30
-    made := Window.{used = true, client = client, surface = id, x = 60 + step, y = 60 + BAND + step, width = spec.width,
-        height = spec.height, trusted = state.trusted}
+    made := Window.{
+        used = true,
+        client = client,
+        surface = id,
+        x = 60 + step,
+        y = 60 + BAND + step,
+        width = spec.width,
+        height = spec.height,
+        trusted = state.trusted,
+    }
     if made.trusted {
         // Centred, above everything
         made.x = (cast[i32](compositor.info.width) - cast[i32](spec.width)) / 2
@@ -578,7 +618,7 @@ create_window :: fn(compositor: ptr[mut Compositor], client: usize, spec: surfac
  * @return Added with its id; Refused for an id in use or 0, a description it doesn't take, a plane outside its memory,
  *     every place taken, or memory that couldn't be mapped. The memory's closed when it's refused.
  */
-add_buffer :: fn(compositor: ptr[mut Compositor], client: usize, given: surface.NewBuffer) -> surface.Response {
+add_buffer :: fn(compositor : ptr[mut Compositor], client : usize, given : surface.NewBuffer) -> surface.Response {
     refusal := surface.Refusal.NoSuchThing
     if client < compositor.states.count && given.id != 0 {
         state :: &compositor.states[client]
@@ -597,10 +637,19 @@ add_buffer :: fn(compositor: ptr[mut Compositor], client: usize, given: surface.
         size :: slop_os.memory_size(given.memory) or_else 0
         rows :: cast[u64](plane.stride) * cast[u64](description.height)
         fits :: (description.format == surface.FORMAT_XRGB8888 || description.format == surface.FORMAT_ARGB8888)
-            && description.modifier == surface.MODIFIER_LINEAR && description.plane_count == 1 && description.width > 0
-            && description.height > 0 && description.width <= MOST_PIXELS && description.height <= MOST_PIXELS
-            && plane.stride >= 4 * description.width && plane.offset <= size && rows <= size - plane.offset
-        refusal = if taken { surface.Refusal.NoSuchThing } else if !fits { surface.Refusal.Unsupported } else { surface.Refusal.TooMany }
+            && description.modifier == surface.MODIFIER_LINEAR
+            && description.plane_count == 1
+            && description.width > 0
+            && description.height > 0
+            && description.width <= MOST_PIXELS
+            && description.height <= MOST_PIXELS
+            && plane.stride >= 4 * description.width
+            && plane.offset <= size
+            && rows <= size - plane.offset
+        refusal = if taken {
+            surface.Refusal.NoSuchThing
+        }
+        else if !fits { surface.Refusal.Unsupported } else { surface.Refusal.TooMany }
         if !taken && fits && place < MAX_BUFFERS {
             buffer :: &state.buffers[place]
             mapped :: (size + 4095) / 4096 * 4096
@@ -609,7 +658,14 @@ add_buffer :: fn(compositor: ptr[mut Compositor], client: usize, given: surface.
                 buffer.reserved_bytes = if buffer.reserved == 0 { cast[u64](0) } else { mapped }
             }
             if buffer.reserved != 0
-                && (slop_os.memory_map(given.memory, slop_os.startup_block().space, buffer.reserved, 0, mapped, slop_os.PROTECTION_READ) is_ok) {
+                && (slop_os.memory_map(
+                    given.memory,
+                    slop_os.startup_block().space,
+                    buffer.reserved,
+                    0,
+                    mapped,
+                    slop_os.PROTECTION_READ
+                ) is_ok) {
                 buffer.id = given.id
                 buffer.memory = given.memory
                 buffer.address = buffer.reserved
@@ -629,14 +685,14 @@ add_buffer :: fn(compositor: ptr[mut Compositor], client: usize, given: surface.
 }
 
 /** Unmap a buffer and close its memory, keeping its addresses for the next. */
-unmap :: fn(buffer: ptr[mut ClientBuffer]) {
+unmap :: fn(buffer : ptr[mut ClientBuffer]) {
     _ = slop_os.memory_unmap(slop_os.startup_block().space, buffer.address)
     _ = slop_os.handle_close(cast[slop_os.Handle](buffer.memory))
     buffer.id = 0
 }
 
 /** A client's buffer by id, or null. */
-buffer_of :: fn(compositor: ptr[mut Compositor], client: usize, id: u32) -> ptr[mut ClientBuffer]? {
+buffer_of :: fn(compositor : ptr[mut Compositor], client : usize, id : u32) -> ptr[mut ClientBuffer]? {
     if client >= compositor.states.count || id == 0 {
         return null
     }
@@ -649,7 +705,7 @@ buffer_of :: fn(compositor: ptr[mut Compositor], client: usize, id: u32) -> ptr[
 }
 
 /** Take a buffer back, once no window shows it: one that's shown stays until it's replaced. */
-remove_buffer :: fn(compositor: ptr[mut Compositor], client: usize, id: u32) {
+remove_buffer :: fn(compositor : ptr[mut Compositor], client : usize, id : u32) {
     for window in compositor.windows {
         if window.used && window.client == client && (window.buffer == id || window.replaced == id) {
             return void
@@ -667,7 +723,7 @@ remove_buffer :: fn(compositor: ptr[mut Compositor], client: usize, id: u32) {
  * @return null once it's taken; why it's refused otherwise: a surface or buffer the client hasn't, or a buffer that
  *     isn't the window's size.
  */
-submit :: fn(compositor: ptr[mut Compositor], client: usize, submission: surface.Submission) -> surface.Refusal? {
+submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surface.Submission) -> surface.Refusal? {
     index :: window_of(compositor, client, submission.surface)
     if index >= MAX_WINDOWS {
         return .NoSuchThing
@@ -694,8 +750,15 @@ submit :: fn(compositor: ptr[mut Compositor], client: usize, submission: surface
         frame_of(window)
     }
     else {
-        canvas.intersect(content, canvas.Rect.{x0 = window.x + submission.damage.x, y0 = window.y + submission.damage.y,
-            x1 = window.x + submission.damage.x + cast[i32](submission.damage.width), y1 = window.y + submission.damage.y + cast[i32](submission.damage.height)})
+        canvas.intersect(
+            content,
+            canvas.Rect.{
+                x0 = window.x + submission.damage.x,
+                y0 = window.y + submission.damage.y,
+                x1 = window.x + submission.damage.x + cast[i32](submission.damage.width),
+                y1 = window.y + submission.damage.y + cast[i32](submission.damage.height),
+            }
+        )
     }
     add_damage(compositor, damaged)
     if first {
@@ -706,13 +769,13 @@ submit :: fn(compositor: ptr[mut Compositor], client: usize, submission: surface
 }
 
 /** A window's title as text. */
-title_of :: fn(window: ptr[Window]) -> string {
+title_of :: fn(window : ptr[Window]) -> string {
     count :: if window.title_count <= window.title.count { window.title_count } else { window.title.count }
     return if count > 0 { string_of(&window.title[0], count) } else { "" }
 }
 
 /** Change a window's title, its band drawn again. */
-set_title :: fn(compositor: ptr[mut Compositor], client: usize, id: u32, text: u8[]) {
+set_title :: fn(compositor : ptr[mut Compositor], client : usize, id : u32, text : u8[]) {
     index :: window_of(compositor, client, id)
     if index >= MAX_WINDOWS {
         return void
@@ -729,7 +792,7 @@ set_title :: fn(compositor: ptr[mut Compositor], client: usize, id: u32, text: u
 }
 
 /** End a window: taken off the screen, its buffers released, focus to the window below. */
-destroy :: fn(compositor: ptr[mut Compositor], index: usize) {
+destroy :: fn(compositor : ptr[mut Compositor], index : usize) {
     if index >= MAX_WINDOWS || !compositor.windows[index].used {
         return void
     }
@@ -756,7 +819,7 @@ destroy :: fn(compositor: ptr[mut Compositor], index: usize) {
 }
 
 /** Take a window out of the stacking order. */
-remove_from_order :: fn(compositor: ptr[mut Compositor], index: usize) {
+remove_from_order :: fn(compositor : ptr[mut Compositor], index : usize) {
     kept : usize = 0
     for i in cast[usize](0)..<MAX_WINDOWS {
         if i < compositor.order_count && compositor.order[i] != index && kept < compositor.order.count {
@@ -768,7 +831,7 @@ remove_from_order :: fn(compositor: ptr[mut Compositor], index: usize) {
 }
 
 /** Queue a Released for a client's buffer. */
-release :: fn(compositor: ptr[mut Compositor], client: usize, id: u32) {
+release :: fn(compositor : ptr[mut Compositor], client : usize, id : u32) {
     released := surface.event_of(.Released, 0)
     released.code = id
     queue(compositor, client, released, "")
@@ -777,12 +840,17 @@ release :: fn(compositor: ptr[mut Compositor], client: usize, id: u32) {
 // ---- Geometry
 
 /** A window's content on the screen. */
-content_of :: fn(window: ptr[Window]) -> canvas.Rect {
-    return canvas.Rect.{x0 = window.x, y0 = window.y, x1 = window.x + cast[i32](window.width), y1 = window.y + cast[i32](window.height)}
+content_of :: fn(window : ptr[Window]) -> canvas.Rect {
+    return canvas.Rect.{
+        x0 = window.x,
+        y0 = window.y,
+        x1 = window.x + cast[i32](window.width),
+        y1 = window.y + cast[i32](window.height),
+    }
 }
 
 /** A window's band on the screen; none for the trusted layer's. */
-band_of :: fn(window: ptr[Window]) -> canvas.Rect {
+band_of :: fn(window : ptr[Window]) -> canvas.Rect {
     if window.trusted {
         return canvas.Rect.{}
     }
@@ -790,18 +858,21 @@ band_of :: fn(window: ptr[Window]) -> canvas.Rect {
 }
 
 /** A window and its band on the screen. */
-frame_of :: fn(window: ptr[Window]) -> canvas.Rect {
+frame_of :: fn(window : ptr[Window]) -> canvas.Rect {
     band :: band_of(window)
     return if canvas.is_empty(band) { content_of(window) } else { canvas.union_of(band, content_of(window)) }
 }
 
 /** The trusted layer's topmost window shown, or NO_WINDOW when it shows none. */
-trusted_top :: fn(compositor: ptr[Compositor]) -> usize {
+trusted_top :: fn(compositor : ptr[Compositor]) -> usize {
     found := NO_WINDOW
     for i in cast[usize](0)..<MAX_WINDOWS {
         if i < compositor.order_count {
             index :: compositor.order[i]
-            if index < MAX_WINDOWS && compositor.windows[index].used && compositor.windows[index].trusted && compositor.windows[index].buffer != 0 {
+            if index < MAX_WINDOWS
+                && compositor.windows[index].used
+                && compositor.windows[index].trusted
+                && compositor.windows[index].buffer != 0 {
                 found = index
             }
         }
@@ -810,19 +881,19 @@ trusted_top :: fn(compositor: ptr[Compositor]) -> usize {
 }
 
 /** A window's close box on the screen. */
-close_of :: fn(window: ptr[Window]) -> canvas.Rect {
+close_of :: fn(window : ptr[Window]) -> canvas.Rect {
     right :: window.x + cast[i32](window.width) - 6
     top :: window.y - BAND + (BAND - CLOSE) / 2
     return canvas.Rect.{x0 = right - CLOSE, y0 = top, x1 = right, y1 = top + CLOSE}
 }
 
 /** Whether a point's in a rectangle. */
-inside :: fn(rect: canvas.Rect, x: i32, y: i32) -> bool {
+inside :: fn(rect : canvas.Rect, x : i32, y : i32) -> bool {
     return x >= rect.x0 && x < rect.x1 && y >= rect.y0 && y < rect.y1
 }
 
 /** Add to what changed, cut to the screen. */
-add_damage :: fn(compositor: ptr[mut Compositor], rect: canvas.Rect) {
+add_damage :: fn(compositor : ptr[mut Compositor], rect : canvas.Rect) {
     cut :: canvas.intersect(rect, screen(compositor))
     if canvas.is_empty(cut) {
         return void
@@ -831,7 +902,7 @@ add_damage :: fn(compositor: ptr[mut Compositor], rect: canvas.Rect) {
 }
 
 /** The topmost window at a point, or NO_WINDOW; while the trusted layer shows a window, only its windows. */
-window_at :: fn(compositor: ptr[Compositor], x: i32, y: i32) -> usize {
+window_at :: fn(compositor : ptr[Compositor], x : i32, y : i32) -> usize {
     layer :: trusted_top(compositor) < MAX_WINDOWS
     for pass in cast[usize](0)..<2 {
         // The trusted layer first, as it's drawn above
@@ -844,12 +915,14 @@ window_at :: fn(compositor: ptr[Compositor], x: i32, y: i32) -> usize {
 }
 
 /** The topmost window at a point of one layer, or NO_WINDOW. */
-window_in :: fn(compositor: ptr[Compositor], x: i32, y: i32, trusted: bool) -> usize {
+window_in :: fn(compositor : ptr[Compositor], x : i32, y : i32, trusted : bool) -> usize {
     for i in cast[usize](0)..<MAX_WINDOWS {
         if i < compositor.order_count {
             at :: compositor.order_count - 1 - i
             index :: if at < compositor.order.count { compositor.order[at] } else { NO_WINDOW }
-            if index < MAX_WINDOWS && compositor.windows[index].buffer != 0 && compositor.windows[index].trusted == trusted
+            if index < MAX_WINDOWS
+                && compositor.windows[index].buffer != 0
+                && compositor.windows[index].trusted == trusted
                 && inside(frame_of(&compositor.windows[index]), x, y) {
                 return index
             }
@@ -861,7 +934,7 @@ window_in :: fn(compositor: ptr[Compositor], x: i32, y: i32, trusted: bool) -> u
 // ---- Focus, stacking and the seat
 
 /** Raise a window to the top and give it focus, telling the windows that lose and gain it. */
-focus_window :: fn(compositor: ptr[mut Compositor], index: usize) {
+focus_window :: fn(compositor : ptr[mut Compositor], index : usize) {
     if index >= MAX_WINDOWS || !compositor.windows[index].used {
         return void
     }
@@ -890,7 +963,7 @@ focus_window :: fn(compositor: ptr[mut Compositor], index: usize) {
  * told, a press raising its window, a drag of a band moving it, a press on the close box asking to close. Another Read
  * is held after each answer.
  */
-take_seat :: fn(compositor: ptr[mut Compositor], into: ptr[mut os.Incoming]) {
+take_seat :: fn(compositor : ptr[mut Compositor], into : ptr[mut os.Incoming]) {
     if cast[slop_os.Handle](compositor.seat_end) == slop_os.NO_HANDLE {
         return void
     }
@@ -918,7 +991,7 @@ take_seat :: fn(compositor: ptr[mut Compositor], into: ptr[mut os.Incoming]) {
 }
 
 /** Take one of the seat's events. */
-take_event :: fn(compositor: ptr[mut Compositor], event: seat.Event, text: u8[]) {
+take_event :: fn(compositor : ptr[mut Compositor], event : seat.Event, text : u8[]) {
     kind :: seat.kind_of(event) or_return void
     match kind {
         case .Key => {
@@ -934,7 +1007,12 @@ take_event :: fn(compositor: ptr[mut Compositor], event: seat.Event, text: u8[])
             paste :: terminal.CONTROL | terminal.SHIFT
             if event.code == USAGE_V && event.modifiers & paste == paste && !window.trusted {
                 kept :: compositor.clipboard[0..<TITLE_BYTES]
-                pasted :: if compositor.clipboard_count <= kept.count { kept[0..<compositor.clipboard_count] } else { kept }
+                pasted :: if compositor.clipboard_count <= kept.count {
+                    kept[0..<compositor.clipboard_count]
+                }
+                else {
+                    kept
+                }
                 queue(compositor, window.client, surface.event_of(.Paste, window.surface), string_of_bytes(pasted))
                 runtime.log_info("pasted into '%'", title_of(window))
                 return void
@@ -946,7 +1024,11 @@ take_event :: fn(compositor: ptr[mut Compositor], event: seat.Event, text: u8[])
             queue(compositor, window.client, key, string_of_bytes(typed))
         }
         case .PointerMotion => move_pointer(compositor, compositor.pointer_x + event.x, compositor.pointer_y + event.y)
-        case .PointerPosition => move_pointer(compositor, scaled(event.x, compositor.info.width), scaled(event.y, compositor.info.height))
+        case .PointerPosition => move_pointer(
+            compositor,
+            scaled(event.x, compositor.info.width),
+            scaled(event.y, compositor.info.height)
+        )
         case .Button => press(compositor, event.code, event.pressed != 0)
         case .Wheel => {
             if compositor.hover < MAX_WINDOWS {
@@ -961,17 +1043,17 @@ take_event :: fn(compositor: ptr[mut Compositor], event: seat.Event, text: u8[])
 }
 
 /** Bytes as text, for an event's. */
-string_of_bytes :: fn(bytes: u8[]) -> string {
+string_of_bytes :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
 /** A seat position, 0 to seat.POSITION_MAX, as a pixel on a screen of a size. */
-scaled :: fn(value: i32, size: u32) -> i32 {
+scaled :: fn(value : i32, size : u32) -> i32 {
     return cast[i32](cast[i64](value) * cast[i64](size) / (cast[i64](seat.POSITION_MAX) + 1))
 }
 
 /** Move the pointer: the cursor, a dragged window, and the windows it leaves, enters and moves over told. */
-move_pointer :: fn(compositor: ptr[mut Compositor], x: i32, y: i32) {
+move_pointer :: fn(compositor : ptr[mut Compositor], x : i32, y : i32) {
     top :: cast[i32](compositor.info.width) - 1
     bottom :: cast[i32](compositor.info.height) - 1
     compositor.pointer_x = if x < 0 { 0 } else if x > top { top } else { x }
@@ -996,13 +1078,14 @@ move_pointer :: fn(compositor: ptr[mut Compositor], x: i32, y: i32) {
             pointer_event(compositor, .PointerEnter, over)
         }
     }
-    else if over < MAX_WINDOWS && inside(content_of(&compositor.windows[over]), compositor.pointer_x, compositor.pointer_y) {
+    else if over < MAX_WINDOWS
+        && inside(content_of(&compositor.windows[over]), compositor.pointer_x, compositor.pointer_y) {
         pointer_event(compositor, .PointerMotion, over)
     }
 }
 
 /** Tell a window where the pointer is in its units. */
-pointer_event :: fn(compositor: ptr[mut Compositor], kind: surface.EventKind, index: usize) {
+pointer_event :: fn(compositor : ptr[mut Compositor], kind : surface.EventKind, index : usize) {
     window :: &compositor.windows[index % MAX_WINDOWS]
     made := surface.event_of(kind, window.surface)
     made.x = compositor.pointer_x - window.x
@@ -1015,7 +1098,7 @@ pointer_event :: fn(compositor: ptr[mut Compositor], kind: surface.EventKind, in
  * asks it to close on its close box, or goes to it on its content; a release ends a drag, or goes to the window the
  * press went to.
  */
-press :: fn(compositor: ptr[mut Compositor], button: u16, pressed: bool) {
+press :: fn(compositor : ptr[mut Compositor], button : u16, pressed : bool) {
     if !pressed {
         if compositor.dragging < MAX_WINDOWS {
             moved :: &compositor.windows[compositor.dragging]
@@ -1052,7 +1135,7 @@ press :: fn(compositor: ptr[mut Compositor], button: u16, pressed: bool) {
 }
 
 /** Tell a window a button went down or came up, where the pointer is in its units. */
-button_event :: fn(compositor: ptr[mut Compositor], index: usize, button: u16, pressed: bool) {
+button_event :: fn(compositor : ptr[mut Compositor], index : usize, button : u16, pressed : bool) {
     window :: &compositor.windows[index % MAX_WINDOWS]
     made := surface.event_of(.Button, window.surface)
     made.code = cast[u32](button)
@@ -1065,7 +1148,7 @@ button_event :: fn(compositor: ptr[mut Compositor], index: usize, button: u16, p
 // ---- Events for clients
 
 /** Queue an event for a client, with its text; past what's kept, the oldest are dropped. */
-queue :: fn(compositor: ptr[mut Compositor], client: usize, made: surface.Event, text: string) {
+queue :: fn(compositor : ptr[mut Compositor], client : usize, made : surface.Event, text : string) {
     if client >= compositor.states.count {
         return void
     }
@@ -1095,7 +1178,7 @@ queue :: fn(compositor: ptr[mut Compositor], client: usize, made: surface.Event,
 }
 
 /** Answer a client's held Read with what's waiting, if there's anything. */
-deliver :: fn(compositor: ptr[mut Compositor], client: usize) {
+deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
     if client >= compositor.states.count || client >= compositor.clients.ends.count {
         return void
     }
@@ -1110,7 +1193,12 @@ deliver :: fn(compositor: ptr[mut Compositor], client: usize) {
     // The text of those given, which are first, up to where the next's starts; fewer given while it's past MAX_TEXT
     text_end := state.text_count
     loop {
-        text_end = if count < state.count && count < state.events.count { cast[usize](state.events[count].text_start) } else { state.text_count }
+        text_end = if count < state.count && count < state.events.count {
+            cast[usize](state.events[count].text_start)
+        }
+        else {
+            state.text_count
+        }
         if count <= 1 || text_end <= surface.MAX_TEXT {
             break
         }
@@ -1124,7 +1212,12 @@ deliver :: fn(compositor: ptr[mut Compositor], client: usize) {
     }
     out := os.Outgoing.{}
     response :: os.begin[surface.Response](&out)
-    response^ = .Input(surface.Events.{events = os.append(&out, state.events[0..<count]), text = os.append(&out, state.text[0..<text_end])})
+    response^ = .Input(
+        surface.Events.{
+            events = os.append(&out, state.events[0..<count]),
+            text = os.append(&out, state.text[0..<text_end]),
+        }
+    )
     if surface.send_response(compositor.clients.ends[client], compositor.port, &out) != null {
         return void
     }
@@ -1134,7 +1227,12 @@ deliver :: fn(compositor: ptr[mut Compositor], client: usize) {
         from :: i + count
         if from < state.events.count && i < state.events.count {
             moved := state.events[from]
-            moved.text_start = if cast[usize](moved.text_start) >= text_end { moved.text_start - cast[u32](text_end) } else { 0 }
+            moved.text_start = if cast[usize](moved.text_start) >= text_end {
+                moved.text_start - cast[u32](text_end)
+            }
+            else {
+                0
+            }
             state.events[i] = moved
         }
     }
@@ -1154,16 +1252,32 @@ deliver :: fn(compositor: ptr[mut Compositor], client: usize) {
  * Draw the frame into the buffer that isn't shown, over this frame's damage and the last's, and present it; then the
  * buffers replaced are released and the windows submitted told they're shown.
  */
-composite :: fn(compositor: ptr[mut Compositor]) {
-    region :: canvas.intersect(if canvas.is_empty(compositor.last_damage) { compositor.damage }
-        else if canvas.is_empty(compositor.damage) { compositor.last_damage }
-        else { canvas.union_of(compositor.damage, compositor.last_damage) }, screen(compositor))
+composite :: fn(compositor : ptr[mut Compositor]) {
+    region :: canvas.intersect(
+        if canvas.is_empty(compositor.last_damage) {
+            compositor.damage
+        }
+        else if canvas.is_empty(compositor.damage) {
+            compositor.last_damage
+        }
+        else {
+            canvas.union_of(compositor.damage, compositor.last_damage)
+        },
+        screen(compositor)
+    )
     next :: 1 - (compositor.shown % 2)
     if !canvas.is_empty(region) {
         draw(compositor, next, region)
     }
-    frame :: display.Frame.{buffer = next, damage = display.Rect.{x = cast[u32](region.x0), y = cast[u32](region.y0),
-        width = cast[u32](region.x1 - region.x0), height = cast[u32](region.y1 - region.y0)}}
+    frame :: display.Frame.{
+        buffer = next,
+        damage = display.Rect.{
+            x = cast[u32](region.x0),
+            y = cast[u32](region.y0),
+            width = cast[u32](region.x1 - region.x0),
+            height = cast[u32](region.y1 - region.y0),
+        },
+    }
     presented := false
     match ask(compositor, .Present(frame)) {
         case Presented(_) => {
@@ -1196,19 +1310,33 @@ composite :: fn(compositor: ptr[mut Compositor]) {
 }
 
 /** Draw a region of the frame into a display buffer: the background, then each window from the bottom up. */
-draw :: fn(compositor: ptr[mut Compositor], buffer: u32, region: canvas.Rect) {
+draw :: fn(compositor : ptr[mut Compositor], buffer : u32, region : canvas.Rect) {
     canvas.free_canvas(&compositor.painter)
     compositor.painter = canvas.make(compositor.frames[buffer % 2])
     painter :: &compositor.painter
-    canvas.clip_rect(painter, cast[f32](region.x0), cast[f32](region.y0), cast[f32](region.x1 - region.x0), cast[f32](region.y1 - region.y0))
-    canvas.fill_rect(painter, cast[f32](region.x0), cast[f32](region.y0), cast[f32](region.x1 - region.x0), cast[f32](region.y1 - region.y0),
-        canvas.Paint.Solid(canvas.rgb(38, 50, 56)))
+    canvas.clip_rect(
+        painter,
+        cast[f32](region.x0),
+        cast[f32](region.y0),
+        cast[f32](region.x1 - region.x0),
+        cast[f32](region.y1 - region.y0)
+    )
+    canvas.fill_rect(
+        painter,
+        cast[f32](region.x0),
+        cast[f32](region.y0),
+        cast[f32](region.x1 - region.x0),
+        cast[f32](region.y1 - region.y0),
+        canvas.Paint.Solid(canvas.rgb(38, 50, 56))
+    )
     for pass in cast[usize](0)..<2 {
         // Clients' windows, then the trusted layer's above them
         for i in cast[usize](0)..<MAX_WINDOWS {
             if i < compositor.order_count {
                 index :: compositor.order[i]
-                if index < MAX_WINDOWS && compositor.windows[index].used && compositor.windows[index].buffer != 0
+                if index < MAX_WINDOWS
+                    && compositor.windows[index].used
+                    && compositor.windows[index].buffer != 0
                     && compositor.windows[index].trusted == (pass == 1) {
                     draw_window(compositor, buffer, index, region)
                 }
@@ -1218,23 +1346,50 @@ draw :: fn(compositor: ptr[mut Compositor], buffer: u32, region: canvas.Rect) {
 }
 
 /** Draw a window within a region: its band, its title and close box, then its buffer's pixels. */
-draw_window :: fn(compositor: ptr[mut Compositor], buffer: u32, index: usize, region: canvas.Rect) {
+draw_window :: fn(compositor : ptr[mut Compositor], buffer : u32, index : usize, region : canvas.Rect) {
     window :: &compositor.windows[index % MAX_WINDOWS]
     painter :: &compositor.painter
     band :: band_of(window)
     if !canvas.is_empty(canvas.intersect(band, region)) {
         focused :: compositor.focus == index
         colour :: if focused { canvas.rgb(25, 118, 210) } else { canvas.rgb(96, 125, 139) }
-        canvas.fill_rect(painter, cast[f32](band.x0), cast[f32](band.y0), cast[f32](band.x1 - band.x0), cast[f32](BAND), canvas.Paint.Solid(colour))
+        canvas.fill_rect(
+            painter,
+            cast[f32](band.x0),
+            cast[f32](band.y0),
+            cast[f32](band.x1 - band.x0),
+            cast[f32](BAND),
+            canvas.Paint.Solid(colour)
+        )
         canvas.save(painter)
         close :: close_of(window)
-        canvas.clip_rect(painter, cast[f32](band.x0), cast[f32](band.y0), cast[f32](close.x0 - 4 - band.x0), cast[f32](BAND))
+        canvas.clip_rect(
+            painter,
+            cast[f32](band.x0),
+            cast[f32](band.y0),
+            cast[f32](close.x0 - 4 - band.x0),
+            cast[f32](BAND)
+        )
         // Opened where it's used, as a font holds a view of its bytes; the glyph cache keeps its glyphs between frames
         font :: fonts.open(SANS[0..<SANS.count]) or_else fonts.Font.{}
-        _ = canvas.draw_text(painter, &font, BAND_TEXT, cast[f32](band.x0 + 8), cast[f32](band.y0 + 19),
-            string_bytes(title_of(window)), canvas.Paint.Solid(canvas.rgb(255, 255, 255)))
+        _ = canvas.draw_text(
+            painter,
+            &font,
+            BAND_TEXT,
+            cast[f32](band.x0 + 8),
+            cast[f32](band.y0 + 19),
+            string_bytes(title_of(window)),
+            canvas.Paint.Solid(canvas.rgb(255, 255, 255))
+        )
         canvas.restore(painter)
-        canvas.fill_rect(painter, cast[f32](close.x0), cast[f32](close.y0), cast[f32](CLOSE), cast[f32](CLOSE), canvas.Paint.Solid(canvas.rgb(229, 57, 53)))
+        canvas.fill_rect(
+            painter,
+            cast[f32](close.x0),
+            cast[f32](close.y0),
+            cast[f32](CLOSE),
+            cast[f32](CLOSE),
+            canvas.Paint.Solid(canvas.rgb(229, 57, 53))
+        )
     }
     content :: canvas.intersect(canvas.intersect(content_of(window), region), screen(compositor))
     if canvas.is_empty(content) {
@@ -1254,7 +1409,7 @@ draw_window :: fn(compositor: ptr[mut Compositor], buffer: u32, index: usize, re
  * @param left The window content's left edge.
  * @param top Its top edge.
  */
-blit :: fn(target: canvas.Image, from: ptr[ClientBuffer], rect: canvas.Rect, left: i32, top: i32) {
+blit :: fn(target : canvas.Image, from : ptr[ClientBuffer], rect : canvas.Rect, left : i32, top : i32) {
     source :: view_of(cast[ptr[u8]](from.address), cast[usize](from.bytes))
     blending :: from.format == surface.FORMAT_ARGB8888
     width :: cast[usize](rect.x1 - rect.x0)
@@ -1288,7 +1443,7 @@ blit :: fn(target: canvas.Image, from: ptr[ClientBuffer], rect: canvas.Rect, lef
 }
 
 /** Bytes at an offset, count of them; none past the end. */
-span :: fn(bytes: mut u8[], at: usize, count: usize) -> mut u8[] {
+span :: fn(bytes : mut u8[], at : usize, count : usize) -> mut u8[] {
     if at <= bytes.count {
         rest :: bytes[at..<bytes.count]
         if count <= rest.count {
@@ -1299,7 +1454,7 @@ span :: fn(bytes: mut u8[], at: usize, count: usize) -> mut u8[] {
 }
 
 /** Bytes at an offset, count of them, read only; none past the end. */
-span_of :: fn(bytes: u8[], at: usize, count: usize) -> u8[] {
+span_of :: fn(bytes : u8[], at : usize, count : usize) -> u8[] {
     if at <= bytes.count {
         rest :: bytes[at..<bytes.count]
         if count <= rest.count {
@@ -1310,7 +1465,7 @@ span_of :: fn(bytes: u8[], at: usize, count: usize) -> u8[] {
 }
 
 /** Draw the pointer's arrow into the cursor's buffer: white with a black edge, not premultiplied. */
-draw_arrow :: fn(compositor: ptr[mut Compositor]) {
+draw_arrow :: fn(compositor : ptr[mut Compositor]) {
     canvas.free_canvas(&compositor.painter)
     compositor.painter = canvas.make(compositor.cursor)
     painter :: &compositor.painter
@@ -1326,7 +1481,12 @@ draw_arrow :: fn(compositor: ptr[mut Compositor]) {
     canvas.line_to(&arrow, 17, 16)
     canvas.close(&arrow)
     canvas.fill(painter, &arrow, canvas.Paint.Solid(canvas.rgb(255, 255, 255)))
-    canvas.stroke(painter, &arrow, canvas.Paint.Solid(canvas.rgb(0, 0, 0)), canvas.Stroke.{width = 1.2, join = .Miter, miter_limit = 4})
+    canvas.stroke(
+        painter,
+        &arrow,
+        canvas.Paint.Solid(canvas.rgb(0, 0, 0)),
+        canvas.Stroke.{width = 1.2, join = .Miter, miter_limit = 4}
+    )
     pixels :: compositor.cursor.pixels
     for at in cast[usize](0)..<pixels.count / 4 {
         pixel :: span(pixels, 4 * at, 4)

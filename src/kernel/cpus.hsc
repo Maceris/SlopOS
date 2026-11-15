@@ -46,7 +46,7 @@ CPU_ABANDONED : u32 : 2
  *     started.
  * @param info The boot information, whose start_cpu starts a CPU; if it has none, only the boot CPU is online.
  */
-start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInfo]) {
+start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info : ptr[boot_info.BootInfo]) {
     // A copy of the view, which the calls below can't change
     cpus :: kernel.cpus
     kernel.online_cpus = 1
@@ -56,12 +56,17 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
         allocated : ptr[mut PerCpu]? = null
         match allocate_cpu(kernel, cast[u32](index)) {
             case Ok(made) => allocated = made
-            case Error(error) => runtime.log_warn("no memory for CPU %, so it and the ones after it are left out", index)
+            case Error(
+                error
+            ) => runtime.log_warn("no memory for CPU %, so it and the ones after it are left out", index)
         }
         // Its kernel shadow stack, where the kernel's code runs on them (decisions/0186, Hd)
         match allocated {
             case Some(made) => if !give_kernel_shadow_stack(kernel, made) {
-                runtime.log_warn("no memory for CPU %'s kernel shadow stack, so it and the ones after it are left out", index)
+                runtime.log_warn(
+                    "no memory for CPU %'s kernel shadow stack, so it and the ones after it are left out",
+                    index
+                )
                 allocated = null
             }
             case None => {}
@@ -73,12 +78,17 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info: ptr[boot_info.BootInf
             arch.spin_hint()
         }
         while intrinsics.atomic_load_u32_acquire(&cpu.start_state) == CPU_WAITING && arch.counter() < deadline
-        // It may report in right now, so it's given up on only if it still hasn't. Its PerCpu and
-        // stacks stay allocated, since it may still start and use them.
+        /*
+         * It may report in right now, so it's given up on only if it still hasn't. Its PerCpu and
+         * stacks stay allocated, since it may still start and use them.
+         */
         _, abandoned :: intrinsics.interlocked_compare_exchange_u32(&cpu.start_state, CPU_ABANDONED, CPU_WAITING)
         if abandoned {
-            runtime.log_warn("CPU % (hardware ID %) didn't start, so it and the ones after it are left out", index,
-                cpus[index].hardware_id)
+            runtime.log_warn(
+                "CPU % (hardware ID %) didn't start, so it and the ones after it are left out",
+                index,
+                cpus[index].hardware_id
+            )
             break
         }
         kernel.online_cpus += 1
@@ -130,7 +140,7 @@ cpu_started :: fn() #never_returns {
  * @error OutOfMemory No frames were left for the PerCpu or its stacks; a PerCpu made before the stacks failed isn't
  *     given back.
  */
-allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr[mut PerCpu], frames.FrameError] {
+allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index : u32) -> Result[ptr[mut PerCpu], frames.FrameError] {
     cpu :: allocate_object[PerCpu](&kernel.frames)?
     stack_memory :: allocate_object[CpuStackMemory](&kernel.frames)?
     cpu.kernel = kernel
@@ -151,9 +161,18 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
     cpu.context.clock = &kernel.clock
 
     cpu.stacks.kernel = range_of(&stack_memory.kernel[0], KERNEL_STACK_SIZE)
-    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.Nmi)] = range_of(&stack_memory.nmi[0], CRITICAL_STACK_SIZE)
-    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.DoubleFault)] = range_of(&stack_memory.double_fault[0], CRITICAL_STACK_SIZE)
-    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.MachineCheck)] = range_of(&stack_memory.machine_check[0], CRITICAL_STACK_SIZE)
+    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.Nmi)] = range_of(
+        &stack_memory.nmi[0],
+        CRITICAL_STACK_SIZE
+    )
+    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.DoubleFault)] = range_of(
+        &stack_memory.double_fault[0],
+        CRITICAL_STACK_SIZE
+    )
+    cpu.stacks.critical[cast[u8](arch_interface.CriticalEvent.MachineCheck)] = range_of(
+        &stack_memory.machine_check[0],
+        CRITICAL_STACK_SIZE
+    )
     return .Ok(cpu)
 }
 
@@ -164,7 +183,7 @@ allocate_cpu :: fn(kernel #escaping : ptr[mut Kernel], index: u32) -> Result[ptr
  *
  * @param kernel The kernel, whose first online_cpus CPUs, the caller's apart, are sent the IPI.
  */
-stop_other_cpus :: fn(kernel: ptr[Kernel]) {
+stop_other_cpus :: fn(kernel : ptr[Kernel]) {
     self :: per_cpu().index
     for cpu, index in kernel.cpus {
         if index < cast[usize](kernel.online_cpus) && cast[u32](index) != self {

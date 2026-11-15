@@ -27,7 +27,7 @@ FORGED_V4 :: net_stack.Ipv4.{bytes = u8.[6, 6, 6, 6]}
  *
  * @param world The world; its router serves only once dns_socket is opened.
  */
-serve_dns :: fn(world: ptr[mut World]) {
+serve_dns :: fn(world : ptr[mut World]) {
     if world.dns_socket == 0 {
         return void
     }
@@ -39,12 +39,24 @@ serve_dns :: fn(world: ptr[mut World]) {
         if world.dns_spoof {
             forged : u8[512]
             length :: answer_query(asked, view_of(&forged[0], forged.count), true)
-            _ = net_stack.udp_send(&world.router, world.dns_socket, got.from, got.from_port, net_stack.part(view_of(&forged[0], forged.count), 0, length))
+            _ = net_stack.udp_send(
+                &world.router,
+                world.dns_socket,
+                got.from,
+                got.from_port,
+                net_stack.part(view_of(&forged[0], forged.count), 0, length)
+            )
         }
         answer : u8[512]
         length :: answer_query(asked, view_of(&answer[0], answer.count), false)
         if length > 0 {
-            _ = net_stack.udp_send(&world.router, world.dns_socket, got.from, got.from_port, net_stack.part(view_of(&answer[0], answer.count), 0, length))
+            _ = net_stack.udp_send(
+                &world.router,
+                world.dns_socket,
+                got.from,
+                got.from_port,
+                net_stack.part(view_of(&answer[0], answer.count), 0, length)
+            )
         }
     }
 }
@@ -58,7 +70,7 @@ serve_dns :: fn(world: ptr[mut World]) {
  * @param forged Whether to forge it: its ID one off, and FORGED_V4 for any name.
  * @return The answer's length; 0 for a query that isn't read.
  */
-answer_query :: fn(query: u8[], into: mut u8[], forged: bool) -> usize {
+answer_query :: fn(query : u8[], into : mut u8[], forged : bool) -> usize {
     name : u8[net_stack.MAX_NAME]
     name_length :: net_stack.read_name(query, 12, view_of(&name[0], name.count)) or_return 0
     question_end :: net_stack.skip_name(query, 12) or_return 0
@@ -131,7 +143,7 @@ answer_query :: fn(query: u8[], into: mut u8[], forged: bool) -> usize {
  * @param faults How the link misbehaves.
  * @return The world, the caller's to free.
  */
-dns_world :: fn(seed: u64, faults: Faults) -> ptr[mut World] {
+dns_world :: fn(seed : u64, faults : Faults) -> ptr[mut World] {
     world :: make_world(seed, faults)
     world.dns_socket = net_stack.udp_open(&world.router, net_stack.DNS_PORT) or_else 0
     take_frames(world)
@@ -154,8 +166,9 @@ dns_world :: fn(seed: u64, faults: Faults) -> ptr[mut World] {
  * @param v6 Whether its IPv6 addresses are wanted.
  * @return Its result; Failed with no addresses if it wasn't done in a minute, or couldn't start.
  */
-look_up :: fn(world: ptr[mut World], name: string, v4: bool, v6: bool) -> net_stack.Resolution {
-    lookup :: net_stack.resolve(&world.host, string_bytes(name), v4, v6) or_return net_stack.Resolution.{outcome = .Failed}
+look_up :: fn(world : ptr[mut World], name : string, v4 : bool, v6 : bool) -> net_stack.Resolution {
+    lookup :: net_stack.resolve(&world.host, string_bytes(name), v4, v6)
+        or_return net_stack.Resolution.{outcome = .Failed}
     for step in 0..<600 {
         match net_stack.take_resolution(&world.host, lookup) {
             case Some(result) => return result
@@ -167,16 +180,20 @@ look_up :: fn(world: ptr[mut World], name: string, v4: bool, v6: bool) -> net_st
 }
 
 /** Tell whether a result's address at an index is an IPv4 address. */
-is_v4 :: fn(result: ptr[net_stack.Resolution], index: usize, address: net_stack.Ipv4) -> bool {
-    return index < result.count && index < result.addresses.count && net_stack.same_address(result.addresses[index], .V4(address))
+is_v4 :: fn(result : ptr[net_stack.Resolution], index : usize, address : net_stack.Ipv4) -> bool {
+    return index < result.count
+        && index < result.addresses.count
+        && net_stack.same_address(result.addresses[index], .V4(address))
 }
 
 /** Tell whether a result's address at an index is an IPv6 address. */
-is_v6 :: fn(result: ptr[net_stack.Resolution], index: usize, address: net_stack.Ipv6) -> bool {
-    return index < result.count && index < result.addresses.count && net_stack.same_address(result.addresses[index], .V6(address))
+is_v6 :: fn(result : ptr[net_stack.Resolution], index : usize, address : net_stack.Ipv6) -> bool {
+    return index < result.count
+        && index < result.addresses.count
+        && net_stack.same_address(result.addresses[index], .V6(address))
 }
 
-resolves_names #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+resolves_names #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     world :: dns_world(11, Faults.{})
     defer runtime.free(world)
     testing.require(t, world.leased, "leased")?
@@ -184,8 +201,11 @@ resolves_names #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     testing.expect(t, peer.outcome == .Found && peer.count == 2, "both of a name's addresses")
     testing.expect(t, is_v6(&peer, 0, PEER_V6) && is_v4(&peer, 1, PEER_V4), "IPv6 first, then IPv4")
     alias := look_up(world, "ALIAS.Example.Test.", true, true)
-    testing.expect(t, alias.outcome == .Found && is_v6(&alias, 0, PEER_V6) && is_v4(&alias, 1, PEER_V4),
-        "a CNAME followed, the name's case and final dot aside")
+    testing.expect(
+        t,
+        alias.outcome == .Found && is_v6(&alias, 0, PEER_V6) && is_v4(&alias, 1, PEER_V4),
+        "a CNAME followed, the name's case and final dot aside"
+    )
     only := look_up(world, "v4only.example.test", true, true)
     testing.expect(t, only.outcome == .Found && only.count == 1 && is_v4(&only, 0, ONLY_V4), "a name with IPv4 only")
     v6 := look_up(world, "v4only.example.test", false, true)
@@ -201,34 +221,46 @@ resolves_names #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     return .Ok
 }
 
-caches_answers_for_their_ttl #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+caches_answers_for_their_ttl #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     world :: dns_world(12, Faults.{})
     defer runtime.free(world)
     first := look_up(world, "peer.example.test", true, true)
     asked :: world.dns_queries
     testing.expect(t, first.outcome == .Found && asked == 2, "a query of each kind")
     again := look_up(world, "peer.example.test", true, true)
-    testing.expect(t, again.outcome == .Found && again.count == 2 && world.dns_queries == asked, "answered from the cache")
+    testing.expect(
+        t,
+        again.outcome == .Found && again.count == 2 && world.dns_queries == asked,
+        "answered from the cache"
+    )
     missing := look_up(world, "missing.example.test", true, true)
     missed :: world.dns_queries
     _ = look_up(world, "missing.example.test", true, true)
-    testing.expect(t, missing.outcome == .NoSuchName && world.dns_queries == missed, "a name that doesn't exist is remembered")
+    testing.expect(
+        t,
+        missing.outcome == .NoSuchName && world.dns_queries == missed,
+        "a name that doesn't exist is remembered"
+    )
     run(world, cast[u64](TTL + 1) * net_stack.SECOND)
     later := look_up(world, "peer.example.test", true, true)
     testing.expect(t, later.outcome == .Found && world.dns_queries > missed, "asked again once its TTL's passed")
     return .Ok
 }
 
-ignores_forged_answers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+ignores_forged_answers #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     world :: dns_world(13, Faults.{})
     defer runtime.free(world)
     world.dns_spoof = true
     peer := look_up(world, "peer.example.test", true, false)
-    testing.expect(t, peer.outcome == .Found && peer.count == 1 && is_v4(&peer, 0, PEER_V4), "the forged ID's answer ignored")
+    testing.expect(
+        t,
+        peer.outcome == .Found && peer.count == 1 && is_v4(&peer, 0, PEER_V4),
+        "the forged ID's answer ignored"
+    )
     return .Ok
 }
 
-passes_over_a_silent_server #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+passes_over_a_silent_server #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     world :: dns_world(14, Faults.{})
     defer runtime.free(world)
     // A server no one answers for, configured first, then the router
@@ -241,7 +273,7 @@ passes_over_a_silent_server #test :: fn(t: ptr[mut testing.T]) -> testing.Outcom
     return .Ok
 }
 
-learns_servers_from_dhcp_and_routers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+learns_servers_from_dhcp_and_routers #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     world :: make_world(15, Faults.{})
     defer runtime.free(world)
     take_frames(world)
@@ -269,7 +301,7 @@ learns_servers_from_dhcp_and_routers #test :: fn(t: ptr[mut testing.T]) -> testi
     return .Ok
 }
 
-resolves_over_a_lossy_link #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+resolves_over_a_lossy_link #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     for seed in cast[u64](1)..<11 {
         world :: dns_world(seed, Faults.{drop = 20, duplicate = 10, most_delay = 50 * MILLISECOND})
         peer := look_up(world, "peer.example.test", true, true)
@@ -280,11 +312,11 @@ resolves_over_a_lossy_link #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome
 }
 
 /** Names in messages made at random are read, skipped and compared without harm, and never past MAX_NAME. */
-reads_any_name #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+reads_any_name #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     return testing.check_property(t, any_name)
 }
 
-any_name : testing.Property : fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+any_name : testing.Property : fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     message :: testing.draw_bytes(source, 600)
     at :: cast[usize](testing.draw_between(source, 0, 600))
     name : u8[net_stack.MAX_NAME]

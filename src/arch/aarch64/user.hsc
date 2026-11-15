@@ -1,8 +1,8 @@
 package arch_aarch64
 
 import aarch64 from "base:intrinsics/aarch64"
-import arch_interface from "../../arch_interface"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../../arch_interface"
 
 /*
  * User-mode registers (arch_interface, User State): a thread's RegisterFrame, as the entry function saves it
@@ -20,7 +20,7 @@ USER_SPSR : u64 : 0
  * @param registers The thread's registers, overwritten whole.
  * @param start Where it starts: its first instruction (ELR_EL1), its stack pointer (SP_EL0), and x0's argument.
  */
-init_user_registers :: fn(registers: ptr[mut UserRegisters], start: ptr[arch_interface.UserStart]) {
+init_user_registers :: fn(registers : ptr[mut UserRegisters], start : ptr[arch_interface.UserStart]) {
     registers.frame = aarch64.RegisterFrame.{}
     registers.frame.elr = cast[u64](start.instruction_pointer)
     registers.frame.sp_el0 = cast[u64](start.stack_pointer)
@@ -34,7 +34,7 @@ init_user_registers :: fn(registers: ptr[mut UserRegisters], start: ptr[arch_int
  * @param registers The calling thread's registers, saved at its svc.
  * @return x8, as user mode set it; any value, unchecked.
  */
-syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
+syscall_number :: fn(registers : ptr[UserRegisters]) -> u64 {
     return registers.frame.x[8]
 }
 
@@ -45,7 +45,7 @@ syscall_number :: fn(registers: ptr[UserRegisters]) -> u64 {
  * @param index Which argument, 0 to 5, in x0 to x5.
  * @return The argument register's value, as user mode set it; 0 for an index past the sixth.
  */
-syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
+syscall_argument :: fn(registers : ptr[UserRegisters], index : u32) -> u64 {
     if index >= 6 {
         return 0
     }
@@ -58,7 +58,7 @@ syscall_argument :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
  * @param registers The calling thread's registers, which it returns to.
  * @param result The result: its tag goes in x0, its two values in x1 and x2.
  */
-set_syscall_result :: fn(registers: ptr[mut UserRegisters], result: ptr[arch_interface.SyscallResult]) {
+set_syscall_result :: fn(registers : ptr[mut UserRegisters], result : ptr[arch_interface.SyscallResult]) {
     registers.frame.x[0] = result.tag
     registers.frame.x[1] = result.values[0]
     registers.frame.x[2] = result.values[1]
@@ -70,7 +70,7 @@ set_syscall_result :: fn(registers: ptr[mut UserRegisters], result: ptr[arch_int
  * @param registers The thread's registers, as its last entry to the kernel saved them; only read.
  * @return ELR_EL1 as saved: after an svc, the instruction after it; after a fault, the faulting instruction.
  */
-instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.VirtualAddress {
+instruction_pointer :: fn(registers : ptr[UserRegisters]) -> arch_interface.VirtualAddress {
     return cast[arch_interface.VirtualAddress](registers.frame.elr)
 }
 
@@ -80,7 +80,7 @@ instruction_pointer :: fn(registers: ptr[UserRegisters]) -> arch_interface.Virtu
  * @param registers The thread's registers, saved at an svc: ELR_EL1 is just past it, which is 4 bytes, as every
  *     instruction is, so it goes back 4.
  */
-restart_syscall :: fn(registers: ptr[mut UserRegisters]) {
+restart_syscall :: fn(registers : ptr[mut UserRegisters]) {
     registers.frame.elr -= 4
 }
 
@@ -117,7 +117,7 @@ user_register_count :: fn() -> u32 {
  * @param index 0 to 30 for x0 to x30, then SP_INDEX, PC_INDEX and PSTATE_INDEX.
  * @return The register's value; 0 for an index past PSTATE_INDEX.
  */
-get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
+get_user_register :: fn(registers : ptr[UserRegisters], index : u32) -> u64 {
     frame :: &registers.frame
     if index < 31 {
         return frame.x[cast[usize](index)]
@@ -140,7 +140,7 @@ get_user_register :: fn(registers: ptr[UserRegisters], index: u32) -> u64 {
  * @return False, with nothing changed, for an index past PSTATE_INDEX, or an sp or pc outside user addresses
  *     (user_address_range), which would fault as soon as the thread ran; true otherwise.
  */
-set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u64) -> bool {
+set_user_register :: fn(registers : ptr[mut UserRegisters], index : u32, value : u64) -> bool {
     frame :: &registers.frame
     low, high :: user_address_range()
     // An instruction or stack pointer outside user addresses would fault as soon as the thread ran
@@ -175,17 +175,23 @@ set_user_register :: fn(registers: ptr[mut UserRegisters], index: u32, value: u6
  *
  * @param registers The thread's registers, restored whole.
  */
-return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
+return_to_user :: fn(registers : ptr[UserRegisters]) #never_returns {
     key :: current_cpu().user_key
     if has_pointer_authentication() {
-        // APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1), then SCTLR_EL1.EnIA, here, where no frame below returns
+        /*
+         * APIAKeyLo_EL1 and APIAKeyHi_EL1 (S3_0_C2_C1_0 and S3_0_C2_C1_1), then SCTLR_EL1.EnIA, here, where no frame
+         * below returns
+         */
         aarch64.write_system_register_encoded(3, 0, 2, 1, 0, key[0])
         aarch64.write_system_register_encoded(3, 0, 2, 1, 1, key[1])
         aarch64.write_system_register(.SCTLR_EL1, aarch64.read_system_register(.SCTLR_EL1) | SCTLR_ENABLE_IA)
         aarch64.isb()
     }
     cpu :: current_cpu()
-    // The kernel's Guarded Control Stack from its top, as SP_EL1 is, and on (decisions/0186, Hd): GCSPR_EL1 (S3_0_C2_C5_1), GCSCR_EL1 (S3_0_C2_C5_0)
+    /*
+     * The kernel's Guarded Control Stack from its top, as SP_EL1 is, and on (decisions/0186, Hd): GCSPR_EL1
+     * (S3_0_C2_C5_1), GCSCR_EL1 (S3_0_C2_C5_0)
+     */
     if cpu.kernel_shadow_top != 0 {
         aarch64.write_system_register_encoded(3, 0, 2, 5, 1, cpu.kernel_shadow_top)
         aarch64.write_system_register_encoded(3, 0, 2, 5, 0, GCSCR_ON)
@@ -195,8 +201,10 @@ return_to_user :: fn(registers: ptr[UserRegisters]) #never_returns {
     aarch64.return_to_user(&registers.frame, cast[rawptr](cpu.kernel_stack_top))
 }
 
-// The self-hosted debug registers (decisions/0183, 12b), by their encodings, which take n in CRm
-//SPEC: Arm ARM (DDI 0487) D2 (AArch64 self-hosted debug), D19.3 (debug registers)
+/*
+ * The self-hosted debug registers (decisions/0183, 12b), by their encodings, which take n in CRm
+ * SPEC: Arm ARM (DDI 0487) D2 (AArch64 self-hosted debug), D19.3 (debug registers)
+ */
 /** MDSCR_EL1.SS (bit 0): software step on. */
 MDSCR_SS : u64 : 1 << 0
 /** MDSCR_EL1.MDE (bit 15): breakpoints and watchpoints on. */
@@ -245,7 +253,12 @@ DebugRegisters :: struct {
  * @return False, changing nothing, for a slot past the CPU's breakpoints or watchpoints, an address outside user
  *     memory, or a data slot whose size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it.
  */
-set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters], step: bool, slots: slop_os.DebugSlot[]) -> bool {
+set_debug :: fn(
+    debug : ptr[mut DebugRegisters],
+    registers : ptr[mut UserRegisters],
+    step : bool,
+    slots : slop_os.DebugSlot[]
+) -> bool {
     made := DebugRegisters.{step = step, used = step}
     features :: aarch64.read_system_register_encoded(3, 0, 0, 5, 0)
     breakpoint_count :: ((features >> 12) & 0xf) + 1
@@ -267,7 +280,9 @@ set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters
         }
         else {
             size :: cast[u64](slot.size)
-            if cast[u64](i) >= watchpoint_count || (size != 1 && size != 2 && size != 4 && size != 8) || slot.address % size != 0 {
+            if cast[u64](i) >= watchpoint_count
+                || (size != 1 && size != 2 && size != 4 && size != 8)
+                || slot.address % size != 0 {
                 return false
             }
             accesses : u64 = if slot.kind == .Write { 2 } else { 3 }
@@ -287,7 +302,7 @@ set_debug :: fn(debug: ptr[mut DebugRegisters], registers: ptr[mut UserRegisters
  * @param debug The thread's state; with nothing set, nothing's loaded.
  * @param registers Its registers, whose SPSR.SS is set so the eret steps one instruction, when it steps.
  */
-debug_on :: fn(debug: ptr[DebugRegisters], registers: ptr[mut UserRegisters]) {
+debug_on :: fn(debug : ptr[DebugRegisters], registers : ptr[mut UserRegisters]) {
     if !debug.used {
         return void
     }
@@ -327,7 +342,7 @@ debug_off :: fn() {
  * @param value Its address.
  * @param control Its control; 0 turns it off.
  */
-write_breakpoint :: fn(n: usize, value: u64, control: u64) {
+write_breakpoint :: fn(n : usize, value : u64, control : u64) {
     match n {
         case 0 => {
             aarch64.write_system_register_encoded(2, 0, 0, 0, 4, value)
@@ -355,7 +370,7 @@ write_breakpoint :: fn(n: usize, value: u64, control: u64) {
  * @param value Its doubleword's address.
  * @param control Its control; 0 turns it off.
  */
-write_watchpoint :: fn(n: usize, value: u64, control: u64) {
+write_watchpoint :: fn(n : usize, value : u64, control : u64) {
     match n {
         case 0 => {
             aarch64.write_system_register_encoded(2, 0, 0, 0, 6, value)
@@ -388,7 +403,7 @@ MRS_CNTPCT : u32 : 0xd53be020
  *
  * @param trapped Whether they trap.
  */
-set_counter_trap :: fn(trapped: bool) {
+set_counter_trap :: fn(trapped : bool) {
     cpu :: current_cpu()
     if cpu.counter_trapped == trapped {
         return void
@@ -406,7 +421,7 @@ set_counter_trap :: fn(trapped: bool) {
  * @param instruction The instruction.
  * @return The counter; null for any other instruction.
  */
-emulate_counter_read :: fn(registers: ptr[mut UserRegisters], instruction: u32) -> u64? {
+emulate_counter_read :: fn(registers : ptr[mut UserRegisters], instruction : u32) -> u64? {
     encoding :: instruction & ~cast[u32](0x1f)
     value : u64 = 0
     if encoding == MRS_CNTVCT {

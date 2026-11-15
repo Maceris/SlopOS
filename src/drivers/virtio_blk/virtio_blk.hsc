@@ -12,9 +12,9 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
+import service_kit from "../../libraries/service_kit"
 import pci from "../../pci"
 import block from "../../protocols/block"
-import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
 /** The bytes of a page: 4096. */
@@ -138,9 +138,19 @@ Driver :: struct {
  *     configuration, 5 if no port could be made, 6 if its MSI couldn't be set up, 7 if its DMA memory couldn't be
  *     made or mapped, 8 if its queue couldn't be set up, 9 if the listener couldn't be bound.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    clients: os.Listener[block.Block]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[block.Block]
+) -> int {
     block_of_startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     driver_made, driver_error :: runtime.new_aligned(Driver, align_of(Driver))
@@ -159,7 +169,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if driver.transport.device == 0 {
         return 4
     }
-    driver.block_count = virtio.read_u32(driver.transport.device, CAPACITY) | (cast[u64](virtio.read_u32(driver.transport.device, CAPACITY + 4)) << 32)
+    driver.block_count = virtio.read_u32(driver.transport.device, CAPACITY)
+        | (cast[u64](virtio.read_u32(driver.transport.device, CAPACITY + 4)) << 32)
 
     driver.port = slop_os.port_create(block_of_startup.budget) or_return 5
     _ = service_kit.watch_stop(driver.port)
@@ -168,7 +179,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) or_return 6
+    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+        or_return 6
 
     // The queue's page, then the requests' headers and status bytes
     memory :: slop_os.dma_memory_create(domain, block_of_startup.budget, 2 * PAGE, 0) or_return 7
@@ -176,7 +188,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, block_of_startup.space, pages, 0, 2 * PAGE, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.queue = virtio.setup_queue(&driver.transport, 0, pages, device_address,virtio.QUEUE_PAGE, 0) or_return 8
+    driver.queue = virtio.setup_queue(&driver.transport, 0, pages, device_address, virtio.QUEUE_PAGE, 0) or_return 8
     driver.requests = pages + PAGE
     driver.requests_device = device_address + PAGE
     virtio.ready(&driver.transport)
@@ -219,7 +231,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  *     with it.
  * @param into Where each request is received, reused for each.
  */
-serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
     }
@@ -237,8 +249,10 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
             }
             case _ => {
                 service_kit.drop_client(&driver.clients, index)
-                // Its buffer goes with it, windows and all, so a client taking its place never sees what it held: now,
-                // or once the device has finished what it was asked for with it
+                /*
+                 * Its buffer goes with it, windows and all, so a client taking its place never sees what it held: now,
+                 * or once the device has finished what it was asked for with it
+                 */
                 if index < driver.buffers.count {
                     driver.generations[index] += 1
                     old :: driver.buffers[index].memory
@@ -252,8 +266,18 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
             case Read(transfer) => answer(driver, end, start(driver, index, transfer, false))
             case Write(transfer) => answer(driver, end, start(driver, index, transfer, true))
             case Flush(tag) => answer(driver, end, start_flush(driver, index, tag))
-            case Describe => answer(driver, end, .Described(block.Info.{block_count = driver.block_count, buffer_bytes = BUFFER_BYTES,
-                read_only = driver.read_only, flushes = driver.flushes}))
+            case Describe => answer(
+                driver,
+                end,
+                .Described(
+                    block.Info.{
+                        block_count = driver.block_count,
+                        buffer_bytes = BUFFER_BYTES,
+                        read_only = driver.read_only,
+                        flushes = driver.flushes,
+                    }
+                )
+            )
             case GetBuffer => answer(driver, end, buffer_for(driver, index))
             case Connect(connection) => {
                 if !service_kit.add_client(&driver.clients, driver.port, connection.end) {
@@ -272,7 +296,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  *     closed here.
  * @param response The answer; null for a request in flight, answered when the device finishes it.
  */
-answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: block.Response?) {
+answer :: fn(driver : ptr[mut Driver], end : slop_os.Channel, response : block.Response?) {
     given :: response or_return void
     out := os.Outgoing.{}
     made :: os.begin[block.Response](&out)
@@ -287,7 +311,7 @@ answer :: fn(driver: ptr[mut Driver], end: slop_os.Channel, response: block.Resp
  * @param status How it went.
  * @return Finished with tag and status; never null, the optional only for start's and the rest's results.
  */
-finished :: fn(tag: u64, status: block.Status) -> block.Response? {
+finished :: fn(tag : u64, status : block.Status) -> block.Response? {
     return block.Response.Finished(block.Completion.{tag = tag, status = status})
 }
 
@@ -303,13 +327,16 @@ finished :: fn(tag: u64, status: block.Status) -> block.Response? {
  *     a buffer, a count of 0, or blocks past the disk or bytes past the buffer; ReadOnly for a Write to a read-only
  *     disk; Busy with every slot or descriptor taken.
  */
-start :: fn(driver: ptr[mut Driver], client: usize, transfer: block.Transfer, writes: bool) -> block.Response? {
+start :: fn(driver : ptr[mut Driver], client : usize, transfer : block.Transfer, writes : bool) -> block.Response? {
     if client >= driver.buffers.count || cast[slop_os.Handle](driver.buffers[client].memory) == slop_os.NO_HANDLE {
         return finished(transfer.tag, .OutOfRange)
     }
     bytes :: cast[u64](transfer.count) * block.BLOCK_BYTES
-    if transfer.count == 0 || transfer.first > driver.block_count || cast[u64](transfer.count) > driver.block_count - transfer.first
-        || cast[u64](transfer.offset) > BUFFER_BYTES || bytes > BUFFER_BYTES - cast[u64](transfer.offset) {
+    if transfer.count == 0
+        || transfer.first > driver.block_count
+        || cast[u64](transfer.count) > driver.block_count - transfer.first
+        || cast[u64](transfer.offset) > BUFFER_BYTES
+        || bytes > BUFFER_BYTES - cast[u64](transfer.offset) {
         return finished(transfer.tag, .OutOfRange)
     }
     if writes && driver.read_only {
@@ -319,8 +346,12 @@ start :: fn(driver: ptr[mut Driver], client: usize, transfer: block.Transfer, wr
     header :: write_header(driver, slot, if writes { REQUEST_OUT } else { REQUEST_IN }, transfer.first)
     parts :: virtio.Part.[
         virtio.Part.{address = header, length = cast[u32](HEADER_BYTES), device_writes = false},
-        virtio.Part.{address = driver.buffers[client].device + cast[u64](transfer.offset), length = cast[u32](bytes), device_writes = !writes},
-        virtio.Part.{address = status_of(driver, slot), length = 1, device_writes = true},
+        virtio.Part.{
+            address = driver.buffers[client].device + cast[u64](transfer.offset),
+            length = cast[u32](bytes),
+            device_writes = !writes,
+        },
+        virtio.Part.{address = status_of(driver, slot), length = 1, device_writes = true}
     ]
     return send_slot(driver, slot, client, transfer.tag, parts)
 }
@@ -334,7 +365,7 @@ start :: fn(driver: ptr[mut Driver], client: usize, transfer: block.Transfer, wr
  * @return Null when it's sent, answered when the device finishes it; Finished now with Done for a device without a
  *     cache, whose writes are durable, or Busy with every slot or descriptor taken.
  */
-start_flush :: fn(driver: ptr[mut Driver], client: usize, tag: u64) -> block.Response? {
+start_flush :: fn(driver : ptr[mut Driver], client : usize, tag : u64) -> block.Response? {
     if !driver.flushes {
         return finished(tag, .Done)
     }
@@ -342,7 +373,7 @@ start_flush :: fn(driver: ptr[mut Driver], client: usize, tag: u64) -> block.Res
     header :: write_header(driver, slot, REQUEST_FLUSH, 0)
     parts :: virtio.Part.[
         virtio.Part.{address = header, length = cast[u32](HEADER_BYTES), device_writes = false},
-        virtio.Part.{address = status_of(driver, slot), length = 1, device_writes = true},
+        virtio.Part.{address = status_of(driver, slot), length = 1, device_writes = true}
     ]
     return send_slot(driver, slot, client, tag, parts)
 }
@@ -358,14 +389,32 @@ start_flush :: fn(driver: ptr[mut Driver], client: usize, tag: u64) -> block.Res
  * @param parts The chain's buffers, at most virtio.MAX_CHAIN.
  * @return Null once it's offered; Finished with Busy if the queue hasn't the descriptors for it.
  */
-send_slot :: fn(driver: ptr[mut Driver], slot: usize, client: usize, tag: u64, parts: virtio.Part[]) -> block.Response? {
+send_slot :: fn(
+    driver : ptr[mut Driver],
+    slot : usize,
+    client : usize,
+    tag : u64,
+    parts : virtio.Part[]
+) -> block.Response? {
     head :: virtio.offer_chain(&driver.queue, parts)
     if head == virtio.NO_DESCRIPTOR || slot >= driver.slots.count {
         return finished(tag, .Busy)
     }
     generation :: if client < driver.generations.count { driver.generations[client] } else { cast[u32](0) }
-    memory :: if client < driver.buffers.count { driver.buffers[client].memory } else { cast[slop_os.Memory](slop_os.NO_HANDLE) }
-    driver.slots[slot] = Slot.{used = true, client = client, tag = tag, head = head, generation = generation, memory = memory}
+    memory :: if client < driver.buffers.count {
+        driver.buffers[client].memory
+    }
+    else {
+        cast[slop_os.Memory](slop_os.NO_HANDLE)
+    }
+    driver.slots[slot] = Slot.{
+        used = true,
+        client = client,
+        tag = tag,
+        head = head,
+        generation = generation,
+        memory = memory,
+    }
     return null
 }
 
@@ -375,7 +424,7 @@ send_slot :: fn(driver: ptr[mut Driver], slot: usize, client: usize, tag: u64, p
  * @param driver The driver, whose slots are looked through for requests with the buffer.
  * @param memory The buffer's memory; NO_HANDLE is nothing to close.
  */
-release_buffer :: fn(driver: ptr[Driver], memory: slop_os.Memory) {
+release_buffer :: fn(driver : ptr[Driver], memory : slop_os.Memory) {
     if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE {
         return void
     }
@@ -393,7 +442,7 @@ release_buffer :: fn(driver: ptr[Driver], memory: slop_os.Memory) {
  * @param driver The driver, which isn't changed.
  * @return The lowest free slot's index; null if all SLOTS are in flight.
  */
-free_slot :: fn(driver: ptr[Driver]) -> usize? {
+free_slot :: fn(driver : ptr[Driver]) -> usize? {
     for slot, i in driver.slots {
         if !slot.used {
             return i
@@ -411,7 +460,7 @@ free_slot :: fn(driver: ptr[Driver]) -> usize? {
  * @param sector The first sector, 0 for a flush.
  * @return The header's device address, for the chain's first part.
  */
-write_header :: fn(driver: ptr[mut Driver], slot: usize, kind: u32, sector: u64) -> u64 {
+write_header :: fn(driver : ptr[mut Driver], slot : usize, kind : u32, sector : u64) -> u64 {
     header :: cast[ptr[mut RequestHeader]](driver.requests + cast[u64](slot) * HEADER_BYTES)
     header.kind = cast[u32le](kind)
     header.reserved = 0
@@ -428,7 +477,7 @@ write_header :: fn(driver: ptr[mut Driver], slot: usize, kind: u32, sector: u64)
  * @param slot The slot, below SLOTS.
  * @return The status byte's device address, for the chain's last part.
  */
-status_of :: fn(driver: ptr[Driver], slot: usize) -> u64 {
+status_of :: fn(driver : ptr[Driver], slot : usize) -> u64 {
     return driver.requests_device + STATUS_AT + cast[u64](slot)
 }
 
@@ -439,7 +488,7 @@ status_of :: fn(driver: ptr[Driver], slot: usize) -> u64 {
  * @param slot The slot, below SLOTS.
  * @param value The status byte written, 0xff for one the device hasn't written yet.
  */
-set_status :: fn(driver: ptr[mut Driver], slot: usize, value: u8) {
+set_status :: fn(driver : ptr[mut Driver], slot : usize, value : u8) {
     intrinsics.volatile_store_u8(cast[ptr[mut u8]](driver.requests + STATUS_AT + cast[u64](slot)), value)
 }
 
@@ -451,7 +500,7 @@ set_status :: fn(driver: ptr[mut Driver], slot: usize, value: u8) {
  *
  * @param driver The driver, its queue's finished chains taken and its slots freed.
  */
-finish :: fn(driver: ptr[mut Driver]) {
+finish :: fn(driver : ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.queue) or_break
         for &slot, index in driver.slots {
@@ -464,7 +513,14 @@ finish :: fn(driver: ptr[mut Driver]) {
             if current && slot.client < driver.clients.ends.count {
                 end :: driver.clients.ends[slot.client]
                 if cast[slop_os.Handle](end) != slop_os.NO_HANDLE {
-                    answer(driver, end, finished(slot.tag, if status == STATUS_OK { block.Status.Done } else { block.Status.DeviceError }))
+                    answer(
+                        driver,
+                        end,
+                        finished(
+                            slot.tag,
+                            if status == STATUS_OK { block.Status.Done } else { block.Status.DeviceError }
+                        )
+                    )
                 }
             }
             // The last request with a buffer its client left closes it
@@ -484,16 +540,18 @@ finish :: fn(driver: ptr[mut Driver]) {
  * @return Buffer with a new window onto all of the buffer, read-write, which moves to the client; Unsupported if the
  *     client's index is past them, or the buffer or window couldn't be made.
  */
-buffer_for :: fn(driver: ptr[mut Driver], client: usize) -> block.Response? {
+buffer_for :: fn(driver : ptr[mut Driver], client : usize) -> block.Response? {
     block_of_startup :: slop_os.startup_block()
     if client >= driver.buffers.count {
         return block.Response.Unsupported
     }
     if cast[slop_os.Handle](driver.buffers[client].memory) == slop_os.NO_HANDLE {
-        memory :: slop_os.dma_memory_create(driver.domain, block_of_startup.budget, BUFFER_BYTES, 0) or_return block.Response.Unsupported
+        memory :: slop_os.dma_memory_create(driver.domain, block_of_startup.budget, BUFFER_BYTES, 0)
+            or_return block.Response.Unsupported
         address :: slop_os.memory_device_address(memory) or_return block.Response.Unsupported
         driver.buffers[client] = Buffer.{memory = memory, device = address}
     }
-    window :: slop_os.memory_create_window(driver.buffers[client].memory, block_of_startup.budget, 0, BUFFER_BYTES) or_return block.Response.Unsupported
+    window :: slop_os.memory_create_window(driver.buffers[client].memory, block_of_startup.budget, 0, BUFFER_BYTES)
+        or_return block.Response.Unsupported
     return block.Response.Buffer(window)
 }

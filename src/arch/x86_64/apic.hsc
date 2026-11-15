@@ -1,7 +1,7 @@
 package arch_x86_64
 
-import runtime from "base:runtime"
 import x86_64 from "base:intrinsics/x86_64"
+import runtime from "base:runtime"
 import arch_interface from "../../arch_interface"
 
 /*
@@ -9,7 +9,7 @@ import arch_interface from "../../arch_interface"
  *
  * Every vector the kernel uses. Device interrupts get 48 to 239 (docs/specs/arch_interface.md, x86-64).
  */
-//SPEC: Intel SDM Vol. 3A §11 (APIC), §11.12 (x2APIC), Table 11-6 (x2APIC MSR addresses)
+// SPEC: Intel SDM Vol. 3A §11 (APIC), §11.12 (x2APIC), Table 11-6 (x2APIC MSR addresses)
 /** The vector of the local APIC timer's interrupt, the first one past the 32 the CPU reserves for exceptions. */
 TIMER_VECTOR : u8 : 32
 /** The vector of the reschedule IPI (arch_interface.IpiKind.Reschedule). */
@@ -66,8 +66,10 @@ LVT_TIMER_TSC_DEADLINE : u64 : 2 << 17
 /** Divide configuration 1011b: the timer counts at the bus clock divided by 1. */
 TIMER_DIVIDE_BY_1 : u64 : 0xb
 
-// PIT channel 2, for measuring the TSC when nothing else gives its frequency
-//SPEC: Intel 8254 datasheet; port 0x61 bits 0 (gate), 1 (speaker) and 5 (channel 2 output)
+/*
+ * PIT channel 2, for measuring the TSC when nothing else gives its frequency
+ * SPEC: Intel 8254 datasheet; port 0x61 bits 0 (gate), 1 (speaker) and 5 (channel 2 output)
+ */
 /** The PIT's input clock, in Hz: how fast its counters count down. */
 PIT_FREQUENCY : u64 : 1193182
 /** The I/O port of PIT channel 2's counter. */
@@ -81,7 +83,10 @@ PIT_CHANNEL_2_MODE_0 : u8 : 0xb0
 /** How long calibration measures, in parts of a second: 100, so 10 ms. */
 CALIBRATION_DIVISOR : u64 : 100
 
-//TODO(claude): xAPIC through its memory-mapped registers when there's no x2APIC: the kernel window can map them, but init_cpu would need them mapped first (testable with QEMU's -cpu max,-x2apic)
+/*
+ * TODO(claude): xAPIC through its memory-mapped registers when there's no x2APIC: the kernel window can map them, but
+ * init_cpu would need them mapped first (testable with QEMU's -cpu max,-x2apic)
+ */
 /**
  * Turn on x2APIC mode and software-enable the calling CPU's local APIC, with spurious interrupts on SPURIOUS_VECTOR.
  *
@@ -99,7 +104,7 @@ enable_local_apic :: fn() {
  *
  * @param id The interrupt, which isn't used: the local APIC ends the highest-priority one in service, which it knows.
  */
-end_of_interrupt :: fn(id: arch_interface.InterruptId) {
+end_of_interrupt :: fn(id : arch_interface.InterruptId) {
     x86_64.wrmsr(X2APIC_EOI, 0)
 }
 
@@ -109,7 +114,7 @@ end_of_interrupt :: fn(id: arch_interface.InterruptId) {
  * @return first FIRST_DEVICE_VECTOR, 48, the first vector past the timer's and the IPIs'.
  * @return count DEVICE_VECTOR_COUNT, 192, so devices get 48 to 239, below the spurious vector.
  */
-device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32) {
+device_interrupt_range :: fn() -> (first : arch_interface.InterruptId, count : u32) {
     return cast[arch_interface.InterruptId](FIRST_DEVICE_VECTOR), DEVICE_VECTOR_COUNT
 }
 
@@ -119,7 +124,7 @@ device_interrupt_range :: fn() -> (first: arch_interface.InterruptId, count: u32
  * @param cpu_hardware_id The target CPU's x2APIC ID, all 32 bits of it.
  * @param kind What it's for, which picks its vector: RESCHEDULE_VECTOR, TLB_FLUSH_VECTOR or STOP_VECTOR.
  */
-send_ipi :: fn(cpu_hardware_id: u64, kind: arch_interface.IpiKind) {
+send_ipi :: fn(cpu_hardware_id : u64, kind : arch_interface.IpiKind) {
     vector :: match kind {
         case .Reschedule => RESCHEDULE_VECTOR
         case .TlbFlush => TLB_FLUSH_VECTOR
@@ -145,7 +150,7 @@ test_nmi :: fn() {
  * @param cpu_hardware_id The CPU's x2APIC ID.
  * @return True: x86-64 always has NMIs to send.
  */
-send_nmi :: fn(cpu_hardware_id: u64) -> bool {
+send_nmi :: fn(cpu_hardware_id : u64) -> bool {
     x86_64.wrmsr(X2APIC_ICR, (cpu_hardware_id << 32) | ICR_DELIVERY_NMI)
     return true
 }
@@ -188,8 +193,7 @@ msi_controller_memory :: fn() -> u64 {
  *
  * @param memory The memory msi_controller_memory asked for, none, so not used.
  */
-init_msi :: fn(memory: arch_interface.PhysicalAddress) {
-}
+init_msi :: fn(memory : arch_interface.PhysicalAddress) {}
 
 /**
  * Add a device's MSIs, which needs nothing on x86-64: this does nothing.
@@ -198,19 +202,19 @@ init_msi :: fn(memory: arch_interface.PhysicalAddress) {
  * @param memory The memory msi_device_memory asked for, none, so not used.
  * @param events How many MSIs the device has, not used.
  */
-add_msi_device :: fn(source: u32, memory: arch_interface.PhysicalAddress, events: u32) {
-}
+add_msi_device :: fn(source : u32, memory : arch_interface.PhysicalAddress, events : u32) {}
 
 /**
  * Forget a device's MSIs, which needs nothing on x86-64: this does nothing.
  *
  * @param source The device's source, unused on x86-64.
  */
-remove_msi_device :: fn(source: u32) {
-}
+remove_msi_device :: fn(source : u32) {}
 
-//SPEC: Intel SDM Vol. 3A §11.11 (message signalled interrupts)
-//TODO(claude): destinations above 255 need interrupt remapping through the IOMMU (after M7)
+/*
+ * SPEC: Intel SDM Vol. 3A §11.11 (message signalled interrupts)
+ * TODO(claude): destinations above 255 need interrupt remapping through the IOMMU (after M7)
+ */
 /**
  * Make the message a device sends to raise id on a CPU.
  *
@@ -224,7 +228,12 @@ remove_msi_device :: fn(source: u32) {
  * @param id The vector to raise, of which only the low 8 bits are used; one of device_interrupt_range's.
  * @return The address and data the device's driver programs into its MSI or MSI-X registers.
  */
-route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+route_msi :: fn(
+    source : u32,
+    event : u32,
+    cpu_hardware_id : u64,
+    id : arch_interface.InterruptId
+) -> arch_interface.MsiMessage {
     return arch_interface.MsiMessage.{
         address = 0xfee00000 | ((cpu_hardware_id & 0xff) << 12),
         data = cast[u32](id) & 0xff,
@@ -242,7 +251,12 @@ route_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interfac
  * @param id The vector to raise, of which only the low 8 bits are used.
  * @return The new address and data.
  */
-move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface.InterruptId) -> arch_interface.MsiMessage {
+move_msi :: fn(
+    source : u32,
+    event : u32,
+    cpu_hardware_id : u64,
+    id : arch_interface.InterruptId
+) -> arch_interface.MsiMessage {
     return route_msi(source, event, cpu_hardware_id, id)
 }
 
@@ -254,8 +268,7 @@ move_msi :: fn(source: u32, event: u32, cpu_hardware_id: u64, id: arch_interface
  * @param source The device's source, not used.
  * @param event The device's event, not used.
  */
-unroute_msi :: fn(source: u32, event: u32) {
-}
+unroute_msi :: fn(source : u32, event : u32) {}
 
 /**
  * Give the page devices write their MSIs to as memory, for an IOMMU to map.
@@ -280,7 +293,7 @@ msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
  *     it didn't.
  * @return The TSC's frequency in Hz, the rate counter() counts at.
  */
-init_timer :: fn(hint: u64?) -> u64 {
+init_timer :: fn(hint : u64?) -> u64 {
     timer :: &current_cpu().timer
     timer.tsc_frequency = hint or_else (tsc_frequency_from_cpuid() or_else measure_tsc_frequency())
     features :: detect_features()
@@ -317,7 +330,7 @@ counter :: fn() -> u64 {
  *
  * @param value The TSC value to fire at.
  */
-set_deadline :: fn(value: u64) {
+set_deadline :: fn(value : u64) {
     timer :: &current_cpu().timer
     if timer.tsc_deadline {
         x86_64.wrmsr(IA32_TSC_DEADLINE, value)
@@ -355,11 +368,11 @@ cancel_deadline :: fn() {
  * @param denominator The rate to scale from, not 0, below 2^32 for the same reason.
  * @return The scaled value, rounded down; it overflows only if the result itself doesn't fit in 64 bits.
  */
-scale :: fn(value, numerator, denominator: u64) -> u64 {
+scale :: fn(value, numerator, denominator : u64) -> u64 {
     return value / denominator * numerator + value % denominator * numerator / denominator
 }
 
-//SPEC: Intel SDM Vol. 2A, CPUID leaf 15H
+// SPEC: Intel SDM Vol. 2A, CPUID leaf 15H
 /**
  * Read the TSC's frequency from CPUID leaf 0x15: the crystal clock's frequency times the ratio of the TSC to it.
  *
@@ -422,7 +435,7 @@ time_pit_interval :: fn() -> (u64, u64) {
  * @param tsc_frequency The TSC's frequency in Hz, at least 100 for the wait to be more than nothing.
  * @return The timer's frequency in ticks per second, at the divide configuration it had.
  */
-measure_apic_timer_frequency :: fn(tsc_frequency: u64) -> u64 {
+measure_apic_timer_frequency :: fn(tsc_frequency : u64) -> u64 {
     x86_64.wrmsr(X2APIC_LVT_TIMER, LVT_MASKED | cast[u64](TIMER_VECTOR))
     x86_64.wrmsr(X2APIC_TIMER_INITIAL_COUNT, 0xffffffff)
     start :: x86_64.rdtsc()

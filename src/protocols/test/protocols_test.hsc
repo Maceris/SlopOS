@@ -12,20 +12,19 @@ package protocols_test
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import testing from "std:testing"
-import network from "std:os/slop_os/network"
-import tcp_stream from "std:os/slop_os/tcp_stream"
-import tcp_listener from "std:os/slop_os/tcp_listener"
 import datagrams from "std:os/slop_os/datagrams"
+import network from "std:os/slop_os/network"
+import tcp_listener from "std:os/slop_os/tcp_listener"
+import tcp_stream from "std:os/slop_os/tcp_stream"
+import testing from "std:testing"
 import accounts from "../accounts"
 import block from "../block"
 import bundle_store from "../bundle_store"
 import clock_setting from "../clock_setting"
 import config from "../config"
 import connector from "../connector"
-import display from "../display"
-import surface from "../surface"
 import container from "../container"
+import display from "../display"
 import entropy from "../entropy"
 import events from "../events"
 import input from "../input"
@@ -44,6 +43,7 @@ import serial from "../serial"
 import session from "../session"
 import storage from "../storage"
 import supervision from "../supervision"
+import surface from "../surface"
 import trace from "../trace"
 import update from "../update"
 import volume from "../volume"
@@ -54,9 +54,9 @@ Judged :: struct {
     /** The protocol's package's name. */
     name : string,
     /** Its validate_request. */
-    request : (fn(message: u8[], size: u32, handle_count: u32) -> os.Validity),
+    request : fn(message : u8[], size : u32, handle_count : u32) -> os.Validity,
     /** Its validate_response. */
-    response : (fn(message: u8[], size: u32, handle_count: u32) -> os.Validity),
+    response : fn(message : u8[], size : u32, handle_count : u32) -> os.Validity,
 }
 
 /** How many protocols there are. */
@@ -73,8 +73,16 @@ protocols :: fn() -> Judged[PROTOCOL_COUNT] {
     return Judged.[
         Judged.{name = "accounts", request = accounts.validate_request, response = accounts.validate_response},
         Judged.{name = "block", request = block.validate_request, response = block.validate_response},
-        Judged.{name = "bundle_store", request = bundle_store.validate_request, response = bundle_store.validate_response},
-        Judged.{name = "clock_setting", request = clock_setting.validate_request, response = clock_setting.validate_response},
+        Judged.{
+            name = "bundle_store",
+            request = bundle_store.validate_request,
+            response = bundle_store.validate_response,
+        },
+        Judged.{
+            name = "clock_setting",
+            request = clock_setting.validate_request,
+            response = clock_setting.validate_response,
+        },
         Judged.{name = "config", request = config.validate_request, response = config.validate_response},
         Judged.{name = "connector", request = connector.validate_request, response = connector.validate_response},
         Judged.{name = "display", request = display.validate_request, response = display.validate_response},
@@ -104,8 +112,12 @@ protocols :: fn() -> Judged[PROTOCOL_COUNT] {
         Judged.{name = "net", request = net.validate_request, response = net.validate_response},
         Judged.{name = "network", request = network.validate_request, response = network.validate_response},
         Judged.{name = "tcp_stream", request = tcp_stream.validate_request, response = tcp_stream.validate_response},
-        Judged.{name = "tcp_listener", request = tcp_listener.validate_request, response = tcp_listener.validate_response},
-        Judged.{name = "datagrams", request = datagrams.validate_request, response = datagrams.validate_response},
+        Judged.{
+            name = "tcp_listener",
+            request = tcp_listener.validate_request,
+            response = tcp_listener.validate_response,
+        },
+        Judged.{name = "datagrams", request = datagrams.validate_request, response = datagrams.validate_response}
     ]
 }
 
@@ -118,7 +130,10 @@ protocols :: fn() -> Judged[PROTOCOL_COUNT] {
  * @param source The case's source: the protocol, the side, the handle count and the bytes.
  * @return Ok.
  */
-any_bytes_are_judged_without_reading_outside_them #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+any_bytes_are_judged_without_reading_outside_them #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     all :: protocols()
     index :: cast[usize](testing.draw_below(source, PROTOCOL_COUNT))
     if index >= all.count {
@@ -147,25 +162,37 @@ any_bytes_are_judged_without_reading_outside_them #test :: fn(t: ptr[mut testing
 }
 
 /** Each handle a message carries is named by one of its fields, once: none left over, none named twice. */
-handles_are_each_named_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+handles_are_each_named_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     // Dialed names one handle, by its index in the batch, 0; Unavailable names none
     dialed := os.Outgoing.{}
     answer :: os.begin[connector.Response](&dialed)
     answer^ = .Dialed(cast[slop_os.Channel](0))
     message :: bytes_of(&dialed)
     testing.expect(t, connector.validate_response(message, cast[u32](message.count), 1) == .Valid, "one handle, named")
-    testing.expect(t, connector.validate_response(message, cast[u32](message.count), 2) == .Invalid, "a second, named by nothing")
-    testing.expect(t, connector.validate_response(message, cast[u32](message.count), 0) == .Invalid, "a handle named that didn't come")
+    testing.expect(
+        t,
+        connector.validate_response(message, cast[u32](message.count), 2) == .Invalid,
+        "a second, named by nothing"
+    )
+    testing.expect(
+        t,
+        connector.validate_response(message, cast[u32](message.count), 0) == .Invalid,
+        "a handle named that didn't come"
+    )
     unavailable := os.Outgoing.{}
     none :: os.begin[connector.Response](&unavailable)
     none^ = .Unavailable
     empty :: bytes_of(&unavailable)
     testing.expect(t, connector.validate_response(empty, cast[u32](empty.count), 0) == .Valid, "no handles, none named")
-    testing.expect(t, connector.validate_response(empty, cast[u32](empty.count), 1) == .Invalid, "a handle with a message naming none")
+    testing.expect(
+        t,
+        connector.validate_response(empty, cast[u32](empty.count), 1) == .Invalid,
+        "a handle with a message naming none"
+    )
     return .Ok
 }
 
 /** A message being built, as the bytes it'd be sent as. */
-bytes_of :: fn(out: ptr[os.Outgoing]) -> u8[] {
+bytes_of :: fn(out : ptr[os.Outgoing]) -> u8[] {
     return bit_cast[u8[]](usize.[cast[usize](out.used), cast[usize](cast[uintptr](&out.words[0]))])
 }

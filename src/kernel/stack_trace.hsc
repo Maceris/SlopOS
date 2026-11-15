@@ -11,7 +11,7 @@ import intrinsics from "base:intrinsics"
  * @param address The address as the frame holds it.
  * @return The address of the code it returns to.
  */
-without_authentication :: fn(address: u64) -> u64 {
+without_authentication :: fn(address : u64) -> u64 {
     if (address >> 55) & 1 != 0 {
         return address | 0xffff000000000000
     }
@@ -31,7 +31,7 @@ STACK_TRACE_FRAMES :: 32
  *
  * @param skip How many frames to leave out after this function's own: 0 starts at the function that calls this.
  */
-log_stack_trace :: fn(skip: usize = 0) {
+log_stack_trace :: fn(skip : usize = 0) {
     addresses : rawptr[STACK_TRACE_FRAMES]
     // One more for this function's own frame
     count :: intrinsics.capture_stack_trace(addresses, skip + 1)

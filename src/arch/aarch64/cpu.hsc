@@ -8,12 +8,12 @@
  */
 package arch_aarch64
 
-import runtime from "base:runtime"
 import aarch64 from "base:intrinsics/aarch64"
+import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 import devicetree from "../../devicetree"
-import concurrency from "std:concurrency"
 
 /**
  * One CPU's architecture state (arch_interface.ArchCpu).
@@ -179,7 +179,7 @@ current_system :: fn() -> ptr[mut ArchSystem] {
  * @param stack The stack, whose low end has a guard below the limit.
  * @return The address runtime.STACK_GUARD bytes above the stack's lowest address.
  */
-stack_limit_of :: fn(stack: arch_interface.StackRange) -> rawptr {
+stack_limit_of :: fn(stack : arch_interface.StackRange) -> rawptr {
     return cast[rawptr](cast[u64](stack.low) + runtime.STACK_GUARD)
 }
 
@@ -197,7 +197,7 @@ stack_limit_of :: fn(stack: arch_interface.StackRange) -> rawptr {
  *     tree is.
  * @param direct_map_offset Where physical address 0 is in the bootloader's direct map.
  */
-init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) {
+init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) {
     system.vectors = cast[u64](aarch64.vector_table(exception_entry))
     system.direct_map_offset = direct_map_offset
     system.console = console_address()
@@ -259,8 +259,9 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
  * @param redistributors The redistributor region's physical address.
  * @param redistributors_size The redistributor region's size in bytes.
  */
-map_gic :: fn(system: ptr[mut ArchSystem], distributor: u64, redistributors: u64, redistributors_size: u64) {
-    if !map_device_range(system, distributor, DISTRIBUTOR_SIZE) || !map_device_range(system, redistributors, redistributors_size) {
+map_gic :: fn(system : ptr[mut ArchSystem], distributor : u64, redistributors : u64, redistributors_size : u64) {
+    if !map_device_range(system, distributor, DISTRIBUTOR_SIZE)
+        || !map_device_range(system, redistributors, redistributors_size) {
         return void
     }
     system.distributor_physical = distributor
@@ -276,7 +277,7 @@ map_gic :: fn(system: ptr[mut ArchSystem], distributor: u64, redistributors: u64
  * @param direct_map_offset Where physical address 0 is in the direct map.
  * @return The device tree's virtual address through the direct map, or 0 without one.
  */
-devicetree_address :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> u64 {
+devicetree_address :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> u64 {
     physical :: firmware.devicetree or_return 0
     return direct_map_offset + cast[u64](physical)
 }
@@ -302,11 +303,11 @@ devicetree_address :: fn(firmware: ptr[boot_info.FirmwareTables], direct_map_off
  *     critical events.
  */
 init_cpu :: fn(
-    system: ptr[ArchSystem],
-    cpu: ptr[mut ArchCpu],
+    system : ptr[ArchSystem],
+    cpu : ptr[mut ArchCpu],
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
-    stacks: ptr[arch_interface.CpuStacks],
+    stacks : ptr[arch_interface.CpuStacks]
 ) {
     cpu.carrier = carrier
     cpu.context = context

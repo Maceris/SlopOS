@@ -25,10 +25,10 @@ import files from "std:os/slop_os/files"
 import lifecycle from "std:os/slop_os/lifecycle"
 import network from "std:os/slop_os/network"
 import text_buffer from "std:text_buffer"
+import service_kit from "../../libraries/service_kit"
 import powerbox from "../../protocols/powerbox"
 import programs from "../../protocols/programs"
 import prompt from "../../protocols/prompt"
-import service_kit from "../../libraries/service_kit"
 
 /** No channel: what home_end is without a home, and prompt_end once the trusted path's gone. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -129,8 +129,13 @@ Box :: struct {
  * @return 0 when it's asked to stop; 1 if its port couldn't be made; 2 if a port for the home or the prompt
  *     connection couldn't be made or bound; 3 if the manager's connection couldn't be served.
  */
-main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manager: os.Channel[powerbox.Powerbox],
-    programs: os.Channel[programs.Programs]?, network: os.Channel[network.Network]?) -> int {
+main :: fn(
+    home : os.Channel[dir.Dir]?,
+    prompts : os.Channel[prompt.Prompt],
+    manager : os.Channel[powerbox.Powerbox],
+    programs : os.Channel[programs.Programs]?,
+    network : os.Channel[network.Network]?
+) -> int {
     block :: slop_os.startup_block()
     box := runtime.new(Box)
     box.port = slop_os.port_create(block.budget) or_return 1
@@ -202,7 +207,7 @@ main :: fn(home: os.Channel[dir.Dir]?, prompts: os.Channel[prompt.Prompt], manag
  * @param index The client's index; one past the clients, or dropped, is passed over.
  * @param into Where each request is received, reused from one to the next.
  */
-serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(box : ptr[mut Box], index : usize, into : ptr[mut os.Incoming]) {
     if index >= box.clients.ends.count {
         return void
     }
@@ -231,25 +236,48 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
         response :: os.begin[powerbox.Response](&out)
         match os.message_of[powerbox.Request](into)^ {
             case Serve(served) => {
-                response^ = if index == MANAGER && serve_program(box, os.items(into, served.name), served.end) { .Done } else { .Refused }
+                response^ = if index == MANAGER && serve_program(box, os.items(into, served.name), served.end) {
+                    .Done
+                }
+                else {
+                    .Refused
+                }
                 if index != MANAGER {
                     _ = slop_os.handle_close(cast[slop_os.Handle](served.end.end))
                 }
             }
             case RequestFile(asked) => {
-                match ask(box, index, .File, asked.write, os.items(into, asked.purpose), os.items(into, asked.suggested), os.items(into, asked.keep)) {
+                match ask(
+                    box,
+                    index,
+                    .File,
+                    asked.write,
+                    os.items(into, asked.purpose),
+                    os.items(into, asked.suggested),
+                    os.items(into, asked.keep)
+                ) {
                     case Some(answer) => response^ = answer
                     // Answered once the user has chosen
                     case None => continue
                 }
             }
             case RequestDirectory(asked) => {
-                match ask(box, index, .Directory, asked.write, os.items(into, asked.purpose), u8.[], os.items(into, asked.keep)) {
+                match ask(
+                    box,
+                    index,
+                    .Directory,
+                    asked.write,
+                    os.items(into, asked.purpose),
+                    u8.[],
+                    os.items(into, asked.keep)
+                ) {
                     case Some(answer) => response^ = answer
                     case None => continue
                 }
             }
-            case Reopen(reopening) => response^ = reopen(box, index, os.items(into, reopening.key), reopening.kind, reopening.write)
+            case Reopen(
+                reopening
+            ) => response^ = reopen(box, index, os.items(into, reopening.key), reopening.kind, reopening.write)
             case RequestAccount(asked) => {
                 match ask(box, index, .Account, false, os.items(into, asked.purpose), u8.[], u8.[]) {
                     case Some(answer) => response^ = answer
@@ -263,14 +291,22 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                 }
             }
             case RequestNetwork(asked) => {
-                match ask_network(box, index, os.items(into, asked.purpose), os.items(into, asked.connect), os.items(into, asked.listen)) {
+                match ask_network(
+                    box,
+                    index,
+                    os.items(into, asked.purpose),
+                    os.items(into, asked.connect),
+                    os.items(into, asked.listen)
+                ) {
                     case Some(answer) => response^ = answer
                     case None => continue
                 }
             }
             case RequestKeys(asked) => {
-                kind :: if asked.change == .Add { prompt.Kind.AddKey } else if asked.change == .Remove { prompt.Kind.RemoveKey }
-                    else { prompt.Kind.ListKeys }
+                kind :: if asked.change == .Add {
+                    prompt.Kind.AddKey
+                }
+                else if asked.change == .Remove { prompt.Kind.RemoveKey } else { prompt.Kind.ListKeys }
                 match ask(box, index, kind, false, os.items(into, asked.purpose), os.items(into, asked.key), u8.[]) {
                     case Some(answer) => response^ = answer
                     case None => continue
@@ -283,7 +319,14 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
                 }
             }
             case RequestDebug(asked) => {
-                match ask_debug(box, index, os.items(into, asked.name), os.items(into, asked.purpose), asked.port, asked.key) {
+                match ask_debug(
+                    box,
+                    index,
+                    os.items(into, asked.name),
+                    os.items(into, asked.purpose),
+                    asked.port,
+                    asked.key
+                ) {
                     case Some(answer) => response^ = answer
                     case None => continue
                 }
@@ -310,7 +353,7 @@ serve :: fn(box: ptr[mut Box], index: usize, into: ptr[mut os.Incoming]) {
  *     here.
  * @return True if it's served; false if there was no room for another client.
  */
-serve_program :: fn(box: ptr[mut Box], name: u8[], end: os.Channel[powerbox.Powerbox]) -> bool {
+serve_program :: fn(box : ptr[mut Box], name : u8[], end : os.Channel[powerbox.Powerbox]) -> bool {
     index :: service_kit.add_client_index(&box.clients, box.port, end.end) or_return false
     if index < box.names.count {
         box.names[index] = Name.{}
@@ -332,7 +375,7 @@ serve_program :: fn(box: ptr[mut Box], name: u8[], end: os.Channel[powerbox.Powe
  * @return Its name, a view of the box's, good until the client's index is served again; empty for the session
  *     manager's connection or an index past the clients.
  */
-name_of :: fn(box: ptr[Box], index: usize) -> u8[] {
+name_of :: fn(box : ptr[Box], index : usize) -> u8[] {
     if index >= box.names.count {
         return box.names[0].bytes[0..<0]
     }
@@ -356,7 +399,15 @@ name_of :: fn(box: ptr[Box], index: usize) -> u8[] {
  *     request waiting already, Refused for a bad key, without a home or the trusted path, or if the home couldn't be
  *     narrowed or the Ask sent.
  */
-ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpose: u8[], suggested: u8[], key: u8[]) -> powerbox.Response? {
+ask :: fn(
+    box : ptr[mut Box],
+    index : usize,
+    kind : prompt.Kind,
+    write : bool,
+    purpose : u8[],
+    suggested : u8[],
+    key : u8[]
+) -> powerbox.Response? {
     if box.has_waiting {
         return .Busy
     }
@@ -372,8 +423,17 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     }
     out := os.Outgoing.{}
     request :: os.begin[prompt.Request](&out)
-    request^ = .Ask(prompt.Ask.{requester = os.append(&out, name_of(box, index)), purpose = os.append(&out, purpose),
-        suggested = os.append(&out, suggested), kind = kind, write = write, keep = key.count > 0, home = home})
+    request^ = .Ask(
+        prompt.Ask.{
+            requester = os.append(&out, name_of(box, index)),
+            purpose = os.append(&out, purpose),
+            suggested = os.append(&out, suggested),
+            kind = kind,
+            write = write,
+            keep = key.count > 0,
+            home = home,
+        }
+    )
     if prompt.send_request(box.prompt_end, box.prompt_port, &out) != null {
         return .Refused
     }
@@ -386,14 +446,56 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
     }
     box.has_waiting = true
     who :: name_of(box, index)
-    runtime.log_info("% asks for a %", if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
-        if kind == .Account { "new account" } else if kind == .ShutDown { "shutdown" } else if kind == .Restart { "restart" }
-        else if kind == .Debug || kind == .DebugOther { "debugger" }
-        else if kind == .Trace { "trace" } else if kind == .SystemLog { "read of the system's log" }
-        else if kind == .Network { "network connection" }
-        else if kind == .AddKey { "key added" } else if kind == .RemoveKey { "key removed" } else if kind == .ListKeys { "list of keys" }
-        else if kind == .File { if write { "file to write" } else { "file to read" } }
-        else { if write { "directory to write in" } else { "directory to read" } })
+    runtime.log_info(
+        "% asks for a %",
+        if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
+        if kind == .Account {
+            "new account"
+        }
+        else if kind == .ShutDown {
+            "shutdown"
+        }
+        else if kind == .Restart {
+            "restart"
+        }
+        else if kind == .Debug || kind == .DebugOther {
+            "debugger"
+        }
+        else if kind == .Trace {
+            "trace"
+        }
+        else if kind == .SystemLog {
+            "read of the system's log"
+        }
+        else if kind == .Network {
+            "network connection"
+        }
+        else if kind == .AddKey {
+            "key added"
+        }
+        else if kind == .RemoveKey {
+            "key removed"
+        }
+        else if kind == .ListKeys {
+            "list of keys"
+        }
+        else if kind == .File {
+            if write {
+                "file to write"
+            }
+            else {
+                "file to read"
+            }
+        }
+        else {
+            if write {
+                "directory to write in"
+            }
+            else {
+                "directory to read"
+            }
+        }
+    )
     return null
 }
 
@@ -405,10 +507,17 @@ ask :: fn(box: ptr[mut Box], index: usize, kind: prompt.Kind, write: bool, purpo
  * @param purpose Why it asks.
  * @param connect What it would connect to.
  * @param listen What it would listen on.
- * @return The answer now: Busy, or Refused without a network connection to give from, or with rules past MAX_RULES; null
+ * @return The answer now: Busy, or Refused without a network connection to give from, or with rules past MAX_RULES;
+ *     null
  *     once it's asked, to be answered when the user has.
  */
-ask_network :: fn(box: ptr[mut Box], index: usize, purpose: u8[], connect: network.Rule[], listen: network.Rule[]) -> powerbox.Response? {
+ask_network :: fn(
+    box : ptr[mut Box],
+    index : usize,
+    purpose : u8[],
+    connect : network.Rule[],
+    listen : network.Rule[]
+) -> powerbox.Response? {
     if box.network_end == NONE {
         return .Refused
     }
@@ -428,7 +537,7 @@ ask_network :: fn(box: ptr[mut Box], index: usize, purpose: u8[], connect: netwo
  *
  * @param box The powerbox, its waiting request a network connection's.
  */
-network_allowed :: fn(box: ptr[mut Box]) {
+network_allowed :: fn(box : ptr[mut Box]) {
     match network.narrow(box.network_end, box.network_port, &box.waiting.policy) {
         case Some(made) => {
             storage : u8[200]
@@ -451,7 +560,7 @@ network_allowed :: fn(box: ptr[mut Box]) {
  * @param box The powerbox; its waiting request is answered, unless the answer hasn't come.
  * @param into Where the answer is received.
  */
-take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
+take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
     if !box.has_waiting || box.prompt_end == NONE {
         return void
     }
@@ -481,7 +590,10 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
                 answer(box, .Done)
                 return void
             }
-            runtime.log_info("the administrator allowed a %", if box.waiting.kind == .Restart { "restart" } else { "shutdown" })
+            runtime.log_info(
+                "the administrator allowed a %",
+                if box.waiting.kind == .Restart { "restart" } else { "shutdown" }
+            )
             answer(box, .Allowed)
         }
         case LogGranted(given) => {
@@ -504,8 +616,11 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
             given :: opened(box, path, choice.new, box.waiting.kind, box.waiting.write)
             if given is_some {
                 who :: name_of(box, box.waiting.client)
-                runtime.log_info("gave % %", if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
-                    if path.count > 0 { string_of(&path[0], path.count) } else { "the home" })
+                runtime.log_info(
+                    "gave % %",
+                    if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
+                    if path.count > 0 { string_of(&path[0], path.count) } else { "the home" }
+                )
                 if choice.keep && box.waiting.key_count > 0 && box.waiting.key_count <= box.waiting.key.count {
                     keep(box, box.waiting.client, box.waiting.key[0..<box.waiting.key_count], path, box.waiting.write)
                 }
@@ -530,9 +645,17 @@ take_answer :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
  * @param purpose Why it asks.
  * @param port The debugger's port, which the powerbox now holds; closed if it's refused.
  * @param key The key its stops come under.
- * @return An answer now, Busy or Refused, the port closed for Refused; null once it's asked, answered when the user has.
+ * @return An answer now, Busy or Refused, the port closed for Refused; null once it's asked, answered when the user
+ *     has.
  */
-ask_debug :: fn(box: ptr[mut Box], index: usize, name: u8[], purpose: u8[], port: slop_os.Port, key: u64) -> powerbox.Response? {
+ask_debug :: fn(
+    box : ptr[mut Box],
+    index : usize,
+    name : u8[],
+    purpose : u8[],
+    port : slop_os.Port,
+    key : u64
+) -> powerbox.Response? {
     if box.has_waiting {
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
         return .Busy
@@ -580,7 +703,7 @@ ask_debug :: fn(box: ptr[mut Box], index: usize, name: u8[], purpose: u8[], port
  * @param box The powerbox, whose waiting request is a debugger's.
  * @param into Where the session manager's answer is received.
  */
-attach_allowed :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
+attach_allowed :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
     elevated :: box.waiting.kind == .DebugOther
     count :: box.waiting.name_count
     if count == 0 || count > box.waiting.name.count {
@@ -591,8 +714,14 @@ attach_allowed :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
     name :: box.waiting.name[0..<count]
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
-    request^ = .Attach(programs.Attaching.{name = os.append(&out, name), port = box.waiting.port, key = box.waiting.stop_key,
-        elevated = elevated})
+    request^ = .Attach(
+        programs.Attaching.{
+            name = os.append(&out, name),
+            port = box.waiting.port,
+            key = box.waiting.stop_key,
+            elevated = elevated,
+        }
+    )
     // The port moves with the request, sent or not
     box.waiting.port = cast[slop_os.Port](slop_os.NO_HANDLE)
     if programs.send_request(box.programs_end, box.programs_port, &out) != null {
@@ -626,20 +755,30 @@ attach_allowed :: fn(box: ptr[mut Box], into: ptr[mut os.Incoming]) {
  * @param attached What the session manager gave.
  * @param program The program's name, attached.program's bytes.
  */
-answer_attached :: fn(box: ptr[mut Box], attached: powerbox.Attached, program: u8[]) {
+answer_attached :: fn(box : ptr[mut Box], attached : powerbox.Attached, program : u8[]) {
     box.has_waiting = false
     index :: box.waiting.client
     if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
-        for handle in slop_os.Handle.[cast[slop_os.Handle](attached.process), cast[slop_os.Handle](attached.intercept),
-            cast[slop_os.Handle](attached.space)] {
+        for handle in slop_os.Handle.[
+            cast[slop_os.Handle](attached.process),
+            cast[slop_os.Handle](attached.intercept),
+            cast[slop_os.Handle](attached.space)
+        ] {
             _ = slop_os.handle_close(handle)
         }
         return void
     }
     out := os.Outgoing.{}
     response :: os.begin[powerbox.Response](&out)
-    response^ = .Attached(powerbox.Attached.{process = attached.process, intercept = attached.intercept, space = attached.space,
-        image = attached.image, program = os.append(&out, program)})
+    response^ = .Attached(
+        powerbox.Attached.{
+            process = attached.process,
+            intercept = attached.intercept,
+            space = attached.space,
+            image = attached.image,
+            program = os.append(&out, program),
+        }
+    )
     _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
 }
 
@@ -648,8 +787,9 @@ answer_attached :: fn(box: ptr[mut Box], attached: powerbox.Attached, program: u
  *
  * @param box The powerbox.
  */
-refuse_debug_port :: fn(box: ptr[mut Box]) {
-    if (box.waiting.kind == .Debug || box.waiting.kind == .DebugOther) && cast[slop_os.Handle](box.waiting.port) != slop_os.NO_HANDLE {
+refuse_debug_port :: fn(box : ptr[mut Box]) {
+    if (box.waiting.kind == .Debug || box.waiting.kind == .DebugOther)
+        && cast[slop_os.Handle](box.waiting.port) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](box.waiting.port))
         box.waiting.port = cast[slop_os.Port](slop_os.NO_HANDLE)
     }
@@ -666,13 +806,17 @@ refuse_debug_port :: fn(box: ptr[mut Box]) {
  * @param write Whether to grant writing as well as reading.
  * @return The grant, whose end moves to the program in the answer; null if it can't be opened.
  */
-opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write: bool) -> powerbox.Response? {
+opened :: fn(box : ptr[mut Box], path : u8[], new : bool, kind : prompt.Kind, write : bool) -> powerbox.Response? {
     out := os.Outgoing.{}
     if kind == .File {
         if write {
             opening :: os.begin[dir.Request](&out)
-            opening^ = .OpenFile(dir.OpenFile.{path = os.append(&out, path),
-                creation = if new { files.Creation.New } else { files.Creation.Existing }})
+            opening^ = .OpenFile(
+                dir.OpenFile.{
+                    path = os.append(&out, path),
+                    creation = if new { files.Creation.New } else { files.Creation.Existing },
+                }
+            )
             return match ask_dir_with(box, box.home_end, box.home_port, &out) {
                 case OpenedFile(file) => .GrantedFile(file)
                 case _ => null
@@ -705,7 +849,12 @@ opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write:
         return .GrantedDirectory(os.Channel[dir.Dir].{end = directory})
     }
     port :: os.port_for(slop_os.startup_block().budget, directory) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-    narrowed :: if cast[slop_os.Handle](port) == slop_os.NO_HANDLE { dir.Response.Unsupported } else { ask_dir(box, directory, port, .Narrow) }
+    narrowed :: if cast[slop_os.Handle](port) == slop_os.NO_HANDLE {
+        dir.Response.Unsupported
+    }
+    else {
+        ask_dir(box, directory, port, .Narrow)
+    }
     if cast[slop_os.Handle](port) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
     }
@@ -728,7 +877,7 @@ opened :: fn(box: ptr[mut Box], path: u8[], new: bool, kind: prompt.Kind, write:
  * @param path What the user chose, beneath the home; the home itself, empty, isn't kept.
  * @param write Whether the kept grant writes.
  */
-keep :: fn(box: ptr[mut Box], index: usize, key: u8[], path: u8[], write: bool) {
+keep :: fn(box : ptr[mut Box], index : usize, key : u8[], path : u8[], write : bool) {
     who :: name_of(box, index)
     if who.count == 0 || path.count == 0 {
         return void
@@ -772,7 +921,7 @@ keep :: fn(box: ptr[mut Box], index: usize, key: u8[], path: u8[], write: bool) 
  * @param write Whether to open it to write; a link kept read only won't open to write.
  * @return The grant; Refused without a home or a name, for a key that isn't valid_key's, or if it's gone or revoked.
  */
-reopen :: fn(box: ptr[mut Box], index: usize, key: u8[], kind: powerbox.Kind, write: bool) -> powerbox.Response {
+reopen :: fn(box : ptr[mut Box], index : usize, key : u8[], kind : powerbox.Kind, write : bool) -> powerbox.Response {
     who :: name_of(box, index)
     if box.home_end == NONE || who.count == 0 || !valid_key(key) {
         return .Refused
@@ -799,7 +948,7 @@ reopen :: fn(box: ptr[mut Box], index: usize, key: u8[], kind: powerbox.Kind, wr
  * @param path The directory's path beneath the home.
  * @return True if it's there now.
  */
-made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
+made_directory :: fn(box : ptr[mut Box], path : u8[]) -> bool {
     out := os.Outgoing.{}
     making :: os.begin[dir.Request](&out)
     making^ = .OpenDirectory(dir.OpenDirectory.{path = os.append(&out, path), create = true})
@@ -821,7 +970,7 @@ made_directory :: fn(box: ptr[mut Box], path: u8[]) -> bool {
  * @param storage Where the path is written; what's past PATH_BYTES is cut.
  * @return The path, a view of storage, good as long as it is.
  */
-kept_path :: fn(who: u8[], key: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] {
+kept_path :: fn(who : u8[], key : u8[], storage : ptr[mut u8[PATH_BYTES]]) -> u8[] {
     count : usize = 0
     append_bytes(storage, &count, string_bytes("grants/"))
     append_bytes(storage, &count, who)
@@ -839,7 +988,7 @@ kept_path :: fn(who: u8[], key: u8[], storage: ptr[mut u8[PATH_BYTES]]) -> u8[] 
  * @param count How many of its bytes are in use, moved on by those appended.
  * @param bytes The bytes; those past PATH_BYTES are dropped.
  */
-append_bytes :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], bytes: u8[]) {
+append_bytes :: fn(storage : ptr[mut u8[PATH_BYTES]], count : ptr[mut usize], bytes : u8[]) {
     for byte in bytes {
         at :: count^
         if at < storage.count {
@@ -855,7 +1004,7 @@ append_bytes :: fn(storage: ptr[mut u8[PATH_BYTES]], count: ptr[mut usize], byte
  * @param bytes The bytes, not checked to be UTF-8.
  * @return The text, a view of bytes; empty for none.
  */
-as_text :: fn(bytes: u8[]) -> string {
+as_text :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
@@ -865,13 +1014,16 @@ as_text :: fn(bytes: u8[]) -> string {
  * @param key The key's bytes, as the program sent them; any length, read only.
  * @return True for 1 to KEY_BYTES ASCII letters, digits, - and _.
  */
-valid_key :: fn(key: u8[]) -> bool {
+valid_key :: fn(key : u8[]) -> bool {
     if key.count == 0 || key.count > powerbox.KEY_BYTES {
         return false
     }
     for byte in key {
-        if !((byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('A') && byte <= cast[u8]('Z')) || (byte >= cast[u8]('0') && byte <= cast[u8]('9'))
-            || byte == cast[u8]('-') || byte == cast[u8]('_')) {
+        if !((byte >= cast[u8]('a') && byte <= cast[u8]('z'))
+            || (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+            || (byte >= cast[u8]('0') && byte <= cast[u8]('9'))
+            || byte == cast[u8]('-')
+            || byte == cast[u8]('_')) {
             return false
         }
     }
@@ -885,7 +1037,7 @@ valid_key :: fn(key: u8[]) -> bool {
  * @param box The powerbox, whose waiting request is answered on its client's end and is no longer waiting.
  * @param name The account's name, as the trusted path gave it, copied into the answer.
  */
-answer_made :: fn(box: ptr[mut Box], name: u8[]) {
+answer_made :: fn(box : ptr[mut Box], name : u8[]) {
     box.has_waiting = false
     index :: box.waiting.client
     if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
@@ -903,7 +1055,7 @@ answer_made :: fn(box: ptr[mut Box], name: u8[]) {
  * @param box The powerbox, whose waiting request is answered and no longer waiting.
  * @param keys The keys, a line each.
  */
-answer_listed :: fn(box: ptr[mut Box], keys: u8[]) {
+answer_listed :: fn(box : ptr[mut Box], keys : u8[]) {
     box.has_waiting = false
     index :: box.waiting.client
     if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
@@ -921,7 +1073,7 @@ answer_listed :: fn(box: ptr[mut Box], keys: u8[]) {
  * @param box The powerbox, whose waiting request is answered on its client's end and is no longer waiting.
  * @param given The answer; a grant's end moves to the program, and is lost if the program's gone.
  */
-answer :: fn(box: ptr[mut Box], given: powerbox.Response) {
+answer :: fn(box : ptr[mut Box], given : powerbox.Response) {
     box.has_waiting = false
     index :: box.waiting.client
     if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
@@ -941,7 +1093,7 @@ answer :: fn(box: ptr[mut Box], given: powerbox.Response) {
  * @param request The request, without items.
  * @return The answer; Unsupported if it couldn't be sent or answered.
  */
-ask_dir :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, request: dir.Request) -> dir.Response {
+ask_dir :: fn(box : ptr[mut Box], end : slop_os.Channel, port : slop_os.Port, request : dir.Request) -> dir.Response {
     out := os.Outgoing.{}
     os.begin[dir.Request](&out)^ = request
     return ask_dir_with(box, end, port, &out)
@@ -957,7 +1109,12 @@ ask_dir :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, reque
  * @param out The request, put together by the caller.
  * @return The answer, whose handles are the caller's; Unsupported if it couldn't be sent or answered.
  */
-ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> dir.Response {
+ask_dir_with :: fn(
+    box : ptr[mut Box],
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing]
+) -> dir.Response {
     if dir.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -980,7 +1137,7 @@ ask_dir_with :: fn(box: ptr[mut Box], end: slop_os.Channel, port: slop_os.Port, 
  * @return The new connection's end, the caller's to give or close; null if the channel couldn't be made or Connect
  *     sent.
  */
-connection_to :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel? {
+connection_to :: fn(end : slop_os.Channel, port : slop_os.Port) -> slop_os.Channel? {
     pair :: os.channel_for[dir.Dir](slop_os.startup_block().budget, 0) or_return null
     out := os.Outgoing.{}
     os.begin[dir.Request](&out)^ = .Connect(os.Channel[dir.Dir].{end = pair.a})
@@ -998,7 +1155,7 @@ connection_to :: fn(end: slop_os.Channel, port: slop_os.Port) -> slop_os.Channel
  * @param name The program's name.
  * @return Where it runs; Nowhere if the session manager couldn't be asked.
  */
-locate :: fn(box: ptr[mut Box], name: u8[]) -> programs.Location {
+locate :: fn(box : ptr[mut Box], name : u8[]) -> programs.Location {
     out := os.Outgoing.{}
     request :: os.begin[programs.Request](&out)
     request^ = .Locate(os.append(&out, name))
@@ -1015,4 +1172,3 @@ locate :: fn(box: ptr[mut Box], name: u8[]) -> programs.Location {
         case _ => programs.Location.Nowhere
     }
 }
-

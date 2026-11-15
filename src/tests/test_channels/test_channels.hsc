@@ -19,9 +19,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -52,7 +52,9 @@ SHORT_WAIT_NANOSECONDS : u64 : 20_000_000
 B_RESULTS :: 13
 /** B's result slot for binding c0 to its port, as test_kit.tag_of gives it: 0 if it bound. */
 B_BOUND_C0 :: 0
-/** B's result slot for the size of A's message through the kernel, in bytes; or 0xdead0000 plus the read's error tag. */
+/**
+ * B's result slot for the size of A's message through the kernel, in bytes; or 0xdead0000 plus the read's error tag.
+ */
 B_SIZE :: 1
 /** B's result slot for that message's flags and batch, as channel_read gives them. */
 B_FLAGS_AND_BATCH :: 2
@@ -107,7 +109,7 @@ BGrants :: struct {
  *     tail on by 16.
  * @return Whether the reader says it waits, so the writer has to ring the doorbell (channel_notify with Readable).
  */
-ring_send :: fn(memory: u64, side: u64, value: u64) -> bool {
+ring_send :: fn(memory : u64, side : u64, value : u64) -> bool {
     indices :: memory + side * 128
     ring :: memory + cast[u64](slop_os.CHANNEL_RINGS_OFFSET) + side * cast[u64](slop_os.CHANNEL_DEFAULT_RING)
     mask :: cast[u64](slop_os.CHANNEL_DEFAULT_RING) - 1
@@ -129,7 +131,7 @@ ring_send :: fn(memory: u64, side: u64, value: u64) -> bool {
  * @param once Counts each KEY_ONCE packet taken from port while waiting, so a Once binding's packet isn't lost.
  * @return The message's 8 bytes, any value; the length word before it isn't checked. Doesn't return until one comes.
  */
-ring_receive :: fn(memory: u64, side: u64, port: slop_os.Port, once: ptr[mut u64]) -> u64 {
+ring_receive :: fn(memory : u64, side : u64, port : slop_os.Port, once : ptr[mut u64]) -> u64 {
     indices :: memory + side * 128
     ring :: memory + cast[u64](slop_os.CHANNEL_RINGS_OFFSET) + side * cast[u64](slop_os.CHANNEL_DEFAULT_RING)
     mask :: cast[u64](slop_os.CHANNEL_DEFAULT_RING) - 1
@@ -181,8 +183,16 @@ Given :: struct {
  * @param cpu_budget Not used.
  * @return How many tests failed, 0 when every one passed; as B, what run_b gives.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     match peer {
         case Some(c0) => return run_b(c0)
         case None => {}
@@ -201,28 +211,55 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  *     ring addresses, the port, c0, x and y, the manager's port, the log's copy, B, or c0's port couldn't be made, or
  *     B's results couldn't be received.
  */
-handles_and_messages_pass_between_processes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+handles_and_messages_pass_between_processes #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     space :: block.space
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     program :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for A's objects")?
-    ring_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](slop_os.channel_memory_size(slop_os.CHANNEL_DEFAULT_RING))), "addresses for x's rings")?
+    ring_at :: testing.require_some(
+        t,
+        runtime.reserve_addresses(cast[usize](slop_os.channel_memory_size(slop_os.CHANNEL_DEFAULT_RING))),
+        "addresses for x's rings"
+    )?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port for x")?
     // c0, and B, a copy of this program given its other end
     first :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "c0, the channel between A and B")?
     c0 :: first.a
-    manager_port :: testing.require_some(t, os.port_for(block.budget, manager.end), "a port for the process manager's replies")?
-    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
-    log_copy :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](given.log), log_rights), "the debug log can be copied for B")?
-    launch :: os.launch(manager, manager_port, "test_channels B", program, 4 << 20, main, BGrants.{log = cast[slop_os.DebugLog](log_copy), peer = first.b})
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(block.budget, manager.end),
+        "a port for the process manager's replies"
+    )?
+    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
+    log_copy :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](given.log), log_rights),
+        "the debug log can be copied for B"
+    )?
+    launch :: os.launch(
+        manager,
+        manager_port,
+        "test_channels B",
+        program,
+        4 << 20,
+        main,
+        BGrants.{log = cast[slop_os.DebugLog](log_copy), peer = first.b}
+    )
     b :: testing.require_ok(t, launch, "the process manager launches B with its end of c0")?
     pair :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "x and y, a channel's ends, are made")?
     x :: pair.a
     y :: pair.b
     small_ring :: slop_os.channel_create(budget, 1000, 0)
-    testing.expect_error(t, small_ring, slop_os.ChannelError.InvalidSize, "a channel's ring is a power of two of bytes, which 1000 isn't")
+    testing.expect_error(
+        t,
+        small_ring,
+        slop_os.ChannelError.InvalidSize,
+        "a channel's ring is a power of two of bytes, which 1000 isn't"
+    )
     mapped :: slop_os.channel_map(x, space, ring_at)
     testing.expect_ok(t, mapped, "an end's rings map")
     mapped_again :: slop_os.channel_map(x, space, ring_at + 0x10000)
@@ -234,7 +271,12 @@ handles_and_messages_pass_between_processes #test :: fn(t: ptr[mut testing.T]) -
     testing.expect_error(t, sent_mapped, slop_os.ChannelError.Mapped, "an end whose rings are mapped can't be sent")
     handles[0] = cast[slop_os.Handle](c0)
     sent_itself :: slop_os.channel_send_handles(c0, handles, 3)
-    testing.expect_error(t, sent_itself, slop_os.ChannelError.NotTransferable, "an end can't be sent through its own channel")
+    testing.expect_error(
+        t,
+        sent_itself,
+        slop_os.ChannelError.NotTransferable,
+        "an end can't be sent through its own channel"
+    )
     handles[0] = cast[slop_os.Handle](y)
     sent_y :: slop_os.channel_send_handles(c0, handles, 3)
     testing.expect_ok(t, sent_y, "an end is sent to B in a batch")
@@ -244,19 +286,32 @@ handles_and_messages_pass_between_processes #test :: fn(t: ptr[mut testing.T]) -
     writable :: cast[u64](cast[u32](slop_os.SIGNAL_WRITABLE))
     peer_closed :: cast[u64](cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     any_x :: cast[slop_os.Handle](x)
-    readable_or_closed :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    readable_or_closed :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE)
+        | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     bound :: slop_os.port_bind(port, any_x, readable_or_closed, KEY_X, .Persistent)
     testing.expect_ok(t, bound, "x binds to a port for Readable and PeerClosed")
     bound_once :: slop_os.port_bind(port, any_x, slop_os.SIGNAL_WRITABLE, KEY_ONCE, .Once)
     testing.expect_ok(t, bound_once, "x binds to a port for Writable, once")
     // Through the rings: x is side 0, so A writes ring 0 and reads ring 1
     once := cast[u64](0)
-    testing.expect_eq(t, ring_receive(ring_at, 1, port, &once), FROM_B, "B's message through the rings reaches A, its doorbell waking A")
+    testing.expect_eq(
+        t,
+        ring_receive(ring_at, 1, port, &once),
+        FROM_B,
+        "B's message through the rings reaches A, its doorbell waking A"
+    )
     _ = ring_send(ring_at, 0, FIRST_FROM_A)
     // B rings Writable twice once it has the message: the Once binding sees it once
     seen := false
     packets : slop_os.Packet[4]
-    waited := cast[usize](slop_os.channel_notify_and_wait(x, slop_os.SIGNAL_READABLE, port, packets, slop_os.NO_DEADLINE) or_else 0)
+    waited := cast[usize](slop_os.channel_notify_and_wait(
+        x,
+        slop_os.SIGNAL_READABLE,
+        port,
+        packets,
+        slop_os.NO_DEADLINE
+    )
+        or_else 0)
     loop {
         for packet, i in packets {
             if i < waited && packet.key == KEY_ONCE && packet.data[0] == writable {
@@ -305,10 +360,20 @@ handles_and_messages_pass_between_processes #test :: fn(t: ptr[mut testing.T]) -
     }
     while both != 3
     written :: slop_os.channel_write(x, os.bytes_of(&value), slop_os.NO_BATCH)
-    testing.expect_error(t, written, slop_os.ChannelError.PeerClosed, "writing an end whose peer is closed fails with PeerClosed")
+    testing.expect_error(
+        t,
+        written,
+        slop_os.ChannelError.PeerClosed,
+        "writing an end whose peer is closed fails with PeerClosed"
+    )
     buffer : u8[64]
     read :: slop_os.channel_read(x, buffer, cast[ptr[mut u32]](0))
-    testing.expect_error(t, read, slop_os.ChannelError.PeerClosed, "reading an empty end whose peer is closed fails with PeerClosed")
+    testing.expect_error(
+        t,
+        read,
+        slop_os.ChannelError.PeerClosed,
+        "reading an empty end whose peer is closed fails with PeerClosed"
+    )
     closed_x :: slop_os.handle_close(any_x)
     testing.expect_ok(t, closed_x, "x closes")
     // Closing x unmapped its rings, so another channel's go where they were; and again once unmapped
@@ -328,22 +393,51 @@ handles_and_messages_pass_between_processes #test :: fn(t: ptr[mut testing.T]) -
     b_results : u64[B_RESULTS]
     c0_port :: testing.require_some(t, os.port_for(block.budget, c0), "a port for c0")?
     none : slop_os.Handle[1]
-    testing.require_ok(t, os.receive(c0, c0_port, os.mut_bytes_of(&b_results), none), "B sends what it found through c0")?
+    testing.require_ok(
+        t,
+        os.receive(c0, c0_port, os.mut_bytes_of(&b_results), none),
+        "B sends what it found through c0"
+    )?
     _ = slop_os.handle_close(cast[slop_os.Handle](c0))
     _ = slop_os.handle_close(cast[slop_os.Handle](c0_port))
     testing.expect_eq(t, b_results[B_BOUND_C0], 0, "B binds its end of c0 to a port")
     testing.expect_eq(t, b_results[B_SIZE], 8, "A's message through the kernel reaches B with its 8 bytes")
-    testing.expect_eq(t, b_results[B_FLAGS_AND_BATCH], cast[u64](slop_os.MESSAGE_HAS_HANDLES) | (3 << 16), "A's message through the kernel says it has handles, in batch 3")
-    testing.expect_eq(t, b_results[B_VALUE], CHANNEL_VALUE, "A's message through the kernel reads back as it was written")
+    testing.expect_eq(
+        t,
+        b_results[B_FLAGS_AND_BATCH],
+        cast[u64](slop_os.MESSAGE_HAS_HANDLES) | (3 << 16),
+        "A's message through the kernel says it has handles, in batch 3"
+    )
+    testing.expect_eq(
+        t,
+        b_results[B_VALUE],
+        CHANNEL_VALUE,
+        "A's message through the kernel reads back as it was written"
+    )
     testing.expect_eq(t, b_results[B_TAKEN], 1, "B takes the batch's one handle, y")
-    testing.expect_eq(t, b_results[B_TAKEN_AGAIN], test_kit.tag(slop_os.ChannelError.NoSuchBatch), "a batch is taken once, so taking it again is refused with NoSuchBatch")
+    testing.expect_eq(
+        t,
+        b_results[B_TAKEN_AGAIN],
+        test_kit.tag(slop_os.ChannelError.NoSuchBatch),
+        "a batch is taken once, so taking it again is refused with NoSuchBatch"
+    )
     testing.expect_eq(t, b_results[B_MAPPED_Y], 0, "B maps y, the end it was sent")
     testing.expect_eq(t, b_results[B_BOUND_Y], 0, "B binds y to its port")
     testing.expect_eq(t, b_results[B_FIRST], FIRST_FROM_A, "A's first message through the rings reaches B")
-    testing.expect_eq(t, b_results[B_SECOND], SECOND_FROM_A, "A's message once its Once binding is armed again reaches B")
+    testing.expect_eq(
+        t,
+        b_results[B_SECOND],
+        SECOND_FROM_A,
+        "A's message once its Once binding is armed again reaches B"
+    )
     testing.expect_eq(t, b_results[B_CLOSED_Y], 0, "B closes y")
     testing.expect_eq(t, b_results[B_FINISHED], 1, "B got to the end of what it does")
-    testing.expect_eq(t, b_results[B_TOOK_IT], TOOK_IT, "A's message saying it took the Once binding's packet reaches B")
+    testing.expect_eq(
+        t,
+        b_results[B_TOOK_IT],
+        TOOK_IT,
+        "A's message saying it took the Once binding's packet reaches B"
+    )
     // B ends, and what it and A's objects charged comes back
     _ = test_kit.wait_for_budget(b.budget, 0, 2_000_000_000)
     testing.expect_eq(t, test_kit.used(b.budget), 0, "B's budget is back to nothing once it has ended")
@@ -359,7 +453,7 @@ handles_and_messages_pass_between_processes #test :: fn(t: ptr[mut testing.T]) -
  * @param t The test's state.
  * @return Ok once it's run; Error if the channel or the port couldn't be made, bound or written.
  */
-an_end_bound_before_it_is_read_is_woken #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_end_bound_before_it_is_read_is_woken #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     budget :: slop_os.startup_block().budget
     pair :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "a channel")?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port")?
@@ -372,11 +466,17 @@ an_end_bound_before_it_is_read_is_woken #test :: fn(t: ptr[mut testing.T]) -> te
     taken :: slop_os.port_wait(port, packets, test_kit.clock_now() + 50 * SHORT_WAIT_NANOSECONDS) or_else 0
     woken := false
     for packet, i in packets {
-        if i < cast[usize](taken) && packet.key == KEY_ONCE && packet.data[0] & cast[u64](cast[u32](slop_os.SIGNAL_READABLE)) != 0 {
+        if i < cast[usize](taken)
+            && packet.key == KEY_ONCE
+            && packet.data[0] & cast[u64](cast[u32](slop_os.SIGNAL_READABLE)) != 0 {
             woken = true
         }
     }
-    for each in slop_os.Handle.[cast[slop_os.Handle](pair.a), cast[slop_os.Handle](pair.b), cast[slop_os.Handle](port)] {
+    for each in slop_os.Handle.[
+        cast[slop_os.Handle](pair.a),
+        cast[slop_os.Handle](pair.b),
+        cast[slop_os.Handle](port)
+    ] {
         _ = slop_os.handle_close(each)
     }
     testing.expect(t, woken, "the first message to an end bound before it was ever read wakes its port within a second")
@@ -392,12 +492,20 @@ an_end_bound_before_it_is_read_is_woken #test :: fn(t: ptr[mut testing.T]) -> te
  * @return Ok once it's run; Error if the channels, the copy, the port or the message couldn't be made, sent, read or
  *     taken.
  */
-a_stale_end_in_flight_arrives_as_no_handle #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_stale_end_in_flight_arrives_as_no_handle #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     budget :: slop_os.startup_block().budget
     carrier :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "a channel to carry the copy")?
-    doomed :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "a channel whose end is copied, then destroyed")?
+    doomed :: testing.require_ok(
+        t,
+        slop_os.channel_create(budget, 0, 0),
+        "a channel whose end is copied, then destroyed"
+    )?
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_TRANSFER) | cast[u32](slop_os.RIGHT_CHANNEL_MAP))
-    copy :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](doomed.a), rights), "a copy of the doomed end")?
+    copy :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](doomed.a), rights),
+        "a copy of the doomed end"
+    )?
     handles : slop_os.Handle[1]
     handles[0] = copy
     sent :: slop_os.channel_send_handles(carrier.a, handles, 5)
@@ -412,12 +520,29 @@ a_stale_end_in_flight_arrives_as_no_handle #test :: fn(t: ptr[mut testing.T]) ->
     written :: slop_os.channel_write(carrier.a, os.bytes_of(&value), 5)
     testing.require_ok(t, written, "a message naming the batch is written")?
     data : u64[8]
-    info :: testing.require_ok(t, slop_os.channel_read(carrier.b, os.mut_bytes_of(&data), cast[ptr[mut u32]](0)), "the message is read")?
+    info :: testing.require_ok(
+        t,
+        slop_os.channel_read(carrier.b, os.mut_bytes_of(&data), cast[ptr[mut u32]](0)),
+        "the message is read"
+    )?
     into : slop_os.Handle[1]
-    taken :: testing.require_ok(t, slop_os.channel_take_handles(carrier.b, cast[u32](info.flags_and_batch >> 16), into, cast[ptr[mut u32]](0)), "the batch is taken")?
+    taken :: testing.require_ok(
+        t,
+        slop_os.channel_take_handles(carrier.b, cast[u32](info.flags_and_batch >> 16), into, cast[ptr[mut u32]](0)),
+        "the batch is taken"
+    )?
     testing.expect_eq(t, taken, 1, "the batch holds the one copy")
-    testing.expect_eq(t, into[0], slop_os.NO_HANDLE, "a copy of an end destroyed while in flight comes out as NO_HANDLE")
-    for each in slop_os.Handle.[cast[slop_os.Handle](carrier.a), cast[slop_os.Handle](carrier.b), cast[slop_os.Handle](waiter)] {
+    testing.expect_eq(
+        t,
+        into[0],
+        slop_os.NO_HANDLE,
+        "a copy of an end destroyed while in flight comes out as NO_HANDLE"
+    )
+    for each in slop_os.Handle.[
+        cast[slop_os.Handle](carrier.a),
+        cast[slop_os.Handle](carrier.b),
+        cast[slop_os.Handle](waiter)
+    ] {
         _ = slop_os.handle_close(each)
     }
     return .Ok
@@ -430,13 +555,16 @@ a_stale_end_in_flight_arrives_as_no_handle #test :: fn(t: ptr[mut testing.T]) ->
  * @return 0 once its results are sent; 101 if no addresses could be reserved for y's rings, 102 or 103 if a port
  *     couldn't be made, 104 if its results couldn't be sent. What B finds, A checks for it.
  */
-run_b :: fn(c0: slop_os.Channel) -> int {
+run_b :: fn(c0 : slop_os.Channel) -> int {
     block :: slop_os.startup_block()
     space :: block.space
-    ring_at :: runtime.reserve_addresses(cast[usize](slop_os.channel_memory_size(slop_os.CHANNEL_DEFAULT_RING))) or_return 101
+    ring_at :: runtime.reserve_addresses(cast[usize](slop_os.channel_memory_size(slop_os.CHANNEL_DEFAULT_RING)))
+        or_return 101
     port :: slop_os.port_create(block.budget) or_return 102
     results : u64[B_RESULTS]
-    results[B_BOUND_C0] = test_kit.tag_of(slop_os.port_bind(port, cast[slop_os.Handle](c0), slop_os.SIGNAL_READABLE, KEY_C0, .Persistent))
+    results[B_BOUND_C0] = test_kit.tag_of(
+        slop_os.port_bind(port, cast[slop_os.Handle](c0), slop_os.SIGNAL_READABLE, KEY_C0, .Persistent)
+    )
     // Through the kernel: Empty says it waits, so A's write rings the doorbell
     data : u64[8]
     loop {
@@ -463,7 +591,9 @@ run_b :: fn(c0: slop_os.Channel) -> int {
     results[B_TAKEN_AGAIN] = test_kit.tag_of(slop_os.channel_take_handles(c0, batch, into, cast[ptr[mut u32]](0)))
     y :: cast[slop_os.Channel](into[0])
     results[B_MAPPED_Y] = test_kit.tag_of(slop_os.channel_map(y, space, ring_at))
-    results[B_BOUND_Y] = test_kit.tag_of(slop_os.port_bind(port, cast[slop_os.Handle](y), slop_os.SIGNAL_READABLE, KEY_Y, .Persistent))
+    results[B_BOUND_Y] = test_kit.tag_of(
+        slop_os.port_bind(port, cast[slop_os.Handle](y), slop_os.SIGNAL_READABLE, KEY_Y, .Persistent)
+    )
     // y is side 1: B writes ring 1 and reads ring 0
     once := cast[u64](0)
     if ring_send(ring_at, 1, FROM_B) {

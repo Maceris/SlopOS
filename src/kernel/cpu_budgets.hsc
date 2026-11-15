@@ -87,7 +87,7 @@ CpuBudget :: struct #align(16) {
  * @return The share, in millionths of a CPU, rounded down; null if period_ns is 0, or time_ns is 2^32 or more
  *     periods.
  */
-share_of :: fn(period_ns: u64, time_ns: u64) -> u64? {
+share_of :: fn(period_ns : u64, time_ns : u64) -> u64? {
     if period_ns == 0 {
         return null
     }
@@ -108,7 +108,7 @@ share_of :: fn(period_ns: u64, time_ns: u64) -> u64? {
  * @return The budget, as an address, owned by the kernel and charged to no memory budget; 0 if there was no memory
  *     for it.
  */
-make_root_cpu_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
+make_root_cpu_budget :: fn(kernel : ptr[mut Kernel]) -> u64 {
     object :: new_object(kernel, .CpuBudget, 0, 0) or_else 0
     if object == 0 {
         return 0
@@ -119,8 +119,10 @@ make_root_cpu_budget :: fn(kernel: ptr[mut Kernel]) -> u64 {
     budget.time_ns = ROOT_PERIOD_NS * cpus
     budget.share = cpus * WHOLE_CPU
     budget.time = make_budget(kernel, cast[u8](TOP_PRIORITY), budget.period_ns, budget.time_ns)
-    // Its threads can't use more than every CPU has, so it's never charged: refills merged past MAX_REFILLS would
-    // otherwise hold back time it has
+    /*
+     * Its threads can't use more than every CPU has, so it's never charged: refills merged past MAX_REFILLS would
+     * otherwise hold back time it has
+     */
     budget.time.unlimited = true
     return object
 }
@@ -163,8 +165,15 @@ CpuBudgetError :: enum {
  * @error TooMuch The parent is being destroyed, its priority is lower, or what's left of its share is too little.
  * @error OwnerGone The owner is being destroyed; the budget was made and destroyed again, its share given back.
  */
-create_cpu_budget :: fn(kernel: ptr[mut Kernel], owner: u64, memory_budget: u64, parent: ptr[mut CpuBudget], priority: u32, period_ns: u64,
-    time_ns: u64) -> Result[ptr[mut CpuBudget], CpuBudgetError] {
+create_cpu_budget :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    memory_budget : u64,
+    parent : ptr[mut CpuBudget],
+    priority : u32,
+    period_ns : u64,
+    time_ns : u64
+) -> Result[ptr[mut CpuBudget], CpuBudgetError] {
     share :: share_of(period_ns, time_ns) or_return .Error(.InvalidArgument)
     if priority > TOP_PRIORITY || time_ns == 0 {
         return .Error(.InvalidArgument)
@@ -172,11 +181,17 @@ create_cpu_budget :: fn(kernel: ptr[mut Kernel], owner: u64, memory_budget: u64,
     object := cast[u64](0)
     match new_object(kernel, .CpuBudget, memory_budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { CpuBudgetError.BudgetExceeded } else { CpuBudgetError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { CpuBudgetError.BudgetExceeded } else { CpuBudgetError.OutOfMemory }
+        )
     }
     budget :: cast[ptr[mut CpuBudget]](object)
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
-    if parent.header.dying != 0 || priority > cast[u32](parent.time.priority) || parent.children_share + share > parent.share {
+    if parent.header.dying != 0
+        || priority > cast[u32](parent.time.priority)
+        || parent.children_share + share > parent.share {
         unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
         release_object(kernel, object)
         return .Error(.TooMuch)
@@ -217,7 +232,13 @@ create_cpu_budget :: fn(kernel: ptr[mut Kernel], owner: u64, memory_budget: u64,
  * @error TooMuch The budget is the root, or the change goes past its parent's share or priority, or below its
  *     children's share or a child's priority; nothing changed.
  */
-set_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], priority: u32, period_ns: u64, time_ns: u64) -> Result[void, CpuBudgetError] {
+set_cpu_budget :: fn(
+    kernel : ptr[mut Kernel],
+    budget : ptr[mut CpuBudget],
+    priority : u32,
+    period_ns : u64,
+    time_ns : u64
+) -> Result[void, CpuBudgetError] {
     share :: share_of(period_ns, time_ns) or_return .Error(.InvalidArgument)
     if priority > TOP_PRIORITY || time_ns == 0 {
         return .Error(.InvalidArgument)
@@ -229,8 +250,10 @@ set_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], priori
         return .Error(.TooMuch)
     }
     parent :: cast[ptr[mut CpuBudget]](budget.parent)
-    if priority > cast[u32](parent.time.priority) || parent.children_share - budget.share + share > parent.share
-        || budget.children_share > share || !children_below(budget, priority) {
+    if priority > cast[u32](parent.time.priority)
+        || parent.children_share - budget.share + share > parent.share
+        || budget.children_share > share
+        || !children_below(budget, priority) {
         return .Error(.TooMuch)
     }
     parent.children_share = parent.children_share - budget.share + share
@@ -260,7 +283,11 @@ set_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], priori
  * @error TooMuch The budget is the root, cpus has a CPU its parent's don't, or leaves out one of a child's; nothing
  *     changed.
  */
-set_cpu_budget_cpus :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], cpus: u64) -> Result[void, CpuBudgetError] {
+set_cpu_budget_cpus :: fn(
+    kernel : ptr[mut Kernel],
+    budget : ptr[mut CpuBudget],
+    cpus : u64
+) -> Result[void, CpuBudgetError] {
     online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
     online_mask :: if online >= 64 { ~cast[u64](0) } else { (cast[u64](1) << cast[u64](online)) - 1 }
     if cpus & online_mask == 0 {
@@ -301,7 +328,7 @@ set_cpu_budget_cpus :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget], c
  * @param process The process, live or being destroyed; its cpu_budget is read under the lock.
  * @return A bit per CPU's index; all ones if the process is on no budget. Its bits may include CPUs not online.
  */
-cpus_of :: fn(kernel: ptr[mut Kernel], process: ptr[Process]) -> u64 {
+cpus_of :: fn(kernel : ptr[mut Kernel], process : ptr[Process]) -> u64 {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if process.cpu_budget == 0 {
@@ -319,7 +346,7 @@ cpus_of :: fn(kernel: ptr[mut Kernel], process: ptr[Process]) -> u64 {
  * @return The index of an online CPU: the first allowed from the counter's turn on, or the one at its turn if none of
  *     the online CPUs is allowed.
  */
-next_cpu_of :: fn(kernel: ptr[mut Kernel], counter: ptr[mut u32], cpus: u64) -> u32 {
+next_cpu_of :: fn(kernel : ptr[mut Kernel], counter : ptr[mut u32], cpus : u64) -> u32 {
     online :: intrinsics.atomic_load_u32_acquire(&kernel.online_cpus)
     start :: intrinsics.interlocked_increment_u32(counter) % online
     for offset in 0..<online {
@@ -338,7 +365,7 @@ next_cpu_of :: fn(kernel: ptr[mut Kernel], counter: ptr[mut u32], cpus: u64) -> 
  * @param priority The priority to compare with.
  * @return True if no child's priority is above it, or there are no children.
  */
-children_below :: fn(budget: ptr[CpuBudget], priority: u32) -> bool {
+children_below :: fn(budget : ptr[CpuBudget], priority : u32) -> bool {
     at := budget.first_child
     loop {
         if at == 0 {
@@ -358,7 +385,7 @@ children_below :: fn(budget: ptr[CpuBudget], priority: u32) -> bool {
  * @param parent The parent, whose list changes under kernel.cpu_budgets_lock, held by the caller.
  * @param child The child, on no parent's list.
  */
-link_child :: fn(parent: ptr[mut CpuBudget], child: ptr[mut CpuBudget]) {
+link_child :: fn(parent : ptr[mut CpuBudget], child : ptr[mut CpuBudget]) {
     child.sibling_previous = 0
     child.sibling_next = parent.first_child
     if parent.first_child != 0 {
@@ -373,7 +400,7 @@ link_child :: fn(parent: ptr[mut CpuBudget], child: ptr[mut CpuBudget]) {
  * @param parent The parent, whose list changes under kernel.cpu_budgets_lock, held by the caller.
  * @param child The child, on parent's list; its sibling links are cleared.
  */
-unlink_child :: fn(parent: ptr[mut CpuBudget], child: ptr[mut CpuBudget]) {
+unlink_child :: fn(parent : ptr[mut CpuBudget], child : ptr[mut CpuBudget]) {
     if child.sibling_previous != 0 {
         cast[ptr[mut CpuBudget]](child.sibling_previous).sibling_next = child.sibling_next
     }
@@ -393,7 +420,7 @@ unlink_child :: fn(parent: ptr[mut CpuBudget], child: ptr[mut CpuBudget]) {
  * @param process The process, on a budget or none.
  * @param budget The budget it goes first on the list of; kernel.cpu_budgets_lock is held by the caller.
  */
-move_process :: fn(process: ptr[mut Process], budget: ptr[mut CpuBudget]) {
+move_process :: fn(process : ptr[mut Process], budget : ptr[mut CpuBudget]) {
     if process.cpu_budget != 0 {
         unlink_process(cast[ptr[mut CpuBudget]](process.cpu_budget), process)
     }
@@ -412,7 +439,7 @@ move_process :: fn(process: ptr[mut Process], budget: ptr[mut CpuBudget]) {
  * @param budget The budget it's on, whose list changes under kernel.cpu_budgets_lock, held by the caller.
  * @param process The process, whose cpu_budget and links are cleared.
  */
-unlink_process :: fn(budget: ptr[mut CpuBudget], process: ptr[mut Process]) {
+unlink_process :: fn(budget : ptr[mut CpuBudget], process : ptr[mut Process]) {
     if process.cpu_budget_previous != 0 {
         cast[ptr[mut Process]](process.cpu_budget_previous).cpu_budget_next = process.cpu_budget_next
     }
@@ -433,7 +460,7 @@ unlink_process :: fn(budget: ptr[mut CpuBudget], process: ptr[mut Process]) {
  * @param thread The thread, on a budget or none; its budget, the CpuTime the scheduler charges, is set atomically.
  * @param budget The budget it goes first on the list of; kernel.cpu_budgets_lock is held by the caller.
  */
-move_thread :: fn(thread: ptr[mut Thread], budget: ptr[mut CpuBudget]) {
+move_thread :: fn(thread : ptr[mut Thread], budget : ptr[mut CpuBudget]) {
     if thread.budget_object != 0 {
         unlink_thread_budget(cast[ptr[mut CpuBudget]](thread.budget_object), thread)
     }
@@ -453,7 +480,7 @@ move_thread :: fn(thread: ptr[mut Thread], budget: ptr[mut CpuBudget]) {
  * @param budget The budget it's on, whose list changes under kernel.cpu_budgets_lock, held by the caller.
  * @param thread The thread, whose budget_object and links are cleared.
  */
-unlink_thread_budget :: fn(budget: ptr[mut CpuBudget], thread: ptr[mut Thread]) {
+unlink_thread_budget :: fn(budget : ptr[mut CpuBudget], thread : ptr[mut Thread]) {
     if thread.budget_previous != 0 {
         cast[ptr[mut Thread]](thread.budget_previous).budget_next = thread.budget_next
     }
@@ -477,7 +504,7 @@ unlink_thread_budget :: fn(budget: ptr[mut CpuBudget], thread: ptr[mut Thread]) 
  * @param creator The Process that made it, as an address, or 0 for the kernel, which puts it on the root budget. If
  *     the creator is on none, or there's no root budget yet, it's left on none.
  */
-join_creators_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], creator: u64) {
+join_creators_budget :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process], creator : u64) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     from :: if creator != 0 { cast[ptr[Process]](creator).cpu_budget } else { kernel.root_cpu_budget }
@@ -497,7 +524,7 @@ join_creators_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], c
  * @param budget The budget it goes on.
  * @return True if it moved; false, with nothing changed, if the budget or the process is being destroyed.
  */
-set_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], budget: ptr[mut CpuBudget]) -> bool {
+set_process_budget :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process], budget : ptr[mut CpuBudget]) -> bool {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget.header.dying != 0 || process.header.dying != 0 {
@@ -534,7 +561,7 @@ set_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process], bud
  * @return True if it's on the budget, or nothing was asked; false, with nothing changed, if the budget is being
  *     destroyed.
  */
-set_thread_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], budget: u64) -> bool {
+set_thread_budget :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], budget : u64) -> bool {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget == 0 || thread.budget_object == budget {
@@ -557,7 +584,7 @@ set_thread_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], budget
  * @param thread The new thread, on no budget.
  * @param process The process that owns it.
  */
-join_process_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], process: ptr[Process]) {
+join_process_budget :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], process : ptr[Process]) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if process.cpu_budget != 0 {
@@ -575,7 +602,7 @@ join_process_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], proc
  *     with no lock held.
  * @param thread The thread, on a budget or none.
  */
-leave_thread_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+leave_thread_budget :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if thread.budget_object != 0 {
@@ -590,7 +617,7 @@ leave_thread_budget :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  *     with no lock held.
  * @param process The process, on a budget or none.
  */
-leave_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
+leave_process_budget :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if process.cpu_budget != 0 {
@@ -609,7 +636,7 @@ leave_process_budget :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) {
  *     with no lock of that rank or above held.
  * @param budget The budget, already dying, its generation advanced.
  */
-destroy_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
+destroy_cpu_budget :: fn(kernel : ptr[mut Kernel], budget : ptr[mut CpuBudget]) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     if budget.parent == 0 {
@@ -650,8 +677,7 @@ destroy_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
  * @param kernel The kernel, unused: there's nothing to give back to it.
  * @param budget The budget: destroyed and past its grace period, or never handed out, as when making it failed.
  */
-release_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
-}
+release_cpu_budget :: fn(kernel : ptr[mut Kernel], budget : ptr[mut CpuBudget]) {}
 
 /**
  * Fill in what cpu_budget_info gives, in its order: priority, period_ns, time_ns, share, children's share, CPUs, and
@@ -665,13 +691,21 @@ release_cpu_budget :: fn(kernel: ptr[mut Kernel], budget: ptr[mut CpuBudget]) {
  *     the lock.
  * @param words Where they go, in the kernel's memory; past its count, they're left out.
  */
-cpu_budget_words :: fn(kernel: ptr[mut Kernel], budget: ptr[CpuBudget], words: mut u64[]) {
+cpu_budget_words :: fn(kernel : ptr[mut Kernel], budget : ptr[CpuBudget], words : mut u64[]) {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     lent :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.run_by_others))
     ran :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.ran))
-    values :: u64.[cast[u64](budget.time.priority), budget.period_ns, budget.time_ns, budget.share, budget.children_share, budget.time.cpus,
-        lent, ran]
+    values :: u64.[
+        cast[u64](budget.time.priority),
+        budget.period_ns,
+        budget.time_ns,
+        budget.share,
+        budget.children_share,
+        budget.time.cpus,
+        lent,
+        ran
+    ]
     for value, i in values {
         if i < words.count {
             words[i] = value

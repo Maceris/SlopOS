@@ -83,12 +83,13 @@ Record :: struct {
  * @return Null if new can stand in for old, or why not: a constant sentence fragment, such as "an export's type
  *     changed".
  */
-check :: fn(old: u8[], new: u8[]) -> string? {
+check :: fn(old : u8[], new : u8[]) -> string? {
     before_image :: image_of(old) or_return "the old library isn't an ELF library"
     after_image :: image_of(new) or_return "the new library isn't an ELF library"
     before := record_of(&before_image) or_return "the old library has no interface record"
     after := record_of(&after_image) or_return "the new library has no interface record"
-    if before.convention != after.convention || !same_bytes(&before_image, before.context_hash, &after_image, after.context_hash, 32) {
+    if before.convention != after.convention
+        || !same_bytes(&before_image, before.context_hash, &after_image, after.context_hash, 32) {
         return "it's built for another calling convention or Context"
     }
     for i in cast[u64](0)..<before.count {
@@ -121,9 +122,16 @@ check :: fn(old: u8[], new: u8[]) -> string? {
  * @return The image, or null if file isn't a 64-bit little-endian ELF shared object (ET_DYN) with 56-byte program
  *     headers all within it, or its dynamic section or relocations can't be read within its segments' file bytes.
  */
-image_of :: fn(file: u8[]) -> Image? {
-    if file.count < 64 || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 || file[4] != 2 || file[5] != 1
-        || word_of(file, 16, 2) != 3 || word_of(file, 54, 2) != 56 {
+image_of :: fn(file : u8[]) -> Image? {
+    if file.count < 64
+        || file[0] != 0x7f
+        || file[1] != 0x45
+        || file[2] != 0x4c
+        || file[3] != 0x46
+        || file[4] != 2
+        || file[5] != 1
+        || word_of(file, 16, 2) != 3
+        || word_of(file, 54, 2) != 56 {
         return null
     }
     image := Image.{file = file, headers = word_of(file, 32, 8), count = word_of(file, 56, 2)}
@@ -165,13 +173,17 @@ image_of :: fn(file: u8[]) -> Image? {
  * @return The record's start, or null if the entry's 8 bytes aren't LIBRARY_MAGIC, its fields can't be read from
  *     the file, or it has more than MAX_EXPORTS exports.
  */
-record_of :: fn(image: ptr[Image]) -> Record? {
+record_of :: fn(image : ptr[Image]) -> Record? {
     at :: word_of(image.file, 24, 8)
     if (word(image, at) or_return null) != LIBRARY_MAGIC {
         return null
     }
-    record :: Record.{convention = word(image, at + INTERFACE_CONVENTION) or_return null, context_hash = at + INTERFACE_CONTEXT_HASH,
-        count = word(image, at + INTERFACE_EXPORTS) or_return null, exports = pointer(image, at + INTERFACE_EXPORTS + 8) or_return null}
+    record :: Record.{
+        convention = word(image, at + INTERFACE_CONVENTION) or_return null,
+        context_hash = at + INTERFACE_CONTEXT_HASH,
+        count = word(image, at + INTERFACE_EXPORTS) or_return null,
+        exports = pointer(image, at + INTERFACE_EXPORTS + 8) or_return null,
+    }
     if record.count > MAX_EXPORTS {
         return null
     }
@@ -187,7 +199,7 @@ record_of :: fn(image: ptr[Image]) -> Record? {
  * @return The string, a view of the image's file, good as long as the file is; empty for a count of 0, or null if
  *     its count is more than MAX_NAME or its pointer or bytes can't be read (bytes_at).
  */
-string_at :: fn(image: ptr[Image], address: u64) -> string? {
+string_at :: fn(image : ptr[Image], address : u64) -> string? {
     count :: word(image, address) or_return null
     if count > MAX_NAME {
         return null
@@ -210,7 +222,7 @@ string_at :: fn(image: ptr[Image], address: u64) -> string? {
  * @param count How many bytes are compared; 0 compares as false, as bytes_at reads no bytes.
  * @return True if both ranges are each in one segment's file bytes and are the same, false otherwise.
  */
-same_bytes :: fn(image_a: ptr[Image], a: u64, image_b: ptr[Image], b: u64, count: u64) -> bool {
+same_bytes :: fn(image_a : ptr[Image], a : u64, image_b : ptr[Image], b : u64, count : u64) -> bool {
     first :: bytes_at(image_a, a, count) or_return false
     second :: bytes_at(image_b, b, count) or_return false
     for byte, i in first {
@@ -229,7 +241,7 @@ same_bytes :: fn(image_a: ptr[Image], a: u64, image_b: ptr[Image], b: u64, count
  * @return The addend of the relative relocation at address, if there's one, since the file holds such a pointer as
  *     zeros; otherwise the 8 bytes at address; null if there's no relocation there and the bytes can't be read.
  */
-pointer :: fn(image: ptr[Image], address: u64) -> u64? {
+pointer :: fn(image : ptr[Image], address : u64) -> u64? {
     for i in cast[u64](0)..<image.relocation_bytes / RELA_SIZE {
         entry :: image.relocations + i * RELA_SIZE
         kind :: cast[u32](word_of(image.file, entry + 8, 4))
@@ -249,7 +261,7 @@ pointer :: fn(image: ptr[Image], address: u64) -> u64? {
  * @return The u64, or null if address isn't in a loadable segment's file bytes or the 8 bytes run past the file's
  *     end. The bytes may run past the segment's own file bytes, into what follows it in the file.
  */
-word :: fn(image: ptr[Image], address: u64) -> u64? {
+word :: fn(image : ptr[Image], address : u64) -> u64? {
     offset :: offset_of_address(image, address) or_return null
     if offset > cast[u64](image.file.count) || 8 > cast[u64](image.file.count) - offset {
         return null
@@ -270,7 +282,7 @@ word :: fn(image: ptr[Image], address: u64) -> u64? {
  *     or last byte isn't in a segment's file bytes or they aren't count - 1 bytes apart in the file, or if the bytes
  *     run past the file's end.
  */
-bytes_at :: fn(image: ptr[Image], address: u64, count: u64) -> u8[]? {
+bytes_at :: fn(image : ptr[Image], address : u64, count : u64) -> u8[]? {
     offset :: offset_of_address(image, address) or_return null
     if count == 0 || offset_of_address(image, address + count - 1) != offset + count - 1 {
         return null
@@ -292,7 +304,7 @@ bytes_at :: fn(image: ptr[Image], address: u64, count: u64) -> u8[]? {
  * @return Its offset in the file, from the first loadable segment whose file bytes hold it, or null if none does;
  *     the offset isn't checked against the file's size.
  */
-offset_of_address :: fn(image: ptr[Image], address: u64) -> u64? {
+offset_of_address :: fn(image : ptr[Image], address : u64) -> u64? {
     for i in cast[u64](0)..<image.count {
         header :: image.headers + i * 56
         if word_of(image.file, header, 4) != cast[u64](PT_LOAD) {
@@ -315,7 +327,7 @@ offset_of_address :: fn(image: ptr[Image], address: u64) -> u64? {
  * @param size How many bytes the number takes, 0 to 8; 0 reads 0.
  * @return The number, or 0 if any of its bytes is past bytes' end, which can't be told from a number that's 0.
  */
-word_of :: fn(bytes: u8[], offset: u64, size: u64) -> u64 {
+word_of :: fn(bytes : u8[], offset : u64, size : u64) -> u64 {
     value : u64 = 0
     for i in cast[u64](0)..<size {
         at :: offset + i
@@ -336,7 +348,7 @@ word_of :: fn(bytes: u8[], offset: u64, size: u64) -> u64 {
  * @return The file's length in bytes: where its section headers end, or its program headers or a segment's bytes,
  *     whichever is last; 0 if it isn't an ELF file, or that end is past the memory's.
  */
-file_size :: fn(file: u8[]) -> u64 {
+file_size :: fn(file : u8[]) -> u64 {
     if file.count < 64 || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 {
         return 0
     }

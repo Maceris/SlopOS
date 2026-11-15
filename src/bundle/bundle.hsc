@@ -121,7 +121,7 @@ DOCUMENTATION_SCHEMA :: #run schema.hash(type_info_of(Documentation))
  * @return The documentation, its text in a copy from context's allocator that's never freed; null if the record isn't
  *     a Documentation's, or its value doesn't read (schema.read_value), or there isn't the memory for it.
  */
-documentation_of :: fn(record: u8[]) -> Documentation? {
+documentation_of :: fn(record : u8[]) -> Documentation? {
     value :: value_of(record, DOCUMENTATION_SCHEMA) or_return null
     return schema.read_value[Documentation](value)
 }
@@ -133,7 +133,7 @@ documentation_of :: fn(record: u8[]) -> Documentation? {
  *     allowed, and only read.
  * @return Their BLAKE3-256 hash.
  */
-hash_of :: fn(bytes: u8[]) -> Hash {
+hash_of :: fn(bytes : u8[]) -> Hash {
     made := Hash.{}
     crypto.blake3(bytes, made.bytes)
     return made
@@ -146,7 +146,7 @@ hash_of :: fn(bytes: u8[]) -> Hash {
  * @param b The other hash, compared byte for byte with a.
  * @return True if every byte is the same.
  */
-same :: fn(a: Hash, b: Hash) -> bool {
+same :: fn(a : Hash, b : Hash) -> bool {
     for byte, i in a.bytes {
         if byte != b.bytes[i] {
             return false
@@ -163,7 +163,7 @@ same :: fn(a: Hash, b: Hash) -> bool {
  * @param value The value, written as schema.write_value writes it, what it points to after it; it isn't changed.
  * @param into The bytes, which grow by the record, with context's allocator.
  */
-write :: fn[T](value: T, into: ptr[mut u8[..]]) {
+write :: fn[T](value : T, into : ptr[mut u8[..]]) {
     for byte in schema.hash(type_info_of(T)) {
         runtime.array_add(into, byte)
     }
@@ -177,7 +177,7 @@ write :: fn[T](value: T, into: ptr[mut u8[..]]) {
  * @param storage Where the text is written.
  * @return The 64 lowercase hex characters, two a byte, high digit first: a view into storage, good while it is.
  */
-hex :: fn(hash: Hash, storage: ptr[mut u8[64]]) -> string {
+hex :: fn(hash : Hash, storage : ptr[mut u8[64]]) -> string {
     digits :: "0123456789abcdef"
     for byte, i in hash.bytes {
         storage^[(2 * i) % 64] = cast[u8](digits[cast[usize](byte >> 4)])
@@ -192,7 +192,7 @@ hex :: fn(hash: Hash, storage: ptr[mut u8[64]]) -> string {
  * @param text The text, whose first 64 characters are read; any after them are ignored.
  * @return The hash; null if text has fewer than 64 characters, or one of the first 64 isn't a lowercase hex digit.
  */
-from_hex :: fn(text: string) -> Hash? {
+from_hex :: fn(text : string) -> Hash? {
     if text.count < 64 {
         return null
     }
@@ -211,7 +211,7 @@ from_hex :: fn(text: string) -> Hash? {
  * @param character A character of hex text; uppercase digits aren't taken.
  * @return Its value, 0 to 15; null for anything but 0 to 9 and a to f.
  */
-digit :: fn(character: char) -> u8? {
+digit :: fn(character : char) -> u8? {
     if character >= '0' && character <= '9' {
         return cast[u8](character) - cast[u8]('0')
     }
@@ -229,7 +229,7 @@ digit :: fn(character: char) -> u8? {
  * @return The value's bytes, after the hash, a view into record; null if record is shorter than a hash, or its hash
  *     isn't expected.
  */
-value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
+value_of :: fn(record : u8[], expected : u8[32]) -> u8[]? {
     if record.count < 32 {
         return null
     }
@@ -251,12 +251,17 @@ value_of :: fn(record: u8[], expected: u8[32]) -> u8[]? {
  * @return True once they're listed; false if the bytes aren't a bundle's record, or its lists run past its end.
  * @error OutOfMemory There wasn't the memory to list them (decisions/0104).
  */
-bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> Result[bool, runtime.AllocatorError] {
+bundle_refers :: fn(record : u8[], each : ptr[mut Hash[..]]) -> Result[bool, runtime.AllocatorError] {
     value :: value_of(record, BUNDLE_SCHEMA) or_return .Ok(false)
     if value.count < size_of(Bundle) {
         return .Ok(false)
     }
-    for first in usize.[offset_of(Bundle, program), offset_of(Bundle, manifest), offset_of(Bundle, documentation), offset_of(Bundle, debug)] {
+    for first in usize.[
+        offset_of(Bundle, program),
+        offset_of(Bundle, manifest),
+        offset_of(Bundle, documentation),
+        offset_of(Bundle, debug)
+    ] {
         if runtime.array_try_add(each, hash_at(value, first)) != null {
             return .Error(.OutOfMemory)
         }
@@ -288,7 +293,11 @@ bundle_refers :: fn(record: u8[], each: ptr[mut Hash[..]]) -> Result[bool, runti
  *     end, in which case the entries before it are listed.
  * @error OutOfMemory There wasn't the memory for the lists (decisions/0104).
  */
-root_entries :: fn(record #escaping : u8[], names: ptr[mut string[..]], bundles: ptr[mut Hash[..]]) -> Result[bool, runtime.AllocatorError] {
+root_entries :: fn(
+    record #escaping : u8[],
+    names : ptr[mut string[..]],
+    bundles : ptr[mut Hash[..]]
+) -> Result[bool, runtime.AllocatorError] {
     value :: value_of(record, ROOT_SCHEMA) or_return .Ok(false)
     if value.count < size_of(Root) {
         return .Ok(false)
@@ -300,7 +309,8 @@ root_entries :: fn(record #escaping : u8[], names: ptr[mut string[..]], bundles:
         return .Ok(false)
     }
     // Room for every entry, so the lists stay whole
-    if runtime.array_try_reserve(names, names.count + count) != null || runtime.array_try_reserve(bundles, bundles.count + count) != null {
+    if runtime.array_try_reserve(names, names.count + count) != null
+        || runtime.array_try_reserve(bundles, bundles.count + count) != null {
         return .Error(.OutOfMemory)
     }
     for i in cast[usize](0)..<count {
@@ -324,7 +334,7 @@ root_entries :: fn(record #escaping : u8[], names: ptr[mut string[..]], bundles:
  * @param at Where the hash starts, in bytes.
  * @return The 32 bytes from at; those past bytes' end are 0.
  */
-hash_at :: fn(bytes: u8[], at: usize) -> Hash {
+hash_at :: fn(bytes : u8[], at : usize) -> Hash {
     made := Hash.{}
     for i in cast[usize](0)..<32 {
         if at + i < bytes.count {
@@ -341,7 +351,7 @@ hash_at :: fn(bytes: u8[], at: usize) -> Hash {
  * @param at Where the word starts, in bytes.
  * @return The word; bytes past bytes' end count as 0.
  */
-word :: fn(bytes: u8[], at: usize) -> u64 {
+word :: fn(bytes : u8[], at : usize) -> u64 {
     result : u64 = 0
     for i in cast[usize](0)..<8 {
         if at + i < bytes.count {

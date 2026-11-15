@@ -89,7 +89,7 @@ RESERVE_FLOOR : u64 : 128
  * @param block_count The container's size in blocks.
  * @return RESERVE_PERCENT hundredths of it, or RESERVE_FLOOR if that's more.
  */
-reserve_of :: fn(block_count: u64) -> u64 {
+reserve_of :: fn(block_count : u64) -> u64 {
     part :: block_count * RESERVE_PERCENT / 100
     return if part > RESERVE_FLOOR { part } else { RESERVE_FLOOR }
 }
@@ -142,7 +142,7 @@ Space :: struct {
  * @param owner The volume's ID; 0, the container, has no account.
  * @return A copy of its account; one of nothing used and no quota if it has none.
  */
-account_of :: fn(space: ptr[Space], owner: u64) -> Account {
+account_of :: fn(space : ptr[Space], owner : u64) -> Account {
     for account in space.accounts {
         if account.owner == owner {
             return account
@@ -166,7 +166,7 @@ account_of :: fn(space: ptr[Space], owner: u64) -> Account {
  * @return True if there's room in every list; false if there wasn't the memory, with nothing changed but some lists'
  *     capacity.
  */
-space_room :: fn(space: ptr[mut Space], changes: usize, later: usize, free: usize, owners: usize) -> bool {
+space_room :: fn(space : ptr[mut Space], changes : usize, later : usize, free : usize, owners : usize) -> bool {
     return runtime.array_try_reserve(&space.changes, space.changes.count + changes) == null
         && runtime.array_try_reserve(&space.later, space.later.count + later) == null
         && runtime.array_try_reserve(&space.free, space.free.count + free) == null
@@ -182,13 +182,16 @@ space_room :: fn(space: ptr[mut Space], changes: usize, later: usize, free: usiz
  * @param blocks How many blocks.
  * @param adding True to count them up, false to count them down, never below 0.
  */
-charge :: fn(space: ptr[mut Space], owner: u64, blocks: u64, adding: bool) {
+charge :: fn(space : ptr[mut Space], owner : u64, blocks : u64, adding : bool) {
     if owner == 0 {
         return void
     }
     for &account in space.accounts {
         if account.owner == owner {
-            account.used = if adding { account.used + blocks } else if account.used > blocks { account.used - blocks } else { 0 }
+            account.used = if adding {
+                account.used + blocks
+            }
+            else if account.used > blocks { account.used - blocks } else { 0 }
             return void
         }
     }
@@ -204,7 +207,7 @@ charge :: fn(space: ptr[mut Space], owner: u64, blocks: u64, adding: bool) {
  * @param owner The volume's ID, never 0.
  * @param quota The most blocks it may have, its snapshots' included; 0 for no limit.
  */
-set_quota_of :: fn(space: ptr[mut Space], owner: u64, quota: u64) {
+set_quota_of :: fn(space : ptr[mut Space], owner : u64, quota : u64) {
     for &account in space.accounts {
         if account.owner == owner {
             account.quota = quota
@@ -221,7 +224,7 @@ set_quota_of :: fn(space: ptr[mut Space], owner: u64, quota: u64) {
  * @param owner The volume's ID; 0, the container, has no floor.
  * @return A copy of its floor; one of 0s, holding nothing, if it has none.
  */
-floor_of :: fn(space: ptr[Space], owner: u64) -> Floor {
+floor_of :: fn(space : ptr[Space], owner : u64) -> Floor {
     for floor in space.floors {
         if floor.owner == owner {
             return floor
@@ -238,7 +241,7 @@ floor_of :: fn(space: ptr[Space], owner: u64) -> Floor {
  * @param snapshot The transaction its newest snapshot holds, 0 for none; null to keep what it was.
  * @param origin The transaction its origin's snapshot holds, 0 for none; null to keep what it was.
  */
-set_floor :: fn(space: ptr[mut Space], owner: u64, snapshot: u64?, origin: u64?) {
+set_floor :: fn(space : ptr[mut Space], owner : u64, snapshot : u64?, origin : u64?) {
     for &floor in space.floors {
         if floor.owner == owner {
             floor.snapshot = snapshot or_else floor.snapshot
@@ -256,7 +259,7 @@ set_floor :: fn(space: ptr[mut Space], owner: u64, snapshot: u64?, origin: u64?)
  * @param start The extent's first block.
  * @return The index of the first extent starting at or after start; the list's count if there's none.
  */
-extent_index :: fn(extents: Extent[], start: u64) -> usize {
+extent_index :: fn(extents : Extent[], start : u64) -> usize {
     low : usize = 0
     high := extents.count
     loop {
@@ -279,7 +282,7 @@ extent_index :: fn(extents: Extent[], start: u64) -> usize {
  * @param index The extent's index in the list; past the end gives an empty extent, not an error.
  * @return The extent; an empty one, at block 0, if index is past the end.
  */
-extent_at :: fn(extents: Extent[], index: usize) -> Extent {
+extent_at :: fn(extents : Extent[], index : usize) -> Extent {
     return if index < extents.count { extents[index] } else { Extent.{} }
 }
 
@@ -290,7 +293,7 @@ extent_at :: fn(extents: Extent[], index: usize) -> Extent {
  * @param index Its index; past the end, nothing changes.
  * @param extent The extent to put there, replacing what was.
  */
-set_extent :: fn(extents: mut Extent[], index: usize, extent: Extent) {
+set_extent :: fn(extents : mut Extent[], index : usize, extent : Extent) {
     if index < extents.count {
         extents[index] = extent
     }
@@ -303,7 +306,7 @@ set_extent :: fn(extents: mut Extent[], index: usize, extent: Extent) {
  * @param start The extent's first block.
  * @param blocks Its length in blocks, at least 1; it shouldn't overlap a free extent.
  */
-add_free :: fn(space: ptr[mut Space], start: u64, blocks: u64) {
+add_free :: fn(space : ptr[mut Space], start : u64, blocks : u64) {
     space.free_blocks += blocks
     index :: extent_index(space.free, start)
     before :: if index > 0 { extent_at(space.free, index - 1) } else { Extent.{} }
@@ -332,7 +335,7 @@ add_free :: fn(space: ptr[mut Space], start: u64, blocks: u64) {
  * @param index Where it goes, at most the list's count.
  * @param extent The extent to insert, which should keep the list sorted and not touching.
  */
-insert_extent :: fn(extents: ptr[mut Extent[..]], index: usize, extent: Extent) {
+insert_extent :: fn(extents : ptr[mut Extent[..]], index : usize, extent : Extent) {
     runtime.array_add(extents, extent)
     with {
         i := extents.count - 1
@@ -359,7 +362,7 @@ insert_extent :: fn(extents: ptr[mut Extent[..]], index: usize, extent: Extent) 
  * @return The extent's first block; null if no free extent is big enough, a quota or the reserve refuses it, or there
  *     isn't the memory to record it.
  */
-space_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u64? {
+space_allocate :: fn(context : rawptr, blocks : u64, owner : u64, data : bool) -> u64? {
     space :: cast[ptr[mut Space]](context)
     /*
      * Room for this change and the two releases a copy made with it brings (writable's of the old node and its
@@ -400,7 +403,10 @@ space_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u6
     }
     take_free(space, found, start, blocks)
     space.rotor = start + blocks
-    runtime.array_add(&space.changes, Change.{change = .Allocated, start = start, blocks = blocks, owner = owner, birth = space.transaction})
+    runtime.array_add(
+        &space.changes,
+        Change.{change = .Allocated, start = start, blocks = blocks, owner = owner, birth = space.transaction}
+    )
     charge(space, owner, blocks, true)
     return start
 }
@@ -413,7 +419,7 @@ space_allocate :: fn(context: rawptr, blocks: u64, owner: u64, data: bool) -> u6
  * @param blocks How many blocks are being allocated, at least 1.
  * @return True if at is after the extent's start and the blocks from it fit in the extent.
  */
-pass_inside :: fn(extent: Extent, at: u64, blocks: u64) -> bool {
+pass_inside :: fn(extent : Extent, at : u64, blocks : u64) -> bool {
     return at > extent.start && at + blocks <= extent.start + extent.blocks
 }
 
@@ -426,7 +432,7 @@ pass_inside :: fn(extent: Extent, at: u64, blocks: u64) -> bool {
  * @param start The first block taken, inside the extent.
  * @param blocks How many, all inside the extent.
  */
-take_free :: fn(space: ptr[mut Space], index: usize, start: u64, blocks: u64) {
+take_free :: fn(space : ptr[mut Space], index : usize, start : u64, blocks : u64) {
     if index >= space.free.count {
         return void
     }
@@ -464,7 +470,7 @@ take_free :: fn(space: ptr[mut Space], index: usize, start: u64, blocks: u64) {
  * @param owner The volume whose it is, or 0, the container.
  * @param birth The transaction it was written in.
  */
-space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth: u64) {
+space_release :: fn(context : rawptr, start : u64, blocks : u64, owner : u64, birth : u64) {
     space :: cast[ptr[mut Space]](context)
     /*
      * Without the memory to record it, the extent stays allocated: lost to the space until it's checked, but never
@@ -488,7 +494,10 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
     }
     // One a snapshot holds goes on the dead list, still its owner's
     if birth <= floor.snapshot {
-        runtime.array_add(&space.changes, Change.{change = .Dead, start = start, blocks = blocks, owner = owner, birth = birth})
+        runtime.array_add(
+            &space.changes,
+            Change.{change = .Dead, start = start, blocks = blocks, owner = owner, birth = birth}
+        )
         return void
     }
     charge(space, owner, blocks, false)
@@ -498,7 +507,10 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
     }
     else {
         runtime.array_add(&space.later, Later.{start = start, blocks = blocks, owner = owner})
-        runtime.array_add(&space.changes, Change.{change = .FreedLater, start = start, blocks = blocks, owner = owner, birth = birth})
+        runtime.array_add(
+            &space.changes,
+            Change.{change = .FreedLater, start = start, blocks = blocks, owner = owner, birth = birth}
+        )
     }
 }
 
@@ -512,7 +524,7 @@ space_release :: fn(context: rawptr, start: u64, blocks: u64, owner: u64, birth:
  * @param owner The volume the snapshot is of.
  * @param floor The snapshot's transaction, its new floor: extents born in it or before are held.
  */
-hold_freed :: fn(space: ptr[mut Space], owner: u64, floor: u64) {
+hold_freed :: fn(space : ptr[mut Space], owner : u64, floor : u64) {
     for &change in space.changes {
         if change.change != .FreedLater || change.owner != owner || change.birth > floor {
             continue
@@ -539,7 +551,7 @@ ALL_OWNERS : u64 : 0xffffffffffffffff
  * @param owner The owner of a change.
  * @return True if only is ALL_OWNERS or owner, or owner is 0.
  */
-takes :: fn(only: u64, owner: u64) -> bool {
+takes :: fn(only : u64, owner : u64) -> bool {
     return only == ALL_OWNERS || owner == 0 || owner == only
 }
 
@@ -551,7 +563,7 @@ takes :: fn(only: u64, owner: u64) -> bool {
  * @param space The container's space in memory; its later list shrinks, and its transaction advances.
  * @param only The volume the commit took the changes of, as takes has it.
  */
-space_committed :: fn(space: ptr[mut Space], only: u64) {
+space_committed :: fn(space : ptr[mut Space], only : u64) {
     kept : Later[..]
     // Without the memory to sort them, every extent waits for a later commit, still not free
     if runtime.array_try_reserve(&kept, space.later.count) != null || !space_room(space, 0, 0, space.later.count, 0) {
@@ -582,7 +594,7 @@ space_committed :: fn(space: ptr[mut Space], only: u64) {
  * @param blocks Its length in blocks.
  * @param owner The volume whose dead list it was on.
  */
-space_free_held :: fn(space: ptr[mut Space], start: u64, blocks: u64, owner: u64) {
+space_free_held :: fn(space : ptr[mut Space], start : u64, blocks : u64, owner : u64) {
     // As a release: without the memory to record it, held still
     if !space_room(space, 1, 1, 0, 0) {
         return void
@@ -597,7 +609,7 @@ space_free_held :: fn(space: ptr[mut Space], start: u64, blocks: u64, owner: u64
  *
  * @param space The space; it may not be used again.
  */
-space_free :: fn(space: ptr[mut Space]) {
+space_free :: fn(space : ptr[mut Space]) {
     runtime.array_free(&space.floors)
     runtime.array_free(&space.accounts)
     runtime.array_free(&space.free)

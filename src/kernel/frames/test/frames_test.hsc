@@ -31,7 +31,7 @@ Memory :: alias u64[32768]
  */
 REGIONS :: boot_info.MemoryRegion.[
     .{range = .{base = cast[boot_info.PhysicalAddress](0), size = MEMORY_BASE}, kind = .Reserved},
-    .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable},
+    .{range = .{base = cast[boot_info.PhysicalAddress](MEMORY_BASE), size = MEMORY_SIZE}, kind = .Usable}
 ]
 
 /**
@@ -40,7 +40,7 @@ REGIONS :: boot_info.MemoryRegion.[
  * @param memory The stand-in memory, only its address used.
  * @return What's added to a physical address in it to reach its byte in memory.
  */
-offset_of :: fn(memory: ptr[mut Memory]) -> u64 {
+offset_of :: fn(memory : ptr[mut Memory]) -> u64 {
     return cast[u64](&memory[0]) - MEMORY_BASE
 }
 
@@ -52,14 +52,17 @@ offset_of :: fn(memory: ptr[mut Memory]) -> u64 {
  * @return The allocator, whose failure points the caller reports with hosted_faults.report_points; Error if make
  *     refused the memory, the failure recorded.
  */
-made_allocator :: fn(t: ptr[mut testing.T], memory: ptr[mut Memory]) -> Result[frames.FrameAllocator, testing.Stopped] {
+made_allocator :: fn(
+    t : ptr[mut testing.T],
+    memory : ptr[mut Memory]
+) -> Result[frames.FrameAllocator, testing.Stopped] {
     made :: frames.make(REGIONS, offset_of(memory))
     allocator := testing.require_ok(t, made, "256 KiB of usable memory makes an allocator")?
     allocator.faults.spec = hosted_faults.point_spec()
     return .Ok(allocator)
 }
 
-a_new_allocator_has_every_frame_free_but_its_state_bytes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_new_allocator_has_every_frame_free_but_its_state_bytes #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -72,7 +75,7 @@ a_new_allocator_has_every_frame_free_but_its_state_bytes #test :: fn(t: ptr[mut 
     return .Ok
 }
 
-the_smallest_block_that_fits_is_given #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_smallest_block_that_fits_is_given #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -89,7 +92,7 @@ the_smallest_block_that_fits_is_given #test :: fn(t: ptr[mut testing.T]) -> test
     return .Ok
 }
 
-frames_freed_merge_back_with_their_buddies #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+frames_freed_merge_back_with_their_buddies #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -97,7 +100,11 @@ frames_freed_merge_back_with_their_buddies #test :: fn(t: ptr[mut testing.T]) ->
     addresses : boot_info.PhysicalAddress[FREE_FRAMES]
     for index in 0..<FREE_FRAMES {
         allocated :: frames.allocate(&allocator, 0)
-        addresses[index] = testing.require_ok(t, allocated, "each of the free frames can be allocated alone, splitting blocks")?
+        addresses[index] = testing.require_ok(
+            t,
+            allocated,
+            "each of the free frames can be allocated alone, splitting blocks"
+        )?
     }
     testing.expect_eq(t, allocator.free_frames, 0, "every frame is allocated")
     testing.expect(t, frames.allocate(&allocator, 0) is_error, "so there's none to give")
@@ -113,12 +120,17 @@ frames_freed_merge_back_with_their_buddies #test :: fn(t: ptr[mut testing.T]) ->
     }
     testing.expect_eq(t, allocator.free_frames, FREE_FRAMES, "every frame is free again")
     for order in 0..<6 {
-        testing.expect_eq(t, allocator.lists[order].count, 1, "buddies merged back into the blocks the allocator started with")
+        testing.expect_eq(
+            t,
+            allocator.lists[order].count,
+            1,
+            "buddies merged back into the blocks the allocator started with"
+        )
     }
     return .Ok
 }
 
-a_block_written_to_comes_back_zeroed #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_block_written_to_comes_back_zeroed #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
@@ -130,20 +142,35 @@ a_block_written_to_comes_back_zeroed #test :: fn(t: ptr[mut testing.T]) -> testi
     zeroed :: frames.allocate_zeroed(&allocator, 1)
     clean :: testing.require_ok(t, zeroed, "the block freed is free again")?
     testing.expect_eq(t, cast[u64](clean), cast[u64](dirty), "the block freed is the one given again")
-    testing.expect_eq(t, cast[ptr[u64]](frames.virtual_of(&allocator, clean) + 8)^, 0, "what was written to it is zeroed")
+    testing.expect_eq(
+        t,
+        cast[ptr[u64]](frames.virtual_of(&allocator, clean) + 8)^,
+        0,
+        "what was written to it is zeroed"
+    )
     frames.free(&allocator, clean, 1)
     return .Ok
 }
 
-a_cpus_cache_takes_and_gives_back_half_its_size_at_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_cpus_cache_takes_and_gives_back_half_its_size_at_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     allocator := made_allocator(t, &memory)?
     defer hosted_faults.report_points(&allocator.faults)
     cache : frames.FrameCache
     took :: frames.take_frame(&cache, &allocator)
     first :: testing.require_ok(t, took, "an empty cache fills from the allocator")?
-    testing.expect_eq(t, cache.count, frames.FRAME_CACHE_BATCH - 1, "it takes a batch, half its size, and hands one out")
-    testing.expect_eq(t, allocator.free_frames, FREE_FRAMES - frames.FRAME_CACHE_BATCH, "the batch is the allocator's no more")
+    testing.expect_eq(
+        t,
+        cache.count,
+        frames.FRAME_CACHE_BATCH - 1,
+        "it takes a batch, half its size, and hands one out"
+    )
+    testing.expect_eq(
+        t,
+        allocator.free_frames,
+        FREE_FRAMES - frames.FRAME_CACHE_BATCH,
+        "the batch is the allocator's no more"
+    )
     taken : boot_info.PhysicalAddress[frames.FRAME_CACHE_SIZE]
     for i in 0..<frames.FRAME_CACHE_SIZE {
         allocated :: frames.allocate(&allocator, 0)
@@ -153,19 +180,34 @@ a_cpus_cache_takes_and_gives_back_half_its_size_at_once #test :: fn(t: ptr[mut t
         frames.give_frame(&cache, &allocator, taken[i])
     }
     // 15 left and 32 given: full after 17, so the 18th gives 16 back first, leaving 31 once all are in
-    testing.expect_eq(t, cache.count, 31, "full after 17, the 18th gives a batch back first, leaving 31 once all are in")
-    testing.expect_eq(t, allocator.free_frames, FREE_FRAMES - frames.FRAME_CACHE_SIZE, "the batch given back is the allocator's")
+    testing.expect_eq(
+        t,
+        cache.count,
+        31,
+        "full after 17, the 18th gives a batch back first, leaving 31 once all are in"
+    )
+    testing.expect_eq(
+        t,
+        allocator.free_frames,
+        FREE_FRAMES - frames.FRAME_CACHE_SIZE,
+        "the batch given back is the allocator's"
+    )
     frames.give_frame(&cache, &allocator, first)
     frames.drain_frames(&cache, &allocator)
     testing.expect_eq(t, cache.count, 0, "draining empties the cache")
     testing.expect_eq(t, allocator.free_frames, FREE_FRAMES, "into the allocator")
     for order in 0..<6 {
-        testing.expect_eq(t, allocator.lists[order].count, 1, "the cache's frames merged into their buddies, every list as it was")
+        testing.expect_eq(
+            t,
+            allocator.lists[order].count,
+            1,
+            "the cache's frames merged into their buddies, every list as it was"
+        )
     }
     return .Ok
 }
 
-order_for_gives_the_smallest_order_that_holds_a_size #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+order_for_gives_the_smallest_order_that_holds_a_size #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     testing.expect_eq(t, frames.order_for(1), 0, "a byte takes a frame")
     testing.expect_eq(t, frames.order_for(4096), 0, "a frame's worth takes a frame")
     testing.expect_eq(t, frames.order_for(4097), 1, "a byte more takes two")
@@ -173,12 +215,16 @@ order_for_gives_the_smallest_order_that_holds_a_size #test :: fn(t: ptr[mut test
     return .Ok
 }
 
-too_little_memory_for_the_state_bytes_makes_no_allocator #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+too_little_memory_for_the_state_bytes_makes_no_allocator #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     memory : Memory
     tiny := boot_info.MemoryRegion.[
-        .{range = .{base = cast[boot_info.PhysicalAddress](0x1000000000), size = 0x1000}, kind = .Usable},
+        .{range = .{base = cast[boot_info.PhysicalAddress](0x1000000000), size = 0x1000}, kind = .Usable}
     ]
-    testing.expect(t, frames.make(tiny, offset_of(&memory)) is_error, "one frame at 64 GiB has no room for its own state bytes")
+    testing.expect(
+        t,
+        frames.make(tiny, offset_of(&memory)) is_error,
+        "one frame at 64 GiB has no room for its own state bytes"
+    )
     return .Ok
 }
 

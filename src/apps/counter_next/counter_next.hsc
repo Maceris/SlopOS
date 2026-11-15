@@ -3,9 +3,9 @@
  */
 package counter_next
 
-import config from "../../protocols/config"
-import installations from "../../installations"
 import counter_app from "../../counter_app"
+import installations from "../../installations"
+import config from "../../protocols/config"
 
 /**
  * Count this run in the app's data, say which run and version it is, then keep running until asked to stop.
@@ -20,6 +20,6 @@ import counter_app from "../../counter_app"
  * @return 0 once it's asked to stop; 1 if a port for the settings couldn't be made, 2 if the data directory couldn't be
  *     opened, 3 if the count couldn't be written, 4 if it couldn't wait to be asked to stop.
  */
-main :: fn(data: installations.AppData, settings: config.Config[counter_app.CounterSettings]?) -> int {
+main :: fn(data : installations.AppData, settings : config.Config[counter_app.CounterSettings]?) -> int {
     return counter_app.run(data, settings, 2)
 }

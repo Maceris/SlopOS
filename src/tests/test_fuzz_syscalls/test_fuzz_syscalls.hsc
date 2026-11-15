@@ -16,17 +16,19 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
-import test_kit from "../../test_kit"
+import testing from "std:testing"
 import log_line from "../../log_line"
+import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
 NAME :: "test_fuzz_syscalls"
 /** How long it fuzzes, in seconds, unless the build's fuzz_seconds setting says. */
 FUZZ_SECONDS : u64 : #run setting_number("fuzz_seconds", 20)
-/** The seed its random generator starts from: the build's fuzz_seed setting, or 0 for one from the clock, which it logs. */
+/**
+ * The seed its random generator starts from: the build's fuzz_seed setting, or 0 for one from the clock, which it logs.
+ */
 FUZZ_SEED : u64 : #run setting_number("fuzz_seed", 0)
 /** The most calls an input makes. */
 MOST_CALLS :: 8
@@ -103,11 +105,11 @@ Input :: struct {
 
 /** What the fuzzing came to, for the log. */
 Totals :: struct {
-    inputs : u64,
-    calls : u64,
+    inputs    : u64,
+    calls     : u64,
     succeeded : u64,
-    kept : u64,
-    reached : u64,
+    kept      : u64,
+    reached   : u64,
 }
 
 /** The fuzzer's state. */
@@ -139,7 +141,7 @@ Fuzzer :: struct {
  * @param otherwise What it is without the setting, or for one that isn't a decimal number.
  * @return The number.
  */
-setting_number :: fn(name: string, otherwise: u64) -> u64 {
+setting_number :: fn(name : string, otherwise : u64) -> u64 {
     text :: compiler.target_setting(name, default = "")
     if text.count == 0 {
         return otherwise
@@ -202,8 +204,11 @@ shape_code :: fn() -> compiler.Code {
             })
             index += 1
         }
-        left_out := function.never_returns || member.name == "thread_create" || member.name == "thread_set_page"
-            || member.name == "thread_use_cpu_budget" || member.name == "coverage_take"
+        left_out := function.never_returns
+            || member.name == "thread_create"
+            || member.name == "thread_set_page"
+            || member.name == "thread_use_cpu_budget"
+            || member.name == "coverage_take"
         handles := cast[u64](0)
         if !function.never_returns {
             ok, error :: slop_os.result_types(slop_os.result_of(function), member.name)
@@ -214,7 +219,9 @@ shape_code :: fn() -> compiler.Code {
                     }
                     else if slop_os.underlying(type).variant == .STRUCT {
                         members :: cast[ptr[compiler.TypeInfoStruct]](slop_os.underlying(type)).members
-                        if members.count >= 2 && os.is_handle(members[0].member_type) && os.is_handle(members[1].member_type) {
+                        if members.count >= 2
+                            && os.is_handle(members[0].member_type)
+                            && os.is_handle(members[1].member_type) {
                             handles = 2
                         }
                     }
@@ -242,7 +249,7 @@ shape_code :: fn() -> compiler.Code {
  * @param type A handle type, an alias.
  * @return The kind's value; 0 for Handle, or a name that isn't a kind.
  */
-object_kind_of :: fn(type: ptr[compiler.TypeInfo]) -> u64 {
+object_kind_of :: fn(type : ptr[compiler.TypeInfo]) -> u64 {
     if type.variant != .ALIAS {
         return 0
     }
@@ -262,7 +269,7 @@ object_kind_of :: fn(type: ptr[compiler.TypeInfo]) -> u64 {
  * @param number The call's number, below CALL_COUNT.
  * @return Its shape; left out for a number past them.
  */
-shape_of :: fn(number: u64) -> Shape {
+shape_of :: fn(number : u64) -> Shape {
     shape := Shape.{}
     #insert shape_code()
     shape.left_out = true
@@ -275,7 +282,7 @@ shape_of :: fn(number: u64) -> Shape {
  * @param t The test's state.
  * @return Ok once it's fuzzed; Error if what it fuzzes with couldn't be made.
  */
-survives_calls_drawn_from_the_abi_table #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     given :: test_kit.given(t, Given)?
     seed :: if FUZZ_SEED != 0 { FUZZ_SEED } else { 0x9e3779b97f4a7c15 ~ (slop_os.clock_monotonic() or_else 1) }
@@ -289,14 +296,29 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t: ptr[mut testing.T]) -> te
         }
     }
     // The scratch memory, between unmapped ranges, so a call reaching past it finds nothing
-    scratch_memory :: testing.require_ok(t, slop_os.memory_create(block.budget, SCRATCH_BYTES), "the scratch memory is made")?
-    reserved :: testing.require_some(t, runtime.reserve_addresses(cast[usize](3 * SCRATCH_BYTES)), "addresses for it are reserved")?
+    scratch_memory :: testing.require_ok(
+        t,
+        slop_os.memory_create(block.budget, SCRATCH_BYTES),
+        "the scratch memory is made"
+    )?
+    reserved :: testing.require_some(
+        t,
+        runtime.reserve_addresses(cast[usize](3 * SCRATCH_BYTES)),
+        "addresses for it are reserved"
+    )?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    testing.require_ok(t, slop_os.memory_map(scratch_memory, block.space, reserved + SCRATCH_BYTES, 0, SCRATCH_BYTES, read_write),
-        "it's mapped")?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(scratch_memory, block.space, reserved + SCRATCH_BYTES, 0, SCRATCH_BYTES, read_write),
+        "it's mapped"
+    )?
     fuzzer.scratch = reserved + SCRATCH_BYTES
     // What it fuzzes with, under a budget of their own
-    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, POOL_BUDGET), "a budget for what's fuzzed")?
+    budget :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, POOL_BUDGET),
+        "a budget for what's fuzzed"
+    )?
     add_handle(&fuzzer, cast[slop_os.Handle](budget))
     match slop_os.address_space_create(budget) {
         case Ok(made) => add_handle(&fuzzer, cast[slop_os.Handle](made))
@@ -333,7 +355,9 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t: ptr[mut testing.T]) -> te
             fuzzer.counters = counters
             fuzzer.seen = seen
         }
-        case Error(error) => log_line.write(given.log, "%: the kernel has no coverage counters, so every input is drawn afresh", NAME)
+        case Error(
+            error
+        ) => log_line.write(given.log, "%: the kernel has no coverage counters, so every input is drawn afresh", NAME)
     }
     start :: slop_os.clock_monotonic() or_else 0
     deadline :: start + FUZZ_SECONDS * 1_000_000_000
@@ -371,7 +395,7 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t: ptr[mut testing.T]) -> te
  * @param fuzzer The fuzzer.
  * @param handle The handle.
  */
-add_handle :: fn(fuzzer: ptr[mut Fuzzer], handle: slop_os.Handle) {
+add_handle :: fn(fuzzer : ptr[mut Fuzzer], handle : slop_os.Handle) {
     at :: fuzzer.pool_count
     if at < fuzzer.pool.count && at < fuzzer.pool_kinds.count {
         fuzzer.pool[at] = handle
@@ -392,7 +416,7 @@ add_handle :: fn(fuzzer: ptr[mut Fuzzer], handle: slop_os.Handle) {
  * @param wanted The slop_os.ObjectKind, as a number; 0 for any.
  * @return The handle, as a word; null if none is of that kind.
  */
-draw_pooled :: fn(fuzzer: ptr[Fuzzer], source: ptr[mut testing.Source], wanted: u64) -> u64? {
+draw_pooled :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source], wanted : u64) -> u64? {
     matching : u64 = 0
     for kind, i in fuzzer.pool_kinds {
         if i < fuzzer.pool_count && (wanted == 0 || kind == wanted) {
@@ -420,7 +444,7 @@ draw_pooled :: fn(fuzzer: ptr[Fuzzer], source: ptr[mut testing.Source], wanted: 
  * @param fuzzer The fuzzer, whose random generator moves on.
  * @param input Where it goes.
  */
-choose_input :: fn(fuzzer: ptr[mut Fuzzer], input: ptr[mut Input]) {
+choose_input :: fn(fuzzer : ptr[mut Fuzzer], input : ptr[mut Input]) {
     if fuzzer.kept.count == 0 || next_random(fuzzer) % 8 == 0 {
         input.count = INPUT_BYTES
         for i in 0..<input.bytes.count {
@@ -474,7 +498,7 @@ choose_input :: fn(fuzzer: ptr[mut Fuzzer], input: ptr[mut Input]) {
  * @param fuzzer The fuzzer.
  * @param input The input.
  */
-run_input :: fn(fuzzer: ptr[mut Fuzzer], input: ptr[Input]) {
+run_input :: fn(fuzzer : ptr[mut Fuzzer], input : ptr[Input]) {
     room : u8[INPUT_BYTES]
     for byte, i in input.bytes {
         if i < input.count {
@@ -519,7 +543,7 @@ run_input :: fn(fuzzer: ptr[mut Fuzzer], input: ptr[Input]) {
  * @param wanted For a handle, the slop_os.ObjectKind its parameter takes, as a number; 0 for any.
  * @return The word.
  */
-draw_word :: fn(fuzzer: ptr[Fuzzer], source: ptr[mut testing.Source], kind: Kind, wanted: u64) -> u64 {
+draw_word :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source], kind : Kind, wanted : u64) -> u64 {
     way :: testing.draw_below(source, 16)
     match kind {
         case .Handle => {
@@ -583,7 +607,7 @@ draw_word :: fn(fuzzer: ptr[Fuzzer], source: ptr[mut testing.Source], kind: Kind
  * @param way Which, as draw_word drew it, below 16.
  * @return The address.
  */
-draw_address :: fn(fuzzer: ptr[Fuzzer], source: ptr[mut testing.Source], way: u64) -> u64 {
+draw_address :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source], way : u64) -> u64 {
     if way < 11 {
         return fuzzer.scratch + (testing.draw_below(source, SCRATCH_BYTES) & ~cast[u64](7))
     }
@@ -602,7 +626,7 @@ draw_address :: fn(fuzzer: ptr[Fuzzer], source: ptr[mut testing.Source], way: u6
  * @param fuzzer The fuzzer, whose seen grows.
  * @return True if anything was new.
  */
-reached_more :: fn(fuzzer: ptr[mut Fuzzer]) -> bool {
+reached_more :: fn(fuzzer : ptr[mut Fuzzer]) -> bool {
     more := false
     seen :: fuzzer.seen
     for count, i in fuzzer.counters {
@@ -627,7 +651,7 @@ reached_more :: fn(fuzzer: ptr[mut Fuzzer]) -> bool {
  * @param count The counter, above 0.
  * @return Its bucket's bit.
  */
-bucket_of :: fn(count: u8) -> u8 {
+bucket_of :: fn(count : u8) -> u8 {
     if count <= 3 {
         return cast[u8](1) << (count - 1)
     }
@@ -652,7 +676,7 @@ bucket_of :: fn(count: u8) -> u8 {
  * @param fuzzer The fuzzer.
  * @param input The input.
  */
-keep :: fn(fuzzer: ptr[mut Fuzzer], input: ptr[Input]) {
+keep :: fn(fuzzer : ptr[mut Fuzzer], input : ptr[Input]) {
     fuzzer.totals.kept += 1
     if fuzzer.kept.count < MOST_KEPT {
         runtime.array_add(&fuzzer.kept, input^)
@@ -669,10 +693,20 @@ keep :: fn(fuzzer: ptr[mut Fuzzer], input: ptr[Input]) {
  *
  * @param fuzzer The fuzzer.
  */
-report_progress :: fn(fuzzer: ptr[Fuzzer]) {
+report_progress :: fn(fuzzer : ptr[Fuzzer]) {
     totals :: fuzzer.totals
-    log_line.write(fuzzer.log, "%: % inputs, % calls, % succeeded, % of the kernel's % counters reached, % inputs kept, % handles", NAME,
-        totals.inputs, totals.calls, totals.succeeded, totals.reached, fuzzer.counters.count, fuzzer.kept.count, fuzzer.pool_count)
+    log_line.write(
+        fuzzer.log,
+        "%: % inputs, % calls, % succeeded, % of the kernel's % counters reached, % inputs kept, % handles",
+        NAME,
+        totals.inputs,
+        totals.calls,
+        totals.succeeded,
+        totals.reached,
+        fuzzer.counters.count,
+        fuzzer.kept.count,
+        fuzzer.pool_count
+    )
 }
 
 /**
@@ -681,7 +715,7 @@ report_progress :: fn(fuzzer: ptr[Fuzzer]) {
  * @param fuzzer The fuzzer, whose generator moves on.
  * @return A number, any u64.
  */
-next_random :: fn(fuzzer: ptr[mut Fuzzer]) -> u64 {
+next_random :: fn(fuzzer : ptr[mut Fuzzer]) -> u64 {
     x := fuzzer.random | 1
     x = x ~ (x >> 12)
     x = x ~ (x << 25)
@@ -690,8 +724,16 @@ next_random :: fn(fuzzer: ptr[mut Fuzzer]) -> u64 {
     return x * 0x2545f4914f6cdd1d
 }
 
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

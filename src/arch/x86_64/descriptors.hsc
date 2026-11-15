@@ -1,12 +1,14 @@
 package arch_x86_64
 
-import runtime from "base:runtime"
 import x86_64 from "base:intrinsics/x86_64"
+import runtime from "base:runtime"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 
-// Model-specific registers and control register bits
-//SPEC: Intel SDM Vol. 4 (MSRs), Vol. 3A §2.5 (control registers), §2.2.1 (EFER)
+/*
+ * Model-specific registers and control register bits
+ * SPEC: Intel SDM Vol. 4 (MSRs), Vol. 3A §2.5 (control registers), §2.2.1 (EFER)
+ */
 /** The IA32_EFER MSR's number: extended features, like SYSCALL and no-execute. */
 IA32_EFER : u32 : 0xc0000080
 /** The IA32_STAR MSR's number: the segment selectors SYSCALL and SYSRET load. */
@@ -31,7 +33,7 @@ EFER_NO_EXECUTE_ENABLE : u64 : 1 << 11
  * SYSCALL loads the kernel's code selector and the data one after it; 64-bit SYSRET loads user code
  * at the base plus 16 and user data at the base plus 8, so the base sits below user data.
  */
-//SPEC: Intel SDM Vol. 3A §5.8.8 (fast system calls in 64-bit mode)
+// SPEC: Intel SDM Vol. 3A §5.8.8 (fast system calls in 64-bit mode)
 /** IA32_STAR bits 32-47: the selector base SYSCALL loads cs (and ss, 8 above it) from, the kernel's code selector. */
 STAR_SYSCALL_SELECTORS : u64 : cast[u64](KERNEL_CODE_SELECTOR) << 32
 /** IA32_STAR bits 48-63: the selector base 64-bit SYSRET loads from, 8 below user data, with RPL 3. */
@@ -67,8 +69,10 @@ XCR0_SSE : u64 : 1 << 1
 /** XCR0 bit 2: the AVX state component, the YMM registers' upper halves. */
 XCR0_AVX : u64 : 1 << 2
 
-// Code and data segments for 64-bit mode: base and limit are ignored, only the access bits matter.
-//SPEC: Intel SDM Vol. 3A §3.4.5, Figure 3-8 (segment descriptors), §5.2.1 (code segments in 64-bit mode)
+/*
+ * Code and data segments for 64-bit mode: base and limit are ignored, only the access bits matter.
+ * SPEC: Intel SDM Vol. 3A §3.4.5, Figure 3-8 (segment descriptors), §5.2.1 (code segments in 64-bit mode)
+ */
 /** The kernel's code segment descriptor: present, DPL 0, execute/read, 64-bit (L set). */
 KERNEL_CODE_DESCRIPTOR : u64 : 0x00af9a000000ffff
 /** The kernel's data segment descriptor: present, DPL 0, read/write. */
@@ -87,7 +91,7 @@ USER_CODE_DESCRIPTOR : u64 : 0x00affa000000ffff
  * @return The descriptor's low 8 bytes, the entry the TSS's selector names.
  * @return Its high 8 bytes, bits 32-63 of base, the entry after it.
  */
-tss_descriptor :: fn(base: u64) -> (u64, u64) {
+tss_descriptor :: fn(base : u64) -> (u64, u64) {
     limit :: cast[u64](size_of(TaskStateSegment) - 1)
     low := limit & 0xffff
     low |= (base & 0xffffff) << 16
@@ -105,7 +109,7 @@ tss_descriptor :: fn(base: u64) -> (u64, u64) {
  * @return The 16-byte gate, present, for the caller to store in the IDT; handler's 64 bits are split across its
  *     three offset fields.
  */
-gate :: fn(handler: u64, ist: u8) -> IdtEntry {
+gate :: fn(handler : u64, ist : u8) -> IdtEntry {
     return IdtEntry.{
         offset_low = cast[u16](handler & 0xffff),
         selector = KERNEL_CODE_SELECTOR,
@@ -126,7 +130,7 @@ gate :: fn(handler: u64, ist: u8) -> IdtEntry {
  * @param firmware The firmware's tables, which x86-64 doesn't need here.
  * @param direct_map_offset Where the bootloader's direct map is, not needed here either.
  */
-init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) {
+init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) {
     for &entry in system.idt {
         entry^ = IdtEntry.{}
     }
@@ -138,7 +142,8 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
  * Set up the calling CPU.
  *
  * In order: its GDT and TSS with the stacks entries use, the IDT, no-execute, user-access protection, the x87, SSE and
- * AVX state, enhanced IBRS where it's there (hardening.hsc), address-space tags, SYSCALL, the gs base for entries, and its local APIC in x2APIC mode. It runs once on
+ * AVX state, enhanced IBRS where it's there (hardening.hsc), address-space tags, SYSCALL, the gs base for entries, and
+ * its local APIC in x2APIC mode. It runs once on
  * each CPU, at ring 0 with interrupts disabled, after init_system.
  *
  * @param system The shared state init_system set up, whose IDT this CPU loads.
@@ -148,11 +153,11 @@ init_system :: fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareT
  * @param stacks The kernel stack and the critical events' stacks, their tops put in the TSS.
  */
 init_cpu :: fn(
-    system: ptr[ArchSystem],
-    cpu: ptr[mut ArchCpu],
+    system : ptr[ArchSystem],
+    cpu : ptr[mut ArchCpu],
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
-    stacks: ptr[arch_interface.CpuStacks],
+    stacks : ptr[arch_interface.CpuStacks]
 ) {
     cpu.carrier = carrier
     cpu.context = context
@@ -182,15 +187,17 @@ init_cpu :: fn(
  * @param cpu The CPU's state, whose tss, syscall.kernel_stack and stack limits are set.
  * @param stacks The kernel stack and the critical events' stacks, indexed by arch_interface.CriticalEvent.
  */
-record_stacks :: fn(cpu: ptr[mut ArchCpu], stacks: ptr[arch_interface.CpuStacks]) {
+record_stacks :: fn(cpu : ptr[mut ArchCpu], stacks : ptr[arch_interface.CpuStacks]) {
     kernel_top :: cast[u64](stacks.kernel.high)
     cpu.syscall.kernel_stack = kernel_top
     cpu.tss = TaskStateSegment.{}
     cpu.tss.rsp[0] = kernel_top
     cpu.tss.ist[IST_KERNEL - 1] = kernel_top
     cpu.tss.ist[IST_NMI - 1] = cast[u64](stacks.critical[cast[u8](arch_interface.CriticalEvent.Nmi)].high)
-    cpu.tss.ist[IST_DOUBLE_FAULT - 1] = cast[u64](stacks.critical[cast[u8](arch_interface.CriticalEvent.DoubleFault)].high)
-    cpu.tss.ist[IST_MACHINE_CHECK - 1] = cast[u64](stacks.critical[cast[u8](arch_interface.CriticalEvent.MachineCheck)].high)
+    cpu.tss.ist[IST_DOUBLE_FAULT
+        - 1] = cast[u64](stacks.critical[cast[u8](arch_interface.CriticalEvent.DoubleFault)].high)
+    cpu.tss.ist[IST_MACHINE_CHECK
+        - 1] = cast[u64](stacks.critical[cast[u8](arch_interface.CriticalEvent.MachineCheck)].high)
     cpu.tss.io_map_base = cast[u16](size_of(TaskStateSegment))
     cpu.kernel_stack_limit = stack_limit_of(stacks.kernel)
     for i in 0..<3 {
@@ -206,7 +213,7 @@ record_stacks :: fn(cpu: ptr[mut ArchCpu], stacks: ptr[arch_interface.CpuStacks]
  * @param system The shared state whose IDT is loaded.
  * @param cpu The CPU's state, whose gdt is filled and whose tss is loaded, so it has to be filled first.
  */
-load_descriptor_tables :: fn(system: ptr[ArchSystem], cpu: ptr[mut ArchCpu]) {
+load_descriptor_tables :: fn(system : ptr[ArchSystem], cpu : ptr[mut ArchCpu]) {
     cpu.gdt[0] = 0
     cpu.gdt[1] = KERNEL_CODE_DESCRIPTOR
     cpu.gdt[2] = KERNEL_DATA_DESCRIPTOR

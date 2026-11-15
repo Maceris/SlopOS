@@ -26,18 +26,22 @@ Made :: struct {
     type : u8,
 }
 
-an_interface_the_same_or_with_more_exports_stands_in #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_interface_the_same_or_with_more_exports_stands_in #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     old : u8[SIZE]
     new : u8[SIZE]
     make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
     make(&new, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
     testing.expect_none(t, library_interface.check(old, new), "the same exports of the same types")
-    make(&new, 1, Made.[Made.{name = "has_word", type = 2}, Made.{name = "build_name", type = 3}, Made.{name = "add", type = 1}])
+    make(
+        &new,
+        1,
+        Made.[Made.{name = "has_word", type = 2}, Made.{name = "build_name", type = 3}, Made.{name = "add", type = 1}]
+    )
     testing.expect_none(t, library_interface.check(old, new), "an export more, and the old ones in another order")
     return .Ok
 }
 
-an_interface_with_an_export_lost_or_changed_does_not_stand_in #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_interface_with_an_export_lost_or_changed_does_not_stand_in #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     old : u8[SIZE]
     new : u8[SIZE]
     make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
@@ -46,15 +50,24 @@ an_interface_with_an_export_lost_or_changed_does_not_stand_in #test :: fn(t: ptr
     testing.expect_eq(t, fewer, "an export isn't there any more", "has_word is gone, and a program may call it")
     make(&new, 1, Made.[Made.{name = "add", type = 9}, Made.{name = "has_word", type = 2}])
     retyped :: library_interface.check(old, new) or_else ""
-    testing.expect_eq(t, retyped, "an export's type changed", "add's type hash differs, so its callers would pass the wrong things")
+    testing.expect_eq(
+        t,
+        retyped,
+        "an export's type changed",
+        "add's type hash differs, so its callers would pass the wrong things"
+    )
     make(&new, 2, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
     reconvened :: library_interface.check(old, new) or_else ""
-    testing.expect_eq(t, reconvened, "it's built for another calling convention or Context",
-        "convention 2 isn't 1, so no call into it would work")
+    testing.expect_eq(
+        t,
+        reconvened,
+        "it's built for another calling convention or Context",
+        "convention 2 isn't 1, so no call into it would work"
+    )
     return .Ok
 }
 
-bytes_that_are_not_a_library_are_not_read #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+bytes_that_are_not_a_library_are_not_read #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     old : u8[SIZE]
     make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
     garbage : u8[SIZE]
@@ -63,10 +76,15 @@ bytes_that_are_not_a_library_are_not_read #test :: fn(t: ptr[mut testing.T]) -> 
     return .Ok
 }
 
-a_files_length_comes_from_its_headers #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_files_length_comes_from_its_headers #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     old : u8[SIZE]
     make(&old, 1, Made.[Made.{name = "add", type = 1}, Made.{name = "has_word", type = 2}])
-    testing.expect_eq(t, library_interface.file_size(old), SIZE - 64, "it ends where its section headers do, before its memory does")
+    testing.expect_eq(
+        t,
+        library_interface.file_size(old),
+        SIZE - 64,
+        "it ends where its section headers do, before its memory does"
+    )
     return .Ok
 }
 
@@ -80,7 +98,7 @@ a_files_length_comes_from_its_headers #test :: fn(t: ptr[mut testing.T]) -> test
  * @param exports The record's exports, in order: at most 13, their names together at most 896 bytes, for them to
  *     fit where they're put, in the segment's 1920 bytes.
  */
-make :: fn(bytes: ptr[mut u8[SIZE]], convention: u64, exports: Made[]) {
+make :: fn(bytes : ptr[mut u8[SIZE]], convention : u64, exports : Made[]) {
     for i in 0..<bytes.count {
         bytes^[i] = 0
     }
@@ -123,7 +141,7 @@ make :: fn(bytes: ptr[mut u8[SIZE]], convention: u64, exports: Made[]) {
  * @param size How many bytes it takes, 0 to 8.
  * @param value The number; its low size bytes are written.
  */
-put :: fn(bytes: ptr[mut u8[SIZE]], offset: u64, size: u64, value: u64) {
+put :: fn(bytes : ptr[mut u8[SIZE]], offset : u64, size : u64, value : u64) {
     for i in cast[u64](0)..<size {
         at :: cast[usize](offset + i)
         if at < bytes.count {

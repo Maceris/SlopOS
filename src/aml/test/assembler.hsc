@@ -19,7 +19,7 @@ Assembler :: struct {
  * @param a The assembler.
  * @param values The bytes.
  */
-raw :: fn(a: ptr[mut Assembler], values: u8[]) {
+raw :: fn(a : ptr[mut Assembler], values : u8[]) {
     for value in values {
         runtime.array_add(&a.bytes, value)
     }
@@ -31,7 +31,7 @@ raw :: fn(a: ptr[mut Assembler], values: u8[]) {
  * @param a The assembler.
  * @param value The byte.
  */
-op :: fn(a: ptr[mut Assembler], value: u8) {
+op :: fn(a : ptr[mut Assembler], value : u8) {
     runtime.array_add(&a.bytes, value)
 }
 
@@ -42,7 +42,7 @@ op :: fn(a: ptr[mut Assembler], value: u8) {
  * @param opcode The opcode's bytes.
  * @return Where the length is, for close.
  */
-open :: fn(a: ptr[mut Assembler], opcode: u8[]) -> usize {
+open :: fn(a : ptr[mut Assembler], opcode : u8[]) -> usize {
     raw(a, opcode)
     mark :: a.bytes.count
     raw(a, u8.[0, 0, 0, 0])
@@ -55,10 +55,14 @@ open :: fn(a: ptr[mut Assembler], opcode: u8[]) -> usize {
  * @param a The assembler.
  * @param mark What open gave.
  */
-close :: fn(a: ptr[mut Assembler], mark: usize) {
+close :: fn(a : ptr[mut Assembler], mark : usize) {
     length :: a.bytes.count - mark
-    encoded :: u8.[cast[u8](0xc0 | (length & 0x0f)), cast[u8]((length >> 4) & 0xff), cast[u8]((length >> 12) & 0xff),
-        cast[u8]((length >> 20) & 0xff)]
+    encoded :: u8.[
+        cast[u8](0xc0 | (length & 0x0f)),
+        cast[u8]((length >> 4) & 0xff),
+        cast[u8]((length >> 12) & 0xff),
+        cast[u8]((length >> 20) & 0xff)
+    ]
     for byte, i in encoded {
         at :: mark + i
         if at < a.bytes.count {
@@ -73,7 +77,7 @@ close :: fn(a: ptr[mut Assembler], mark: usize) {
  * @param a The assembler.
  * @param text The name, as `\_SB.PCI0` or `^FOO` or `BAR`.
  */
-name :: fn(a: ptr[mut Assembler], text: string) {
+name :: fn(a : ptr[mut Assembler], text : string) {
     bytes :: string_bytes(text)
     at : usize = 0
     loop {
@@ -126,7 +130,7 @@ name :: fn(a: ptr[mut Assembler], text: string) {
  * @param a The assembler.
  * @param value The integer.
  */
-integer :: fn(a: ptr[mut Assembler], value: u64) {
+integer :: fn(a : ptr[mut Assembler], value : u64) {
     if value == 0 {
         op(a, 0x00)
         return void
@@ -161,7 +165,7 @@ integer :: fn(a: ptr[mut Assembler], value: u64) {
  * @param a The assembler.
  * @param text Its text, ASCII.
  */
-text :: fn(a: ptr[mut Assembler], text: string) {
+text :: fn(a : ptr[mut Assembler], text : string) {
     op(a, 0x0d)
     raw(a, string_bytes(text))
     op(a, 0x00)
@@ -175,7 +179,7 @@ text :: fn(a: ptr[mut Assembler], text: string) {
  * @param revision The header's revision: 2 or more makes a DSDT's integers 64 bits.
  * @return The table, on the heap, never freed.
  */
-table :: fn(body: ptr[Assembler], signature: string = "DSDT", revision: u8 = 2) -> u8[] {
+table :: fn(body : ptr[Assembler], signature : string = "DSDT", revision : u8 = 2) -> u8[] {
     made : u8[..]
     for character in string_bytes(signature) {
         runtime.array_add(&made, character)

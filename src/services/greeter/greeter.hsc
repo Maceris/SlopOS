@@ -11,9 +11,9 @@ package greeter
 
 import runtime from "base:runtime"
 import os from "std:os"
-import ui from "std:ui"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import ui from "std:ui"
 import gui_kit from "../../gui_kit"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
@@ -64,8 +64,12 @@ Greeter :: struct {
  * @return 2 without any of them; 3 if the account service can't be dialed, 4 if its session connection can't be
  *     bound, 5 if its window can't be made. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, accounts_service: os.Channel[connector.Connector]?, sessions: os.Channel[session.Session]?,
-    trusted: os.Channel[surface.Surface]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    accounts_service : os.Channel[connector.Connector]?,
+    sessions : os.Channel[session.Session]?,
+    trusted : os.Channel[surface.Surface]?
+) -> int {
     startup :: slop_os.startup_block()
     greeter :: runtime.new(Greeter)
     greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
@@ -93,7 +97,7 @@ main :: fn(log: slop_os.DebugLog?, accounts_service: os.Channel[connector.Connec
 }
 
 /** Say something under the fields. */
-say :: fn(greeter: ptr[mut Greeter], text: string) {
+say :: fn(greeter : ptr[mut Greeter], text : string) {
     greeter.message_count = 0
     for byte in string_bytes(text) {
         if greeter.message_count < greeter.message.count {
@@ -104,7 +108,7 @@ say :: fn(greeter: ptr[mut Greeter], text: string) {
 }
 
 /** A frame of the login window: the name and password, and Log in, which Enter in the password does too. */
-frame :: fn(greeter: ptr[mut Greeter]) {
+frame :: fn(greeter : ptr[mut Greeter]) {
     u :: gui_kit.begin(greeter.window)
     _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 20, padding_y = 16, gap = 10})
     _ = ui.label(u, "Log in to SlopOS", ui.TextStyle.{size = 18})
@@ -128,12 +132,16 @@ frame :: fn(greeter: ptr[mut Greeter]) {
 }
 
 /** Check the name and password with the account service, and make the session if they're right. */
-log_in :: fn(greeter: ptr[mut Greeter]) {
+log_in :: fn(greeter : ptr[mut Greeter]) {
     runtime.log_info("logging in as %", string_of_bytes(greeter.name[0..<greeter.name.count]))
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    request^ = .OpenHome(accounts.Credentials.{name = os.append(&out, greeter.name[0..<greeter.name.count]),
-        password = os.append(&out, greeter.password[0..<greeter.password.count])})
+    request^ = .OpenHome(
+        accounts.Credentials.{
+            name = os.append(&out, greeter.name[0..<greeter.name.count]),
+            password = os.append(&out, greeter.password[0..<greeter.password.count]),
+        }
+    )
     sent :: accounts.send_request(greeter.accounts_end, greeter.accounts_port, &out) is_none
     // The password's copies wiped: what was sent, and what was typed
     for i in 0..<out.words.count {
@@ -169,13 +177,23 @@ log_in :: fn(greeter: ptr[mut Greeter]) {
 }
 
 /** Make the GUI session, its home and a prompt connection given to the session manager. */
-start_session :: fn(greeter: ptr[mut Greeter], home: os.Channel[dir.Dir]) {
+start_session :: fn(greeter : ptr[mut Greeter], home : os.Channel[dir.Dir]) {
     budget :: slop_os.startup_block().budget
-    pair :: os.channel_for[prompt.Prompt](budget, 0) or_else slop_os.ChannelPair.{a = cast[slop_os.Channel](slop_os.NO_HANDLE), b = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    pair :: os.channel_for[prompt.Prompt](budget, 0)
+        or_else slop_os.ChannelPair.{
+            a = cast[slop_os.Channel](slop_os.NO_HANDLE),
+            b = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        }
     out := os.Outgoing.{}
     request :: os.begin[session.Request](&out)
-    request^ = .StartGui(session.GuiStart.{user = os.append(&out, greeter.name[0..<greeter.name.count]), layout = os.append(&out, string_bytes("us")),
-        home = home, prompts = os.Channel[prompt.Prompt].{end = pair.b}})
+    request^ = .StartGui(
+        session.GuiStart.{
+            user = os.append(&out, greeter.name[0..<greeter.name.count]),
+            layout = os.append(&out, string_bytes("us")),
+            home = home,
+            prompts = os.Channel[prompt.Prompt].{end = pair.b},
+        }
+    )
     if session.send_request(greeter.sessions_end, greeter.sessions_port, &out) is_some {
         say(greeter, "The session manager couldn't be asked.")
         return void
@@ -209,12 +227,12 @@ start_session :: fn(greeter: ptr[mut Greeter], home: os.Channel[dir.Dir]) {
 }
 
 /** Bytes as text. */
-string_of_bytes :: fn(bytes: u8[]) -> string {
+string_of_bytes :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
 /** Once the session's first program has ended: the login window shown again, for the next. */
-wait_for_session :: fn(greeter: ptr[mut Greeter]) {
+wait_for_session :: fn(greeter : ptr[mut Greeter]) {
     into := os.Incoming.{}
     match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, false) {
         case Received => {}
@@ -236,7 +254,7 @@ wait_for_session :: fn(greeter: ptr[mut Greeter]) {
 }
 
 /** Refuse what the session's powerbox asks: its prompts aren't drawn in the trusted layer yet. */
-refuse_prompts :: fn(greeter: ptr[mut Greeter]) {
+refuse_prompts :: fn(greeter : ptr[mut Greeter]) {
     if greeter.prompts == cast[slop_os.Channel](slop_os.NO_HANDLE) {
         return void
     }

@@ -9,9 +9,9 @@ package test_values
 
 import compiler from "base:compiler"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** The test's name, which starts each line it logs. */
@@ -108,7 +108,7 @@ Given :: struct {
  * @return Ok once it's run; Error if, run by the root task, it wasn't given the process manager or its module, or a
  *     port, the log's copy or the launch couldn't be made.
  */
-values_given_in_a_launch_reach_the_program #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+values_given_in_a_launch_reach_the_program #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     match given.copy {
         case Some(read) => {
@@ -120,18 +120,44 @@ values_given_in_a_launch_reach_the_program #test :: fn(t: ptr[mut testing.T]) ->
     block :: slop_os.startup_block()
     executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
     loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
-    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(block.budget, loader.end),
+        "a port for the process manager's replies"
+    )?
     port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for the copy's watch")?
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
-    copy_log :: testing.require_ok(t, slop_os.handle_duplicate(cast[slop_os.Handle](given.log), rights), "the debug log can be copied for the copy")?
-    grants := CopyGrants.{log = cast[slop_os.DebugLog](copy_log), count = 3, label = "three", tags = string.["a", "bc"], speed = .Fast,
-        limits = Limits.{low = -7, high = 9_000_000_000, name = "bounds"}}
-    launch :: os.launch(loader, manager_port, "test_values copy", executable, COPY_BUDGET, main, grants,
-        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}})
+    copy_log :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](given.log), rights),
+        "the debug log can be copied for the copy"
+    )?
+    grants := CopyGrants.{
+        log = cast[slop_os.DebugLog](copy_log),
+        count = 3,
+        label = "three",
+        tags = string.["a", "bc"],
+        speed = .Fast,
+        limits = Limits.{low = -7, high = 9_000_000_000, name = "bounds"},
+    }
+    launch :: os.launch(
+        loader,
+        manager_port,
+        "test_values copy",
+        executable,
+        COPY_BUDGET,
+        main,
+        grants,
+        os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}
+    )
     launched :: testing.require_ok(t, launch, "the process manager launches the copy with its values")?
     testing.expect_eq(t, ended_with(port), 0, "the copy read every value as it was given, so its test passed")
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.process))
-    testing.expect(t, test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000), "the copy's budget is back to nothing once it has ended")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(launched.budget, 0, 1_000_000_000),
+        "the copy's budget is back to nothing once it has ended"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](launched.budget))
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
     return .Ok
@@ -143,11 +169,15 @@ values_given_in_a_launch_reach_the_program #test :: fn(t: ptr[mut testing.T]) ->
  * @param t The test's state, which each value that isn't what was given is recorded in.
  * @param read What the copy read of its values.
  */
-check_copy :: fn(t: ptr[mut testing.T], read: ValuesRead) {
+check_copy :: fn(t : ptr[mut testing.T], read : ValuesRead) {
     testing.expect_eq(t, read.count, 3, "a number given reads back as itself")
     testing.expect(t, read.label_is_three, "a string given reads back as itself, \"three\"")
     testing.expect_eq(t, read.tag_count, 2, "a list of strings given reads back with as many strings")
-    testing.expect(t, read.tags_are_a_and_bc, "each string of a list given reads back as itself, in its place: \"a\" then \"bc\"")
+    testing.expect(
+        t,
+        read.tags_are_a_and_bc,
+        "each string of a list given reads back as itself, in its place: \"a\" then \"bc\""
+    )
     testing.expect_eq(t, read.speed, Speed.Fast, "an enum's member given reads back as that member")
     testing.expect(t, read.has_limits, "a record given reads back")
     testing.expect_eq(t, read.low, -7, "a record's negative number keeps its sign")
@@ -165,7 +195,7 @@ check_copy :: fn(t: ptr[mut testing.T], read: ValuesRead) {
  * @param limits The record given; None reads as no record, its numbers 0.
  * @return What was read, each string as whether it's what the program launching the copy gave.
  */
-read_values :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, limits: Limits?) -> ValuesRead {
+read_values :: fn(count : u64, label : string?, tags : string[]?, speed : Speed?, limits : Limits?) -> ValuesRead {
     given_tags :: tags or_else string.[]
     expected_tags :: string.["a", "bc"]
     tags_match := given_tags.count == expected_tags.count
@@ -175,9 +205,17 @@ read_values :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, li
         }
     }
     bounds :: limits or_else Limits.{}
-    return ValuesRead.{count = count, label_is_three = (label or_else "") == "three", tag_count = given_tags.count,
-        tags_are_a_and_bc = tags_match, speed = speed or_else Speed.Slow, has_limits = limits is_some, low = bounds.low,
-        high = bounds.high, name_is_bounds = (limits is_some) && bounds.name == "bounds"}
+    return ValuesRead.{
+        count = count,
+        label_is_three = (label or_else "") == "three",
+        tag_count = given_tags.count,
+        tags_are_a_and_bc = tags_match,
+        speed = speed or_else Speed.Slow,
+        has_limits = limits is_some,
+        low = bounds.low,
+        high = bounds.high,
+        name_is_bounds = (limits is_some) && bounds.name == "bounds",
+    }
 }
 
 /**
@@ -194,8 +232,16 @@ read_values :: fn(count: u64, label: string?, tags: string[]?, speed: Speed?, li
  * @param limits Given only to the copy: -7, 9,000,000,000 and "bounds".
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, count: u64?,
-    label: string?, tags: string[]?, speed: Speed?, limits: Limits?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    count : u64?,
+    label : string?,
+    tags : string[]?,
+    speed : Speed?,
+    limits : Limits?
+) -> int {
     given := Given.{log = log, manager = manager, program = program}
     name := NAME
     match count {
@@ -214,7 +260,7 @@ main :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessMan
  * @param port The port its watch, for SIGNAL_TERMINATED, queues on; nothing else may be bound to it.
  * @return The process's exit code, or 0xffff if the wait failed.
  */
-ended_with :: fn(port: slop_os.Port) -> u64 {
+ended_with :: fn(port : slop_os.Port) -> u64 {
     packets : slop_os.Packet[1]
     taken :: slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0
     return if taken == 1 { packets[0].data[1] } else { cast[u64](0xffff) }

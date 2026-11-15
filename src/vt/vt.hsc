@@ -7,8 +7,8 @@
  */
 package vt
 
-import text_buffer from "std:text_buffer"
 import terminal from "std:os/slop_os/terminal"
+import text_buffer from "std:text_buffer"
 
 /** ESC, which starts every escape sequence. */
 ESCAPE : u8 : 0x1b
@@ -58,7 +58,7 @@ USAGE_UP : u16 : 0x52
  *
  * @param out The text appended to; what doesn't fit its storage is dropped, as text_buffer drops it.
  */
-append_csi :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_csi :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     text_buffer.append_byte(out, ESCAPE)
     text_buffer.append_byte(out, cast[u8]('['))
 }
@@ -70,10 +70,17 @@ append_csi :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  * @param style The style: bold, dim, italic, underline, inverse and strikethrough, and its two colours, each left out
  *     when it's the default.
  */
-append_style :: fn(out: ptr[mut text_buffer.TextBuffer], style: terminal.Style) {
+append_style :: fn(out : ptr[mut text_buffer.TextBuffer], style : terminal.Style) {
     append_csi(out)
     text_buffer.append_byte(out, cast[u8]('0'))
-    attributes :: u8.[terminal.BOLD, terminal.DIM, terminal.ITALIC, terminal.UNDERLINE, terminal.INVERSE, terminal.STRIKETHROUGH]
+    attributes :: u8.[
+        terminal.BOLD,
+        terminal.DIM,
+        terminal.ITALIC,
+        terminal.UNDERLINE,
+        terminal.INVERSE,
+        terminal.STRIKETHROUGH
+    ]
     codes :: u8.[1, 2, 3, 4, 7, 9]
     for attribute, i in attributes {
         if style.attributes & attribute != 0 && i < codes.count {
@@ -94,7 +101,7 @@ append_style :: fn(out: ptr[mut text_buffer.TextBuffer], style: terminal.Style) 
  * @param color The colour; nothing's appended for the default.
  * @param base 30 for the foreground, 40 for the background.
  */
-append_color :: fn(out: ptr[mut text_buffer.TextBuffer], color: terminal.Color, base: u64) {
+append_color :: fn(out : ptr[mut text_buffer.TextBuffer], color : terminal.Color, base : u64) {
     match terminal.color_kind(color) {
         case .Default => return void
         case .Palette => {
@@ -132,7 +139,7 @@ append_color :: fn(out: ptr[mut text_buffer.TextBuffer], color: terminal.Color, 
  * @param row The row, from 0; CUP's own count from 1.
  * @param column The column, from 0.
  */
-append_move :: fn(out: ptr[mut text_buffer.TextBuffer], row: u16, column: u16) {
+append_move :: fn(out : ptr[mut text_buffer.TextBuffer], row : u16, column : u16) {
     append_csi(out)
     text_buffer.append_unsigned(out, cast[u64](row) + 1)
     text_buffer.append_byte(out, cast[u8](';'))
@@ -146,7 +153,7 @@ append_move :: fn(out: ptr[mut text_buffer.TextBuffer], row: u16, column: u16) {
  * @param out The text appended to.
  * @param column The column, from 0.
  */
-append_column :: fn(out: ptr[mut text_buffer.TextBuffer], column: u16) {
+append_column :: fn(out : ptr[mut text_buffer.TextBuffer], column : u16) {
     append_csi(out)
     text_buffer.append_unsigned(out, cast[u64](column) + 1)
     text_buffer.append_byte(out, cast[u8]('G'))
@@ -157,7 +164,7 @@ append_column :: fn(out: ptr[mut text_buffer.TextBuffer], column: u16) {
  *
  * @param out The text appended to.
  */
-append_clear_to_end :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_clear_to_end :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     append_csi(out)
     text_buffer.append_byte(out, cast[u8]('K'))
 }
@@ -167,7 +174,7 @@ append_clear_to_end :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  *
  * @param out The text appended to.
  */
-append_clear_below :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_clear_below :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     append_csi(out)
     text_buffer.append_byte(out, cast[u8]('J'))
 }
@@ -177,7 +184,7 @@ append_clear_below :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  *
  * @param out The text appended to.
  */
-append_clear_screen :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_clear_screen :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     append_csi(out)
     text_buffer.append(out, "2J")
     append_move(out, 0, 0)
@@ -190,7 +197,7 @@ append_clear_screen :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  * @param first The first row that scrolls, from 0.
  * @param last The last row that scrolls, from 0, included; not before first.
  */
-append_margins :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16) {
+append_margins :: fn(out : ptr[mut text_buffer.TextBuffer], first : u16, last : u16) {
     append_csi(out)
     text_buffer.append_unsigned(out, cast[u64](first) + 1)
     text_buffer.append_byte(out, cast[u8](';'))
@@ -209,7 +216,7 @@ append_margins :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16
  * @param lines How many rows they're moved up, or down when negative. 0 is sent as SU's 0, which a terminal takes as
  *     1.
  */
-append_scroll :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16, lines: i16) {
+append_scroll :: fn(out : ptr[mut text_buffer.TextBuffer], first : u16, last : u16, lines : i16) {
     append_margins(out, first, last)
     append_csi(out)
     if lines >= 0 {
@@ -227,7 +234,7 @@ append_scroll :: fn(out: ptr[mut text_buffer.TextBuffer], first: u16, last: u16,
  *
  * @param out The text appended to.
  */
-append_save_cursor :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_save_cursor :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     text_buffer.append_byte(out, ESCAPE)
     text_buffer.append_byte(out, cast[u8]('7'))
 }
@@ -237,7 +244,7 @@ append_save_cursor :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  *
  * @param out The text appended to.
  */
-append_restore_cursor :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_restore_cursor :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     text_buffer.append_byte(out, ESCAPE)
     text_buffer.append_byte(out, cast[u8]('8'))
 }
@@ -248,7 +255,7 @@ append_restore_cursor :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  * @param out The text appended to.
  * @param shown True to show the cursor, false to hide it.
  */
-append_cursor_shown :: fn(out: ptr[mut text_buffer.TextBuffer], shown: bool) {
+append_cursor_shown :: fn(out : ptr[mut text_buffer.TextBuffer], shown : bool) {
     append_csi(out)
     text_buffer.append(out, if shown { "?25h" } else { "?25l" })
 }
@@ -259,7 +266,7 @@ append_cursor_shown :: fn(out: ptr[mut text_buffer.TextBuffer], shown: bool) {
  * @param out The text appended to.
  * @param entered True to enter it, cleared, with the cursor at its top left; false to leave it.
  */
-append_alternate_screen :: fn(out: ptr[mut text_buffer.TextBuffer], entered: bool) {
+append_alternate_screen :: fn(out : ptr[mut text_buffer.TextBuffer], entered : bool) {
     append_csi(out)
     text_buffer.append(out, if entered { "?1049h" } else { "?1049l" })
     if entered {
@@ -274,7 +281,7 @@ append_alternate_screen :: fn(out: ptr[mut text_buffer.TextBuffer], entered: boo
  * @param target The link's target, a URI; empty to stop linking. Only its printable ASCII, without spaces, is kept,
  *     so it can't end the sequence early or hide another in it.
  */
-append_link :: fn(out: ptr[mut text_buffer.TextBuffer], target: u8[]) {
+append_link :: fn(out : ptr[mut text_buffer.TextBuffer], target : u8[]) {
     text_buffer.append_byte(out, ESCAPE)
     text_buffer.append(out, "]8;;")
     for byte in target {
@@ -291,7 +298,7 @@ append_link :: fn(out: ptr[mut text_buffer.TextBuffer], target: u8[]) {
  *
  * @param out The text appended to.
  */
-append_bell :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_bell :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     text_buffer.append_byte(out, 0x07)
 }
 
@@ -300,7 +307,7 @@ append_bell :: fn(out: ptr[mut text_buffer.TextBuffer]) {
  *
  * @param out The text appended to.
  */
-append_line_break :: fn(out: ptr[mut text_buffer.TextBuffer]) {
+append_line_break :: fn(out : ptr[mut text_buffer.TextBuffer]) {
     text_buffer.append_byte(out, 0x0d)
     text_buffer.append_byte(out, 0x0a)
 }
@@ -372,7 +379,7 @@ Decoded :: struct {
  * @param bytes The bytes, as they came from the device.
  * @param decoded Where the events and their text are added, after what's there already.
  */
-feed :: fn(decoder: ptr[mut Decoder], bytes: u8[], decoded: ptr[mut Decoded]) {
+feed :: fn(decoder : ptr[mut Decoder], bytes : u8[], decoded : ptr[mut Decoded]) {
     for byte in bytes {
         feed_byte(decoder, byte, decoded)
     }
@@ -387,7 +394,7 @@ feed :: fn(decoder: ptr[mut Decoder], bytes: u8[], decoded: ptr[mut Decoded]) {
  * @param decoded Where the Escape key or the Paste event is added, after what's there already; dropped if there's no
  *     room.
  */
-finish :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded]) {
+finish :: fn(decoder : ptr[mut Decoder], decoded : ptr[mut Decoded]) {
     if decoder.state == .Escape {
         key(decoded, USAGE_ESCAPE, 0, NO_TEXT[0..<0])
         decoder.state = .Ground
@@ -406,7 +413,7 @@ finish :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded]) {
  *     as ground does.
  * @param decoded Where any event it finishes is added.
  */
-feed_byte :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) {
+feed_byte :: fn(decoder : ptr[mut Decoder], byte : u8, decoded : ptr[mut Decoded]) {
     match decoder.state {
         case .Ground => ground(decoder, byte, decoded)
         case .Escape => {
@@ -448,7 +455,7 @@ feed_byte :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) 
  * @param byte Any byte, decoded as ground_with does with no modifiers.
  * @param decoded Where any event it makes is added.
  */
-ground :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) {
+ground :: fn(decoder : ptr[mut Decoder], byte : u8, decoded : ptr[mut Decoded]) {
     ground_with(decoder, byte, decoded, 0)
 }
 
@@ -469,7 +476,7 @@ ground :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) {
  * @param decoded Where any event it makes is added.
  * @param modifiers The modifiers (terminal.SHIFT, ALT, CONTROL, META) the key it makes has.
  */
-ground_with :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded], modifiers: u8) {
+ground_with :: fn(decoder : ptr[mut Decoder], byte : u8, decoded : ptr[mut Decoded], modifiers : u8) {
     was_return :: decoder.after_return
     decoder.after_return = false
     if decoder.pasting {
@@ -523,7 +530,13 @@ ground_with :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]
         return void
     }
     // A code point's first byte; anything else that isn't UTF-8 is dropped
-    needed :: if byte & 0xe0 == 0xc0 { cast[usize](2) } else if byte & 0xf0 == 0xe0 { cast[usize](3) } else if byte & 0xf8 == 0xf0 { cast[usize](4) } else { cast[usize](0) }
+    needed :: if byte & 0xe0 == 0xc0 {
+        cast[usize](2)
+    }
+    else if byte & 0xf0 == 0xe0 {
+        cast[usize](3)
+    }
+    else if byte & 0xf8 == 0xf0 { cast[usize](4) } else { cast[usize](0) }
     if needed == 0 {
         return void
     }
@@ -543,7 +556,7 @@ ground_with :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]
  * @param decoded Where the key, once the code point is whole, is added; it has no HID usage.
  * @param modifiers The modifiers the key has.
  */
-continue_code_point :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded], modifiers: u8) {
+continue_code_point :: fn(decoder : ptr[mut Decoder], byte : u8, decoded : ptr[mut Decoded], modifiers : u8) {
     if byte & 0xc0 != 0x80 || decoder.partial_count >= decoder.partial.count {
         // Cut short: dropped, and this byte starts again
         decoder.partial_needed = 0
@@ -571,7 +584,7 @@ continue_code_point :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut 
  *     returns the decoder to Ground.
  * @param decoded Where any event it makes is added.
  */
-csi :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) {
+csi :: fn(decoder : ptr[mut Decoder], byte : u8, decoded : ptr[mut Decoded]) {
     if byte >= cast[u8]('0') && byte <= cast[u8]('9') {
         if decoder.parameter_count == 0 {
             decoder.parameter_count = 1
@@ -583,7 +596,12 @@ csi :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) {
         return void
     }
     if byte == cast[u8](';') {
-        decoder.parameter_count = if decoder.parameter_count == 0 { cast[usize](2) } else { decoder.parameter_count + 1 }
+        decoder.parameter_count = if decoder.parameter_count == 0 {
+            cast[usize](2)
+        }
+        else {
+            decoder.parameter_count + 1
+        }
         return void
     }
     if byte == cast[u8]('?') || byte == cast[u8]('<') || byte == cast[u8]('>') || byte == cast[u8]('=') {
@@ -632,12 +650,31 @@ csi :: fn(decoder: ptr[mut Decoder], byte: u8, decoded: ptr[mut Decoded]) {
  * @param byte The byte: A to D for the arrows, H and F for Home and End, P to S for F1 to F4.
  * @return The key's HID usage; 0 for any other byte.
  */
-ss3_key :: fn(byte: u8) -> u16 {
-    return if byte == cast[u8]('A') { USAGE_UP } else if byte == cast[u8]('B') { USAGE_DOWN }
-        else if byte == cast[u8]('C') { USAGE_RIGHT } else if byte == cast[u8]('D') { USAGE_LEFT }
-        else if byte == cast[u8]('H') { USAGE_HOME } else if byte == cast[u8]('F') { USAGE_END }
-        else if byte >= cast[u8]('P') && byte <= cast[u8]('S') { USAGE_F1 + cast[u16](byte - cast[u8]('P')) }
-        else { cast[u16](0) }
+ss3_key :: fn(byte : u8) -> u16 {
+    return if byte == cast[u8]('A') {
+        USAGE_UP
+    }
+    else if byte == cast[u8]('B') {
+        USAGE_DOWN
+    }
+    else if byte == cast[u8]('C') {
+        USAGE_RIGHT
+    }
+    else if byte == cast[u8]('D') {
+        USAGE_LEFT
+    }
+    else if byte == cast[u8]('H') {
+        USAGE_HOME
+    }
+    else if byte == cast[u8]('F') {
+        USAGE_END
+    }
+    else if byte >= cast[u8]('P') && byte <= cast[u8]('S') {
+        USAGE_F1 + cast[u16](byte - cast[u8]('P'))
+    }
+    else {
+        cast[u16](0)
+    }
 }
 
 /**
@@ -647,13 +684,32 @@ ss3_key :: fn(byte: u8) -> u16 {
  *     F6 to F10, 23 and 24 F11 and F12.
  * @return The key's HID usage; 0 for any other number.
  */
-tilde_key :: fn(number: u32) -> u16 {
-    return if number == 1 || number == 7 { USAGE_HOME } else if number == 2 { USAGE_INSERT } else if number == 3 { USAGE_DELETE }
-        else if number == 4 || number == 8 { USAGE_END } else if number == 5 { USAGE_PAGE_UP } else if number == 6 { USAGE_PAGE_DOWN }
-        else if number >= 11 && number <= 15 { USAGE_F1 + cast[u16](number - 11) }
-        else if number >= 17 && number <= 21 { USAGE_F5 + 1 + cast[u16](number - 17) }
-        else if number >= 23 && number <= 24 { USAGE_F5 + 6 + cast[u16](number - 23) }
-        else { cast[u16](0) }
+tilde_key :: fn(number : u32) -> u16 {
+    return if number == 1 || number == 7 {
+        USAGE_HOME
+    }
+    else if number == 2 {
+        USAGE_INSERT
+    }
+    else if number == 3 {
+        USAGE_DELETE
+    }
+    else if number == 4 || number == 8 {
+        USAGE_END
+    }
+    else if number == 5 {
+        USAGE_PAGE_UP
+    }
+    else if number == 6 {
+        USAGE_PAGE_DOWN
+    }
+    else if number >= 11 && number <= 15 {
+        USAGE_F1 + cast[u16](number - 11)
+    }
+    else if number >= 17 && number <= 21 {
+        USAGE_F5 + 1 + cast[u16](number - 17)
+    }
+    else if number >= 23 && number <= 24 { USAGE_F5 + 6 + cast[u16](number - 23) } else { cast[u16](0) }
 }
 
 /**
@@ -662,7 +718,7 @@ tilde_key :: fn(number: u32) -> u16 {
  * @param parameter The parameter: 1 plus Shift 1, Alt 2, Ctrl 4, Meta 8. 0 or 1 is none.
  * @return The modifiers, as terminal.SHIFT, ALT, CONTROL and META's bits.
  */
-modifiers_of :: fn(parameter: u32) -> u8 {
+modifiers_of :: fn(parameter : u32) -> u8 {
     if parameter < 2 {
         return 0
     }
@@ -690,7 +746,7 @@ modifiers_of :: fn(parameter: u32) -> u8 {
  *     gives 0.
  * @return Its key's HID usage; 0 for the rest, known by their text.
  */
-ascii_usage :: fn(byte: u8) -> u16 {
+ascii_usage :: fn(byte : u8) -> u16 {
     if byte >= cast[u8]('a') && byte <= cast[u8]('z') {
         return USAGE_A + cast[u16](byte - cast[u8]('a'))
     }
@@ -718,7 +774,7 @@ ascii_usage :: fn(byte: u8) -> u16 {
  * @param modifiers Its modifiers, as terminal.SHIFT, ALT, CONTROL and META's bits.
  * @param text What it types, copied; empty for a key that types nothing.
  */
-key :: fn(decoded: ptr[mut Decoded], code: u16, modifiers: u8, text: u8[]) {
+key :: fn(decoded : ptr[mut Decoded], code : u16, modifiers : u8, text : u8[]) {
     start :: decoded.text_count
     if text.count > decoded.text.count - start {
         return void
@@ -726,7 +782,16 @@ key :: fn(decoded: ptr[mut Decoded], code: u16, modifiers: u8, text: u8[]) {
     for byte in text {
         add_byte(decoded, byte)
     }
-    event(decoded, terminal.Event.{kind = cast[u8](terminal.EventKind.Key), code = code, modifiers = modifiers, text_start = cast[u32](start), text_bytes = cast[u32](text.count)})
+    event(
+        decoded,
+        terminal.Event.{
+            kind = cast[u8](terminal.EventKind.Key),
+            code = code,
+            modifiers = modifiers,
+            text_start = cast[u32](start),
+            text_bytes = cast[u32](text.count),
+        }
+    )
 }
 
 /**
@@ -735,7 +800,7 @@ key :: fn(decoded: ptr[mut Decoded], code: u16, modifiers: u8, text: u8[]) {
  * @param decoded Where it's added; it's dropped past MAX_EVENTS.
  * @param made The event, whose text, if any, is already in decoded's.
  */
-event :: fn(decoded: ptr[mut Decoded], made: terminal.Event) {
+event :: fn(decoded : ptr[mut Decoded], made : terminal.Event) {
     if decoded.count < decoded.events.count {
         decoded.events[decoded.count] = made
         decoded.count += 1
@@ -748,7 +813,7 @@ event :: fn(decoded: ptr[mut Decoded], made: terminal.Event) {
  * @param decoded Where it's added; it's dropped past MAX_EVENT_TEXT.
  * @param byte The byte, copied to the end of decoded's text, which text_count counts.
  */
-add_byte :: fn(decoded: ptr[mut Decoded], byte: u8) {
+add_byte :: fn(decoded : ptr[mut Decoded], byte : u8) {
     if decoded.text_count < decoded.text.count {
         decoded.text[decoded.text_count] = byte
         decoded.text_count += 1
@@ -762,7 +827,7 @@ add_byte :: fn(decoded: ptr[mut Decoded], byte: u8) {
  * @param decoded Where the text, and the event when it's full, are added.
  * @param byte The byte. When the text is full, this byte isn't added, and nor is any after it until decoded is reset.
  */
-add_text :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded], byte: u8) {
+add_text :: fn(decoder : ptr[mut Decoder], decoded : ptr[mut Decoded], byte : u8) {
     if decoded.text_count >= decoded.text.count {
         give_paste(decoder, decoded)
         return void
@@ -776,10 +841,16 @@ add_text :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded], byte: u8) {
  * @param decoder The decoder, pasting.
  * @param decoded Where the event is added, its text already there from paste_start on.
  */
-give_paste :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded]) {
+give_paste :: fn(decoder : ptr[mut Decoder], decoded : ptr[mut Decoded]) {
     if decoded.text_count > decoder.paste_start {
-        event(decoded, terminal.Event.{kind = cast[u8](terminal.EventKind.Paste), text_start = cast[u32](decoder.paste_start),
-            text_bytes = cast[u32](decoded.text_count - decoder.paste_start)})
+        event(
+            decoded,
+            terminal.Event.{
+                kind = cast[u8](terminal.EventKind.Paste),
+                text_start = cast[u32](decoder.paste_start),
+                text_bytes = cast[u32](decoded.text_count - decoder.paste_start),
+            }
+        )
     }
     decoder.paste_start = decoded.text_count
 }
@@ -790,7 +861,7 @@ give_paste :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded]) {
  * @param decoder The decoder, which keeps its place in a sequence or code point.
  * @param decoded The events and text, emptied.
  */
-reset :: fn(decoder: ptr[mut Decoder], decoded: ptr[mut Decoded]) {
+reset :: fn(decoder : ptr[mut Decoder], decoded : ptr[mut Decoded]) {
     decoded.count = 0
     decoded.text_count = 0
     decoder.paste_start = 0

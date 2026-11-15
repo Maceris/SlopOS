@@ -15,9 +15,9 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
+import service_kit from "../../libraries/service_kit"
 import pci from "../../pci"
 import display from "../../protocols/display"
-import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
 /** The bytes of a page: 4096. */
@@ -319,9 +319,19 @@ Driver :: struct {
  *     made, 6 if its MSI couldn't be set up, 7 if its DMA memory couldn't be made or mapped, 8 if its queues couldn't
  *     be set up, 9 if the listener couldn't be bound, 10 if the device refused a command setting the screen up.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    clients: os.Listener[display.Display]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[display.Display]
+) -> int {
     startup :: slop_os.startup_block()
     driver_made, driver_error :: runtime.new_aligned(Driver, align_of(Driver))
     if driver_error != null {
@@ -341,7 +351,8 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) or_return 6
+    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+        or_return 6
 
     // The queues' pages, then the command page
     memory :: slop_os.dma_memory_create(domain, startup.budget, 3 * PAGE, 0) or_return 7
@@ -349,8 +360,16 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, startup.space, pages, 0, 3 * PAGE, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.control = virtio.setup_queue(&driver.transport, CONTROL_QUEUE, pages, device_address, virtio.QUEUE_PAGE, 0) or_return 8
-    driver.cursor_queue = virtio.setup_queue(&driver.transport, CURSOR_QUEUE, pages + PAGE, device_address + PAGE, virtio.QUEUE_PAGE, 0)
+    driver.control = virtio.setup_queue(&driver.transport, CONTROL_QUEUE, pages, device_address, virtio.QUEUE_PAGE, 0)
+        or_return 8
+    driver.cursor_queue = virtio.setup_queue(
+        &driver.transport,
+        CURSOR_QUEUE,
+        pages + PAGE,
+        device_address + PAGE,
+        virtio.QUEUE_PAGE,
+        0
+    )
         or_return 8
     driver.commands = pages + 2 * PAGE
     driver.commands_device = device_address + 2 * PAGE
@@ -362,18 +381,39 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     stride :: 4 * width
     driver.frame_bytes = round_to_page(cast[u64](stride) * cast[u64](height))
     cursor_bytes :: round_to_page(cast[u64](4 * CURSOR_SIZE * CURSOR_SIZE))
-    driver.frames = slop_os.dma_memory_create(domain, startup.budget, BUFFERS * driver.frame_bytes + cursor_bytes, 0) or_return 7
+    driver.frames = slop_os.dma_memory_create(domain, startup.budget, BUFFERS * driver.frame_bytes + cursor_bytes, 0)
+        or_return 7
     driver.frames_device = slop_os.memory_device_address(driver.frames) or_return 7
-    driver.info = display.Info.{width = width, height = height, stride = stride, format = display.FORMAT_XRGB8888, buffers = BUFFERS,
-        cursor_size = CURSOR_SIZE}
+    driver.info = display.Info.{
+        width = width,
+        height = height,
+        stride = stride,
+        format = display.FORMAT_XRGB8888,
+        buffers = BUFFERS,
+        cursor_size = CURSOR_SIZE,
+    }
     for buffer in cast[u32](0)..<BUFFERS {
-        if !create_resource(driver, buffer + 1, FORMAT_B8G8R8X8, width, height, driver.frames_device + cast[u64](buffer) * driver.frame_bytes,
-            driver.frame_bytes) {
+        if !create_resource(
+            driver,
+            buffer + 1,
+            FORMAT_B8G8R8X8,
+            width,
+            height,
+            driver.frames_device + cast[u64](buffer) * driver.frame_bytes,
+            driver.frame_bytes
+        ) {
             return 10
         }
     }
-    if !create_resource(driver, CURSOR_RESOURCE, FORMAT_B8G8R8A8, CURSOR_SIZE, CURSOR_SIZE, driver.frames_device + BUFFERS * driver.frame_bytes,
-        cursor_bytes) {
+    if !create_resource(
+        driver,
+        CURSOR_RESOURCE,
+        FORMAT_B8G8R8A8,
+        CURSOR_SIZE,
+        CURSOR_SIZE,
+        driver.frames_device + BUFFERS * driver.frame_bytes,
+        cursor_bytes
+    ) {
         return 10
     }
     whole :: display.Rect.{width = width, height = height}
@@ -406,7 +446,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
 }
 
 /** A size in bytes rounded up to whole pages. */
-round_to_page :: fn(bytes: u64) -> u64 {
+round_to_page :: fn(bytes : u64) -> u64 {
     return (bytes + PAGE - 1) / PAGE * PAGE
 }
 
@@ -417,7 +457,7 @@ round_to_page :: fn(bytes: u64) -> u64 {
  * @return The width and height to show: the first scanout's, if it's enabled with a size, each cut to MAX_WIDTH and
  *     MAX_HEIGHT; DEFAULT_WIDTH by DEFAULT_HEIGHT otherwise.
  */
-preferred_size :: fn(driver: ptr[mut Driver]) -> (u32, u32) {
+preferred_size :: fn(driver : ptr[mut Driver]) -> (u32, u32) {
     request :: cast[ptr[mut Header]](driver.commands + CONTROL_AT)
     request^ = header_of(CMD_GET_DISPLAY_INFO)
     if command(driver, cast[u32](size_of(Header)), cast[u32](size_of(DisplayInfo))) != RESP_OK_DISPLAY_INFO {
@@ -435,17 +475,17 @@ preferred_size :: fn(driver: ptr[mut Driver]) -> (u32, u32) {
 }
 
 /** A command's header, of its type, its other fields 0. */
-header_of :: fn(kind: u32) -> Header {
+header_of :: fn(kind : u32) -> Header {
     return Header.{kind = le32(kind)}
 }
 
 /** A value as the device has it, little-endian. */
-le32 :: fn(value: u32) -> u32le {
+le32 :: fn(value : u32) -> u32le {
     return cast[u32le](value)
 }
 
 /** A protocol's rectangle as the device's. */
-device_rect :: fn(rect: display.Rect) -> DeviceRect {
+device_rect :: fn(rect : display.Rect) -> DeviceRect {
     return DeviceRect.{x = le32(rect.x), y = le32(rect.y), width = le32(rect.width), height = le32(rect.height)}
 }
 
@@ -461,23 +501,46 @@ device_rect :: fn(rect: display.Rect) -> DeviceRect {
  * @param bytes Its backing's bytes, at least width times height times 4.
  * @return Whether the device made and backed it.
  */
-create_resource :: fn(driver: ptr[mut Driver], resource: u32, format: u32, width: u32, height: u32, address: u64, bytes: u64) -> bool {
+create_resource :: fn(
+    driver : ptr[mut Driver],
+    resource : u32,
+    format : u32,
+    width : u32,
+    height : u32,
+    address : u64,
+    bytes : u64
+) -> bool {
     create :: cast[ptr[mut ResourceCreate2d]](driver.commands + CONTROL_AT)
-    create^ = ResourceCreate2d.{header = header_of(CMD_RESOURCE_CREATE_2D), resource = le32(resource), format = le32(format),
-        width = le32(width), height = le32(height)}
+    create^ = ResourceCreate2d.{
+        header = header_of(CMD_RESOURCE_CREATE_2D),
+        resource = le32(resource),
+        format = le32(format),
+        width = le32(width),
+        height = le32(height),
+    }
     if command(driver, cast[u32](size_of(ResourceCreate2d)), cast[u32](size_of(Header))) != RESP_OK_NODATA {
         return false
     }
     attach :: cast[ptr[mut AttachBacking]](driver.commands + CONTROL_AT)
-    attach^ = AttachBacking.{header = header_of(CMD_RESOURCE_ATTACH_BACKING), resource = le32(resource), entries = le32(1),
-        address = cast[u64le](address), length = le32(cast[u32](bytes))}
+    attach^ = AttachBacking.{
+        header = header_of(CMD_RESOURCE_ATTACH_BACKING),
+        resource = le32(resource),
+        entries = le32(1),
+        address = cast[u64le](address),
+        length = le32(cast[u32](bytes)),
+    }
     return command(driver, cast[u32](size_of(AttachBacking)), cast[u32](size_of(Header))) == RESP_OK_NODATA
 }
 
 /** Make a resource the first scanout's, over the whole screen. */
-set_scanout :: fn(driver: ptr[mut Driver], resource: u32, whole: display.Rect) -> bool {
+set_scanout :: fn(driver : ptr[mut Driver], resource : u32, whole : display.Rect) -> bool {
     scanout :: cast[ptr[mut SetScanout]](driver.commands + CONTROL_AT)
-    scanout^ = SetScanout.{header = header_of(CMD_SET_SCANOUT), rect = device_rect(whole), scanout = le32(0), resource = le32(resource)}
+    scanout^ = SetScanout.{
+        header = header_of(CMD_SET_SCANOUT),
+        rect = device_rect(whole),
+        scanout = le32(0),
+        resource = le32(resource),
+    }
     return command(driver, cast[u32](size_of(SetScanout)), cast[u32](size_of(Header))) == RESP_OK_NODATA
 }
 
@@ -489,12 +552,16 @@ set_scanout :: fn(driver: ptr[mut Driver], resource: u32, whole: display.Rect) -
  * @param rect What's copied and flushed, within the screen.
  * @return Whether the device did each.
  */
-show :: fn(driver: ptr[mut Driver], buffer: u32, rect: display.Rect) -> bool {
+show :: fn(driver : ptr[mut Driver], buffer : u32, rect : display.Rect) -> bool {
     resource :: buffer + 1
     if rect.width > 0 && rect.height > 0 {
         transfer :: cast[ptr[mut TransferToHost2d]](driver.commands + CONTROL_AT)
-        transfer^ = TransferToHost2d.{header = header_of(CMD_TRANSFER_TO_HOST_2D), rect = device_rect(rect),
-            offset = cast[u64le](cast[u64](rect.y) * cast[u64](driver.info.stride) + 4 * cast[u64](rect.x)), resource = le32(resource)}
+        transfer^ = TransferToHost2d.{
+            header = header_of(CMD_TRANSFER_TO_HOST_2D),
+            rect = device_rect(rect),
+            offset = cast[u64le](cast[u64](rect.y) * cast[u64](driver.info.stride) + 4 * cast[u64](rect.x)),
+            resource = le32(resource),
+        }
         if command(driver, cast[u32](size_of(TransferToHost2d)), cast[u32](size_of(Header))) != RESP_OK_NODATA {
             return false
         }
@@ -507,7 +574,11 @@ show :: fn(driver: ptr[mut Driver], buffer: u32, rect: display.Rect) -> bool {
     }
     if rect.width > 0 && rect.height > 0 {
         flush :: cast[ptr[mut ResourceFlush]](driver.commands + CONTROL_AT)
-        flush^ = ResourceFlush.{header = header_of(CMD_RESOURCE_FLUSH), rect = device_rect(rect), resource = le32(resource)}
+        flush^ = ResourceFlush.{
+            header = header_of(CMD_RESOURCE_FLUSH),
+            rect = device_rect(rect),
+            resource = le32(resource),
+        }
         if command(driver, cast[u32](size_of(ResourceFlush)), cast[u32](size_of(Header))) != RESP_OK_NODATA {
             return false
         }
@@ -525,13 +596,16 @@ show :: fn(driver: ptr[mut Driver], buffer: u32, rect: display.Rect) -> bool {
  * @param response_length The response's bytes, written at RESPONSE_AT.
  * @return The response's type; 0 if it couldn't be sent, or wasn't answered within COMMAND_TIMEOUT.
  */
-command :: fn(driver: ptr[mut Driver], length: u32, response_length: u32) -> u32 {
+command :: fn(driver : ptr[mut Driver], length : u32, response_length : u32) -> u32 {
     response :: cast[ptr[mut Header]](driver.commands + RESPONSE_AT)
     response^ = Header.{}
-    id :: virtio.offer_chain(&driver.control, virtio.Part.[
-        virtio.Part.{address = driver.commands_device + CONTROL_AT, length = length},
-        virtio.Part.{address = driver.commands_device + RESPONSE_AT, length = response_length, device_writes = true},
-    ])
+    id :: virtio.offer_chain(
+        &driver.control,
+        virtio.Part.[
+            virtio.Part.{address = driver.commands_device + CONTROL_AT, length = length},
+            virtio.Part.{address = driver.commands_device + RESPONSE_AT, length = response_length, device_writes = true}
+        ]
+    )
     if id == virtio.NO_DESCRIPTOR {
         return 0
     }
@@ -561,7 +635,7 @@ command :: fn(driver: ptr[mut Driver], length: u32, response_length: u32) -> u32
  *
  * @param driver The driver, whose cursor slots free up.
  */
-reclaim_cursor :: fn(driver: ptr[mut Driver]) {
+reclaim_cursor :: fn(driver : ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.cursor_queue) or_break
         if cast[usize](used.id) < driver.cursor_slot_of.count {
@@ -585,7 +659,7 @@ reclaim_cursor :: fn(driver: ptr[mut Driver]) {
  * @param driver The driver.
  * @param kind CMD_UPDATE_CURSOR, the image, hot spot and position, or CMD_MOVE_CURSOR, the position only.
  */
-send_cursor :: fn(driver: ptr[mut Driver], kind: u32) {
+send_cursor :: fn(driver : ptr[mut Driver], kind : u32) {
     free := cast[u32](CURSOR_SLOTS)
     for slot in cast[u32](0)..<CURSOR_SLOTS {
         if driver.cursor_busy & (cast[u32](1) << slot) == 0 {
@@ -600,8 +674,15 @@ send_cursor :: fn(driver: ptr[mut Driver], kind: u32) {
     at :: CURSOR_AT + cast[u64](free) * CURSOR_SLOT_BYTES
     slot :: cast[ptr[mut UpdateCursor]](driver.commands + at)
     resource :: if driver.cursor_visible { CURSOR_RESOURCE } else { cast[u32](0) }
-    slot^ = UpdateCursor.{header = header_of(kind), scanout = le32(0), x = le32(bit_cast[u32](driver.cursor.x)),
-        y = le32(bit_cast[u32](driver.cursor.y)), resource = le32(resource), hot_x = le32(driver.hot_x), hot_y = le32(driver.hot_y)}
+    slot^ = UpdateCursor.{
+        header = header_of(kind),
+        scanout = le32(0),
+        x = le32(bit_cast[u32](driver.cursor.x)),
+        y = le32(bit_cast[u32](driver.cursor.y)),
+        resource = le32(resource),
+        hot_x = le32(driver.hot_x),
+        hot_y = le32(driver.hot_y),
+    }
     id :: virtio.offer(&driver.cursor_queue, driver.commands_device + at, cast[u32](size_of(UpdateCursor)), false)
     if id == virtio.NO_DESCRIPTOR {
         driver.move_waiting = driver.move_waiting || kind == CMD_MOVE_CURSOR
@@ -624,7 +705,7 @@ send_cursor :: fn(driver: ptr[mut Driver], kind: u32) {
  *     failed is dropped.
  * @param into Where each request is received, reused for each.
  */
-serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
     }
@@ -691,7 +772,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  * @param buffer A scanout buffer's index, or display.CURSOR_BUFFER.
  * @return Buffer with the window; Refused NoSuchBuffer for any other index, or NoMemory if it couldn't be made.
  */
-buffer_window :: fn(driver: ptr[mut Driver], buffer: u32) -> display.Response {
+buffer_window :: fn(driver : ptr[mut Driver], buffer : u32) -> display.Response {
     offset := cast[u64](0)
     bytes := driver.frame_bytes
     if buffer == display.CURSOR_BUFFER {
@@ -718,7 +799,7 @@ buffer_window :: fn(driver: ptr[mut Driver], buffer: u32) -> display.Response {
  * @param frame The frame: its damage is cut to the screen, and is the whole screen for a buffer never presented.
  * @return Presented with the buffer; Refused NoSuchBuffer for one that isn't the display's, or DeviceError.
  */
-present :: fn(driver: ptr[mut Driver], frame: display.Frame) -> display.Response {
+present :: fn(driver : ptr[mut Driver], frame : display.Frame) -> display.Response {
     if frame.buffer >= BUFFERS {
         return .Refused(.NoSuchBuffer)
     }
@@ -733,7 +814,7 @@ present :: fn(driver: ptr[mut Driver], frame: display.Frame) -> display.Response
 }
 
 /** A rectangle cut to the screen's; empty when they don't meet. */
-clipped :: fn(rect: display.Rect, whole: display.Rect) -> display.Rect {
+clipped :: fn(rect : display.Rect, whole : display.Rect) -> display.Rect {
     if rect.x >= whole.width || rect.y >= whole.height {
         return display.Rect.{}
     }
@@ -748,14 +829,17 @@ clipped :: fn(rect: display.Rect, whole: display.Rect) -> display.Rect {
  * @param driver The driver, whose cursor changes.
  * @param cursor The hot spot, cut to the image, and whether it's shown.
  */
-set_cursor :: fn(driver: ptr[mut Driver], cursor: display.Cursor) {
+set_cursor :: fn(driver : ptr[mut Driver], cursor : display.Cursor) {
     driver.hot_x = if cursor.hot_x < CURSOR_SIZE { cursor.hot_x } else { CURSOR_SIZE - 1 }
     driver.hot_y = if cursor.hot_y < CURSOR_SIZE { cursor.hot_y } else { CURSOR_SIZE - 1 }
     driver.cursor_visible = cursor.visible
     if cursor.visible {
         transfer :: cast[ptr[mut TransferToHost2d]](driver.commands + CONTROL_AT)
-        transfer^ = TransferToHost2d.{header = header_of(CMD_TRANSFER_TO_HOST_2D), rect = DeviceRect.{width = le32(CURSOR_SIZE),
-            height = le32(CURSOR_SIZE)}, resource = le32(CURSOR_RESOURCE)}
+        transfer^ = TransferToHost2d.{
+            header = header_of(CMD_TRANSFER_TO_HOST_2D),
+            rect = DeviceRect.{width = le32(CURSOR_SIZE), height = le32(CURSOR_SIZE)},
+            resource = le32(CURSOR_RESOURCE),
+        }
         if command(driver, cast[u32](size_of(TransferToHost2d)), cast[u32](size_of(Header))) != RESP_OK_NODATA {
             runtime.log_error("the device refused the cursor's image")
         }

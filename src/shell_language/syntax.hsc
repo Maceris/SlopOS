@@ -112,7 +112,7 @@ Parser :: struct {
  * @param line The line, copied: the tree's text views the copy, which, like the tree, is never freed.
  * @return The line's Statements node, each statement a child.
  */
-parse :: fn(line: string) -> Result[ptr[mut Node], SyntaxError] {
+parse :: fn(line : string) -> Result[ptr[mut Node], SyntaxError] {
     // A copy of its own, which the tree's words and names are parts of
     text :: strings.clone(line) or_return .Error(SyntaxError.{message = "there's no memory for it", at = 0})
     parser := Parser.{text = text}
@@ -130,7 +130,7 @@ parse :: fn(line: string) -> Result[ptr[mut Node], SyntaxError] {
  * @param tree The node, of any kind, only read.
  * @return The child, the node's own, not a copy; null if it has none.
  */
-first_child :: fn(tree: ptr[Node]) -> ptr[mut Node]? {
+first_child :: fn(tree : ptr[Node]) -> ptr[mut Node]? {
     return child(tree, 0)
 }
 
@@ -141,7 +141,7 @@ first_child :: fn(tree: ptr[Node]) -> ptr[mut Node]? {
  * @param index The child's index, from 0.
  * @return The child; null past the node's children.
  */
-child :: fn(tree: ptr[Node], index: usize) -> ptr[mut Node]? {
+child :: fn(tree : ptr[Node], index : usize) -> ptr[mut Node]? {
     return if index < tree.children.count { tree.children[index] } else { null }
 }
 
@@ -152,7 +152,7 @@ child :: fn(tree: ptr[Node], index: usize) -> ptr[mut Node]? {
  * @param index The item's index, from 0.
  * @return The item; null past the list's items.
  */
-item :: fn(list: ptr[ValueList], index: usize) -> Value? {
+item :: fn(list : ptr[ValueList], index : usize) -> Value? {
     return if index < list.items.count { list.items[index] } else { null }
 }
 
@@ -163,7 +163,7 @@ item :: fn(list: ptr[ValueList], index: usize) -> Value? {
  * @param at Where it starts in the line, in bytes.
  * @return The node, on the heap, never freed.
  */
-node :: fn(kind: NodeKind, at: usize) -> ptr[mut Node] {
+node :: fn(kind : NodeKind, at : usize) -> ptr[mut Node] {
     made :: runtime.new(Node)
     made.kind = kind
     made.at = at
@@ -177,7 +177,7 @@ node :: fn(kind: NodeKind, at: usize) -> ptr[mut Node] {
  * @param parent The node whose children grow by one; what the child means is by parent's kind and its place.
  * @param child The child, kept by parent.
  */
-add :: fn(parent: ptr[mut Node], child #escaping : ptr[mut Node]) {
+add :: fn(parent : ptr[mut Node], child #escaping : ptr[mut Node]) {
     runtime.array_add(&parent.children, child)
 }
 
@@ -187,7 +187,7 @@ add :: fn(parent: ptr[mut Node], child #escaping : ptr[mut Node]) {
  * @param parser The parser, whose error is set to the message at its position, unless it has one already.
  * @param message What's wrong, kept, so a literal.
  */
-fail :: fn(parser: ptr[mut Parser], message #escaping : string) {
+fail :: fn(parser : ptr[mut Parser], message #escaping : string) {
     if parser.error is_none {
         parser.error = SyntaxError.{message = message, at = parser.at}
     }
@@ -200,7 +200,7 @@ fail :: fn(parser: ptr[mut Parser], message #escaping : string) {
  * @param at Where, in bytes from 0.
  * @return The byte; 0 past the line's end.
  */
-char_at :: fn(parser: ptr[Parser], at: usize) -> u8 {
+char_at :: fn(parser : ptr[Parser], at : usize) -> u8 {
     bytes :: string_bytes(parser.text)
     return if at < bytes.count { bytes[at] } else { 0 }
 }
@@ -211,7 +211,7 @@ char_at :: fn(parser: ptr[Parser], at: usize) -> u8 {
  * @param parser The parser, read at its position, which isn't changed.
  * @return The byte; 0 at the line's end.
  */
-peek :: fn(parser: ptr[Parser]) -> u8 {
+peek :: fn(parser : ptr[Parser]) -> u8 {
     return char_at(parser, parser.at)
 }
 
@@ -220,7 +220,7 @@ peek :: fn(parser: ptr[Parser]) -> u8 {
  *
  * @param parser The parser, moved on.
  */
-skip_spaces :: fn(parser: ptr[mut Parser]) {
+skip_spaces :: fn(parser : ptr[mut Parser]) {
     loop {
         byte :: peek(parser)
         if byte == cast[u8](' ') || byte == 9 {
@@ -246,8 +246,10 @@ skip_spaces :: fn(parser: ptr[mut Parser]) {
  * @param byte Any byte; one of a UTF-8 sequence's, 128 or more, is never a letter.
  * @return True for a to z, A to Z and _.
  */
-is_letter :: fn(byte: u8) -> bool {
-    return (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('A') && byte <= cast[u8]('Z')) || byte == cast[u8]('_')
+is_letter :: fn(byte : u8) -> bool {
+    return (byte >= cast[u8]('a') && byte <= cast[u8]('z'))
+        || (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+        || byte == cast[u8]('_')
 }
 
 /**
@@ -256,7 +258,7 @@ is_letter :: fn(byte: u8) -> bool {
  * @param byte Any byte, 0 included, as char_at gives past the line's end.
  * @return True for 0 to 9.
  */
-is_digit :: fn(byte: u8) -> bool {
+is_digit :: fn(byte : u8) -> bool {
     return byte >= cast[u8]('0') && byte <= cast[u8]('9')
 }
 
@@ -266,7 +268,7 @@ is_digit :: fn(byte: u8) -> bool {
  * @param parser The parser, moved past the name.
  * @return The name, a view of the parser's text; empty, and the parser not moved, if there's no name there.
  */
-parse_name :: fn(parser: ptr[mut Parser]) -> string {
+parse_name :: fn(parser : ptr[mut Parser]) -> string {
     start :: parser.at
     if !is_letter(peek(parser)) {
         return ""
@@ -289,7 +291,7 @@ parse_name :: fn(parser: ptr[mut Parser]) -> string {
  * @param end Where it ends, in bytes, excluded.
  * @return The slice, a view of text; empty if the bounds are backwards or past text's end.
  */
-slice :: fn(text: string, start: usize, end: usize) -> string {
+slice :: fn(text : string, start : usize, end : usize) -> string {
     return if start <= end && end <= text.count { text[start..<end] } else { "" }
 }
 
@@ -300,7 +302,7 @@ slice :: fn(text: string, start: usize, end: usize) -> string {
  * @param keyword The keyword, compared byte for byte with the line at the parser's position.
  * @return True if the keyword's there, as a whole word.
  */
-at_keyword :: fn(parser: ptr[Parser], keyword: string) -> bool {
+at_keyword :: fn(parser : ptr[Parser], keyword : string) -> bool {
     end :: parser.at + keyword.count
     if slice(parser.text, parser.at, end) != keyword {
         return false
@@ -316,7 +318,7 @@ at_keyword :: fn(parser: ptr[Parser], keyword: string) -> bool {
  * @param in_block Whether they're a block's, so a } ends them.
  * @return A Statements node, each statement a child; as far as it got if there's an error.
  */
-parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node] {
+parse_statements :: fn(parser : ptr[mut Parser], in_block : bool) -> ptr[mut Node] {
     made :: node(.Statements, parser.at)
     loop {
         skip_spaces(parser)
@@ -331,7 +333,10 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
         add(made, parse_statement(parser))
         skip_spaces(parser)
         after :: peek(parser)
-        if parser.at < parser.text.count && after != 10 && after != cast[u8](';') && !(in_block && after == cast[u8]('}')) {
+        if parser.at < parser.text.count
+            && after != 10
+            && after != cast[u8](';')
+            && !(in_block && after == cast[u8]('}')) {
             fail(parser, "this doesn't go here: a statement ends at a line break or ;")
             break
         }
@@ -345,7 +350,7 @@ parse_statements :: fn(parser: ptr[mut Parser], in_block: bool) -> ptr[mut Node]
  * @param parser The parser, moved past it.
  * @return The statement's node; as far as it got if there's an error.
  */
-parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_statement :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     if at_keyword(parser, "fn") {
         return parse_function(parser)
     }
@@ -416,7 +421,7 @@ parse_statement :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param parser The parser, at fn, moved past the body.
  * @return The Function node; as far as it got if there's an error.
  */
-parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_function :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Function, parser.at)
     parser.at += 2
     skip_spaces(parser)
@@ -447,7 +452,7 @@ parse_function :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param parser The parser, at param, moved past the parameters.
  * @return The Param node; as far as it got if there's an error.
  */
-parse_param :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_param :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Param, parser.at)
     parser.at += 5
     parse_parameters(parser, made, false)
@@ -463,7 +468,7 @@ parse_param :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param made The node the Parameters are added to.
  * @param in_parentheses Whether they end with ), a function's; or at a line break, ; or the text's end, a script's.
  */
-parse_parameters :: fn(parser: ptr[mut Parser], made: ptr[mut Node], in_parentheses: bool) {
+parse_parameters :: fn(parser : ptr[mut Parser], made : ptr[mut Node], in_parentheses : bool) {
     loop {
         skip_spaces(parser)
         byte :: peek(parser)
@@ -523,7 +528,7 @@ parse_parameters :: fn(parser: ptr[mut Parser], made: ptr[mut Node], in_parenthe
  * @return The element itself when there's one and nothing after it; else a Pipeline, wrapped in Try for ? and in Or
  *     for `or`.
  */
-parse_pipeline :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_pipeline :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
     first :: parse_element(parser)
@@ -567,7 +572,7 @@ parse_pipeline :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param parser The parser, at the {, moved past the }.
  * @return The block's Statements node; an empty one, with an error, if there's no { there.
  */
-parse_block :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_block :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     if peek(parser) != cast[u8]('{') {
         fail(parser, "a block starts with {")
         return node(.Statements, parser.at)
@@ -589,9 +594,12 @@ parse_block :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param parser The parser, moved past it.
  * @return The Call node, or the expression's.
  */
-parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_element :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
-    if is_letter(peek(parser)) && !at_keyword(parser, "true") && !at_keyword(parser, "false") && !at_keyword(parser, "null")
+    if is_letter(peek(parser))
+        && !at_keyword(parser, "true")
+        && !at_keyword(parser, "false")
+        && !at_keyword(parser, "null")
         && !at_keyword(parser, "not") {
         return parse_call(parser)
     }
@@ -606,7 +614,7 @@ parse_element :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param parser The parser, at the name, moved past the arguments.
  * @return The Call node, text its name, each argument a child.
  */
-parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_call :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     made :: node(.Call, parser.at)
     start :: parser.at
     made.text = parse_name(parser)
@@ -614,7 +622,11 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     if peek(parser) == cast[u8]('.') || peek(parser) == cast[u8]('/') {
         loop {
             byte :: peek(parser)
-            if !is_letter(byte) && !is_digit(byte) && byte != cast[u8]('-') && byte != cast[u8]('.') && byte != cast[u8]('/') {
+            if !is_letter(byte)
+                && !is_digit(byte)
+                && byte != cast[u8]('-')
+                && byte != cast[u8]('.')
+                && byte != cast[u8]('/') {
                 break
             }
             parser.at += 1
@@ -625,7 +637,11 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     if made.text == "where" || made.text == "map" {
         skip_spaces(parser)
         byte :: peek(parser)
-        if parser.at < parser.text.count && byte != 10 && byte != cast[u8]('|') && byte != cast[u8](';') && byte != cast[u8]('}') {
+        if parser.at < parser.text.count
+            && byte != 10
+            && byte != cast[u8]('|')
+            && byte != cast[u8](';')
+            && byte != cast[u8]('}') {
             add(made, parse_expression(parser))
         }
         return made
@@ -633,8 +649,16 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     loop {
         skip_spaces(parser)
         byte :: peek(parser)
-        if (parser.error is_some) || parser.at >= parser.text.count || byte == 10 || byte == cast[u8]('|') || byte == cast[u8](';')
-            || byte == cast[u8](')') || byte == cast[u8]('}') || byte == cast[u8]('?') || byte == cast[u8]('&') || at_keyword(parser, "or") {
+        if (parser.error is_some)
+            || parser.at >= parser.text.count
+            || byte == 10
+            || byte == cast[u8]('|')
+            || byte == cast[u8](';')
+            || byte == cast[u8](')')
+            || byte == cast[u8]('}')
+            || byte == cast[u8]('?')
+            || byte == cast[u8]('&')
+            || at_keyword(parser, "or") {
             break
         }
         add(made, parse_argument(parser))
@@ -651,7 +675,7 @@ parse_call :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param parser The parser, moved past it.
  * @return The argument's node: Named, Word, or the value's, with any .field or [index] after it.
  */
-parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_argument :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     byte :: peek(parser)
     if byte == cast[u8]('-') && char_at(parser, start + 1) == cast[u8]('-') && is_letter(char_at(parser, start + 2)) {
@@ -666,8 +690,17 @@ parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
     // A bare word: what it is, its parameter's type says
     loop {
         next :: peek(parser)
-        if parser.at >= parser.text.count || next == cast[u8](' ') || next == 9 || next == 10 || next == cast[u8]('|') || next == cast[u8](';')
-            || next == cast[u8](')') || next == cast[u8]('}') || next == cast[u8]('"') || next == cast[u8]('(') || next == cast[u8]('&') {
+        if parser.at >= parser.text.count
+            || next == cast[u8](' ')
+            || next == 9
+            || next == 10
+            || next == cast[u8]('|')
+            || next == cast[u8](';')
+            || next == cast[u8](')')
+            || next == cast[u8]('}')
+            || next == cast[u8]('"')
+            || next == cast[u8]('(')
+            || next == cast[u8]('&') {
             break
         }
         parser.at += 1
@@ -686,7 +719,7 @@ parse_argument :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @return The expression's node: a Binary for an or, the loosest operator, at its top, else a tighter one's; as far as
  *     it got if there's an error.
  */
-parse_expression :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_expression :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     return parse_binary(parser, 0)
 }
 
@@ -710,10 +743,17 @@ MULTIPLYING :: string.["*", "/"]
  * @param level The level, 0 the loosest; 4 and up are MULTIPLYING's.
  * @return The operators, a view of a constant.
  */
-operators_of :: fn(level: usize) -> string[] {
-    return if level == 0 { OR_LEVEL[0..<OR_LEVEL.count] } else if level == 1 { AND_LEVEL[0..<AND_LEVEL.count] }
-        else if level == 2 { COMPARING[0..<COMPARING.count] } else if level == 3 { ADDING[0..<ADDING.count] }
-        else { MULTIPLYING[0..<MULTIPLYING.count] }
+operators_of :: fn(level : usize) -> string[] {
+    return if level == 0 {
+        OR_LEVEL[0..<OR_LEVEL.count]
+    }
+    else if level == 1 {
+        AND_LEVEL[0..<AND_LEVEL.count]
+    }
+    else if level == 2 {
+        COMPARING[0..<COMPARING.count]
+    }
+    else if level == 3 { ADDING[0..<ADDING.count] } else { MULTIPLYING[0..<MULTIPLYING.count] }
 }
 
 /**
@@ -723,7 +763,7 @@ operators_of :: fn(level: usize) -> string[] {
  * @param level The level, 0 the loosest; at LEVELS, a unary expression.
  * @return The expression's node: Binary nodes, the leftmost operation deepest.
  */
-parse_binary :: fn(parser: ptr[mut Parser], level: usize) -> ptr[mut Node] {
+parse_binary :: fn(parser : ptr[mut Parser], level : usize) -> ptr[mut Node] {
     if level >= LEVELS {
         return parse_unary(parser)
     }
@@ -749,7 +789,7 @@ parse_binary :: fn(parser: ptr[mut Parser], level: usize) -> ptr[mut Node] {
  * @param operators The operators, tried in order, so the first that matches wins.
  * @return The operator, a view of operators' string; null if none is there.
  */
-operator_at :: fn(parser: ptr[Parser], operators: string[]) -> string? {
+operator_at :: fn(parser : ptr[Parser], operators : string[]) -> string? {
     for operator in operators {
         if is_letter(cast[u8](operator[0 % operator.count])) {
             if at_keyword(parser, operator) {
@@ -772,7 +812,7 @@ operator_at :: fn(parser: ptr[Parser], operators: string[]) -> string? {
  * @return A Unary node, text "not" or "-", its operand its one child; or the value's node, wrapped in any Field and
  *     Index nodes after it; as far as it got if there's an error.
  */
-parse_unary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_unary :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
     if at_keyword(parser, "not") {
@@ -799,7 +839,7 @@ parse_unary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param base The value's node, kept in the tree.
  * @return The outermost Field or Index node, or base when there are none.
  */
-parse_postfix :: fn(parser: ptr[mut Parser], base #escaping : ptr[mut Node]) -> ptr[mut Node] {
+parse_postfix :: fn(parser : ptr[mut Parser], base #escaping : ptr[mut Node]) -> ptr[mut Node] {
     made := base
     loop {
         byte :: peek(parser)
@@ -836,7 +876,7 @@ parse_postfix :: fn(parser: ptr[mut Parser], base #escaping : ptr[mut Node]) -> 
  * @param parser The parser, moved past it; moved past one byte on an error, so parsing goes on.
  * @return The value's node; an empty Literal, with an error, if nothing that starts a value is there.
  */
-parse_primary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_primary :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     skip_spaces(parser)
     start :: parser.at
     byte :: peek(parser)
@@ -898,7 +938,15 @@ parse_primary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         }
         return made
     }
-    fail(parser, if parser.at >= parser.text.count { "something's missing at the end" } else { "this isn't the start of a value" })
+    fail(
+        parser,
+        if parser.at >= parser.text.count {
+            "something's missing at the end"
+        }
+        else {
+            "this isn't the start of a value"
+        }
+    )
     parser.at += 1
     return node(.Literal, start)
 }
@@ -911,7 +959,7 @@ parse_primary :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  * @param close The closing byte: ] or }.
  * @param named Whether they're a record's fields.
  */
-parse_items :: fn(parser: ptr[mut Parser], made: ptr[mut Node], close: u8, named: bool) {
+parse_items :: fn(parser : ptr[mut Parser], made : ptr[mut Node], close : u8, named : bool) {
     loop {
         skip_spaces(parser)
         loop {
@@ -962,7 +1010,7 @@ parse_items :: fn(parser: ptr[mut Parser], made: ptr[mut Node], close: u8, named
  * @return A Literal with the text as its value, or an Interpolated node if a $ and a letter are in it; its text is
  *     on the heap, never freed.
  */
-parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_quoted :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     parser.at += 1
     text : u8[..]
@@ -980,8 +1028,16 @@ parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         if byte == cast[u8]('\\') {
             escaped :: peek(parser)
             parser.at += 1
-            runtime.array_add(&text, if escaped == cast[u8]('n') { cast[u8](10) } else if escaped == cast[u8]('t') { cast[u8](9) }
-                else if escaped == cast[u8]('$') { cast[u8](0) } else { escaped })
+            runtime.array_add(
+                &text,
+                if escaped == cast[u8]('n') {
+                    cast[u8](10)
+                }
+                else if escaped == cast[u8]('t') {
+                    cast[u8](9)
+                }
+                else if escaped == cast[u8]('$') { cast[u8](0) } else { escaped }
+            )
             continue
         }
         if byte == cast[u8]('$') && is_letter(peek(parser)) {
@@ -1009,7 +1065,7 @@ parse_quoted :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
  *     the digits isn't a unit, or the number is past what its value holds: 2^63 - 1 for an integer or a duration's
  *     nanoseconds, 2^64 - 1 for a size's bytes.
  */
-parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
+parse_number :: fn(parser : ptr[mut Parser]) -> ptr[mut Node] {
     start :: parser.at
     value := cast[u64](0)
     fits := true
@@ -1036,7 +1092,12 @@ parse_number :: fn(parser: ptr[mut Parser]) -> ptr[mut Node] {
         case Some(found) => {
             scaled :: multiplied_sizes(value, found.scale)
             fits = fits && (scaled is_some) && (found.size || (scaled or_else 0) <= largest_signed)
-            made.value = if found.size { Value.Size(scaled or_else 0) } else { Value.Duration(cast[i64](scaled or_else 0)) }
+            made.value = if found.size {
+                Value.Size(scaled or_else 0)
+            }
+            else {
+                Value.Duration(cast[i64](scaled or_else 0))
+            }
         }
         case None => {
             if unit.count > 0 {
@@ -1067,9 +1128,19 @@ Unit :: struct {
  * @param unit The name, case and all.
  * @return The unit; null for any other name.
  */
-unit_value :: fn(unit: string) -> Unit? {
+unit_value :: fn(unit : string) -> Unit? {
     sizes :: string.["B", "KiB", "MiB", "GiB", "TiB", "kB", "MB", "GB", "TB"]
-    scales :: u64.[1, 1 << 10, 1 << 20, 1 << 30, 1 << 40, 1000, 1000 * 1000, 1000 * 1000 * 1000, 1000 * 1000 * 1000 * 1000]
+    scales :: u64.[
+        1,
+        1 << 10,
+        1 << 20,
+        1 << 30,
+        1 << 40,
+        1000,
+        1000 * 1000,
+        1000 * 1000 * 1000,
+        1000 * 1000 * 1000 * 1000
+    ]
     for each, i in sizes {
         if each == unit && i < scales.count {
             return Unit.{scale = scales[i], size = true}

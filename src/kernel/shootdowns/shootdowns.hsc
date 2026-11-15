@@ -1,6 +1,7 @@
 /*
  * The TLB shootdown's handshake (roadmap M3, decisions/0187): how the CPU running a shootdown and the CPUs it asks to
- * flush agree on who has, without a lock. The kernel's shootdown (shootdown.hsc) is made of these steps, with its batch,
+ * flush agree on who has, without a lock. The kernel's shootdown (shootdown.hsc) is made of these steps, with its
+ * batch,
  * IPIs and flushes; a package of its own, so a hosted test checks them under the model checker.
  *
  * One shootdown runs at a time: its CPU starts it, writes its batch, expects a flush of each other CPU, and requests
@@ -9,6 +10,7 @@
  * by the CPU that takes the request; whatever a CPU did before it said it flushed is seen by the running CPU once all
  * have; and whatever a shootdown did is seen by the next to start.
  */
+
 package shootdowns
 
 import intrinsics from "base:intrinsics"
@@ -28,7 +30,7 @@ Handshake :: struct {
  * @return True if none was running, and this CPU's now is: it sees everything the last to finish did. False if
  *     another is running.
  */
-try_start :: fn(handshake: ptr[mut Handshake]) -> bool {
+try_start :: fn(handshake : ptr[mut Handshake]) -> bool {
     _, started :: intrinsics.interlocked_compare_exchange_u32_acquire(&handshake.running, 1, 0)
     return started
 }
@@ -39,7 +41,7 @@ try_start :: fn(handshake: ptr[mut Handshake]) -> bool {
  * @param handshake The handshake, which this CPU's shootdown runs.
  * @param others How many other CPUs it requests to flush.
  */
-expect_flushes :: fn(handshake: ptr[mut Handshake], others: u32) {
+expect_flushes :: fn(handshake : ptr[mut Handshake], others : u32) {
     intrinsics.atomic_store_u32_release(&handshake.pending, others)
 }
 
@@ -49,7 +51,7 @@ expect_flushes :: fn(handshake: ptr[mut Handshake], others: u32) {
  *
  * @param requested The other CPU's request flag, 0 when it has none.
  */
-request :: fn(requested: ptr[mut u32]) {
+request :: fn(requested : ptr[mut u32]) {
     intrinsics.atomic_store_u32_release(requested, 1)
 }
 
@@ -60,7 +62,7 @@ request :: fn(requested: ptr[mut u32]) {
  * @param requested The calling CPU's request flag.
  * @return True if it's requested to flush.
  */
-is_requested :: fn(requested: ptr[u32]) -> bool {
+is_requested :: fn(requested : ptr[u32]) -> bool {
     return intrinsics.atomic_load_u32_acquire(requested) != 0
 }
 
@@ -71,7 +73,7 @@ is_requested :: fn(requested: ptr[u32]) -> bool {
  * @param handshake The handshake whose running shootdown requested it.
  * @param requested The calling CPU's request flag, which is_requested said is set.
  */
-flushed :: fn(handshake: ptr[mut Handshake], requested: ptr[mut u32]) {
+flushed :: fn(handshake : ptr[mut Handshake], requested : ptr[mut u32]) {
     intrinsics.atomic_store_u32_no_fence(requested, 0)
     intrinsics.interlocked_decrement_u32_release(&handshake.pending)
 }
@@ -82,7 +84,7 @@ flushed :: fn(handshake: ptr[mut Handshake], requested: ptr[mut u32]) {
  * @param handshake The handshake, which this CPU's shootdown runs.
  * @return True if they have, and this CPU sees what each did before it said so.
  */
-all_flushed :: fn(handshake: ptr[Handshake]) -> bool {
+all_flushed :: fn(handshake : ptr[Handshake]) -> bool {
     return intrinsics.atomic_load_u32_acquire(&handshake.pending) == 0
 }
 
@@ -91,6 +93,6 @@ all_flushed :: fn(handshake: ptr[Handshake]) -> bool {
  *
  * @param handshake The handshake, which this CPU's shootdown runs.
  */
-finish :: fn(handshake: ptr[mut Handshake]) {
+finish :: fn(handshake : ptr[mut Handshake]) {
     intrinsics.atomic_store_u32_release(&handshake.running, 0)
 }

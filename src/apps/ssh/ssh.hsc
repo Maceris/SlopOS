@@ -17,14 +17,14 @@ import runtime from "base:runtime"
 import crypto from "std:crypto"
 import net from "std:net"
 import os from "std:os"
-import ssh from "std:ssh"
-import strings from "std:strings"
-import terminal from "std:terminal"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import net_address from "std:os/slop_os/net_address"
 import network from "std:os/slop_os/network"
 import terminal as protocol from "std:os/slop_os/terminal"
+import ssh from "std:ssh"
+import strings from "std:strings"
+import terminal from "std:terminal"
 import powerbox as powerbox_protocol from "../../protocols/powerbox"
 
 /** An error naming the parameter it came from. */
@@ -50,20 +50,20 @@ SshError :: union {
 
 /** A connection, and what's needed while it runs. */
 Client :: struct {
-    conn : ssh.Connection,
-    tcp : net.Tcp,
-    console : terminal.Terminal,
-    editor : terminal.LineEditor,
-    directory : os.Directory,
-    host : u8[256],
-    host_count : usize,
+    conn          : ssh.Connection,
+    tcp           : net.Tcp,
+    console       : terminal.Terminal,
+    editor        : terminal.LineEditor,
+    directory     : os.Directory,
+    host          : u8[256],
+    host_count    : usize,
     command_bytes : u8[4096],
     command_count : usize,
-    exit_status : u32,
-    exited : bool,
-    finished : bool,
-    failure : u8,
-    inbox : u8[16384],
+    exit_status   : u32,
+    exited        : bool,
+    finished      : bool,
+    failure       : u8,
+    inbox         : u8[16384],
 }
 
 /** What failed, as Client.failure. */
@@ -89,8 +89,15 @@ FAILED_REFUSED : u8 : 3
  * @error NotTrusted You didn't trust its host key.
  * @error Refused Your key and password were refused.
  */
-main :: fn(here: os.Channel[dir.Dir], destination: string, command: string, port: u16?, console: os.Channel[protocol.Terminal],
-    network: os.Channel[network.Network], powerbox: os.Channel[powerbox_protocol.Powerbox]?) -> Result[u32, SshError] {
+main :: fn(
+    here : os.Channel[dir.Dir],
+    destination : string,
+    command : string,
+    port : u16?,
+    console : os.Channel[protocol.Terminal],
+    network : os.Channel[network.Network],
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?
+) -> Result[u32, SshError] {
     where :: Problem.{parameter = os.ParameterName.{name = "destination"}}
     bytes :: string_bytes(destination)
     at := bytes.count
@@ -106,7 +113,12 @@ main :: fn(here: os.Channel[dir.Dir], destination: string, command: string, port
     }
     client :: runtime.new(Client)
     client.console = terminal.open(console) or_return .Error(.Unreachable(where))
-    client.command_count = if command.count <= client.command_bytes.count { command.count } else { client.command_bytes.count }
+    client.command_count = if command.count <= client.command_bytes.count {
+        command.count
+    }
+    else {
+        client.command_bytes.count
+    }
     for byte, i in string_bytes(command) {
         if i < client.command_bytes.count {
             client.command_bytes[i] = byte
@@ -145,7 +157,12 @@ main :: fn(here: os.Channel[dir.Dir], destination: string, command: string, port
 }
 
 /** Connect by TCP to a host and port: through the session's network, or, for what it doesn't allow, the powerbox's. */
-connect :: fn(network: os.Channel[network.Network], powerbox: os.Channel[powerbox_protocol.Powerbox]?, host: string, port: u16) -> net.Tcp? {
+connect :: fn(
+    network : os.Channel[network.Network],
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?,
+    host : string,
+    port : u16
+) -> net.Tcp? {
     match net_address.parse_v4(host) {
         case Some(address) => {
             to :: net_address.Endpoint.{address = address, port = port}
@@ -173,15 +190,23 @@ connect :: fn(network: os.Channel[network.Network], powerbox: os.Channel[powerbo
 }
 
 /** Ask the powerbox for a network connection to an endpoint by TCP, and wait for the user's answer. */
-ask :: fn(powerbox: os.Channel[powerbox_protocol.Powerbox]?, to: net_address.Endpoint) -> os.Channel[network.Network]? {
+ask :: fn(
+    powerbox : os.Channel[powerbox_protocol.Powerbox]?,
+    to : net_address.Endpoint
+) -> os.Channel[network.Network]? {
     box :: powerbox or_return null
     port :: os.port_for(slop_os.startup_block().budget, box.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     rule :: network.range_rule(to.address, 32, network.TRANSPORT_TCP, to.port, to.port)
     out := os.Outgoing.{}
     request :: os.begin[powerbox_protocol.Request](&out)
-    request^ = .RequestNetwork(powerbox_protocol.NetworkRequest.{purpose = os.append(&out, string_bytes("to log in over SSH")),
-        connect = os.append(&out, network.Rule.[rule]), listen = os.append(&out, network.Rule.[])})
+    request^ = .RequestNetwork(
+        powerbox_protocol.NetworkRequest.{
+            purpose = os.append(&out, string_bytes("to log in over SSH")),
+            connect = os.append(&out, network.Rule.[rule]),
+            listen = os.append(&out, network.Rule.[]),
+        }
+    )
     if powerbox_protocol.send_request(box.end, port, &out) is_some {
         return null
     }
@@ -197,7 +222,7 @@ ask :: fn(powerbox: os.Channel[powerbox_protocol.Powerbox]?, to: net_address.End
 }
 
 /** Start the connection as a client, with your key from .ssh/id_ed25519 if there's one. */
-start_client #constant_time :: fn(client: ptr[mut Client], directory: os.Directory, user: string) {
+start_client #constant_time :: fn(client : ptr[mut Client], directory : os.Directory, user : string) {
     text :: os.read_entire_file_in(directory, ".ssh/id_ed25519") or_else ""
     match ssh.parse_private_key(string_bytes(text)) {
         case Some(key) => {
@@ -209,7 +234,7 @@ start_client #constant_time :: fn(client: ptr[mut Client], directory: os.Directo
 }
 
 /** Move bytes between the connection and the network, taking its events, until it's done. */
-run :: fn(client: ptr[mut Client]) {
+run :: fn(client : ptr[mut Client]) {
     loop {
         events(client)
         out :: ssh.output(&client.conn)
@@ -240,7 +265,7 @@ run :: fn(client: ptr[mut Client]) {
 }
 
 /** Send what the connection has out. */
-flush :: fn(client: ptr[mut Client]) {
+flush :: fn(client : ptr[mut Client]) {
     out :: ssh.output(&client.conn)
     if out.count > 0 {
         ssh.sent(&client.conn, net.write(&client.tcp, out))
@@ -248,7 +273,7 @@ flush :: fn(client: ptr[mut Client]) {
 }
 
 /** The connection's events. */
-events :: fn(client: ptr[mut Client]) {
+events :: fn(client : ptr[mut Client]) {
     loop {
         happened :: ssh.take_event(&client.conn) or_break
         match happened {
@@ -260,7 +285,12 @@ events :: fn(client: ptr[mut Client]) {
                 client.finished = true
             }
             case ChannelOpened(number) => {
-                _ = ssh.channel_request(&client.conn, number, .Exec, as_text(ssh.range(client.command_bytes[0..<4096], 0, client.command_count)))
+                _ = ssh.channel_request(
+                    &client.conn,
+                    number,
+                    .Exec,
+                    as_text(ssh.range(client.command_bytes[0..<4096], 0, client.command_count))
+                )
                 ssh.channel_eof(&client.conn, number)
             }
             case ChannelRefused(number) => client.finished = true
@@ -293,7 +323,7 @@ events :: fn(client: ptr[mut Client]) {
  * Check the host's key against .ssh/known_hosts: the same, trusted; another, refused; none, shown and asked about,
  * and kept if it's trusted.
  */
-check_host_key :: fn(client: ptr[mut Client]) -> bool {
+check_host_key :: fn(client : ptr[mut Client]) -> bool {
     offered :: ssh.blob_of(ssh.host_key_of(&client.conn))
     host :: ssh.range(client.host[0..<client.host.count], 0, client.host_count)
     known :: os.read_entire_file_in(client.directory, ".ssh/known_hosts") or_else ""
@@ -320,11 +350,17 @@ check_host_key :: fn(client: ptr[mut Client]) -> bool {
             return true
         }
         client.failure = FAILED_CHANGED
-        _ = terminal.write_line(&client.console, "Its host key has changed since you trusted it: someone may be in the way.")
+        _ = terminal.write_line(
+            &client.console,
+            "Its host key has changed since you trusted it: someone may be in the way."
+        )
         return false
     }
     printed :: ssh.fingerprint(offered)
-    _ = terminal.write_line(&client.console, strings.format("%'s host key is %.", as_text(host), string_of(&printed[0], 50)) or_else "")
+    _ = terminal.write_line(
+        &client.console,
+        strings.format("%'s host key is %.", as_text(host), string_of(&printed[0], 50)) or_else ""
+    )
     // Asked again for an empty answer
     trusted := false
     for tries in 0..<5 {
@@ -375,7 +411,7 @@ check_host_key :: fn(client: ptr[mut Client]) -> bool {
 }
 
 /** Ask for the password on the terminal, not shown, and give it. */
-ask_password :: fn(client: ptr[mut Client]) {
+ask_password :: fn(client : ptr[mut Client]) {
     _ = terminal.show_input(&client.console, string_bytes("Password: "), 10)
     typed : u8[256]
     count := cast[usize](0)
@@ -419,11 +455,11 @@ ask_password :: fn(client: ptr[mut Client]) {
 }
 
 /** Give the password typed. */
-give_password #constant_time :: fn(client: ptr[mut Client], typed: u8[]) {
+give_password #constant_time :: fn(client : ptr[mut Client], typed : u8[]) {
     ssh.give_password(&client.conn, crypto.as_secret(typed))
 }
 
 /** Bytes as text. */
-as_text :: fn(bytes: u8[]) -> string {
+as_text :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }

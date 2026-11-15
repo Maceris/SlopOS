@@ -12,7 +12,7 @@ import arch_interface from "../../arch_interface"
  */
 NOT_YET_IMPLEMENTED :: string.[
     // An NMI needs pseudo-NMIs or FEAT_NMI (decisions/0065)
-    "test_nmi",
+    "test_nmi"
 ]
 
 /**
@@ -20,7 +20,7 @@ NOT_YET_IMPLEMENTED :: string.[
  *
  * @param name The stub's name, one of NOT_YET_IMPLEMENTED's.
  */
-not_yet #never_returns :: fn(name: string) {
+not_yet #never_returns :: fn(name : string) {
     early_console_write("[arch] not on AArch64 yet: ")
     early_console_write(name)
     early_console_write("\n")

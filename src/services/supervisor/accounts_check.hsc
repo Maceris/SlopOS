@@ -3,9 +3,9 @@ package supervisor
 import compiler from "base:compiler"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import testing from "std:testing"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import test_kit from "../../test_kit"
@@ -70,10 +70,18 @@ AccountsGiven :: struct {
  * @param supervisor The supervisor, which needs a running account service on a disk with no accounts yet; its port is
  *     handled while each answer is waited for, and its budget pays for the connection, which is left open.
  */
-check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
-    shared :: AccountsGiven.{supervisor_at = cast[u64](supervisor), end = cast[slop_os.Channel](slop_os.NO_HANDLE),
-        port = cast[slop_os.Port](slop_os.NO_HANDLE)}
-    _ = test_kit.run(supervisor.log, ACCOUNTS_TEST_NAME, #insert testing.tests_of(compiler.load_package("."), "accounts_check.hsc"), shared)
+check_accounts :: fn(supervisor : ptr[mut Supervisor]) {
+    shared :: AccountsGiven.{
+        supervisor_at = cast[u64](supervisor),
+        end = cast[slop_os.Channel](slop_os.NO_HANDLE),
+        port = cast[slop_os.Port](slop_os.NO_HANDLE),
+    }
+    _ = test_kit.run(
+        supervisor.log,
+        ACCOUNTS_TEST_NAME,
+        #insert testing.tests_of(compiler.load_package("."), "accounts_check.hsc"),
+        shared
+    )
 }
 
 /**
@@ -82,7 +90,7 @@ check_accounts :: fn(supervisor: ptr[mut Supervisor]) {
  * @param shared What the tests share, from test_kit.given.
  * @return The supervisor, which check_accounts was given, good while the tests run.
  */
-supervisor_of :: fn(shared: ptr[AccountsGiven]) -> ptr[mut Supervisor] {
+supervisor_of :: fn(shared : ptr[AccountsGiven]) -> ptr[mut Supervisor] {
     return cast[ptr[mut Supervisor]](shared.supervisor_at)
 }
 
@@ -94,22 +102,30 @@ supervisor_of :: fn(shared: ptr[AccountsGiven]) -> ptr[mut Supervisor] {
  * @return Ok once it's run, the connection and the recovery code kept for the tests after; Error if the account
  *     service couldn't be connected to or described, or didn't make the administrator.
  */
-makes_the_administrator_alone #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+makes_the_administrator_alone #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shared :: test_kit.given(t, AccountsGiven)?
     supervisor :: supervisor_of(shared)
     connected :: accounts_connection(supervisor)
-    connection :: testing.require_some(t, connected, "the account service is running, and takes a connection through its listener")?
+    connection :: testing.require_some(
+        t,
+        connected,
+        "the account service is running, and takes a connection through its listener"
+    )?
     bound :: os.port_for(supervisor.block.budget, connection.end)
     port :: testing.require_some(t, bound, "the supervisor's budget has room for a port")?
     shared.end = connection.end
     shared.port = port
     end :: connection.end
     match ask_accounts(supervisor, end, port, .Describe) {
-        case Described(status) => testing.require_eq(t, status.accounts, 0, "the test boots a disk with no accounts yet")?
+        case Described(
+            status
+        ) => testing.require_eq(t, status.accounts, 0, "the test boots a disk with no accounts yet")?
         case _ => return failed_step(t, "the account service describes itself when asked")
     }
     match create(supervisor, end, port, TEST_NAME, "password") {
-        case PasswordRefused(problem) => testing.expect_eq(t, problem, 3, "a common password is refused as common, problem 3")
+        case PasswordRefused(
+            problem
+        ) => testing.expect_eq(t, problem, 3, "a common password is refused as common, problem 3")
         case _ => testing.fail(t, "an account isn't made with a common password")
     }
     match create(supervisor, end, port, "Admin", TEST_PASSWORD) {
@@ -118,11 +134,24 @@ makes_the_administrator_alone #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
     }
     match create(supervisor, end, port, TEST_NAME, TEST_PASSWORD) {
         case Created(shown) => shared.code = shown.text
-        case _ => return failed_step(t, "the first account is made, the administrator, with a valid name and a long, uncommon password")
+        case _ => return failed_step(
+            t,
+            "the first account is made, the administrator, with a valid name and a long, uncommon password"
+        )
     }
     shared.has_code = true
-    testing.expect_eq(t, shared.code[5], cast[u8]('-'), "a recovery code is shown in groups, a dash after the fifth character")
-    testing.expect_eq(t, shared.code[23], cast[u8]('-'), "a recovery code is shown in groups, a dash after the 23rd character")
+    testing.expect_eq(
+        t,
+        shared.code[5],
+        cast[u8]('-'),
+        "a recovery code is shown in groups, a dash after the fifth character"
+    )
+    testing.expect_eq(
+        t,
+        shared.code[23],
+        cast[u8]('-'),
+        "a recovery code is shown in groups, a dash after the 23rd character"
+    )
     match create(supervisor, end, port, "second", TEST_PASSWORD) {
         case Refused => {}
         case _ => testing.fail(t, "a second account isn't made at first-boot setup: only the administrator, alone")
@@ -136,10 +165,15 @@ makes_the_administrator_alone #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
  * @param t The test's state.
  * @return Ok once it's run; Error if the first test made no connection.
  */
-limits_wrong_passwords #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+limits_wrong_passwords #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shared :: test_kit.given(t, AccountsGiven)?
     supervisor :: supervisor_of(shared)
-    testing.require_ne(t, shared.end, cast[slop_os.Channel](slop_os.NO_HANDLE), "the first test connected to the account service")?
+    testing.require_ne(
+        t,
+        shared.end,
+        cast[slop_os.Channel](slop_os.NO_HANDLE),
+        "the first test connected to the account service"
+    )?
     for i in 0..<3 {
         match open_home(supervisor, shared.end, shared.port, TEST_NAME, "not the password at all") {
             case WrongCredentials => {}
@@ -160,14 +194,22 @@ limits_wrong_passwords #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
  * @param t The test's state.
  * @return Ok once it's run; Error if the first test made no connection, or the home volume didn't open.
  */
-opens_the_administrators_home #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+opens_the_administrators_home #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shared :: test_kit.given(t, AccountsGiven)?
     supervisor :: supervisor_of(shared)
-    testing.require_ne(t, shared.end, cast[slop_os.Channel](slop_os.NO_HANDLE), "the first test connected to the account service")?
+    testing.require_ne(
+        t,
+        shared.end,
+        cast[slop_os.Channel](slop_os.NO_HANDLE),
+        "the first test connected to the account service"
+    )?
     home := os.Channel[dir.Dir].{end = cast[slop_os.Channel](slop_os.NO_HANDLE)}
     match open_home(supervisor, shared.end, shared.port, TEST_NAME, TEST_PASSWORD) {
         case OpenedHome(root) => home = root
-        case _ => return failed_step(t, "the administrator's home volume opens with its password, the wait for wrong ones over")
+        case _ => return failed_step(
+            t,
+            "the administrator's home volume opens with its password, the wait for wrong ones over"
+        )
     }
     testing.expect(t, write_file(home, TEST_FILE, TEST_TEXT), "the administrator's home volume takes a file")
     _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
@@ -181,7 +223,7 @@ opens_the_administrators_home #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
  * @param t The test's state.
  * @return Ok once it's run; Error if the first test kept no recovery code, or the new password opened nothing.
  */
-recovers_the_administrator_with_its_recovery_code #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+recovers_the_administrator_with_its_recovery_code #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shared :: test_kit.given(t, AccountsGiven)?
     supervisor :: supervisor_of(shared)
     testing.require(t, shared.has_code, "the first test made the administrator and kept its recovery code")?
@@ -194,11 +236,19 @@ recovers_the_administrator_with_its_recovery_code #test :: fn(t: ptr[mut testing
     }
     out := os.Outgoing.{}
     recovering :: os.begin[accounts.Request](&out)
-    recovering^ = .Recover(accounts.Recovery.{name = bytes_of(&out, TEST_NAME), code = os.append(&out, code[0..<accounts.RECOVERY_TEXT_BYTES]),
-        new_password = bytes_of(&out, TEST_NEW_PASSWORD)})
+    recovering^ = .Recover(
+        accounts.Recovery.{
+            name = bytes_of(&out, TEST_NAME),
+            code = os.append(&out, code[0..<accounts.RECOVERY_TEXT_BYTES]),
+            new_password = bytes_of(&out, TEST_NEW_PASSWORD),
+        }
+    )
     match send_accounts(supervisor, shared.end, shared.port, &out) {
         case Done => {}
-        case _ => return failed_step(t, "the recovery code, typed in lowercase, replaces the password: it's read ignoring case")
+        case _ => return failed_step(
+            t,
+            "the recovery code, typed in lowercase, replaces the password: it's read ignoring case"
+        )
     }
     match open_home(supervisor, shared.end, shared.port, TEST_NAME, TEST_PASSWORD) {
         case WrongCredentials => {}
@@ -209,7 +259,11 @@ recovers_the_administrator_with_its_recovery_code #test :: fn(t: ptr[mut testing
         case OpenedHome(root) => home = root
         case _ => return failed_step(t, "the new password the recovery code set opens the home volume")
     }
-    testing.expect(t, holds_file(home, TEST_FILE, TEST_TEXT), "recovering an account keeps its home volume, the file written to it still there")
+    testing.expect(
+        t,
+        holds_file(home, TEST_FILE, TEST_TEXT),
+        "recovering an account keeps its home volume, the file written to it still there"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
     return .Ok
 }
@@ -222,7 +276,7 @@ recovers_the_administrator_with_its_recovery_code #test :: fn(t: ptr[mut testing
  * @param location Where the step is; the caller's own.
  * @return Error(Failed), for the test to return.
  */
-failed_step :: fn(t: ptr[mut testing.T], message: string, location := #caller_location) -> testing.Outcome {
+failed_step :: fn(t : ptr[mut testing.T], message : string, location := #caller_location) -> testing.Outcome {
     testing.fail(t, message, location)
     return .Error(.Failed)
 }
@@ -235,9 +289,12 @@ failed_step :: fn(t: ptr[mut testing.T], message: string, location := #caller_lo
  * @return The connection, which moves to the caller; null, and logged, if the account service isn't running, or the
  *     Connect failed.
  */
-accounts_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[accounts.Accounts]? {
+accounts_connection :: fn(supervisor : ptr[mut Supervisor]) -> os.Channel[accounts.Accounts]? {
     for entry, i in supervisor.started {
-        if i < supervisor.started_count && entry.name == "accounts" && entry.running && cast[slop_os.Handle](entry.listener) != slop_os.NO_HANDLE {
+        if i < supervisor.started_count
+            && entry.name == "accounts"
+            && entry.running
+            && cast[slop_os.Handle](entry.listener) != slop_os.NO_HANDLE {
             port :: os.port_for(supervisor.block.budget, entry.listener) or_return null
             defer slop_os.handle_close(cast[slop_os.Handle](port))
             return accounts.connect(entry.listener, port, supervisor.block.budget)
@@ -260,7 +317,13 @@ accounts_connection :: fn(supervisor: ptr[mut Supervisor]) -> os.Channel[account
  * @return The answer: Created with the recovery code, or PasswordRefused, NameRefused, AlreadyExists or Refused;
  *     Failed if it couldn't be asked, or the service failed.
  */
-create :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_os.Port, name: string, password: string) -> accounts.Response {
+create :: fn(
+    supervisor : ptr[mut Supervisor],
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    name : string,
+    password : string
+) -> accounts.Response {
     out := os.Outgoing.{}
     creating :: os.begin[accounts.Request](&out)
     creating^ = .Create(accounts.Creation.{name = bytes_of(&out, name), password = bytes_of(&out, password), now = 1})
@@ -279,7 +342,13 @@ create :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_o
  * @return The answer: OpenedHome with the volume's root, which moves to the caller, WrongCredentials or RateLimited;
  *     Failed if it couldn't be asked, or the service failed.
  */
-open_home :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_os.Port, name: string, password: string) -> accounts.Response {
+open_home :: fn(
+    supervisor : ptr[mut Supervisor],
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    name : string,
+    password : string
+) -> accounts.Response {
     out := os.Outgoing.{}
     opening :: os.begin[accounts.Request](&out)
     opening^ = .OpenHome(accounts.Credentials.{name = bytes_of(&out, name), password = bytes_of(&out, password)})
@@ -295,7 +364,12 @@ open_home :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slo
  * @param request The request, as Describe.
  * @return The answer; Failed if it couldn't be asked.
  */
-ask_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_os.Port, request: accounts.Request) -> accounts.Response {
+ask_accounts :: fn(
+    supervisor : ptr[mut Supervisor],
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    request : accounts.Request
+) -> accounts.Response {
     out := os.Outgoing.{}
     made :: os.begin[accounts.Request](&out)
     made^ = request
@@ -315,7 +389,12 @@ ask_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: 
  * @param out The request, built with os.begin and its bytes appended; it's sent as it is.
  * @return The answer; Failed if it couldn't be sent or the connection failed.
  */
-send_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> accounts.Response {
+send_accounts :: fn(
+    supervisor : ptr[mut Supervisor],
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing]
+) -> accounts.Response {
     if accounts.send_request(end, port, out) is_some {
         return .Failed
     }
@@ -338,7 +417,7 @@ send_accounts :: fn(supervisor: ptr[mut Supervisor], end: slop_os.Channel, port:
  * @param text What the file holds, replacing what it held.
  * @return True if it was written whole; false otherwise.
  */
-write_file :: fn(root: os.Channel[dir.Dir], path: string, text: string) -> bool {
+write_file :: fn(root : os.Channel[dir.Dir], path : string, text : string) -> bool {
     files :: second_root(root) or_return false
     defer os.close_directory(files)
     return os.write_entire_file_in(files, path, text) is_none
@@ -353,7 +432,7 @@ write_file :: fn(root: os.Channel[dir.Dir], path: string, text: string) -> bool 
  * @param text What it should hold.
  * @return True if it could be read and holds text exactly; false otherwise.
  */
-holds_file :: fn(root: os.Channel[dir.Dir], path: string, text: string) -> bool {
+holds_file :: fn(root : os.Channel[dir.Dir], path : string, text : string) -> bool {
     files :: second_root(root) or_return false
     defer os.close_directory(files)
     match os.read_entire_file_in(files, path) {
@@ -373,7 +452,7 @@ holds_file :: fn(root: os.Channel[dir.Dir], path: string, text: string) -> bool 
  * @return The new connection as std's Directory, which the caller closes with os.close_directory; null if it couldn't
  *     be made.
  */
-second_root :: fn(root: os.Channel[dir.Dir]) -> os.Directory? {
+second_root :: fn(root : os.Channel[dir.Dir]) -> os.Directory? {
     budget :: slop_os.startup_block().budget
     port :: os.port_for(budget, root.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](port))

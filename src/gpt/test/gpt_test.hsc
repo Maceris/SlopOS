@@ -23,7 +23,7 @@ Image :: struct {
 /** The partitions every test's table has: one for SlopOS's check, and a spare. */
 PARTITIONS :: gpt.NewPartition.[
     gpt.NewPartition.{first = 34, count = 100, type_guid = guid(1), unique_guid = guid(2), name = "SlopOS check"},
-    gpt.NewPartition.{first = 134, count = 50, type_guid = guid(3), unique_guid = guid(4), name = "spare"},
+    gpt.NewPartition.{first = 134, count = 50, type_guid = guid(3), unique_guid = guid(4), name = "spare"}
 ]
 
 /** A stand-in disk with PARTITIONS' table written on it, and room for read_table's entries. */
@@ -41,7 +41,7 @@ Written :: struct {
  * @return The disk, which the caller frees with free_written; Error if it couldn't be allocated or written, the
  *     failure recorded.
  */
-written :: fn(t: ptr[mut testing.T]) -> Result[Written, testing.Stopped] {
+written :: fn(t : ptr[mut testing.T]) -> Result[Written, testing.Stopped] {
     bytes, error :: runtime.new_array(u8, cast[usize](BLOCKS * gpt.BLOCK_BYTES))
     testing.require(t, error == null, "the stand-in disk is allocated")?
     entries, entries_error :: runtime.new_array(u8, cast[usize](gpt.ENTRY_BLOCKS * gpt.BLOCK_BYTES))
@@ -63,17 +63,17 @@ written :: fn(t: ptr[mut testing.T]) -> Result[Written, testing.Stopped] {
  *
  * @param disk The disk, whose bytes and entries aren't used after.
  */
-free_written :: fn(disk: Written) {
+free_written :: fn(disk : Written) {
     runtime.free_array(disk.bytes)
     runtime.free_array(disk.entries)
 }
 
-checks_the_standard_crc #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+checks_the_standard_crc #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     testing.expect_eq(t, gpt.crc32(string_bytes("123456789")), 0xcbf43926, "the CRC everyone checks against")
     return .Ok
 }
 
-writes_a_protective_mbr #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+writes_a_protective_mbr #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     disk :: written(t)?
     defer free_written(disk)
     if disk.bytes.count < 512 {
@@ -86,7 +86,7 @@ writes_a_protective_mbr #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     return .Ok
 }
 
-reads_the_table_as_written #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+reads_the_table_as_written #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     disk :: written(t)?
     defer free_written(disk)
     image := Image.{bytes = disk.bytes}
@@ -108,7 +108,7 @@ reads_the_table_as_written #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome
     return .Ok
 }
 
-reads_the_backup_when_the_primary_header_is_broken #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+reads_the_backup_when_the_primary_header_is_broken #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     disk :: written(t)?
     defer free_written(disk)
     flip(disk.bytes, cast[usize](gpt.BLOCK_BYTES) + 40)
@@ -121,7 +121,7 @@ reads_the_backup_when_the_primary_header_is_broken #test :: fn(t: ptr[mut testin
     return .Ok
 }
 
-reads_nothing_when_both_sets_of_entries_are_broken #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+reads_nothing_when_both_sets_of_entries_are_broken #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     disk :: written(t)?
     defer free_written(disk)
     flip(disk.bytes, cast[usize](2 * gpt.BLOCK_BYTES))
@@ -133,7 +133,7 @@ reads_nothing_when_both_sets_of_entries_are_broken #test :: fn(t: ptr[mut testin
     return .Ok
 }
 
-refuses_a_partition_outside_the_usable_blocks #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+refuses_a_partition_outside_the_usable_blocks #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     bytes, error :: runtime.new_array(u8, cast[usize](BLOCKS * gpt.BLOCK_BYTES))
     testing.require(t, error == null, "the stand-in disk is allocated")?
     defer runtime.free_array(bytes)
@@ -148,7 +148,7 @@ refuses_a_partition_outside_the_usable_blocks #test :: fn(t: ptr[mut testing.T])
  * @param bytes The image's bytes, changed in place.
  * @param at The byte's offset; past the image's end, nothing changes.
  */
-flip :: fn(bytes: mut u8[], at: usize) {
+flip :: fn(bytes : mut u8[], at : usize) {
     if at < bytes.count {
         bytes[at] ~= 0xff
     }
@@ -160,7 +160,7 @@ flip :: fn(bytes: mut u8[], at: usize) {
  * @param byte The byte; 0 makes the all-zero GUID of an unused entry.
  * @return The GUID, its 16 bytes all the given byte.
  */
-guid :: fn(byte: u8) -> gpt.Guid {
+guid :: fn(byte : u8) -> gpt.Guid {
     made : gpt.Guid
     for &each in made {
         each^ = byte
@@ -177,7 +177,7 @@ guid :: fn(byte: u8) -> gpt.Guid {
  * @param into Where they go; at least count * gpt.BLOCK_BYTES bytes.
  * @return True if they were read; false if they run past the image's end or into is too small, with nothing read.
  */
-read_blocks :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+read_blocks :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     image :: cast[ptr[Image]](context)
     start :: first * gpt.BLOCK_BYTES
     bytes :: count * gpt.BLOCK_BYTES

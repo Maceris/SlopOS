@@ -33,19 +33,27 @@ Acknowledged :: struct {
     log_end : usize,
 }
 
-a_crash_leaves_the_last_acknowledged_commit_or_the_one_being_made #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_crash_leaves_the_last_acknowledged_commit_or_the_one_being_made #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_crashes(t, false)
 }
 
-a_crash_leaves_an_encrypted_volume_at_the_last_acknowledged_commit_or_the_one_being_made #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_crash_leaves_an_encrypted_volume_at_the_last_acknowledged_commit_or_the_one_being_made #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_crashes(t, true)
 }
 
-a_failed_write_is_refused_and_leaves_the_last_acknowledged_commit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_failed_write_is_refused_and_leaves_the_last_acknowledged_commit #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_failed_writes(t, false)
 }
 
-a_failed_write_to_an_encrypted_volume_is_refused_and_leaves_the_last_acknowledged_commit #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_failed_write_to_an_encrypted_volume_is_refused_and_leaves_the_last_acknowledged_commit #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     return check_failed_writes(t, true)
 }
 
@@ -58,7 +66,7 @@ a_failed_write_to_an_encrypted_volume_is_refused_and_leaves_the_last_acknowledge
  * @return Ok once every image is checked, whatever was found; Error(Failed), the failure recorded, if the workload
  *     couldn't be run.
  */
-check_crashes :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+check_crashes :: fn(t : ptr[mut testing.T], sealed : bool) -> testing.Outcome {
     device :: formatted(t, CRASH_BLOCKS, 0xc0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
@@ -103,7 +111,7 @@ check_crashes :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
  * @param into The buffer, from its start.
  * @param from The bytes; those past into's end are dropped.
  */
-copy_into :: fn(into: mut u8[], from: u8[]) {
+copy_into :: fn(into : mut u8[], from : u8[]) {
     for byte, i in from {
         if i < into.count {
             into[i] = byte
@@ -119,7 +127,7 @@ copy_into :: fn(into: mut u8[], from: u8[]) {
  * @param step The step, 0 to STEPS - 1, each doing its own part.
  * @return Ok if it ran; Error(Failed), the failure recorded, if any of it failed.
  */
-workload :: fn(t: ptr[mut testing.T], volume: ptr[mut slopfs.Volume], step: int) -> testing.Outcome {
+workload :: fn(t : ptr[mut testing.T], volume : ptr[mut slopfs.Volume], step : int) -> testing.Outcome {
     data := runtime.new(Data)
     defer runtime.free(data)
     pattern(data.bytes, cast[u64](step) + 100)
@@ -231,7 +239,7 @@ workload :: fn(t: ptr[mut testing.T], volume: ptr[mut slopfs.Volume], step: int)
  * @param name The name to look up.
  * @return The object's ID; null if nothing has the name, or the lookup failed.
  */
-found :: fn(volume: ptr[mut slopfs.Volume], directory: u64, name: string) -> u64? {
+found :: fn(volume : ptr[mut slopfs.Volume], directory : u64, name : string) -> u64? {
     match slopfs.lookup(volume, directory, name) {
         case Ok(object) => return object
         case Error(error) => return null
@@ -244,7 +252,7 @@ found :: fn(volume: ptr[mut slopfs.Volume], directory: u64, name: string) -> u64
  * @param volume The volume under test, open.
  * @return The hash, the same for the same state; null if anything couldn't be listed or read.
  */
-state_digest :: fn(volume: ptr[mut slopfs.Volume]) -> slopfs.Seal? {
+state_digest :: fn(volume : ptr[mut slopfs.Volume]) -> slopfs.Seal? {
     hasher := crypto.blake3_start()
     buffer := runtime.new(Data)
     defer runtime.free(buffer)
@@ -268,7 +276,13 @@ state_digest :: fn(volume: ptr[mut slopfs.Volume]) -> slopfs.Seal? {
  * @param depth How deep the directory is, from 0 for the root; past 8 fails.
  * @return True if it was all hashed; false if anything couldn't be listed or read.
  */
-digest_directory :: fn(volume: ptr[mut slopfs.Volume], hasher: ptr[mut crypto.Blake3], directory: u64, buffer: ptr[mut Data], depth: int) -> bool {
+digest_directory :: fn(
+    volume : ptr[mut slopfs.Volume],
+    hasher : ptr[mut crypto.Blake3],
+    directory : u64,
+    buffer : ptr[mut Data],
+    depth : int
+) -> bool {
     if depth > 8 {
         return false
     }
@@ -331,7 +345,9 @@ Way :: enum {
     Torn,
 }
 
-/** What checking an image a crash could leave found: Held if it's all as it should be, or the first thing that wasn't. */
+/**
+ * What checking an image a crash could leave found: Held if it's all as it should be, or the first thing that wasn't.
+ */
 Found :: enum {
     /** It mounted, checked out whole, held an acknowledged state, and took another commit if asked to. */
     Held,
@@ -380,7 +396,13 @@ Crash :: struct {
  * @return Ok once every image is checked, whatever was found; Error(Failed), the failure recorded, if the memory to
  *     check them couldn't be had.
  */
-replay :: fn(t: ptr[mut testing.T], base: u8[], recorded: ptr[mut Disk], acknowledged: Acknowledged[], sealed: bool) -> testing.Outcome {
+replay :: fn(
+    t : ptr[mut testing.T],
+    base : u8[],
+    recorded : ptr[mut Disk],
+    acknowledged : Acknowledged[],
+    sealed : bool
+) -> testing.Outcome {
     image :: testing.require_some(t, new_device_of(CRASH_BLOCKS), "the disk the images are made on is allocated")?
     defer free_device(image)
     scratch :: cast[ptr[mut Disk]](image.context)
@@ -400,7 +422,12 @@ replay :: fn(t: ptr[mut testing.T], base: u8[], recorded: ptr[mut Disk], acknowl
         // The log up to here, applied
         copy_into(scratch.bytes, running)
         prefix :: check_image(&image, acknowledged, at, at % 8 == 0, &replayed, sealed)
-        testing.expect_eq(t, Crash.{way = .Prefix, at = at, found = prefix}, Crash.{way = .Prefix, at = at, found = .Held}, WHOLE)
+        testing.expect_eq(
+            t,
+            Crash.{way = .Prefix, at = at, found = prefix},
+            Crash.{way = .Prefix, at = at, found = .Held},
+            WHOLE
+        )
         if at >= recorded.log.count {
             break
         }
@@ -419,8 +446,12 @@ replay :: fn(t: ptr[mut testing.T], base: u8[], recorded: ptr[mut Disk], acknowl
                 }
             }
             found_in_subset :: check_image(&image, acknowledged, interval_start, true, &replayed, sealed)
-            testing.expect_eq(t, Crash.{way = .Subset, at = at, subset = subset, found = found_in_subset},
-                Crash.{way = .Subset, at = at, subset = subset, found = .Held}, WHOLE)
+            testing.expect_eq(
+                t,
+                Crash.{way = .Subset, at = at, subset = subset, found = found_in_subset},
+                Crash.{way = .Subset, at = at, subset = subset, found = .Held},
+                WHOLE
+            )
         }
         for torn in interval_start..<at {
             copy_into(scratch.bytes, snapshot)
@@ -430,12 +461,22 @@ replay :: fn(t: ptr[mut testing.T], base: u8[], recorded: ptr[mut Disk], acknowl
                 }
             }
             found_torn :: check_image(&image, acknowledged, interval_start, false, &replayed, sealed)
-            testing.expect_eq(t, Crash.{way = .Torn, at = torn, found = found_torn}, Crash.{way = .Torn, at = torn, found = .Held}, WHOLE)
+            testing.expect_eq(
+                t,
+                Crash.{way = .Torn, at = torn, found = found_torn},
+                Crash.{way = .Torn, at = torn, found = .Held},
+                WHOLE
+            )
         }
         copy_into(snapshot, running)
         interval_start = at + 1
     }
-    runtime.log_info("crash%: % images checked, % of them holding the commit being made", if sealed { " (sealed)" } else { "" }, replayed.images, replayed.newer)
+    runtime.log_info(
+        "crash%: % images checked, % of them holding the commit being made",
+        if sealed { " (sealed)" } else { "" },
+        replayed.images,
+        replayed.newer
+    )
     return .Ok
 }
 
@@ -448,7 +489,7 @@ replay :: fn(t: ptr[mut testing.T], base: u8[], recorded: ptr[mut Disk], acknowl
  * @param entry The write; a flush applies nothing.
  * @param torn Whether only its first half is applied.
  */
-apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: bool) {
+apply :: fn(image : mut u8[], recorded : ptr[mut Disk], entry : Recorded, torn : bool) {
     start :: cast[usize](entry.block * slopfs.BLOCK_BYTES)
     length := cast[usize](entry.count * slopfs.BLOCK_BYTES)
     if torn {
@@ -476,9 +517,14 @@ apply :: fn(image: mut u8[], recorded: ptr[mut Disk], entry: Recorded, torn: boo
  * @param sealed Whether the volume is encrypted.
  * @return Held if it checked out; otherwise the first thing that didn't.
  */
-check_image :: fn(device: ptr[slopfs.Device], acknowledged: Acknowledged[], durable: usize, usable: bool, replayed: ptr[mut Replayed],
-    sealed: bool) -> Found {
-
+check_image :: fn(
+    device : ptr[slopfs.Device],
+    acknowledged : Acknowledged[],
+    durable : usize,
+    usable : bool,
+    replayed : ptr[mut Replayed],
+    sealed : bool
+) -> Found {
     replayed.images += 1
     last : usize = 0
     for each, i in acknowledged {
@@ -527,7 +573,7 @@ FAILED_BYTES :: 8192
  * @return Ok once it's all checked, whatever was found; Error(Failed), the failure recorded, if what's checked couldn't
  *     be set up.
  */
-check_failed_writes :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcome {
+check_failed_writes :: fn(t : ptr[mut testing.T], sealed : bool) -> testing.Outcome {
     device :: formatted(t, CRASH_BLOCKS, 0xd0)?
     defer free_device(device)
     disk :: cast[ptr[mut Disk]](device.context)
@@ -556,7 +602,11 @@ check_failed_writes :: fn(t: ptr[mut testing.T], sealed: bool) -> testing.Outcom
     disk.read_only = false
     testing.expect(t, refused is_error, "a write the disk refuses is refused")
     reading_lost :: slopfs.read(volume, lost, 0, data.bytes[0..<FAILED_BYTES])
-    testing.expect(t, reading_lost is_error, "a chunk whose write failed is refused to reads, being neither what it was nor what was written")
+    testing.expect(
+        t,
+        reading_lost is_error,
+        "a chunk whose write failed is refused to reads, being neither what it was nor what was written"
+    )
     reading_kept :: slopfs.read(volume, kept, 0, data.bytes[0..<FAILED_BYTES])
     testing.expect_ok(t, reading_kept, "a file the failed write wasn't for still reads")
     // Every commit after it fails, the second as the first

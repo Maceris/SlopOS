@@ -12,9 +12,9 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import driver_kit from "../../driver_kit"
+import service_kit from "../../libraries/service_kit"
 import pci from "../../pci"
 import input from "../../protocols/input"
-import service_kit from "../../libraries/service_kit"
 import virtio from "../../virtio"
 
 /** The bytes of a page: 4096. */
@@ -74,14 +74,13 @@ BTN_LAST : u16 : 0x117
  * SPEC: Linux's input-event-codes.h; USB HID Usage Tables 1.4, §10 (Keyboard/Keypad Page)
  */
 HID_OF_KEY :: u8.[
-    0x00, 0x29, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e, 0x2a, 0x2b,
-    0x14, 0x1a, 0x08, 0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30, 0x28, 0xe0, 0x04, 0x16,
-    0x07, 0x09, 0x0a, 0x0b, 0x0d, 0x0e, 0x0f, 0x33, 0x34, 0x35, 0xe1, 0x31, 0x1d, 0x1b, 0x06, 0x19,
-    0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0xe5, 0x55, 0xe2, 0x2c, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e,
-    0x3f, 0x40, 0x41, 0x42, 0x43, 0x53, 0x47, 0x5f, 0x60, 0x61, 0x56, 0x5c, 0x5d, 0x5e, 0x57, 0x59,
-    0x5a, 0x5b, 0x62, 0x63, 0x00, 0x00, 0x64, 0x44, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x58, 0xe4, 0x54, 0x46, 0xe6, 0x00, 0x4a, 0x52, 0x4b, 0x50, 0x4f, 0x4d, 0x51, 0x4e, 0x49, 0x4c,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe3, 0xe7, 0x65,
+    0x00, 0x29, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e, 0x2a, 0x2b, 0x14, 0x1a, 0x08,
+    0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30, 0x28, 0xe0, 0x04, 0x16, 0x07, 0x09, 0x0a, 0x0b, 0x0d, 0x0e,
+    0x0f, 0x33, 0x34, 0x35, 0xe1, 0x31, 0x1d, 0x1b, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0xe5, 0x55, 0xe2,
+    0x2c, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x53, 0x47, 0x5f, 0x60, 0x61, 0x56, 0x5c,
+    0x5d, 0x5e, 0x57, 0x59, 0x5a, 0x5b, 0x62, 0x63, 0x00, 0x00, 0x64, 0x44, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x58, 0xe4, 0x54, 0x46, 0xe6, 0x00, 0x4a, 0x52, 0x4b, 0x50, 0x4f, 0x4d, 0x51, 0x4e, 0x49, 0x4c, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe3, 0xe7, 0x65
 ]
 
 /** An event as the device writes it, virtio_input_event (virtio 1.2 §5.8.6): an evdev triple, little-endian. */
@@ -153,9 +152,19 @@ Driver :: struct {
  *     made, 6 if its MSI couldn't be set up, 7 if its DMA memory couldn't be made or mapped, 8 if its queue couldn't
  *     be set up, 9 if the listener couldn't be bound.
  */
-main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memory, bar0: slop_os.Memory?, bar1: slop_os.Memory?,
-    bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?, bar5: slop_os.Memory?, domain: slop_os.DmaDomain,
-    clients: os.Listener[input.Input]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    device : slop_os.Device,
+    config : slop_os.Memory,
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?,
+    domain : slop_os.DmaDomain,
+    clients : os.Listener[input.Input]
+) -> int {
     startup :: slop_os.startup_block()
     // Its state; without the memory for it, it ends with 99 (decisions/0104)
     driver_made, driver_error :: runtime.new_aligned(Driver, align_of(Driver))
@@ -176,14 +185,16 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent) or_return 6
+    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+        or_return 6
 
     memory :: slop_os.dma_memory_create(domain, startup.budget, 2 * PAGE, 0) or_return 7
     pages :: runtime.reserve_addresses(cast[usize](2 * PAGE)) or_return 7
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(memory, startup.space, pages, 0, 2 * PAGE, read_write) or_return 7
     device_address :: slop_os.memory_device_address(memory) or_return 7
-    driver.queue = virtio.setup_queue(&driver.transport, EVENT_QUEUE, pages, device_address,virtio.QUEUE_PAGE, 0) or_return 8
+    driver.queue = virtio.setup_queue(&driver.transport, EVENT_QUEUE, pages, device_address, virtio.QUEUE_PAGE, 0)
+        or_return 8
     driver.buffers = pages + PAGE
     driver.buffers_device = device_address + PAGE
     driver.axes = axes_of(&driver.transport)
@@ -230,7 +241,7 @@ main :: fn(log: slop_os.DebugLog?, device: slop_os.Device, config: slop_os.Memor
  *     failed is dropped, and its held Read with it.
  * @param into Where each request is received, reused for each.
  */
-serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]) {
     if index >= driver.clients.ends.count {
         return void
     }
@@ -291,7 +302,7 @@ serve :: fn(driver: ptr[mut Driver], index: usize, into: ptr[mut os.Incoming]) {
  * @return Each axis's minimum and maximum; 0 and 0 for an axis the device doesn't have, or a device without a
  *     configuration. A maximum below its minimum is taken as the minimum.
  */
-axes_of :: fn(transport: ptr[virtio.Transport]) -> input.Axes {
+axes_of :: fn(transport : ptr[virtio.Transport]) -> input.Axes {
     axes := input.Axes.{}
     device :: transport.device
     if device == 0 {
@@ -324,8 +335,13 @@ axes_of :: fn(transport: ptr[virtio.Transport]) -> input.Axes {
  * @param driver The driver, its event queue offered the buffer.
  * @param buffer Which buffer, 0 to EVENT_BUFFERS - 1.
  */
-offer_buffer :: fn(driver: ptr[mut Driver], buffer: u8) {
-    id :: virtio.offer(&driver.queue, driver.buffers_device + cast[u64](buffer) * EVENT_BYTES, cast[u32](EVENT_BYTES), true)
+offer_buffer :: fn(driver : ptr[mut Driver], buffer : u8) {
+    id :: virtio.offer(
+        &driver.queue,
+        driver.buffers_device + cast[u64](buffer) * EVENT_BYTES,
+        cast[u32](EVENT_BYTES),
+        true
+    )
     if cast[usize](id) < driver.buffer_of.count {
         driver.buffer_of[id] = buffer
     }
@@ -339,7 +355,7 @@ offer_buffer :: fn(driver: ptr[mut Driver], buffer: u8) {
  *
  * @param driver The driver, whose waiting events grow.
  */
-take_events :: fn(driver: ptr[mut Driver]) {
+take_events :: fn(driver : ptr[mut Driver]) {
     loop {
         used :: virtio.take_used(&driver.queue) or_break
         buffer :: if cast[usize](used.id) < driver.buffer_of.count { driver.buffer_of[used.id] } else { cast[u8](0) }
@@ -370,7 +386,7 @@ take_events :: fn(driver: ptr[mut Driver]) {
  * @param value The evdev value, taken as signed for an axis.
  * @return The protocol's event; null for one it has nothing for, like a SYN or a key without a usage here.
  */
-translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> input.Event? {
+translate :: fn(driver : ptr[mut Driver], kind : u16, code : u16, value : u32) -> input.Event? {
     signed :: bit_cast[i32](value)
     if kind == EV_KEY && code >= BTN_LEFT && code <= BTN_LAST {
         return input.event_of(.Button, value != 0, code - BTN_LEFT, 0, 0)
@@ -384,7 +400,13 @@ translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> in
         return input.event_of(.Key, value != 0, cast[u16](usage), 0, 0)
     }
     if kind == EV_REL && (code == REL_X || code == REL_Y) {
-        return input.event_of(.Motion, false, 0, if code == REL_X { signed } else { 0 }, if code == REL_Y { signed } else { 0 })
+        return input.event_of(
+            .Motion,
+            false,
+            0,
+            if code == REL_X { signed } else { 0 },
+            if code == REL_Y { signed } else { 0 }
+        )
     }
     if kind == EV_REL && code == REL_WHEEL {
         return input.event_of(.Wheel, false, 0, 0, signed)
@@ -410,7 +432,7 @@ translate :: fn(driver: ptr[mut Driver], kind: u16, code: u16, value: u32) -> in
  *
  * @param driver The driver, whose clients' next events move on and held Reads are cleared as they're answered.
  */
-answer_held :: fn(driver: ptr[mut Driver]) {
+answer_held :: fn(driver : ptr[mut Driver]) {
     for &most, index in driver.held {
         if most^ == 0 || index >= driver.clients.ends.count || index >= driver.next_of.count {
             continue

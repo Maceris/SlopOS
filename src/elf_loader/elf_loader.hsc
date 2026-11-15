@@ -194,7 +194,7 @@ RELA_SIZE : u64 : 24
  * @param size How many bytes the integer takes, 0 to 8; 0 reads 0.
  * @return The integer, or null if size is more than 8 or any of its bytes is past bytes' end.
  */
-read_le :: fn(bytes: u8[], offset: u64, size: u64) -> u64? {
+read_le :: fn(bytes : u8[], offset : u64, size : u64) -> u64? {
     count :: cast[u64](bytes.count)
     if offset > count || size > count - offset || size > 8 {
         return null
@@ -217,7 +217,7 @@ read_le :: fn(bytes: u8[], offset: u64, size: u64) -> u64? {
  * @return value rounded up to a multiple of PAGE_SIZE, value itself if it's one already, or null if that would
  *     overflow 64 bits.
  */
-page_up :: fn(value: u64) -> u64? {
+page_up :: fn(value : u64) -> u64? {
     if value > ~cast[u64](0) - (PAGE_SIZE - 1) {
         return null
     }
@@ -234,7 +234,7 @@ page_up :: fn(value: u64) -> u64? {
  * @return FEATURES_PROPERTY's bits as slop_os.CONTROL_FLOW_ bits; 0 for a note that isn't one, or is cut short, or
  *     doesn't have it.
  */
-control_flow_of :: fn(file: u8[], offset: u64, size: u64) -> u32 {
+control_flow_of :: fn(file : u8[], offset : u64, size : u64) -> u32 {
     if size < 16 || offset > cast[u64](file.count) || size > cast[u64](file.count) - offset {
         return 0
     }
@@ -280,7 +280,7 @@ control_flow_of :: fn(file: u8[], offset: u64, size: u64) -> u32 {
  * @return The protection with read, write and execute as the flags give them; no flags give no access.
  * @error WritableAndExecutable The flags have both PF_W and PF_X, which no segment may have.
  */
-protection_of :: fn(flags: u64) -> Result[slop_os.Protection, LoadError] {
+protection_of :: fn(flags : u64) -> Result[slop_os.Protection, LoadError] {
     if flags & PF_W != 0 && flags & PF_X != 0 {
         return .Error(.WritableAndExecutable)
     }
@@ -306,11 +306,13 @@ protection_of :: fn(flags: u64) -> Result[slop_os.Protection, LoadError] {
  *     included. 0 finds the segment address is in, or ends at.
  * @return A copy of the first segment holding all count bytes from address, or null if none does.
  */
-segment_at :: fn(executable: ptr[Executable], address: u64, count: u64) -> Segment? {
+segment_at :: fn(executable : ptr[Executable], address : u64, count : u64) -> Segment? {
     for i in 0..<executable.segment_count {
         if i < executable.segments.count {
             segment :: executable.segments[i]
-            if address >= segment.address && count <= segment.memory_size && address - segment.address <= segment.memory_size - count {
+            if address >= segment.address
+                && count <= segment.memory_size
+                && address - segment.address <= segment.memory_size - count {
                 return segment
             }
         }
@@ -327,7 +329,7 @@ segment_at :: fn(executable: ptr[Executable], address: u64, count: u64) -> Segme
  *     its zeros past file_size.
  * @return The range's offset in the file, in bytes, or null if no one segment's file bytes hold all of it.
  */
-file_offset_of :: fn(executable: ptr[Executable], address: u64, count: u64) -> u64? {
+file_offset_of :: fn(executable : ptr[Executable], address : u64, count : u64) -> u64? {
     segment :: segment_at(executable, address, count) or_return null
     within :: address - segment.address
     if count > segment.file_size || within > segment.file_size - count {
@@ -362,7 +364,7 @@ file_offset_of :: fn(executable: ptr[Executable], address: u64, count: u64) -> u
  * @error UnsupportedRelocation It has relocations other than relative RELA ones.
  * @error RelocationOutsideImage A relocation isn't into a writable segment.
  */
-read :: fn(file: u8[]) -> Result[Executable, LoadError] {
+read :: fn(file : u8[]) -> Result[Executable, LoadError] {
     // ELF
     if cast[u64](file.count) < HEADER_SIZE || file[0] != 0x7f || file[1] != 0x45 || file[2] != 0x4c || file[3] != 0x46 {
         return .Error(.NotElf)
@@ -455,7 +457,8 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
     // With landing pads, its code where indirect branches may land only on them (decisions/0186)
     if executable.control_flow & slop_os.CONTROL_FLOW_LANDING_PADS != 0 {
         for i in 0..<segment_count {
-            if i < executable.segments.count && cast[u32](executable.segments[i].protection) & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
+            if i < executable.segments.count
+                && cast[u32](executable.segments[i].protection) & cast[u32](slop_os.PROTECTION_EXECUTE) != 0 {
                 executable.segments[i].protection = cast[slop_os.Protection](cast[u32](executable.segments[i].protection)
                     | cast[u32](slop_os.PROTECTION_GUARDED))
             }
@@ -491,7 +494,12 @@ read :: fn(file: u8[]) -> Result[Executable, LoadError] {
  * @error UnsupportedRelocation It has REL, PLT or text relocations, or a RELA entry of another type.
  * @error RelocationOutsideImage A relocation's 8 bytes aren't all in one writable segment.
  */
-read_dynamic :: fn(executable: ptr[mut Executable], file: u8[], address: u64, size: u64) -> Result[void, LoadError] {
+read_dynamic :: fn(
+    executable : ptr[mut Executable],
+    file : u8[],
+    address : u64,
+    size : u64
+) -> Result[void, LoadError] {
     dynamic :: file_offset_of(executable, address, size) or_return .Error(.BadHeaders)
     relocations : u64 = 0
     relocations_size : u64 = 0
@@ -555,7 +563,7 @@ read_dynamic :: fn(executable: ptr[mut Executable], file: u8[], address: u64, si
  * @error SegmentOutsideFile A segment's bytes run past the file's or the image's end, which read rules out for the
  *     file it read; segments before it are already copied.
  */
-load :: fn(executable: ptr[Executable], file: u8[], image: mut u8[]) -> Result[void, LoadError] {
+load :: fn(executable : ptr[Executable], file : u8[], image : mut u8[]) -> Result[void, LoadError] {
     if cast[u64](image.count) < executable.size {
         return .Error(.ImageTooSmall)
     }
@@ -566,13 +574,18 @@ load :: fn(executable: ptr[Executable], file: u8[], image: mut u8[]) -> Result[v
         segment :: executable.segments[i]
         count :: segment.file_size
         // read checked these; checked again, so nothing is copied past either end
-        if segment.offset > cast[u64](file.count) || count > cast[u64](file.count) - segment.offset
-            || segment.address > cast[u64](image.count) || count > cast[u64](image.count) - segment.address {
+        if segment.offset > cast[u64](file.count)
+            || count > cast[u64](file.count) - segment.offset
+            || segment.address > cast[u64](image.count)
+            || count > cast[u64](image.count) - segment.address {
             return .Error(.SegmentOutsideFile)
         }
         if count > 0 {
-            intrinsics.mem_copy_non_overlapping(cast[mut rawptr](cast[u64](image.data) + segment.address),
-                cast[rawptr](cast[u64](file.data) + segment.offset), cast[usize](count))
+            intrinsics.mem_copy_non_overlapping(
+                cast[mut rawptr](cast[u64](image.data) + segment.address),
+                cast[rawptr](cast[u64](file.data) + segment.offset),
+                cast[usize](count)
+            )
         }
     }
     return .Ok
@@ -593,7 +606,7 @@ load :: fn(executable: ptr[Executable], file: u8[], image: mut u8[]) -> Result[v
  * @error BadHeaders A relocation can't be read from file, which read rules out for the file it read.
  * @error RelocationOutsideImage A relocation's 8 bytes run past image's end; those before it are already applied.
  */
-relocate :: fn(executable: ptr[Executable], file: u8[], image: mut u8[], base: u64) -> Result[void, LoadError] {
+relocate :: fn(executable : ptr[Executable], file : u8[], image : mut u8[], base : u64) -> Result[void, LoadError] {
     if cast[u64](image.count) < executable.size {
         return .Error(.ImageTooSmall)
     }

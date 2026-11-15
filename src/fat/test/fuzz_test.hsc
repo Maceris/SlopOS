@@ -19,7 +19,9 @@ import fat from ".."
 /** How many rounds of damage the fuzzer runs unless SLOPOS_FUZZ_ROUNDS asks for another number. */
 FUZZ_ROUNDS :: 400
 
-a_volume_damaged_where_its_structure_is_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_volume_damaged_where_its_structure_is_is_used_as_far_as_it_goes_without_crashing #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     made := formatted(t)?
     defer free_formatted(&made)
     return check_fuzz(t, made.image, made.device)
@@ -37,8 +39,10 @@ MOST_CHANGES :: 16
  * @param source The case's source: each change's region, sector, byte and the bits it flips.
  * @return Ok once the case has run; Error(Failed) if the volume to damage couldn't be set up.
  */
-a_volume_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source])
-    -> testing.Outcome {
+a_volume_damaged_as_drawn_is_used_as_far_as_it_goes_without_crashing #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     kept :: testing.fixture[FuzzVolume](source, make_fuzz_volume, free_fuzz_volume)
     volume :: testing.require_some(t, kept, "the volume to damage is set up")?
     image :: volume.image
@@ -110,7 +114,7 @@ make_fuzz_volume :: fn() -> FuzzVolume? {
  *
  * @param volume The volume, not used after.
  */
-free_fuzz_volume :: fn(volume: ptr[mut FuzzVolume]) {
+free_fuzz_volume :: fn(volume : ptr[mut FuzzVolume]) {
     free_image(volume.image)
 }
 
@@ -121,7 +125,7 @@ free_fuzz_volume :: fn(volume: ptr[mut FuzzVolume]) {
  * @param volume The volume, mounted.
  * @return Whether it was all made.
  */
-populate :: fn(volume: ptr[mut fat.Volume]) -> bool {
+populate :: fn(volume : ptr[mut fat.Volume]) -> bool {
     root :: fat.root_of(volume)
     efi := fat.create(volume, root, "EFI", true) or_return false
     boot := fat.create(volume, fat.directory_cluster(volume, &efi), "BOOT", true) or_return false
@@ -130,7 +134,12 @@ populate :: fn(volume: ptr[mut fat.Volume]) -> bool {
     for i in 0..<data.count {
         data[i] = cast[u8](i % 253)
     }
-    for name in string.["BOOTX64.EFI", "A long name for a loader.efi", "config.txt", "Another long one, with spaces.conf"] {
+    for name in string.[
+        "BOOTX64.EFI",
+        "A long name for a loader.efi",
+        "config.txt",
+        "Another long one, with spaces.conf"
+    ] {
         file := fat.create(volume, boot_cluster, name, false) or_return false
         if (fat.write(volume, &file, 0, data) or_else 0) != 40000 {
             return false
@@ -159,7 +168,7 @@ populate :: fn(volume: ptr[mut fat.Volume]) -> bool {
  * @param volume The volume, mounted.
  * @return Pairs of a first sector and how many sectors from it.
  */
-structure_regions :: fn(volume: ptr[fat.Volume]) -> u64[8] {
+structure_regions :: fn(volume : ptr[fat.Volume]) -> u64[8] {
     return u64.[0, 1, 32, 2, 32 + volume.fat_sectors, 2, volume.first_data_sector, 120]
 }
 
@@ -176,7 +185,7 @@ structure_regions :: fn(volume: ptr[fat.Volume]) -> u64[8] {
  * @return Ok once the rounds have run; Error(Failed), the failure recorded, if the volume to damage couldn't be set
  *     up.
  */
-check_fuzz :: fn(t: ptr[mut testing.T], image: ptr[mut Image], device: fat.Device) -> testing.Outcome {
+check_fuzz :: fn(t : ptr[mut testing.T], image : ptr[mut Image], device : fat.Device) -> testing.Outcome {
     mounting :: fat.mount(device)
     volume := testing.require_ok(t, mounting, "a formatted volume mounts")?
     testing.require(t, populate(&volume), "directories and files of short and long names are made on it")?
@@ -221,7 +230,7 @@ check_fuzz :: fn(t: ptr[mut testing.T], image: ptr[mut Image], device: fat.Devic
  * @param image The stand-in disk; its undo and saved grow, with context's allocator.
  * @param sector The sector; one already saved this round is left as it was saved.
  */
-save_sector :: fn(image: ptr[mut Image], sector: u64) {
+save_sector :: fn(image : ptr[mut Image], sector : u64) {
     for each in image.undo {
         if each.sector == sector {
             return void
@@ -242,7 +251,7 @@ save_sector :: fn(image: ptr[mut Image], sector: u64) {
  *
  * @param image The stand-in disk; its undo and saved are emptied.
  */
-restore :: fn(image: ptr[mut Image]) {
+restore :: fn(image : ptr[mut Image]) {
     for each in image.undo {
         start :: cast[usize](each.sector * fat.SECTOR_BYTES)
         for i in 0..<cast[usize](fat.SECTOR_BYTES) {
@@ -264,7 +273,7 @@ restore :: fn(image: ptr[mut Image]) {
  * @param device The device over the damaged image.
  * @return True if the volume mounted; false if it didn't, so nothing else was tried.
  */
-exercise :: fn(device: fat.Device) -> bool {
+exercise :: fn(device : fat.Device) -> bool {
     volume := fat.Volume.{device = device}
     match fat.mount(device) {
         case Ok(mounted) => volume = mounted
@@ -300,7 +309,7 @@ exercise :: fn(device: fat.Device) -> bool {
  * @param directory The directory's first cluster.
  * @param depth How many levels down it is, from 0 for the root.
  */
-walk :: fn(volume: ptr[mut fat.Volume], directory: u32, depth: int) {
+walk :: fn(volume : ptr[mut fat.Volume], directory : u32, depth : int) {
     buffer : u8[4096]
     slot : u32 = 0
     for step in 0..<300 {
@@ -335,7 +344,7 @@ Random :: struct {
  * @param random The generator, its state advanced.
  * @return A number, any u64.
  */
-next_random :: fn(random: ptr[mut Random]) -> u64 {
+next_random :: fn(random : ptr[mut Random]) -> u64 {
     x := random.state
     x = x ~ (x >> 12)
     x = x ~ (x << 25)
@@ -350,7 +359,7 @@ next_random :: fn(random: ptr[mut Random]) -> u64 {
  * @param text The text, digits only.
  * @return The number; null if the text is empty or has anything but digits. Overflow isn't checked.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     value : u64 = 0
     if text.count == 0 {
         return null

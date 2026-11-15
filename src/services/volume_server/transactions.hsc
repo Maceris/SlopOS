@@ -6,8 +6,8 @@ import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
 import files from "std:os/slop_os/files"
-import slopfs from "../../slopfs"
 import container from "../../protocols/container"
+import slopfs from "../../slopfs"
 
 /*
  * Transactions under a directory (decisions/0046, 0089). A transaction's changes are logged, as they're asked for, in
@@ -103,7 +103,7 @@ Transaction :: struct {
  * @return The transaction's index; null if MAX_TRANSACTIONS are open, or the memory's size can't be had, or is smaller
  *     than a LogHead or larger than MAX_BUFFER_BYTES.
  */
-begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> usize? {
+begin :: fn(server : ptr[mut Server], directory : u64, memory : slop_os.Memory) -> usize? {
     for transaction, i in server.transactions {
         if transaction.active {
             continue
@@ -113,7 +113,12 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
             return null
         }
         if i < server.transactions.count {
-            server.transactions[i] = Transaction.{active = true, directory = directory, memory = memory, log_bytes = size}
+            server.transactions[i] = Transaction.{
+                active = true,
+                directory = directory,
+                memory = memory,
+                log_bytes = size,
+            }
         }
         return i
     }
@@ -126,7 +131,7 @@ begin :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory) -> 
  * @param server The server, whose transaction slot is emptied: its log's memory closed, nothing logged applied.
  * @param index The transaction's index; one not open is left alone.
  */
-end_transaction :: fn(server: ptr[mut Server], index: usize) {
+end_transaction :: fn(server : ptr[mut Server], index : usize) {
     if index >= server.transactions.count || !server.transactions[index].active {
         return void
     }
@@ -142,7 +147,7 @@ end_transaction :: fn(server: ptr[mut Server], index: usize) {
  *     kept.
  * @param index The transaction's index; one past them is ignored.
  */
-reset :: fn(server: ptr[mut Server], index: usize) {
+reset :: fn(server : ptr[mut Server], index : usize) {
     if index < server.transactions.count {
         server.transactions[index].used = 0
         server.transactions[index].version_count = 0
@@ -166,7 +171,16 @@ reset :: fn(server: ptr[mut Server], index: usize) {
  * @return Whether it was logged; false if the log hasn't the room, a path is too long, there's no such transaction, or
  *     the log couldn't be written: its client ended, or the memory's gone. What failed to be written isn't counted.
  */
-log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, number: u64, path: string, to: string, data: u8[]) -> bool {
+log_op :: fn(
+    server : ptr[mut Server],
+    index : usize,
+    op : Op,
+    creation : u32,
+    number : u64,
+    path : string,
+    to : string,
+    data : u8[]
+) -> bool {
     if index >= server.transactions.count {
         return false
     }
@@ -175,11 +189,19 @@ log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, numbe
     if transaction.used + length > transaction.log_bytes || path.count > 0xffff || to.count > 0xffff {
         return false
     }
-    head := LogHead.{op = cast[u32le](cast[u32](op)), creation = cast[u32le](creation), number = cast[u64le](number),
-        data_bytes = cast[u32le](cast[u32](data.count)), path_bytes = cast[u16le](cast[u16](path.count)), to_bytes = cast[u16le](cast[u16](to.count))}
+    head := LogHead.{
+        op = cast[u32le](cast[u32](op)),
+        creation = cast[u32le](creation),
+        number = cast[u64le](number),
+        data_bytes = cast[u32le](cast[u32](data.count)),
+        path_bytes = cast[u16le](cast[u16](path.count)),
+        to_bytes = cast[u16le](cast[u16](to.count)),
+    }
     at := transaction.used
-    if !log_part(transaction.memory, &at, view_of(cast[ptr[u8]](&head), size_of(LogHead))) || !log_part(transaction.memory, &at, string_bytes(path))
-        || !log_part(transaction.memory, &at, string_bytes(to)) || !log_part(transaction.memory, &at, data) {
+    if !log_part(transaction.memory, &at, view_of(cast[ptr[u8]](&head), size_of(LogHead)))
+        || !log_part(transaction.memory, &at, string_bytes(path))
+        || !log_part(transaction.memory, &at, string_bytes(to))
+        || !log_part(transaction.memory, &at, data) {
         return false
     }
     transaction.used += length
@@ -194,7 +216,7 @@ log_op :: fn(server: ptr[mut Server], index: usize, op: Op, creation: u32, numbe
  * @param part The bytes; none writes nothing.
  * @return Whether it was written; false if the memory couldn't be: its client ended, or it's gone.
  */
-log_part :: fn(memory: slop_os.Memory, at: ptr[mut u64], part: u8[]) -> bool {
+log_part :: fn(memory : slop_os.Memory, at : ptr[mut u64], part : u8[]) -> bool {
     if part.count > 0 && (slop_os.memory_write(memory, at^, part) is_error) {
         return false
     }
@@ -225,7 +247,7 @@ nothing :: fn() -> u8[] {
  * @param path The path, relative to the transaction's directory.
  * @return Whether they were recorded; false if there's no such transaction or the volume couldn't commit.
  */
-note_versions :: fn(server: ptr[mut Server], index: usize, path: string) -> bool {
+note_versions :: fn(server : ptr[mut Server], index : usize, path : string) -> bool {
     if index >= server.transactions.count {
         return false
     }
@@ -301,7 +323,7 @@ Logged :: struct {
  * @param used How many of the log's bytes are logged changes.
  * @return The change, its paths and data views into the log; null if its head or its bytes reach past what's used.
  */
-logged_at :: fn(log: u8[], at: u64, used: u64) -> Logged? {
+logged_at :: fn(log : u8[], at : u64, used : u64) -> Logged? {
     start :: cast[usize](at)
     if at + cast[u64](size_of(LogHead)) > used || start + size_of(LogHead) > log.count || start >= log.count {
         return null
@@ -316,9 +338,15 @@ logged_at :: fn(log: u8[], at: u64, used: u64) -> Logged? {
     }
     path :: slopfs.part(log, path_start, path_end)
     to :: slopfs.part(log, path_end, to_end)
-    return Logged.{op = cast[u32](head.op), creation = cast[u32](head.creation), number = cast[u64](head.number),
-        path = string_of(cast[ptr[u8]](path.data), path.count), to = string_of(cast[ptr[u8]](to.data), to.count),
-        data = slopfs.part(log, to_end, data_end), next = cast[u64](data_end)}
+    return Logged.{
+        op = cast[u32](head.op),
+        creation = cast[u32](head.creation),
+        number = cast[u64](head.number),
+        path = string_of(cast[ptr[u8]](path.data), path.count),
+        to = string_of(cast[ptr[u8]](to.data), to.count),
+        data = slopfs.part(log, to_end, data_end),
+        next = cast[u64](data_end),
+    }
 }
 
 /**
@@ -327,7 +355,7 @@ logged_at :: fn(log: u8[], at: u64, used: u64) -> Logged? {
  * @param number A logged OpenFile's creation value, which its client may have written anything to.
  * @return New for 2, Either for 3, Truncate for 4, and Existing for anything else.
  */
-creation_of :: fn(number: u32) -> files.Creation {
+creation_of :: fn(number : u32) -> files.Creation {
     return if number == 2 { .New } else if number == 3 { .Either } else if number == 4 { .Truncate } else { .Existing }
 }
 
@@ -349,7 +377,7 @@ creation_of :: fn(number: u32) -> files.Creation {
  *     read (its client ended, or the memory's gone), InvalidPath for a log that doesn't hold together or no such
  *     transaction, or why a change couldn't be applied.
  */
-commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response {
+commit_transaction :: fn(server : ptr[mut Server], index : usize) -> dir.Response {
     defer reset(server, index)
     if index >= server.transactions.count {
         return .Failed(.InvalidPath)
@@ -425,7 +453,7 @@ commit_transaction :: fn(server: ptr[mut Server], index: usize) -> dir.Response 
  * @param logged The change, as logged_at read it; its paths and data are views into the copy of the client's log.
  * @return Null once it's applied; why not, otherwise, InvalidPath for an op that isn't one.
  */
-apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> files.FileError? {
+apply :: fn(server : ptr[mut Server], directory : u64, logged : ptr[Logged]) -> files.FileError? {
     volume :: server.volume
     if logged.op == cast[u32](Op.OpenFile) {
         match open_file_object(volume, directory, logged.path, creation_of(logged.creation), no_schema()) {
@@ -439,8 +467,12 @@ apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> fil
             case Ok(found) => object = found
             case Error(error) => return file_error(error)
         }
-        result :: if logged.op == cast[u32](Op.Write) { slopfs.write(volume, object, logged.number, logged.data) }
-            else { slopfs.set_size(volume, object, logged.number) }
+        result :: if logged.op == cast[u32](Op.Write) {
+            slopfs.write(volume, object, logged.number, logged.data)
+        }
+        else {
+            slopfs.set_size(volume, object, logged.number)
+        }
         match result {
             case Ok => return null
             case Error(error) => return file_error(error)
@@ -466,7 +498,7 @@ apply :: fn(server: ptr[mut Server], directory: u64, logged: ptr[Logged]) -> fil
  *     and its commit_at cleared.
  * @param committed The volume's record as last committed.
  */
-undo :: fn(server: ptr[mut Server], committed: slopfs.VolumeRecord) {
+undo :: fn(server : ptr[mut Server], committed : slopfs.VolumeRecord) {
     _ = ask(server, .Abandon)
     slopfs.forget(server.volume, committed)
     server.commit_at = 0
@@ -482,9 +514,11 @@ undo :: fn(server: ptr[mut Server], committed: slopfs.VolumeRecord) {
  * @param skip The slot of a connection not counted; one past them for none.
  * @return Whether any connection but skip's, a file's, a read-only file's or a replacement's, is to object.
  */
-has_open :: fn(server: ptr[Server], object: u64, skip: usize) -> bool {
+has_open :: fn(server : ptr[Server], object : u64, skip : usize) -> bool {
     for connection, i in server.connections {
-        if i < server.count && i != skip && connection.object == object
+        if i < server.count
+            && i != skip
+            && connection.object == object
             && (connection.kind == .File || connection.kind == .ReadOnlyFile || connection.kind == .Replacement) {
             return true
         }
@@ -499,7 +533,7 @@ has_open :: fn(server: ptr[Server], object: u64, skip: usize) -> bool {
  * @param object The object; 0 for none.
  * @param skip The slot of a connection not counted, as the one closing; one past them for none.
  */
-release_if_unused :: fn(server: ptr[mut Server], object: u64, skip: usize) {
+release_if_unused :: fn(server : ptr[mut Server], object : u64, skip : usize) {
     if object == 0 || has_open(server, object, skip) {
         return void
     }
@@ -522,7 +556,7 @@ release_if_unused :: fn(server: ptr[mut Server], object: u64, skip: usize) {
  * @param path The path of what's removed, relative to directory.
  * @return Null once it's removed, durable with the volume's next commit; why not, otherwise.
  */
-removed :: fn(server: ptr[mut Server], directory: u64, path: string) -> files.FileError? {
+removed :: fn(server : ptr[mut Server], directory : u64, path : string) -> files.FileError? {
     volume :: server.volume
     match slopfs.leaf_of(volume, directory, path) {
         case Ok(leaf) => {
@@ -547,7 +581,7 @@ removed :: fn(server: ptr[mut Server], directory: u64, path: string) -> files.Fi
  * @return OpenedFile with the replacement's connection, which the caller sends; Failed with NoSpace without a channel
  *     or a slot, the orphan given back, or why the path couldn't be followed or the orphan made.
  */
-replacement_of :: fn(server: ptr[mut Server], directory: u64, path: string) -> dir.Response {
+replacement_of :: fn(server : ptr[mut Server], directory : u64, path : string) -> dir.Response {
     volume :: server.volume
     leaf := slopfs.Leaf.{}
     match slopfs.leaf_of(volume, directory, path) {
@@ -584,7 +618,7 @@ replacement_of :: fn(server: ptr[mut Server], directory: u64, path: string) -> d
  * @param index The replacement's connection's slot.
  * @return Null once it's installed and committed; DeviceError if the commit failed, or why it couldn't be installed.
  */
-installed :: fn(server: ptr[mut Server], index: usize) -> files.FileError? {
+installed :: fn(server : ptr[mut Server], index : usize) -> files.FileError? {
     if index >= server.connections.count {
         return files.FileError.InvalidPath
     }
@@ -612,7 +646,7 @@ installed :: fn(server: ptr[mut Server], index: usize) -> files.FileError? {
  *     walked back to; UpToDate past the last; Resync for a cursor older than the history kept; each with the next
  *     cursor. Failed if the history couldn't be read.
  */
-changes_of :: fn(server: ptr[mut Server], directory: u64, cursor: u64, out: ptr[mut os.Outgoing]) -> dir.Response {
+changes_of :: fn(server : ptr[mut Server], directory : u64, cursor : u64, out : ptr[mut os.Outgoing]) -> dir.Response {
     volume :: server.volume
     name : u8[slopfs.NAME_BYTES]
     found := slopfs.ChangesFound.{}
@@ -652,7 +686,7 @@ changes_of :: fn(server: ptr[mut Server], directory: u64, cursor: u64, out: ptr[
  * @return Its length in bytes; 0 if object isn't beneath directory any more, is deeper than 16, a name on the way
  *     can't be found, the path doesn't fit, or object is directory.
  */
-path_to :: fn(server: ptr[mut Server], directory: u64, object: u64, path: mut u8[]) -> usize {
+path_to :: fn(server : ptr[mut Server], directory : u64, object : u64, path : mut u8[]) -> usize {
     volume :: server.volume
     names : u64[16]
     depth : usize = 0
@@ -713,7 +747,7 @@ path_to :: fn(server: ptr[mut Server], directory: u64, object: u64, path: mut u8
  * @param name Where the name goes, slopfs.NAME_BYTES long.
  * @return Its length in bytes in name; null if it isn't in the directory, or the directory couldn't be listed.
  */
-name_in :: fn(volume: ptr[mut slopfs.Volume], directory: u64, object: u64, name: mut u8[]) -> usize? {
+name_in :: fn(volume : ptr[mut slopfs.Volume], directory : u64, object : u64, name : mut u8[]) -> usize? {
     cursor : u64 = 0
     loop {
         listed :: slopfs.list(volume, directory, cursor, name) or_return null
@@ -736,7 +770,12 @@ name_in :: fn(volume: ptr[mut slopfs.Volume], directory: u64, object: u64, name:
  * @return Began with the transaction's connection, which the caller sends; Failed with NoBuffer if it couldn't be
  *     begun, or NoSpace without a channel or a slot.
  */
-transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: slop_os.Memory, name: string) -> dir.Response {
+transaction_connection :: fn(
+    server : ptr[mut Server],
+    directory : u64,
+    memory : slop_os.Memory,
+    name : string
+) -> dir.Response {
     began := begin(server, directory, memory) or_else MAX_TRANSACTIONS
     if began >= MAX_TRANSACTIONS {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
@@ -772,14 +811,20 @@ transaction_connection :: fn(server: ptr[mut Server], directory: u64, memory: sl
  * @return OpenedFile with the connection, which the caller sends; Failed with InvalidPath for an empty path or no such
  *     transaction, or NoSpace if the log is full, the volume couldn't commit, or there's no channel or slot.
  */
-open_in_transaction :: fn(server: ptr[mut Server], index: usize, path: string, creation: files.Creation) -> dir.Response {
+open_in_transaction :: fn(
+    server : ptr[mut Server],
+    index : usize,
+    path : string,
+    creation : files.Creation
+) -> dir.Response {
     if index >= server.transactions.count {
         return .Failed(.InvalidPath)
     }
     if path.count == 0 {
         return .Failed(.InvalidPath)
     }
-    if !note_versions(server, index, path) || !log_op(server, index, .OpenFile, cast[u32](creation), 0, path, "", nothing()) {
+    if !note_versions(server, index, path)
+        || !log_op(server, index, .OpenFile, cast[u32](creation), 0, path, "", nothing()) {
         return .Failed(.NoSpace)
     }
     object :: slopfs.resolve(server.volume, server.transactions[index].directory, path) or_else 0

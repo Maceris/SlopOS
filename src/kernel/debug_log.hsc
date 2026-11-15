@@ -28,7 +28,7 @@ DebugLog :: struct #align(16) {
  *     (the object is destroyed again); or if the handle couldn't be installed, when the object stays owned by the
  *     process, without a handle, until the process is destroyed.
  */
-create_debug_log :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> slop_os.Handle? {
+create_debug_log :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) -> slop_os.Handle? {
     object :: new_object(kernel, .DebugLog, kernel.root_budget, 0) or_return null
     match adopt(cast[u64](process), object) {
         case Ok => {}
@@ -47,8 +47,7 @@ create_debug_log :: fn(kernel: ptr[mut Kernel], process: ptr[mut Process]) -> sl
  *     of the kernel's.
  * @param log The log being destroyed, already dying; its memory stays its kind's until the grace period passes.
  */
-destroy_debug_log :: fn(kernel: ptr[mut Kernel], log: ptr[mut DebugLog]) {
-}
+destroy_debug_log :: fn(kernel : ptr[mut Kernel], log : ptr[mut DebugLog]) {}
 
 /**
  * Release a debug log's memory-held state, at release_object: nothing to do, as it has none.
@@ -57,8 +56,7 @@ destroy_debug_log :: fn(kernel: ptr[mut Kernel], log: ptr[mut DebugLog]) {
  *     of the kernel's.
  * @param log The log, destroyed and past its grace period; release_object frees its slot after this returns.
  */
-release_debug_log :: fn(kernel: ptr[mut Kernel], log: ptr[mut DebugLog]) {
-}
+release_debug_log :: fn(kernel : ptr[mut Kernel], log : ptr[mut DebugLog]) {}
 
 /**
  * Write a line in the kernel's log for a thread's process (the debug_log system call).
@@ -77,9 +75,18 @@ release_debug_log :: fn(kernel: ptr[mut Kernel], log: ptr[mut DebugLog]) {
  * @error ObjectGone The log is being destroyed.
  * @error BadBuffer The text isn't readable in the thread's address space; nothing is written.
  */
-sys_debug_log :: fn(thread: ptr[mut Thread], log: slop_os.DebugLog, text: slop_os.UserBuffer) -> Result[void, slop_os.HandleError] {
+sys_debug_log :: fn(
+    thread : ptr[mut Thread],
+    log : slop_os.DebugLog,
+    text : slop_os.UserBuffer
+) -> Result[void, slop_os.HandleError] {
     kernel :: per_cpu().kernel
-    _ = object_of[slop_os.HandleError](process_of(thread), cast[slop_os.Handle](log), .DebugLog, slop_os.RIGHT_DEBUG_LOG_WRITE)?
+    _ = object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](log),
+        .DebugLog,
+        slop_os.RIGHT_DEBUG_LOG_WRITE
+    )?
     bytes : u8[slop_os.DEBUG_LOG_LINE]
     count :: min_u64(text.count, slop_os.DEBUG_LOG_LINE)
     if count > 0 && !copy_from_user(kernel, thread.space, text.address, cast[u64](&bytes[0]), count) {

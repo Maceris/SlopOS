@@ -13,9 +13,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /** How far its thread counts before it's destroyed. */
@@ -34,7 +34,7 @@ Given :: struct {
  *
  * @param counter The count, which only this thread writes; it wraps after 2^64 counts.
  */
-count_forever #calling_convention(.c) #no_context :: fn(counter: ptr[mut u64]) #never_returns {
+count_forever #calling_convention(.c) #no_context :: fn(counter : ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(counter, intrinsics.volatile_load_u64(counter) + 1)
     }
@@ -46,11 +46,25 @@ count_forever #calling_convention(.c) #no_context :: fn(counter: ptr[mut u64]) #
  * @param t The test's state.
  * @return Ok once it's run; Error if the handle couldn't be looked up.
  */
-its_address_space_handle_has_every_right #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+its_address_space_handle_has_every_right #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
-    info :: testing.require_ok(t, slop_os.handle_info(cast[slop_os.Handle](block.space)), "the startup block's address space handle is one the process holds")?
-    testing.expect_eq(t, info.kind, slop_os.ObjectKind.AddressSpace, "the startup block's space handle reaches the process's address space")
-    testing.expect_eq(t, info.rights, slop_os.RIGHTS_ALL, "the process's own address space handle is given with every right")
+    info :: testing.require_ok(
+        t,
+        slop_os.handle_info(cast[slop_os.Handle](block.space)),
+        "the startup block's address space handle is one the process holds"
+    )?
+    testing.expect_eq(
+        t,
+        info.kind,
+        slop_os.ObjectKind.AddressSpace,
+        "the startup block's space handle reaches the process's address space"
+    )
+    testing.expect_eq(
+        t,
+        info.rights,
+        slop_os.RIGHTS_ALL,
+        "the process's own address space handle is given with every right"
+    )
     return .Ok
 }
 
@@ -61,19 +75,33 @@ its_address_space_handle_has_every_right #test :: fn(t: ptr[mut testing.T]) -> t
  * @param t The test's state.
  * @return Ok once it's run; Error if the copy couldn't be made.
  */
-a_copy_has_only_the_rights_asked_for_and_closes_once #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_copy_has_only_the_rights_asked_for_and_closes_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     space :: cast[slop_os.Handle](block.space)
-    copied :: testing.require_ok(t, slop_os.handle_duplicate(space, slop_os.RIGHT_DUPLICATE), "a handle with RIGHT_DUPLICATE can be copied with fewer rights")?
+    copied :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(space, slop_os.RIGHT_DUPLICATE),
+        "a handle with RIGHT_DUPLICATE can be copied with fewer rights"
+    )?
     copied_info :: slop_os.handle_info(copied) or_else slop_os.HandleInfo.{}
     testing.expect_eq(t, copied_info.rights, slop_os.RIGHT_DUPLICATE, "a copy has just the rights it was asked for")
     more :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
     widened :: slop_os.handle_duplicate(copied, more)
-    testing.expect_error(t, widened, slop_os.HandleError.MissingRight, "a copy can't ask for a right its source doesn't have")
+    testing.expect_error(
+        t,
+        widened,
+        slop_os.HandleError.MissingRight,
+        "a copy can't ask for a right its source doesn't have"
+    )
     closed :: slop_os.handle_close(copied)
     testing.expect_ok(t, closed, "the copy closes")
     closed_again :: slop_os.handle_close(copied)
-    testing.expect_error(t, closed_again, slop_os.HandleError.InvalidHandle, "a closed handle is no handle, so closing it again is refused")
+    testing.expect_error(
+        t,
+        closed_again,
+        slop_os.HandleError.InvalidHandle,
+        "a closed handle is no handle, so closing it again is refused"
+    )
     return .Ok
 }
 
@@ -85,7 +113,7 @@ a_copy_has_only_the_rights_asked_for_and_closes_once #test :: fn(t: ptr[mut test
  * @param t The test's state.
  * @return Ok once it's run; Error if the count's memory, the budget or the thread couldn't be made.
  */
-closing_an_owning_handle_destroys_its_object #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+closing_an_owning_handle_destroys_its_object #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()
     counters, error :: runtime.new_array(u64, 1)
     if error != null || counters.count == 0 {
@@ -94,8 +122,16 @@ closing_an_owning_handle_destroys_its_object #test :: fn(t: ptr[mut testing.T]) 
     }
     counter :: &counters[0]
     // What it makes is charged to a budget of its own, which has to be back to nothing at the end
-    budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the thread and the process")?
-    thread :: testing.require_ok(t, test_kit.start_thread(budget, cast[u64](count_forever), cast[u64](counter)), "a thread of the program's own starts")?
+    budget :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 1 << 20),
+        "a budget for the thread and the process"
+    )?
+    thread :: testing.require_ok(
+        t,
+        test_kit.start_thread(budget, cast[u64](count_forever), cast[u64](counter)),
+        "a thread of the program's own starts"
+    )?
     made :: cast[slop_os.Handle](thread)
     watch :: slop_os.handle_duplicate(made, slop_os.RIGHT_DUPLICATE)
     testing.expect_ok(t, watch, "the thread's handle is copied, the copy not owning it")
@@ -111,13 +147,27 @@ closing_an_owning_handle_destroys_its_object #test :: fn(t: ptr[mut testing.T]) 
     thread_closed :: slop_os.handle_close(made)
     testing.expect_ok(t, thread_closed, "the thread's owning handle closes, destroying it")
     stale :: slop_os.handle_info(watch or_else slop_os.NO_HANDLE)
-    testing.expect_error(t, stale, slop_os.HandleError.ObjectGone, "a non-owning copy reaches nothing once the owning handle has destroyed its thread")
+    testing.expect_error(
+        t,
+        stale,
+        slop_os.HandleError.ObjectGone,
+        "a non-owning copy reaches nothing once the owning handle has destroyed its thread"
+    )
     stopped :: intrinsics.volatile_load_u64(counter)
     test_kit.wait_nanoseconds(50_000_000)
-    testing.expect_eq(t, intrinsics.volatile_load_u64(counter), stopped, "a destroyed thread is never run again, so its count stands still")
+    testing.expect_eq(
+        t,
+        intrinsics.volatile_load_u64(counter),
+        stopped,
+        "a destroyed thread is never run again, so its count stands still"
+    )
     _ = slop_os.handle_close(watch or_else slop_os.NO_HANDLE)
     // What the thread and the process charged comes back, after a grace period
-    testing.expect(t, test_kit.wait_for_budget(budget, 0, 1_000_000_000), "the budget is back to nothing once the thread and the process are destroyed")
+    testing.expect(
+        t,
+        test_kit.wait_for_budget(budget, 0, 1_000_000_000),
+        "the budget is back to nothing once the thread and the process are destroyed"
+    )
     return .Ok
 }
 
@@ -136,8 +186,16 @@ closing_an_owning_handle_destroys_its_object #test :: fn(t: ptr[mut testing.T]) 
  * @param cpu_budget Not used.
  * @return How many tests failed: 0 when every one passed.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     given :: Given.{log = log}
     return test_kit.run(log, NAME, #insert testing.tests_of(compiler.load_package(".")), given)
 }

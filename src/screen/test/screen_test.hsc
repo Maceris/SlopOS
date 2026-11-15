@@ -6,8 +6,8 @@
  */
 package screen_test
 
-import testing from "std:testing"
 import terminal from "std:os/slop_os/terminal"
+import testing from "std:testing"
 import screen from ".."
 
 /**
@@ -19,7 +19,7 @@ import screen from ".."
  * @return The cell's cluster, a view of the grid's bytes, good until the cell changes; empty for an empty cell or one
  *     past the grid.
  */
-text_at :: fn(grid: ptr[mut screen.Grid], row: u16, column: u16) -> string {
+text_at :: fn(grid : ptr[mut screen.Grid], row : u16, column : u16) -> string {
     found :: screen.cell(grid, row, column) or_return ""
     if found.count == 0 || cast[usize](found.count) > found.bytes.count {
         return ""
@@ -27,7 +27,7 @@ text_at :: fn(grid: ptr[mut screen.Grid], row: u16, column: u16) -> string {
     return string_of(&found.bytes[0], cast[usize](found.count))
 }
 
-clusters_go_where_the_cursor_is #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+clusters_go_where_the_cursor_is #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shown := screen.Screen.{}
     plain :: terminal.Style.{}
     grid :: &shown.lines
@@ -45,7 +45,7 @@ clusters_go_where_the_cursor_is #test :: fn(t: ptr[mut testing.T]) -> testing.Ou
     return .Ok
 }
 
-a_wide_cluster_that_does_not_fit_wraps_whole #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_wide_cluster_that_does_not_fit_wraps_whole #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shown := screen.Screen.{}
     plain :: terminal.Style.{}
     grid :: &shown.lines
@@ -58,7 +58,7 @@ a_wide_cluster_that_does_not_fit_wraps_whole #test :: fn(t: ptr[mut testing.T]) 
     return .Ok
 }
 
-a_line_break_at_the_bottom_scrolls_everything_up #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_line_break_at_the_bottom_scrolls_everything_up #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shown := screen.Screen.{}
     plain :: terminal.Style.{}
     grid :: &shown.lines
@@ -76,7 +76,9 @@ a_line_break_at_the_bottom_scrolls_everything_up #test :: fn(t: ptr[mut testing.
     return .Ok
 }
 
-a_whole_screen_starts_blank_and_leaving_it_finds_the_lines_as_they_were #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_whole_screen_starts_blank_and_leaving_it_finds_the_lines_as_they_were #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     shown := screen.Screen.{}
     plain :: terminal.Style.{}
     grid :: &shown.lines
@@ -93,12 +95,17 @@ a_whole_screen_starts_blank_and_leaving_it_finds_the_lines_as_they_were #test ::
     testing.expect_eq(t, text_at(&shown.whole, 0, 0), "w", "writing goes to the whole screen, from its corner")
     testing.expect_eq(t, text_at(&shown.whole, 2, 4), "x", "move takes a column, then a row")
     screen.use_whole(&shown, false)
-    testing.expect_eq(t, text_at(grid, screen.PROGRAM_ROWS - 2, 0), "z", "the lines weren't touched while it was in use")
+    testing.expect_eq(
+        t,
+        text_at(grid, screen.PROGRAM_ROWS - 2, 0),
+        "z",
+        "the lines weren't touched while it was in use"
+    )
     testing.expect_eq(t, text_at(grid, 0, 1), "中", "nor their first row")
     return .Ok
 }
 
-areas_scroll_and_clear #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+areas_scroll_and_clear #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shown := screen.Screen.{}
     plain :: terminal.Style.{}
     screen.use_whole(&shown, true)
@@ -109,13 +116,18 @@ areas_scroll_and_clear #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
     screen.scroll(&shown.whole, 0, 3, -1)
     testing.expect_eq(t, text_at(&shown.whole, 1, 0), "w", "scrolling rows 0 to 2 down moves row 0 to row 1")
     testing.expect_eq(t, text_at(&shown.whole, 0, 0), "", "and leaves row 0 empty")
-    testing.expect_eq(t, text_at(&shown.whole, 2, 4), "", "row 2 moved down, out of the area, and row 1's empty cell took its place")
+    testing.expect_eq(
+        t,
+        text_at(&shown.whole, 2, 4),
+        "",
+        "row 2 moved down, out of the area, and row 1's empty cell took its place"
+    )
     screen.clear(&shown.whole, terminal.Area.{column = 0, row = 1, columns = 1, rows = 1})
     testing.expect_eq(t, text_at(&shown.whole, 1, 0), "", "clearing a cell empties it")
     return .Ok
 }
 
-the_status_line_is_marked_only_when_it_changes #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+the_status_line_is_marked_only_when_it_changes #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     shown := screen.Screen.{}
     screen.set_status(&shown, "one")
     shown.status_dirty = false

@@ -2,9 +2,9 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../arch_interface"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -23,7 +23,7 @@ import slop_os from "std:os/slop_os"
  * by thread_exit, takes it off its run queue at once. A CPU running it sees it's dying at its next
  * entry and doesn't resume it (scheduler.hsc).
  */
-//TODO(claude): blocking threads on ports (M5, ports)
+// TODO(claude): blocking threads on ports (M5, ports)
 
 /** Where a thread is in the scheduler's eyes. */
 ThreadState :: enum #backed_by(u8) {
@@ -57,16 +57,21 @@ Thread :: struct #align(16) {
     budget_next : u64,
     /** The previous thread on its CPU budget's list, 0 at the start; under kernel.cpu_budgets_lock. */
     budget_previous : u64,
-    /** Its per-thread page's frame, as a physical address, 0 for none (thread_pages.hsc); only its own thread sets it. */
+    /**
+     * Its per-thread page's frame, as a physical address, 0 for none (thread_pages.hsc); only its own thread sets it.
+     */
     page_frame : u64,
-    /** The memory object the page is part of, as an address: the page is read only while it's live at page_generation. */
+    /**
+     * The memory object the page is part of, as an address: the page is read only while it's live at page_generation.
+     */
     page_memory : u64,
     /** The budget handle the page held when it was last resolved, 0 for its process's own (bind_from_page). */
     page_seen : u32,
     /** page_memory's generation when the page was given. */
     page_generation : u32,
     /**
-     * Its shadow stack's slot in its process's region plus 1, 0 for none (shadow_stacks.hsc, decisions/0186); its memory
+     * Its shadow stack's slot in its process's region plus 1, 0 for none (shadow_stacks.hsc, decisions/0186); its
+     * memory
      * is what's mapped there.
      */
     shadow_slot : u32,
@@ -124,7 +129,9 @@ Thread :: struct #align(16) {
     wait_sequence : u64,
     /** The timer that ends its wait at wait_deadline (timers.hsc). */
     wait_timer : TimerEntry,
-    /** Its debugging state, which a debugger sets (thread_set_debug) and returning to user mode loads; none at first. */
+    /**
+     * Its debugging state, which a debugger sets (thread_set_debug) and returning to user mode loads; none at first.
+     */
     debug : arch.DebugRegisters,
     /**
      * Whether it single-steps (thread_set_debug), when its own debugging state is loaded rather than its process's, so
@@ -205,12 +212,21 @@ ThreadError :: enum {
  * @error BudgetExceeded memory_budget can't pay for it.
  * @error OwnerGone Its owner or its address space is being destroyed; the thread was destroyed again.
  */
-create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[mut AddressSpace], start: ptr[arch_interface.UserStart],
-    config: arch_interface.VectorConfig, budget: u64, memory_budget: u64) -> Result[ptr[mut Thread], ThreadError] {
+create_thread :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    space #escaping : ptr[mut AddressSpace],
+    start : ptr[arch_interface.UserStart],
+    config : arch_interface.VectorConfig,
+    budget : u64,
+    memory_budget : u64
+) -> Result[ptr[mut Thread], ThreadError] {
     object := cast[u64](0)
     match new_object(kernel, .Thread, memory_budget, cast[u64](arch.vector_state_size(config))) {
         case Ok(address) => object = address
-        case Error(error) => return .Error(if error == .BudgetExceeded { ThreadError.BudgetExceeded } else { ThreadError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(if error == .BudgetExceeded { ThreadError.BudgetExceeded } else { ThreadError.OutOfMemory })
     }
     thread :: cast[ptr[mut Thread]](object)
     vector, error :: runtime.new_array_aligned(u8, arch.vector_state_size(config), arch.vector_state_alignment())
@@ -265,13 +281,18 @@ create_thread :: fn(kernel: ptr[mut Kernel], owner: u64, space #escaping : ptr[m
  * @param kernel The kernel, whose next_start_cpu is advanced, and the chosen CPU's run-queue lock taken.
  * @param thread The thread, made by create_thread and not yet started; started again, it isn't counted twice.
  */
-start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+start_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     owner :: thread.header.owner
     if owner != 0 && !thread.counted && cast[ptr[ObjectHeader]](owner).kind == .Process {
         thread.counted = true
         _ = intrinsics.interlocked_increment_u32(&cast[ptr[mut Process]](owner).live_threads)
     }
-    cpus :: if thread.budget != 0 { intrinsics.atomic_load_u64_acquire(&cast[ptr[mut CpuTime]](thread.budget).cpus) } else { ~cast[u64](0) }
+    cpus :: if thread.budget != 0 {
+        intrinsics.atomic_load_u64_acquire(&cast[ptr[mut CpuTime]](thread.budget).cpus)
+    }
+    else {
+        ~cast[u64](0)
+    }
     cpu :: next_cpu_of(kernel, &kernel.next_start_cpu, cpus)
     intrinsics.atomic_store_u32_release(&thread.cpu, cpu)
     if stop_thread(kernel, thread, .ThreadStart, 0, 0, false) {
@@ -292,7 +313,7 @@ start_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  *     control lock and its CPU's run-queue lock are each taken in turn; called during destroy_object.
  * @param thread The thread, already dying, its generation advanced.
  */
-destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+destroy_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     release_shadow_stack(kernel, thread)
     leave_thread_budget(kernel, thread)
     cancel_wait(kernel, thread)
@@ -337,7 +358,7 @@ destroy_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @param kernel The kernel, for destroying the process later (destroy_later), on this CPU's doomed list.
  * @param thread The thread that's going; one never started, or already uncounted, changes nothing.
  */
-end_process_if_last :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+end_process_if_last :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     if !thread.counted {
         return void
     }
@@ -356,9 +377,12 @@ end_process_if_last :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @param kernel The kernel, unused; the vector state goes back to the context's allocator, the kernel heap.
  * @param thread The thread, its grace period over, or one create_thread is letting go of before it had vector state.
  */
-release_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+release_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     if thread.vector != 0 {
-        runtime.free_array_aligned(view_of(cast[ptr[u8]](thread.vector), cast[usize](thread.vector_size)), arch.vector_state_alignment())
+        runtime.free_array_aligned(
+            view_of(cast[ptr[u8]](thread.vector), cast[usize](thread.vector_size)),
+            arch.vector_state_alignment()
+        )
         thread.vector = 0
     }
 }
@@ -369,7 +393,7 @@ release_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @param object The object's address, a slot of a type-stable pool.
  * @return True once its destruction has started, with a plain atomic load: it can become true the moment after false.
  */
-is_dying :: fn(object: u64) -> bool {
+is_dying :: fn(object : u64) -> bool {
     header :: cast[ptr[ObjectHeader]](object)
     return intrinsics.atomic_load_u32(&header.dying) != 0
 }
@@ -380,7 +404,7 @@ is_dying :: fn(object: u64) -> bool {
  * @param registers The registers, on this CPU's kernel stack; copied, so they needn't outlive the call. With no
  *     current thread, as when idle, nothing is kept.
  */
-save_user_registers :: fn(registers: ptr[arch.UserRegisters]) {
+save_user_registers :: fn(registers : ptr[arch.UserRegisters]) {
     cpu :: per_cpu()
     if cpu.current != 0 {
         cast[ptr[mut Thread]](cpu.current).registers = registers^

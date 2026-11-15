@@ -2,10 +2,10 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../arch_interface"
 import concurrency from "std:concurrency"
 import maps from "std:maps"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
 import slab from "slab"
 
 #if TARGET_ARCH == .x86_64 {
@@ -30,7 +30,10 @@ import slab from "slab"
  * wait when it next runs (complete_wait, from the scheduler): it takes the packets then, or blocks
  * again if another waiter took them first.
  */
-//TODO(claude): slack, to coalesce timers (knowledge/design/scheduling.md §2, Timers); bindings charged to a budget (M5, budgets)
+/*
+ * TODO(claude): slack, to coalesce timers (knowledge/design/scheduling.md §2, Timers); bindings charged to a budget
+ * (M5, budgets)
+ */
 
 /** What raises a binding's packet, which says what its data holds and which PacketKind its packet reports. */
 BindingKind :: enum #backed_by(u8) {
@@ -121,7 +124,7 @@ Port :: struct #align(16) {
  * @return BudgetExceeded if the port's memory budget couldn't pay for the binding, OutOfMemory if the binding pool
  *     couldn't give a slot or the port's map couldn't grow.
  */
-binding_failure :: fn(port: ptr[Port]) -> slop_os.PortError {
+binding_failure :: fn(port : ptr[Port]) -> slop_os.PortError {
     return if port.short_of_budget { slop_os.PortError.BudgetExceeded } else { slop_os.PortError.OutOfMemory }
 }
 
@@ -150,7 +153,7 @@ WaitOutcome :: union {
  * @error BudgetExceeded The budget couldn't pay for the port.
  * @error OwnerGone The owner is being destroyed; the port was destroyed again.
  */
-create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[ptr[mut Port], ObjectError] {
+create_port :: fn(kernel : ptr[mut Kernel], owner : u64, budget : u64) -> Result[ptr[mut Port], ObjectError] {
     object :: new_object(kernel, .Port, budget, 0)?
     port :: cast[ptr[mut Port]](object)
     match adopt(owner, object) {
@@ -175,7 +178,7 @@ create_port :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64) -> Result[pt
  *     port is being destroyed, KeyInUse if key is bound already, of any kind, or BudgetExceeded or OutOfMemory as
  *     binding_failure says.
  */
-port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
+port_bind_wake :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], key : u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
@@ -202,7 +205,7 @@ port_bind_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> 
  * @return Null once the bits are raised; ObjectGone if the port is being destroyed, or NoSuchKey if key isn't bound or
  *     isn't a wake binding.
  */
-port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u64) -> slop_os.PortError? {
+port_wake :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], key : u64, bits : u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
@@ -231,7 +234,7 @@ port_wake :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, bits: u6
  *     kind of binding, BudgetExceeded or OutOfMemory if a new binding couldn't be made (binding_failure), or
  *     OutOfMemory if the CPU's timer heap couldn't grow, when the binding stays, with its deadline but unarmed.
  */
-port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, deadline: u64) -> slop_os.PortError? {
+port_set_timer :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], key : u64, deadline : u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
@@ -272,7 +275,7 @@ port_set_timer :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, dea
  * @param key The key of a binding of any kind on the port.
  * @return Null once it's unbound; ObjectGone if the port is being destroyed, or NoSuchKey if key isn't bound.
  */
-port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slop_os.PortError? {
+port_unbind :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], key : u64) -> slop_os.PortError? {
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
     if is_dying(cast[u64](port)) {
@@ -304,8 +307,14 @@ port_unbind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64) -> slo
  *     capacity is 0, BadBuffer if buffer isn't writable user memory, or ObjectGone if the port is being destroyed; or
  *     Blocked if the thread waits.
  */
-port_wait_begin :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], port: ptr[mut Port], buffer: u64, capacity: u32,
-    deadline: u64) -> WaitOutcome {
+port_wait_begin :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    port : ptr[mut Port],
+    buffer : u64,
+    capacity : u32,
+    deadline : u64
+) -> WaitOutcome {
     count :: if capacity < slop_os.MAX_PACKETS_PER_WAIT { capacity } else { slop_os.MAX_PACKETS_PER_WAIT }
     if count == 0 {
         return .Failed(.BufferTooSmall)
@@ -343,7 +352,7 @@ port_wait_begin :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], port: pt
  *     result registers, and it can run; false if it found nothing before its deadline and blocked again, when it has
  *     left the CPU.
  */
-complete_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> bool {
+complete_wait :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) -> bool {
     match finish_or_block(kernel, thread) {
         case Some(outcome) => {
             match outcome {
@@ -365,7 +374,7 @@ complete_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> bool {
  *     ChannelNotifyAndWait, which shares its tags).
  * @param value The first result value: the packet count on success, 0 otherwise.
  */
-set_wait_result :: fn(thread: ptr[mut Thread], tag: u64, value: u64) {
+set_wait_result :: fn(thread : ptr[mut Thread], tag : u64, value : u64) {
     result :: arch_interface.SyscallResult.{tag = tag, values = u64.[value, 0]}
     arch.set_syscall_result(&thread.registers, &result)
 }
@@ -385,7 +394,7 @@ set_wait_result :: fn(thread: ptr[mut Thread], tag: u64, value: u64) {
  *     with ObjectGone if the port was destroyed (or its slot reused), or Failed with BadBuffer if the packets taken
  *     couldn't be written, when they're lost. Null when the thread blocked, waiting on the port.
  */
-finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitOutcome? {
+finish_or_block :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) -> WaitOutcome? {
     port :: cast[ptr[mut Port]](thread.wait_port)
     packets : slop_os.Packet[slop_os.MAX_PACKETS_PER_WAIT]
     lock_at(&port.lock, .Port)
@@ -398,7 +407,13 @@ finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitO
     if taken > 0 {
         unlock_at(&port.lock, .Port)
         thread.wait_port = 0
-        if !copy_to_user(kernel, thread.space, thread.wait_buffer, cast[u64](&packets[0]), cast[u64](taken) * cast[u64](size_of(slop_os.Packet))) {
+        if !copy_to_user(
+            kernel,
+            thread.space,
+            thread.wait_buffer,
+            cast[u64](&packets[0]),
+            cast[u64](taken) * cast[u64](size_of(slop_os.Packet))
+        ) {
             return WaitOutcome.Failed(.BadBuffer)
         }
         return WaitOutcome.Done(taken)
@@ -420,7 +435,8 @@ finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitO
     if thread.wait_deadline != slop_os.NO_DEADLINE {
         thread.wait_timer.kind = .WaitTimeout
         thread.wait_timer.owner = cast[u64](thread)
-        thread.wait_timer.owner_generation = (cast[u64](thread.header.generation) << 32) | (thread.wait_sequence & 0xffffffff)
+        thread.wait_timer.owner_generation = (cast[u64](thread.header.generation) << 32)
+            | (thread.wait_sequence & 0xffffffff)
         thread.wait_timer.port = cast[u64](port)
         // Without memory for the timer, it waits without its deadline rather than fail
         _ = arm_timer(&thread.wait_timer, thread.wait_deadline)
@@ -441,7 +457,11 @@ finish_or_block :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) -> WaitO
  * @param capacity The most packets to take; at most slop_os.MAX_PACKETS_PER_WAIT are, and 0 takes none.
  * @return How many packets were taken and written, from 0 when no binding is ready.
  */
-take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.MAX_PACKETS_PER_WAIT]], capacity: u32) -> u32 {
+take_packets :: fn(
+    port : ptr[mut Port],
+    packets : ptr[mut slop_os.Packet[slop_os.MAX_PACKETS_PER_WAIT]],
+    capacity : u32
+) -> u32 {
     taken : u32 = 0
     loop {
         binding :: cast[ptr[mut Binding]](port.ready_first)
@@ -477,7 +497,7 @@ take_packets :: fn(port: ptr[mut Port], packets: ptr[mut slop_os.Packet[slop_os.
  * @param port The port binding belongs to, whose lock the caller holds; its ready list gains binding at the end.
  * @param binding The binding, whose data the caller has already updated.
  */
-queue_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {
+queue_binding :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], binding : ptr[mut Binding]) {
     if binding.queued {
         return void
     }
@@ -502,7 +522,7 @@ queue_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[m
  * @param port The port binding belongs to, whose lock the caller holds; its ready list loses binding, if it's on it.
  * @param binding The binding, queued or not.
  */
-unqueue :: fn(port: ptr[mut Port], binding: ptr[mut Binding]) {
+unqueue :: fn(port : ptr[mut Port], binding : ptr[mut Binding]) {
     if !binding.queued {
         return void
     }
@@ -532,7 +552,7 @@ unqueue :: fn(port: ptr[mut Port], binding: ptr[mut Binding]) {
  *     ready on a run queue.
  * @param port The port, whose lock the caller holds; one with no waiters is left as it is.
  */
-wake_waiter :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
+wake_waiter :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port]) {
     first :: port.waiters
     if first == 0 {
         return void
@@ -552,7 +572,7 @@ wake_waiter :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
  * @param port The port, whose lock the caller holds.
  * @param thread The thread, blocked, and not on any port's waiters.
  */
-push_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
+push_waiter :: fn(port : ptr[mut Port], thread : ptr[mut Thread]) {
     thread.wait_previous = 0
     thread.wait_next = port.waiters
     if port.waiters != 0 {
@@ -570,7 +590,7 @@ push_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
  * @param port The port the thread waits on.
  * @param thread The thread, waiting or not.
  */
-unlink_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
+unlink_waiter :: fn(port : ptr[mut Port], thread : ptr[mut Thread]) {
     if !thread.waiting {
         return void
     }
@@ -597,12 +617,14 @@ unlink_waiter :: fn(port: ptr[mut Port], thread: ptr[mut Thread]) {
  *     the binding's generation then, and its port the binding's port. The binding's slot may have been freed or reused
  *     since; it's type-stable, so it's still a Binding.
  */
-fire_port_timer :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
+fire_port_timer :: fn(kernel : ptr[mut Kernel], fired : ptr[TimerEntry]) {
     port :: cast[ptr[mut Port]](fired.port)
     binding :: cast[ptr[mut Binding]](fired.owner)
     lock_at(&port.lock, .Port)
     defer unlock_at(&port.lock, .Port)
-    if is_dying(cast[u64](port)) || cast[u64](binding.generation) != fired.owner_generation || binding.port != cast[u64](port)
+    if is_dying(cast[u64](port))
+        || cast[u64](binding.generation) != fired.owner_generation
+        || binding.port != cast[u64](port)
         || binding.timer.index != NOT_QUEUED {
         return void
     }
@@ -620,7 +642,7 @@ fire_port_timer :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
  *     in the high 32 bits and its wait's sequence number in the low, and its port the port it waits on. A thread whose
  *     generation or wait has changed since is left alone.
  */
-fire_wait_timeout :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
+fire_wait_timeout :: fn(kernel : ptr[mut Kernel], fired : ptr[TimerEntry]) {
     port :: cast[ptr[mut Port]](fired.port)
     thread :: cast[ptr[mut Thread]](fired.owner)
     lock_at(&port.lock, .Port)
@@ -641,7 +663,7 @@ fire_wait_timeout :: fn(kernel: ptr[mut Kernel], fired: ptr[TimerEntry]) {
  * @param kernel The kernel, on one of whose per-CPU timer heaps the thread's deadline may be armed.
  * @param thread The thread being destroyed.
  */
-cancel_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+cancel_wait :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     port_address :: thread.wait_port
     if port_address == 0 {
         return void
@@ -662,7 +684,7 @@ cancel_wait :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @param kernel The kernel: waiters are made ready on its run queues, and bindings go back to its binding pool.
  * @param port The port being destroyed.
  */
-destroy_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
+destroy_port :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port]) {
     lock_at(&port.lock, .Port)
     loop {
         if port.waiters == 0 {
@@ -689,8 +711,7 @@ destroy_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
  * @param kernel The kernel; unused.
  * @param port The port, destroyed, about to go back to its pool.
  */
-release_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
-}
+release_port :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port]) {}
 
 /**
  * Find key's binding, if it's of kind.
@@ -702,7 +723,7 @@ release_port :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port]) {
  * @param kind The kind it has to be.
  * @return The binding, valid while the lock is held; null if key isn't bound, or is bound to another kind.
  */
-binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Binding]? {
+binding_of :: fn(port : ptr[mut Port], key : u64, kind : BindingKind) -> ptr[mut Binding]? {
     address :: maps.map_get(&port.bindings, key) or_return null
     binding :: cast[ptr[mut Binding]](address)
     return if binding.kind == kind { binding } else { null }
@@ -722,7 +743,7 @@ binding_of :: fn(port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Bi
  * @return The binding's port with its lock taken, for the caller to let go of; null, with no lock held, if the binding
  *     isn't that one any more or its port is being destroyed.
  */
-lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? {
+lock_bound_port :: fn(binding : ptr[Binding], generation : u32) -> ptr[mut Port]? {
     address :: intrinsics.atomic_load_u64(&binding.port)
     if address == 0 {
         return null
@@ -754,7 +775,7 @@ lock_bound_port :: fn(binding: ptr[Binding], generation: u32) -> ptr[mut Port]? 
  * @return The binding, which keeps its slot's generation; null if the budget couldn't pay for it, the pool had no slot,
  *     or the map couldn't grow, when nothing is left charged or allocated.
  */
-new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: BindingKind) -> ptr[mut Binding]? {
+new_binding :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], key : u64, kind : BindingKind) -> ptr[mut Binding]? {
     port.short_of_budget = false
     if !charge_more(cast[u64](port), kernel.pools.bindings.object_size) {
         port.short_of_budget = true
@@ -793,7 +814,7 @@ new_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], key: u64, kind: 
  *     gets the binding's charge back.
  * @param binding The binding, already removed from the port's map.
  */
-free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mut Binding]) {
+free_binding :: fn(kernel : ptr[mut Kernel], port : ptr[mut Port], binding : ptr[mut Binding]) {
     unqueue(port, binding)
     _ = cancel_timer(kernel, &binding.timer)
     // In one store: it's read without a lock (lock_bound_port, a binding slot's free check)
@@ -810,7 +831,7 @@ free_binding :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], binding: ptr[mu
  * @return The counter value, in ticks; the clock's start for a time before it starts; slop_os.NO_DEADLINE for
  *     slop_os.NO_DEADLINE.
  */
-ticks_at :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
+ticks_at :: fn(kernel : ptr[Kernel], nanoseconds : u64) -> u64 {
     if nanoseconds == slop_os.NO_DEADLINE {
         return slop_os.NO_DEADLINE
     }
@@ -834,7 +855,7 @@ ticks_at :: fn(kernel: ptr[Kernel], nanoseconds: u64) -> u64 {
  * @return True if every page the range touches is mapped user and read/write; false if any isn't, or the range isn't
  *     within the user address range.
  */
-is_user_writable :: fn(space: ptr[mut AddressSpace], address: u64, size: u64) -> bool {
+is_user_writable :: fn(space : ptr[mut AddressSpace], address : u64, size : u64) -> bool {
     low, high :: arch.user_address_range()
     if address < cast[u64](low) || address >= cast[u64](high) || size > cast[u64](high) - address {
         return false

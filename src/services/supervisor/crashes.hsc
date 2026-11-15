@@ -2,8 +2,8 @@ package supervisor
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import log_line from "../../log_line"
 import crash_reports from "../../crash_reports"
+import log_line from "../../log_line"
 
 /*
  * Crash reports of the services the supervisor starts (decisions/0183, 12a). Each is launched with an intercept of its
@@ -21,7 +21,7 @@ CRASH_KEY : u64 : 9000
  * @param supervisor The supervisor, whose entry at index is reported on.
  * @param index The entry's index in started; out of range, or one without a faults' intercept, does nothing.
  */
-crashed :: fn(supervisor: ptr[mut Supervisor], index: usize) {
+crashed :: fn(supervisor : ptr[mut Supervisor], index : usize) {
     if index >= supervisor.started_count || index >= supervisor.started.count {
         return void
     }
@@ -43,7 +43,7 @@ crashed :: fn(supervisor: ptr[mut Supervisor], index: usize) {
  *
  * @param entry The entry, whose faults is null after.
  */
-forget_faults :: fn(entry: ptr[mut Started]) {
+forget_faults :: fn(entry : ptr[mut Started]) {
     match entry.faults {
         case Some(faults) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
@@ -60,7 +60,7 @@ forget_faults :: fn(entry: ptr[mut Started]) {
  * @param supervisor The supervisor, whose launched_faults is null after.
  * @return The intercept and address space, which move to the caller; null if there are none.
  */
-take_faults :: fn(supervisor: ptr[mut Supervisor]) -> os.LaunchedFaults? {
+take_faults :: fn(supervisor : ptr[mut Supervisor]) -> os.LaunchedFaults? {
     faults :: supervisor.launched_faults
     supervisor.launched_faults = null
     return faults
@@ -71,7 +71,7 @@ take_faults :: fn(supervisor: ptr[mut Supervisor]) -> os.LaunchedFaults? {
  *
  * @param supervisor The supervisor, whose launched_faults is null after.
  */
-forget_launched_faults :: fn(supervisor: ptr[mut Supervisor]) {
+forget_launched_faults :: fn(supervisor : ptr[mut Supervisor]) {
     match take_faults(supervisor) {
         case Some(faults) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
@@ -90,7 +90,7 @@ forget_launched_faults :: fn(supervisor: ptr[mut Supervisor]) {
  * @return True once it's running again; false if nothing was running under name, it couldn't be made to crash, or
  *     it's done for good.
  */
-crash_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
+crash_and_wait :: fn(supervisor : ptr[mut Supervisor], name : string) -> bool {
     index := NOWHERE
     for entry, i in supervisor.started {
         if i < supervisor.started_count && entry.name == name && entry.running {
@@ -102,7 +102,12 @@ crash_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
     }
     restarts :: supervisor.started[index].restarts
     log_line.write(supervisor.log, "supervisor: test_crash: crashing %", name)
-    ping : slop_os.Channel? = if supervisor.started[index].lifecycle != NONE { supervisor.started[index].lifecycle } else { null }
+    ping : slop_os.Channel? = if supervisor.started[index].lifecycle != NONE {
+        supervisor.started[index].lifecycle
+    }
+    else {
+        null
+    }
     match crash_reports.make_crash(supervisor.started[index].process, ping) {
         case Ok => {}
         case Error(error) => {
@@ -113,6 +118,7 @@ crash_and_wait :: fn(supervisor: ptr[mut Supervisor], name: string) -> bool {
     loop {
         wait_and_handle(supervisor)
     }
-    while !supervisor.started[index].done && !(supervisor.started[index].running && supervisor.started[index].restarts > restarts)
+    while !supervisor.started[index].done
+        && !(supervisor.started[index].running && supervisor.started[index].restarts > restarts)
     return supervisor.started[index].running
 }

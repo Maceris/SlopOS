@@ -12,7 +12,7 @@ import arch_interface from "../../arch_interface"
  * the CPU has it, which skips what wasn't changed since the restore. XCR0 is switched only when a
  * thread with other components is restored.
  */
-//SPEC: Intel SDM Vol. 1 §13 (XSAVE): §13.4 (the XSAVE area), §13.8 (XRSTOR), §13.9 (XSAVEOPT); CPUID leaf 0DH
+// SPEC: Intel SDM Vol. 1 §13 (XSAVE): §13.4 (the XSAVE area), §13.8 (XRSTOR), §13.9 (XSAVEOPT); CPUID leaf 0DH
 
 /** The state components every thread has, and XCR0 outside threads: x87, SSE and AVX (decisions/0023). */
 XCR0_BASE : u64 : XCR0_X87 | XCR0_SSE | XCR0_AVX
@@ -52,7 +52,7 @@ VectorState :: struct #align(64) {
  * @return XCR0 bits: XCR0_BASE, and XCR0_AVX512 too when config is extended and the CPU supports all three of its
  *     components, as CPUID leaf 0DH says.
  */
-components_for :: fn(config: arch_interface.VectorConfig) -> u64 {
+components_for :: fn(config : arch_interface.VectorConfig) -> u64 {
     if !config.extended {
         return XCR0_BASE
     }
@@ -67,7 +67,7 @@ components_for :: fn(config: arch_interface.VectorConfig) -> u64 {
  * @param components XCR0 bits; x87 and SSE live in the legacy region, so only the others change the size.
  * @return The area's size in bytes, at least XSAVE_LEGACY_AND_HEADER, not counting VectorState's header.
  */
-area_end :: fn(components: u64) -> u64 {
+area_end :: fn(components : u64) -> u64 {
     size := XSAVE_LEGACY_AND_HEADER
     for component in 2..<64 {
         if (components >> cast[u64](component)) & 1 == 0 {
@@ -88,7 +88,7 @@ area_end :: fn(components: u64) -> u64 {
  * @param config The thread's configuration, which decides its components as components_for does.
  * @return The size in bytes, which init_vector_state fills and save_vector_state writes up to.
  */
-vector_state_size :: fn(config: arch_interface.VectorConfig) -> usize {
+vector_state_size :: fn(config : arch_interface.VectorConfig) -> usize {
     return cast[usize](VECTOR_HEADER_SIZE + area_end(components_for(config)))
 }
 
@@ -110,7 +110,7 @@ vector_state_alignment :: fn() -> usize {
  * @param state The state, vector_state_size(config) bytes, aligned to vector_state_alignment(), all of it written.
  * @param config The thread's configuration, which decides its components.
  */
-init_vector_state :: fn(state: ptr[mut VectorState], config: arch_interface.VectorConfig) {
+init_vector_state :: fn(state : ptr[mut VectorState], config : arch_interface.VectorConfig) {
     components :: components_for(config)
     intrinsics.mem_zero(cast[mut rawptr](state), cast[usize](VECTOR_HEADER_SIZE + area_end(components)))
     state.components = components
@@ -127,7 +127,7 @@ init_vector_state :: fn(state: ptr[mut VectorState], config: arch_interface.Vect
  *
  * @param state The running thread's state, set up by init_vector_state.
  */
-save_vector_state :: fn(state: ptr[mut VectorState]) {
+save_vector_state :: fn(state : ptr[mut VectorState]) {
     if current_cpu().xsaveopt {
         x86_64.xsaveopt(cast[rawptr](area_of(state)), state.components)
     }
@@ -143,7 +143,7 @@ save_vector_state :: fn(state: ptr[mut VectorState]) {
  *
  * @param state The thread's state, set up by init_vector_state, and saved by save_vector_state if it has run before.
  */
-restore_vector_state :: fn(state: ptr[VectorState]) {
+restore_vector_state :: fn(state : ptr[VectorState]) {
     cpu :: current_cpu()
     if cpu.xcr0 != state.components {
         x86_64.xsetbv(0, state.components)
@@ -158,6 +158,6 @@ restore_vector_state :: fn(state: ptr[VectorState]) {
  * @param state The state's header, only used for its address; nothing is read through it.
  * @return The area's virtual address, VECTOR_HEADER_SIZE bytes past state, so 64-byte aligned when state is.
  */
-area_of :: fn(state: ptr[VectorState]) -> u64 {
+area_of :: fn(state : ptr[VectorState]) -> u64 {
     return cast[u64](state) + VECTOR_HEADER_SIZE
 }

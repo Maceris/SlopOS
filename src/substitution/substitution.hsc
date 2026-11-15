@@ -9,9 +9,9 @@
 package substitution
 
 import runtime from "base:runtime"
+import slop_os from "std:os/slop_os"
 import schema from "std:schema"
 import strings from "std:strings"
-import slop_os from "std:os/slop_os"
 import bundle from "../bundle"
 import library_interface from "../library_interface"
 
@@ -46,7 +46,7 @@ Mapped :: struct {
  * @param policy The policy; its bytes are copied as they're laid out in memory, unused entries included.
  * @return The file's bytes: POLICY_SCHEMA, then the policy's bytes.
  */
-policy_record :: fn(policy: bundle.Substitutions) -> u8[POLICY_BYTES] {
+policy_record :: fn(policy : bundle.Substitutions) -> u8[POLICY_BYTES] {
     record : u8[POLICY_BYTES]
     for byte, i in POLICY_SCHEMA {
         if i < record.count {
@@ -69,7 +69,7 @@ policy_record :: fn(policy: bundle.Substitutions) -> u8[POLICY_BYTES] {
  * @return The policy, or null if bytes are too few, don't start with POLICY_SCHEMA, or say a count of more than
  *     bundle.MAX_SUBSTITUTIONS entries.
  */
-policy_of :: fn(bytes: u8[]) -> bundle.Substitutions? {
+policy_of :: fn(bytes : u8[]) -> bundle.Substitutions? {
     if bytes.count < POLICY_BYTES {
         return null
     }
@@ -101,10 +101,17 @@ policy_of :: fn(bytes: u8[]) -> bundle.Substitutions? {
  * @return The mapped bytes and their address, which the caller unmaps with unmap; or null if the object's size
  *     couldn't be read, the free range hasn't room, or the mapping failed.
  */
-mapped :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Handle) -> Mapped? {
+mapped :: fn(block : ptr[slop_os.StartupBlock], memory : slop_os.Handle) -> Mapped? {
     size :: slop_os.memory_size(cast[slop_os.Memory](memory)) or_return null
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    if slop_os.memory_map(cast[slop_os.Memory](memory), block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+    if slop_os.memory_map(
+        cast[slop_os.Memory](memory),
+        block.space,
+        address,
+        0,
+        size,
+        slop_os.PROTECTION_READ
+    ) is_error {
         return null
     }
     return Mapped.{bytes = view_of(cast[ptr[u8]](address), cast[usize](size)), address = address}
@@ -116,7 +123,7 @@ mapped :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Handle) -> Mapped
  * @param block The process's startup block, whose address space it's mapped in; not null.
  * @param what The mapping, whose bytes aren't to be used after.
  */
-unmap :: fn(block: ptr[slop_os.StartupBlock], what: Mapped) {
+unmap :: fn(block : ptr[slop_os.StartupBlock], what : Mapped) {
     _ = slop_os.memory_unmap(block.space, what.address)
 }
 
@@ -129,7 +136,7 @@ unmap :: fn(block: ptr[slop_os.StartupBlock], what: Mapped) {
  * @return The file's bytes and the mapping's address, which the caller unmaps with unmap; or null if it couldn't be
  *     mapped, or isn't an ELF file whose headers fit in the memory, in which case nothing is left mapped.
  */
-library_mapped :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Handle) -> Mapped? {
+library_mapped :: fn(block : ptr[slop_os.StartupBlock], memory : slop_os.Handle) -> Mapped? {
     whole :: mapped(block, memory) or_return null
     length :: cast[usize](library_interface.file_size(whole.bytes))
     if length == 0 || length > whole.bytes.count {
@@ -148,7 +155,7 @@ library_mapped :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Handle) -
  * @return The hash of the file's bytes, as long as its ELF headers say it is; or null if it couldn't be mapped or
  *     isn't an ELF file.
  */
-library_hash :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Handle) -> bundle.Hash? {
+library_hash :: fn(block : ptr[slop_os.StartupBlock], memory : slop_os.Handle) -> bundle.Hash? {
     file :: library_mapped(block, memory) or_return null
     hash :: bundle.hash_of(file.bytes)
     unmap(block, file)
@@ -164,7 +171,7 @@ library_hash :: fn(block: ptr[slop_os.StartupBlock], memory: slop_os.Handle) -> 
  * @param hash The hash of the library's file.
  * @return The first such library, its name and memory, or null if no memory grant labeled library: has that hash.
  */
-own_library :: fn(block: ptr[slop_os.StartupBlock], hash: bundle.Hash) -> Library? {
+own_library :: fn(block : ptr[slop_os.StartupBlock], hash : bundle.Hash) -> Library? {
     for &grant in slop_os.grants_of(block) {
         label :: slop_os.label_of(grant)
         if grant.kind != .Memory || !strings.starts_with(label, LIBRARY_PREFIX) || LIBRARY_PREFIX.count > label.count {
@@ -191,7 +198,7 @@ own_library :: fn(block: ptr[slop_os.StartupBlock], hash: bundle.Hash) -> Librar
  * @return Null if new's interface record passes the check against old's; otherwise why not, a static string: that
  *     either can't be read, or what library_interface.check says.
  */
-check :: fn(block: ptr[slop_os.StartupBlock], old: slop_os.Handle, new: slop_os.Handle) -> string? {
+check :: fn(block : ptr[slop_os.StartupBlock], old : slop_os.Handle, new : slop_os.Handle) -> string? {
     before :: library_mapped(block, old) or_return "the library can't be read"
     defer unmap(block, before)
     after :: library_mapped(block, new) or_return "its substitute can't be read"

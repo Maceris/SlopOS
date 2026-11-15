@@ -50,19 +50,19 @@ Faults :: struct {
 
 /** The link, the two stacks on it, and what's been seen. */
 World :: struct {
-    host : net_stack.Stack,
-    router : net_stack.Stack,
-    flying : Flying[IN_FLIGHT],
-    now : u64,
-    random : u64,
-    faults : Faults,
-    leased : bool,
-    lease : net_stack.Lease,
-    global : bool,
+    host           : net_stack.Stack,
+    router         : net_stack.Stack,
+    flying         : Flying[IN_FLIGHT],
+    now            : u64,
+    random         : u64,
+    faults         : Faults,
+    leased         : bool,
+    lease          : net_stack.Lease,
+    global         : bool,
     global_address : net_stack.Ipv6,
-    link_local : bool,
-    replies : u32,
-    last_reply : u64,
+    link_local     : bool,
+    replies        : u32,
+    last_reply     : u64,
     /** The host's lease losses and conflicts, which shouldn't happen. */
     trouble : u32,
     /** The router's DNS server's socket, 0 while it has none (dns_test.hsc). */
@@ -79,7 +79,7 @@ World :: struct {
  * @param world The world.
  * @return The number.
  */
-draw :: fn(world: ptr[mut World]) -> u64 {
+draw :: fn(world : ptr[mut World]) -> u64 {
     x := world.random
     x = x ~ (x >> 12)
     x = x ~ (x << 25)
@@ -95,7 +95,7 @@ draw :: fn(world: ptr[mut World]) -> u64 {
  * @param faults How the link misbehaves.
  * @return The world, on the heap, the caller's to free.
  */
-make_world :: fn(seed: u64, faults: Faults) -> ptr[mut World] {
+make_world :: fn(seed : u64, faults : Faults) -> ptr[mut World] {
     world :: runtime.new(World)
     world.random = seed | 1
     world.faults = faults
@@ -112,7 +112,7 @@ make_world :: fn(seed: u64, faults: Faults) -> ptr[mut World] {
  * @param bytes The frame.
  * @param to 0 for the host, 1 for the router.
  */
-send :: fn(world: ptr[mut World], bytes: u8[], to: u32) {
+send :: fn(world : ptr[mut World], bytes : u8[], to : u32) {
     if draw(world) % 100 < world.faults.drop {
         return void
     }
@@ -141,7 +141,7 @@ send :: fn(world: ptr[mut World], bytes: u8[], to: u32) {
  *
  * @param world The world.
  */
-take_frames :: fn(world: ptr[mut World]) {
+take_frames :: fn(world : ptr[mut World]) {
     frame : u8[net_stack.MAX_FRAME]
     into :: view_of(&frame[0], frame.count)
     loop {
@@ -163,13 +163,15 @@ take_frames :: fn(world: ptr[mut World]) {
  * @param world The world.
  * @param bytes A frame the host sent.
  */
-play_router :: fn(world: ptr[mut World], bytes: u8[]) {
+play_router :: fn(world : ptr[mut World], bytes : u8[]) {
     kind :: net_stack.u16_at(bytes, 12)
-    if kind == net_stack.ETHER_IPV4 && net_stack.byte_at(bytes, 23) == net_stack.PROTOCOL_UDP
+    if kind == net_stack.ETHER_IPV4
+        && net_stack.byte_at(bytes, 23) == net_stack.PROTOCOL_UDP
         && net_stack.u16_at(bytes, 36) == net_stack.DHCP_SERVER_PORT {
         answer_dhcp(world, net_stack.part(bytes, 42, bytes.count))
     }
-    else if kind == net_stack.ETHER_IPV6 && net_stack.byte_at(bytes, 20) == net_stack.PROTOCOL_ICMPV6
+    else if kind == net_stack.ETHER_IPV6
+        && net_stack.byte_at(bytes, 20) == net_stack.PROTOCOL_ICMPV6
         && net_stack.byte_at(bytes, 54) == net_stack.ROUTER_SOLICITATION {
         advertise(world)
     }
@@ -181,7 +183,7 @@ play_router :: fn(world: ptr[mut World], bytes: u8[]) {
  * @param world The world.
  * @param message The client's message, after the UDP header.
  */
-answer_dhcp :: fn(world: ptr[mut World], message: u8[]) {
+answer_dhcp :: fn(world : ptr[mut World], message : u8[]) {
     kind := cast[u8](0)
     at := cast[usize](net_stack.DHCP_OPTIONS_AT)
     loop {
@@ -195,7 +197,10 @@ answer_dhcp :: fn(world: ptr[mut World], message: u8[]) {
         at += 2 + cast[usize](net_stack.byte_at(message, at + 1))
     }
     while true
-    answer_kind :: if kind == net_stack.DHCP_DISCOVER { net_stack.DHCP_OFFER } else if kind == net_stack.DHCP_REQUEST { net_stack.DHCP_ACK } else { cast[u8](0) }
+    answer_kind :: if kind == net_stack.DHCP_DISCOVER {
+        net_stack.DHCP_OFFER
+    }
+    else if kind == net_stack.DHCP_REQUEST { net_stack.DHCP_ACK } else { cast[u8](0) }
     if answer_kind == 0 {
         return void
     }
@@ -208,10 +213,50 @@ answer_dhcp :: fn(world: ptr[mut World], message: u8[]) {
     net_stack.put_bytes(bytes, 16, view_of(&LEASED_V4.bytes[0], 4))
     net_stack.put_bytes(bytes, 28, net_stack.part(message, 28, 34))
     net_stack.put_u32(bytes, 236, 0x63825363)
-    options :: u8.[53, 1, answer_kind, 54, 4, 10, 0, 2, 2, 1, 4, 255, 255, 255, 0, 3, 4, 10, 0, 2, 2, 6, 4, 10, 0, 2, 3, 51, 4,
-        0, 0, 0x0e, 0x10, 255]
+    options :: u8.[
+        53,
+        1,
+        answer_kind,
+        54,
+        4,
+        10,
+        0,
+        2,
+        2,
+        1,
+        4,
+        255,
+        255,
+        255,
+        0,
+        3,
+        4,
+        10,
+        0,
+        2,
+        2,
+        6,
+        4,
+        10,
+        0,
+        2,
+        3,
+        51,
+        4,
+        0,
+        0,
+        0x0e,
+        0x10,
+        255
+    ]
     net_stack.put_bytes(bytes, net_stack.DHCP_OPTIONS_AT, view_of(&options[0], options.count))
-    _ = net_stack.send_udp4(&world.router, net_stack.LIMITED_BROADCAST, net_stack.DHCP_SERVER_PORT, net_stack.DHCP_CLIENT_PORT, bytes)
+    _ = net_stack.send_udp4(
+        &world.router,
+        net_stack.LIMITED_BROADCAST,
+        net_stack.DHCP_SERVER_PORT,
+        net_stack.DHCP_CLIENT_PORT,
+        bytes
+    )
 }
 
 /**
@@ -220,7 +265,7 @@ answer_dhcp :: fn(world: ptr[mut World], message: u8[]) {
  *
  * @param world The world.
  */
-advertise :: fn(world: ptr[mut World]) {
+advertise :: fn(world : ptr[mut World]) {
     message : u8[80]
     bytes :: view_of(&message[0], message.count)
     net_stack.put_u8(bytes, 0, net_stack.ROUTER_ADVERTISEMENT)
@@ -241,7 +286,13 @@ advertise :: fn(world: ptr[mut World]) {
     net_stack.put_u8(bytes, 57, 3)
     net_stack.put_u32(bytes, 60, 3600)
     net_stack.put_bytes(bytes, 64, view_of(&RDNSS_V6.bytes[0], 16))
-    _ = net_stack.send_icmpv6(&world.router, world.router.link_local.address, net_stack.ALL_NODES, bytes, net_stack.DISCOVERY_HOP_LIMIT)
+    _ = net_stack.send_icmpv6(
+        &world.router,
+        world.router.link_local.address,
+        net_stack.ALL_NODES,
+        bytes,
+        net_stack.DISCOVERY_HOP_LIMIT
+    )
 }
 
 /**
@@ -249,11 +300,13 @@ advertise :: fn(world: ptr[mut World]) {
  *
  * @param world The world.
  */
-deliver :: fn(world: ptr[mut World]) {
+deliver :: fn(world : ptr[mut World]) {
     loop {
         soonest := cast[usize](IN_FLIGHT)
         for slot, i in world.flying {
-            if slot.length > 0 && slot.arrives <= world.now && (soonest >= world.flying.count || slot.arrives < world.flying[soonest].arrives) {
+            if slot.length > 0
+                && slot.arrives <= world.now
+                && (soonest >= world.flying.count || slot.arrives < world.flying[soonest].arrives) {
                 soonest = i
             }
         }
@@ -279,7 +332,7 @@ deliver :: fn(world: ptr[mut World]) {
  *
  * @param world The world.
  */
-take_events :: fn(world: ptr[mut World]) {
+take_events :: fn(world : ptr[mut World]) {
     loop {
         happened :: net_stack.take_event(&world.host) or_break
         match happened {
@@ -320,7 +373,7 @@ take_events :: fn(world: ptr[mut World]) {
  * @param world The world.
  * @param nanoseconds How long.
  */
-run :: fn(world: ptr[mut World], nanoseconds: u64) {
+run :: fn(world : ptr[mut World], nanoseconds : u64) {
     end :: world.now + nanoseconds
     loop {
         world.now += MILLISECOND
@@ -341,7 +394,7 @@ run :: fn(world: ptr[mut World], nanoseconds: u64) {
  * @param seed The seed.
  * @return The key: the seed's bytes, repeated.
  */
-key_of :: fn(seed: u64) -> u8[32] {
+key_of :: fn(seed : u64) -> u8[32] {
     key : u8[32]
     for i in 0..<32 {
         key[i] = cast[u8](seed >> (8 * cast[u64](i % 8)))
@@ -357,7 +410,7 @@ key_of :: fn(seed: u64) -> u8[32] {
  * @param what What should be.
  * @param seed The run's seed.
  */
-check :: fn(t: ptr[mut testing.T], holds: bool, what: string, seed: u64) {
+check :: fn(t : ptr[mut testing.T], holds : bool, what : string, seed : u64) {
     if !holds {
         testing.note(t, "seed %: %", seed, what)
         testing.fail(t, what)
@@ -372,7 +425,7 @@ check :: fn(t: ptr[mut testing.T], holds: bool, what: string, seed: u64) {
  * @param seed The seed.
  * @param faults How the link misbehaves.
  */
-configure_and_ping :: fn(t: ptr[mut testing.T], seed: u64, faults: Faults) {
+configure_and_ping :: fn(t : ptr[mut testing.T], seed : u64, faults : Faults) {
     world :: make_world(seed, faults)
     defer runtime.free(world)
     take_frames(world)
@@ -388,10 +441,19 @@ configure_and_ping :: fn(t: ptr[mut testing.T], seed: u64, faults: Faults) {
     check(t, net_stack.same_ipv4(world.lease.router, ROUTER_V4), "its router", seed)
     check(t, world.link_local, "a link-local address", seed)
     check(t, world.global, "an address from the router's prefix", seed)
-    check(t, net_stack.prefix_matches(view_of(&world.global_address.bytes[0], 16), view_of(&PREFIX.bytes[0], 16), 64),
-        "the address is in the prefix", seed)
+    check(
+        t,
+        net_stack.prefix_matches(view_of(&world.global_address.bytes[0], 16), view_of(&PREFIX.bytes[0], 16), 64),
+        "the address is in the prefix",
+        seed
+    )
     for target in 0..<2 {
-        to :: if target == 0 { net_stack.IpAddress.V4(ROUTER_V4) } else { net_stack.IpAddress.V6(world.router.link_local.address) }
+        to :: if target == 0 {
+            net_stack.IpAddress.V4(ROUTER_V4)
+        }
+        else {
+            net_stack.IpAddress.V6(world.router.link_local.address)
+        }
         before :: world.replies
         for attempt in 0..<30 {
             if world.replies > before {
@@ -400,17 +462,27 @@ configure_and_ping :: fn(t: ptr[mut testing.T], seed: u64, faults: Faults) {
             _ = net_stack.ping(&world.host, to)
             run(world, net_stack.SECOND)
         }
-        check(t, world.replies > before, if target == 0 { "a ping to the router over IPv4 is answered" } else { "a ping to the router over IPv6 is answered" }, seed)
+        check(
+            t,
+            world.replies > before,
+            if target == 0 {
+                "a ping to the router over IPv4 is answered"
+            }
+            else {
+                "a ping to the router over IPv6 is answered"
+            },
+            seed
+        )
     }
     check(t, world.trouble == 0, "no lease lost, no conflict", seed)
 }
 
-configures_and_pings_on_a_clean_link #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+configures_and_pings_on_a_clean_link #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     configure_and_ping(t, 1, Faults.{})
     return .Ok
 }
 
-configures_and_pings_on_a_lossy_link #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+configures_and_pings_on_a_lossy_link #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     for seed in cast[u64](1)..<21 {
         configure_and_ping(t, seed, Faults.{drop = 20, duplicate = 10, most_delay = 50 * MILLISECOND})
     }
@@ -418,7 +490,7 @@ configures_and_pings_on_a_lossy_link #test :: fn(t: ptr[mut testing.T]) -> testi
 }
 
 /** A host's lease, renewed at T1 by its server, outlives its first term with no loss. */
-renews_its_lease #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+renews_its_lease #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     world :: make_world(7, Faults.{})
     defer runtime.free(world)
     take_frames(world)
@@ -433,11 +505,11 @@ renews_its_lease #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
 }
 
 /** Frames made at random, and valid ones damaged, are taken without harm. */
-takes_any_frame #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+takes_any_frame #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     return testing.check_property(t, any_frame)
 }
 
-any_frame : testing.Property : fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+any_frame : testing.Property : fn(t : ptr[mut testing.T], source : ptr[mut testing.Source]) -> testing.Outcome {
     stack :: runtime.new(net_stack.Stack)
     defer runtime.free(stack)
     net_stack.start(stack, net_stack.Setup.{mac = HOST_MAC, key = key_of(3)}, 0)
@@ -466,7 +538,7 @@ any_frame : testing.Property : fn(t: ptr[mut testing.T], source: ptr[mut testing
 }
 
 /** IPv6 addresses are written as RFC 5952 says: the longest run of zero groups, the first of equals, as ::. */
-formats_ipv6_addresses #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+formats_ipv6_addresses #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     expect_text(t, u8.[0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0, 0, 0, 0, 0xab, 0xcd], "fe80::1234:0:0:abcd")
     expect_text(t, u8.[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], "::1")
     expect_text(t, u8.[0xfe, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "fec0::")
@@ -483,7 +555,7 @@ formats_ipv6_addresses #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
  * @param bytes The address.
  * @param expected Its text.
  */
-expect_text :: fn(t: ptr[mut testing.T], bytes: u8[16], expected: string) {
+expect_text :: fn(t : ptr[mut testing.T], bytes : u8[16], expected : string) {
     text : u8[40]
     length :: net_stack.format_ipv6(net_stack.Ipv6.{bytes = bytes}, view_of(&text[0], text.count))
     testing.expect_eq(t, string_of(&text[0], length), expected, "the address's text")

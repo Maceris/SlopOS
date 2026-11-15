@@ -1,18 +1,18 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import schema from "std:schema"
-import text_buffer from "std:text_buffer"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
-import read_only_file from "std:os/slop_os/read_only_file"
 import process_manager from "std:os/slop_os/process_manager"
+import read_only_file from "std:os/slop_os/read_only_file"
 import terminal as protocol from "std:os/slop_os/terminal"
+import schema from "std:schema"
+import text_buffer from "std:text_buffer"
+import unicode from "std:unicode"
 import programs from "../../protocols/programs"
+import shell_language as language from "../../shell_language"
 
 /*
  * Scripts (design/shell.md §7, decisions/0179, 11e6): a file whose name ends in .shell, run as a command, beneath the
@@ -31,8 +31,21 @@ MAX_SCRIPT_BYTES : u64 : 256 * 1024
 /** What a script's name ends with. */
 SCRIPT_SUFFIX :: ".shell"
 /** The shell's own parameters' names, and its runtime's grants', which a script's parameter can't be named. */
-RESERVED :: string.["log", "session_terminal", "home", "manager", "programs", "data", "script", "arguments", "lifecycle",
-    "result", "clock", "locale", "events"]
+RESERVED :: string.[
+    "log",
+    "session_terminal",
+    "home",
+    "manager",
+    "programs",
+    "data",
+    "script",
+    "arguments",
+    "lifecycle",
+    "result",
+    "clock",
+    "locale",
+    "events"
+]
 
 /**
  * Tell whether a command's name is a script's: a path ending in .shell.
@@ -40,7 +53,7 @@ RESERVED :: string.["log", "session_terminal", "home", "manager", "programs", "d
  * @param name The command's name.
  * @return True if it ends in SCRIPT_SUFFIX and has a name before it.
  */
-is_script :: fn(name: string) -> bool {
+is_script :: fn(name : string) -> bool {
     suffix :: SCRIPT_SUFFIX
     if name.count <= suffix.count {
         return false
@@ -63,13 +76,23 @@ is_script :: fn(name: string) -> bool {
  * @param background Whether it's to run in the background, which a script can't.
  * @return The call, on the heap, the caller's to start and then end with end_call.
  */
-prepare_script_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], background: bool) -> Result[ptr[mut Call], EvalError] {
+prepare_script_call :: fn(
+    shell : ptr[mut Shell],
+    tree #escaping : ptr[Node],
+    background : bool
+) -> Result[ptr[mut Call], EvalError] {
     if background {
-        return .Error(EvalError.{message = "a script needs the terminal, which a job in the background hasn't: run it without &", at = tree.at})
+        return .Error(
+            EvalError.{
+                message = "a script needs the terminal, which a job in the background hasn't: run it without &",
+                at = tree.at,
+            }
+        )
     }
     text :: read_script_text(shell, tree)?
     parameters :: script_parameters(text, tree.at)?
-    found :: find_program(shell, "shell") or_return .Error(EvalError.{message = "there's no shell to run scripts with", at = tree.at})
+    found :: find_program(shell, "shell")
+        or_return .Error(EvalError.{message = "there's no shell to run scripts with", at = tree.at})
     call := runtime.new(Call)
     call.tree = tree
     call.executable = found.executable
@@ -82,21 +105,31 @@ prepare_script_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], bac
     }
     manifest :: read_manifest(found)
     _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
-    call.manifest = manifest or_return .Error(EvalError.{message = "the shell's manifest isn't one it can read", at = tree.at})
+    call.manifest = manifest
+        or_return .Error(EvalError.{message = "the shell's manifest isn't one it can read", at = tree.at})
     budget :: slop_os.startup_block().budget
     // The shell's own grants: the terminal, which it can't run without, so the input's its while it runs
     runtime.array_add(&call.parameters, Parameter.{name = "session_terminal", giving = .Terminal})
-    terminal_end :: protocol.connect(shell.console.end, shell.console.port, budget) or_return .Error(EvalError.{message = "there's no memory for its terminal connection", at = tree.at})
-    runtime.array_add(&call.grants, os.NamedGrant.{label = "session_terminal", handle = cast[slop_os.Handle](terminal_end.end)})
+    terminal_end :: protocol.connect(shell.console.end, shell.console.port, budget)
+        or_return .Error(EvalError.{message = "there's no memory for its terminal connection", at = tree.at})
+    runtime.array_add(
+        &call.grants,
+        os.NamedGrant.{label = "session_terminal", handle = cast[slop_os.Handle](terminal_end.end)}
+    )
     match shell.manager {
         case Some(given) => {
-            made :: process_manager.connect(given.end, shell.manager_port, budget) or_return .Error(EvalError.{message = "there's no memory for its process manager connection", at = tree.at})
+            made :: process_manager.connect(given.end, shell.manager_port, budget)
+                or_return .Error(
+                    EvalError.{message = "there's no memory for its process manager connection", at = tree.at}
+                )
             runtime.array_add(&call.grants, os.NamedGrant.{label = "manager", handle = cast[slop_os.Handle](made.end)})
         }
         case None => {}
     }
     match finding_connection(shell) {
-        case Some(made) => runtime.array_add(&call.grants, os.NamedGrant.{label = "programs", handle = cast[slop_os.Handle](made)})
+        case Some(
+            made
+        ) => runtime.array_add(&call.grants, os.NamedGrant.{label = "programs", handle = cast[slop_os.Handle](made)})
         case None => {}
     }
     script :: match opened_beneath_home(shell, tree.text, .ReadOnlyFile) {
@@ -131,12 +164,23 @@ prepare_script_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], bac
  * @return True once it's given; the error otherwise. A parameter given nothing, with a default or a bool, is left for
  *     the script's shell, which evaluates its default, and gives true too.
  */
-give_parameter :: fn(shell: ptr[mut Shell], call: ptr[mut Call], tree: ptr[Node], parameter #escaping : ptr[Node], given #escaping : Matched) -> Result[bool, EvalError] {
+give_parameter :: fn(
+    shell : ptr[mut Shell],
+    call : ptr[mut Call],
+    tree : ptr[Node],
+    parameter #escaping : ptr[Node],
+    given #escaping : Matched
+) -> Result[bool, EvalError] {
     name :: parameter.text
     type :: type_of_parameter(parameter)
     for each in RESERVED {
         if each == name {
-            return .Error(EvalError.{message = message("the script's parameter % has a name the shell's own grants have", name), at = tree.at})
+            return .Error(
+                EvalError.{
+                    message = message("the script's parameter % has a name the shell's own grants have", name),
+                    at = tree.at,
+                }
+            )
         }
     }
     handle_kind :: handle_kind_of(type)
@@ -156,14 +200,20 @@ give_parameter :: fn(shell: ptr[mut Shell], call: ptr[mut Call], tree: ptr[Node]
                             case Path(text) => handle = open_for(shell, text, giving, node.at)?
                             case Text(text) => handle = open_for(shell, text, giving, node.at)?
                             case Handle(held) => handle = another_connection(shell, held, giving, node.at)?
-                            case _ => return .Error(EvalError.{message = message("--% takes %, not %", name, type_article(type), type_name(got)),
-                                at = node.at})
+                            case _ => return .Error(
+                                EvalError.{
+                                    message = message("--% takes %, not %", name, type_article(type), type_name(got)),
+                                    at = node.at,
+                                }
+                            )
                         }
                     }
                 }
                 case None => {
                     if name != "here" || kind != .Dir {
-                        return .Error(EvalError.{message = message("% needs its % (a path)", tree.text, name), at = tree.at})
+                        return .Error(
+                            EvalError.{message = message("% needs its % (a path)", tree.text, name), at = tree.at}
+                        )
                     }
                     handle = open_for(shell, ".", .Dir, tree.at)?
                 }
@@ -174,20 +224,35 @@ give_parameter :: fn(shell: ptr[mut Shell], call: ptr[mut Call], tree: ptr[Node]
         case None => {}
     }
     if type == "list" || type == "record" {
-        return .Error(EvalError.{message = message("a script's parameter can't be % yet: % is", type_article(type), name), at = parameter.at})
+        return .Error(
+            EvalError.{
+                message = message("a script's parameter can't be % yet: % is", type_article(type), name),
+                at = parameter.at,
+            }
+        )
     }
     value := Value.Null
     match given.node {
         case Some(node) => {
             if node.kind == .Word {
-                value = word_as(type, node.text) or_return .Error(EvalError.{message = message("--%: % isn't %", name, node.text,
-                    type_article(type)), at = node.at})
+                value = word_as(type, node.text)
+                    or_return .Error(
+                        EvalError.{
+                            message = message("--%: % isn't %", name, node.text, type_article(type)),
+                            at = node.at,
+                        }
+                    )
             }
             else {
                 value = evaluate(shell, node)?
             }
             if !of_type(type, value) {
-                return .Error(EvalError.{message = message("--% takes %, not %", name, type_article(type), type_name(value)), at = node.at})
+                return .Error(
+                    EvalError.{
+                        message = message("--% takes %, not %", name, type_article(type), type_name(value)),
+                        at = node.at,
+                    }
+                )
             }
         }
         case None => {
@@ -231,7 +296,9 @@ give_parameter :: fn(shell: ptr[mut Shell], call: ptr[mut Call], tree: ptr[Node]
             failed = schema.try_write_value(text, &bytes) is_some
             hash = os.schema_hash_of[string]()
         }
-        case _ => return .Error(EvalError.{message = message("--% can't be given %", name, type_name(value)), at = tree.at})
+        case _ => return .Error(
+            EvalError.{message = message("--% can't be given %", name, type_name(value)), at = tree.at}
+        )
     }
     if failed {
         return .Error(EvalError.{message = "there's no memory for its arguments", at = tree.at})
@@ -250,7 +317,12 @@ give_parameter :: fn(shell: ptr[mut Shell], call: ptr[mut Call], tree: ptr[Node]
  * @param at Where an error points.
  * @return The opened end's handle, the caller's.
  */
-open_for :: fn(shell: ptr[mut Shell], path #escaping : string, giving: Giving, at: usize) -> Result[slop_os.Handle, EvalError] {
+open_for :: fn(
+    shell : ptr[mut Shell],
+    path #escaping : string,
+    giving : Giving,
+    at : usize
+) -> Result[slop_os.Handle, EvalError] {
     return match opened_beneath_home(shell, path, giving) {
         case Ok(handle) => .Ok(handle)
         case Error(problem) => .Error(EvalError.{message = message("%: %", path, problem), at = at})
@@ -266,23 +338,39 @@ open_for :: fn(shell: ptr[mut Shell], path #escaping : string, giving: Giving, a
  * @param at Where an error points.
  * @return The new connection's end, the caller's to give.
  */
-another_connection :: fn(shell: ptr[mut Shell], handle: ptr[HandleValue], giving: Giving, at: usize) -> Result[slop_os.Handle, EvalError] {
+another_connection :: fn(
+    shell : ptr[mut Shell],
+    handle : ptr[HandleValue],
+    giving : Giving,
+    at : usize
+) -> Result[slop_os.Handle, EvalError] {
     wanted :: if giving == .Here { HandleKind.Dir } else { handle_kind_of_giving(giving) or_else handle.kind }
     if wanted != handle.kind || giving == .Other || giving == .Value || giving == .Terminal {
-        return .Error(EvalError.{message = message("% is %, which this doesn't take", handle.name, type_name(Value.Handle(cast[ptr[mut HandleValue]](handle)))),
-            at = at})
+        return .Error(
+            EvalError.{
+                message = message(
+                    "% is %, which this doesn't take",
+                    handle.name,
+                    type_name(Value.Handle(cast[ptr[mut HandleValue]](handle)))
+                ),
+                at = at,
+            }
+        )
     }
     budget :: slop_os.startup_block().budget
-    port :: os.port_for(budget, handle.end) or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
+    port :: os.port_for(budget, handle.end)
+        or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     made := slop_os.NO_HANDLE
     match handle.kind {
         case .Dir => {
-            connected :: dir.connect(handle.end, port, budget) or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
+            connected :: dir.connect(handle.end, port, budget)
+                or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
             made = cast[slop_os.Handle](connected.end)
         }
         case .File => {
-            pair :: os.channel_for[file.File](budget, 0) or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
+            pair :: os.channel_for[file.File](budget, 0)
+                or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
             out := os.Outgoing.{}
             os.begin[file.Request](&out)^ = .Connect(os.Channel[file.File].{end = pair.a})
             if file.send_request(handle.end, port, &out) is_some {
@@ -292,7 +380,8 @@ another_connection :: fn(shell: ptr[mut Shell], handle: ptr[HandleValue], giving
             made = cast[slop_os.Handle](pair.b)
         }
         case .ReadOnlyFile => {
-            pair :: os.channel_for[read_only_file.ReadOnlyFile](budget, 0) or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
+            pair :: os.channel_for[read_only_file.ReadOnlyFile](budget, 0)
+                or_return .Error(EvalError.{message = "there's no memory to pass it on", at = at})
             out := os.Outgoing.{}
             os.begin[read_only_file.Request](&out)^ = .Connect(os.Channel[read_only_file.ReadOnlyFile].{end = pair.a})
             if read_only_file.send_request(handle.end, port, &out) is_some {
@@ -311,7 +400,7 @@ another_connection :: fn(shell: ptr[mut Shell], handle: ptr[HandleValue], giving
  * @param shell The shell, whose programs connection is asked to Connect another.
  * @return The new connection's end, the caller's; null without a programs connection, or if it couldn't be made.
  */
-finding_connection :: fn(shell: ptr[mut Shell]) -> slop_os.Channel? {
+finding_connection :: fn(shell : ptr[mut Shell]) -> slop_os.Channel? {
     connection :: shell.programs or_return null
     pair :: os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) or_return null
     out := os.Outgoing.{}
@@ -330,13 +419,20 @@ finding_connection :: fn(shell: ptr[mut Shell]) -> slop_os.Channel? {
  * @param tree The Call node, its text the script's path.
  * @return Its text, on the heap, never freed; an error if it can't be opened or read, or is past MAX_SCRIPT_BYTES.
  */
-read_script_text :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[string, EvalError] {
+read_script_text :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[string, EvalError] {
     handle :: match opened_beneath_home(shell, tree.text, .ReadOnlyFile) {
         case Ok(made) => made
         case Error(problem) => {
             if problem == file_problem(.NotFound) {
                 match meant_path(shell, tree.text) {
-                    case Some(meant) => return .Error(EvalError.{message = message("%1: %2; did you mean %3?", tree.text, problem, meant), at = tree.at})
+                    case Some(
+                        meant
+                    ) => return .Error(
+                        EvalError.{
+                            message = message("%1: %2; did you mean %3?", tree.text, problem, meant),
+                            at = tree.at,
+                        }
+                    )
                     case None => {}
                 }
             }
@@ -345,7 +441,9 @@ read_script_text :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[string,
     }
     return match text_of_file(cast[slop_os.Channel](handle)) {
         case Some(text) => .Ok(text)
-        case None => .Error(EvalError.{message = message("%: it couldn't be read, or it's past 256 KiB", tree.text), at = tree.at})
+        case None => .Error(
+            EvalError.{message = message("%: it couldn't be read, or it's past 256 KiB", tree.text), at = tree.at}
+        )
     }
 }
 
@@ -355,7 +453,7 @@ read_script_text :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[string,
  * @param end Its connection, speaking read_only_file, which is taken over and closed.
  * @return The text, on the heap, never freed; null if it couldn't be read, or is past MAX_SCRIPT_BYTES.
  */
-text_of_file :: fn(end: slop_os.Channel) -> string? {
+text_of_file :: fn(end : slop_os.Channel) -> string? {
     opened, error :: os.file_on(end, false)
     if error is_some {
         return null
@@ -390,10 +488,17 @@ text_of_file :: fn(end: slop_os.Channel) -> string? {
  * @param at Where an error points, in the caller's line.
  * @return The Parameter nodes, on the heap; empty for a script without param. An error if the script doesn't parse.
  */
-script_parameters :: fn(text: string, at: usize) -> Result[ptr[Node][], EvalError] {
+script_parameters :: fn(text : string, at : usize) -> Result[ptr[Node][], EvalError] {
     tree :: match language.parse(text) {
         case Ok(made) => made
-        case Error(error) => return .Error(EvalError.{message = message("the script doesn't parse, at line %: %", line_number(text, error.at), error.message), at = at})
+        case Error(
+            error
+        ) => return .Error(
+            EvalError.{
+                message = message("the script doesn't parse, at line %: %", line_number(text, error.at), error.message),
+                at = at,
+            }
+        )
     }
     found : ptr[Node][..]
     first :: first_child(tree) or_return .Ok(found[0..<0])
@@ -414,7 +519,7 @@ script_parameters :: fn(text: string, at: usize) -> Result[ptr[Node][], EvalErro
  * @param path The script's path.
  * @return Its Parameter nodes, on the heap; null if it can't be read or doesn't parse.
  */
-script_parameters_at :: fn(shell: ptr[mut Shell], path #escaping : string) -> ptr[Node][]? {
+script_parameters_at :: fn(shell : ptr[mut Shell], path #escaping : string) -> ptr[Node][]? {
     handle :: match opened_beneath_home(shell, path, .ReadOnlyFile) {
         case Ok(made) => made
         case Error(_) => return null
@@ -433,7 +538,7 @@ script_parameters_at :: fn(shell: ptr[mut Shell], path #escaping : string) -> pt
  * @param parameters The script's parameters.
  * @return What each is given, in their order.
  */
-match_script_arguments :: fn(tree: ptr[Node], parameters: ptr[Node][]) -> Result[Matched[], EvalError] {
+match_script_arguments :: fn(tree : ptr[Node], parameters : ptr[Node][]) -> Result[Matched[], EvalError] {
     matched : Matched[..]
     for parameter in parameters {
         runtime.array_add(&matched, Matched.{})
@@ -450,11 +555,15 @@ match_script_arguments :: fn(tree: ptr[Node], parameters: ptr[Node][]) -> Result
                 }
             }
             if index >= parameters.count || index >= matched.count {
-                return .Error(EvalError.{message = message("% takes no --%", tree.text, argument.text), at = argument.at})
+                return .Error(
+                    EvalError.{message = message("% takes no --%", tree.text, argument.text), at = argument.at}
+                )
             }
             next :: child(tree, at)
             if index >= matched.count || index >= parameters.count {
-                return .Error(EvalError.{message = message("% takes no --%", tree.text, argument.text), at = argument.at})
+                return .Error(
+                    EvalError.{message = message("% takes no --%", tree.text, argument.text), at = argument.at}
+                )
             }
             if type_of_parameter(parameters[index]) == "bool" && !is_bool_word(next) {
                 for &each, i in matched {
@@ -464,7 +573,10 @@ match_script_arguments :: fn(tree: ptr[Node], parameters: ptr[Node][]) -> Result
                 }
                 continue
             }
-            value :: next or_return .Error(EvalError.{message = message("--% needs a value after it", argument.text), at = argument.at})
+            value :: next
+                or_return .Error(
+                    EvalError.{message = message("--% needs a value after it", argument.text), at = argument.at}
+                )
             for &each, i in matched {
                 if i == index {
                     each.node = value
@@ -474,7 +586,10 @@ match_script_arguments :: fn(tree: ptr[Node], parameters: ptr[Node][]) -> Result
             continue
         }
         for each, i in matched {
-            if (each.node is_none) && !each.flag && i < parameters.count && !(parameters[i].text == "here" && is_handle_type(parameters[i])) {
+            if (each.node is_none)
+                && !each.flag
+                && i < parameters.count
+                && !(parameters[i].text == "here" && is_handle_type(parameters[i])) {
                 index = i
                 break
             }
@@ -501,7 +616,7 @@ match_script_arguments :: fn(tree: ptr[Node], parameters: ptr[Node][]) -> Result
  * @param script The script's file, which is read and closed.
  * @return 0 once it's run to its end; 1 for an error; 2 if it can't be read.
  */
-run_script :: fn(shell: ptr[mut Shell], script: os.Channel[read_only_file.ReadOnlyFile]) -> int {
+run_script :: fn(shell : ptr[mut Shell], script : os.Channel[read_only_file.ReadOnlyFile]) -> int {
     text :: text_of_file(script.end) or_return 2
     tree :: match language.parse(text) {
         case Ok(made) => made
@@ -534,7 +649,12 @@ run_script :: fn(shell: ptr[mut Shell], script: os.Channel[read_only_file.ReadOn
                 }
             }
             case Error(error) => {
-                script_error(shell, text, error.at, if error.returning { "return is a function's, and this isn't in one" } else { error.message })
+                script_error(
+                    shell,
+                    text,
+                    error.at,
+                    if error.returning { "return is a function's, and this isn't in one" } else { error.message }
+                )
                 return 1
             }
         }
@@ -550,7 +670,7 @@ run_script :: fn(shell: ptr[mut Shell], script: os.Channel[read_only_file.ReadOn
  * @param param The Param node.
  * @return Null once they're bound; an error for one given nothing, without a default.
  */
-bind_script_parameters :: fn(shell: ptr[mut Shell], param #escaping : ptr[Node]) -> EvalError? {
+bind_script_parameters :: fn(shell : ptr[mut Shell], param #escaping : ptr[Node]) -> EvalError? {
     block :: slop_os.startup_block()
     for parameter in param.children {
         name :: parameter.text
@@ -560,11 +680,13 @@ bind_script_parameters :: fn(shell: ptr[mut Shell], param #escaping : ptr[Node])
                 end := cast[slop_os.Channel](slop_os.NO_HANDLE)
                 if name == "here" {
                     home :: shell.home or_return EvalError.{message = "here wasn't given", at = parameter.at}
-                    made :: dir.connect(home.end, shell.home_port, block.budget) or_return EvalError.{message = "there's no memory for here", at = parameter.at}
+                    made :: dir.connect(home.end, shell.home_port, block.budget)
+                        or_return EvalError.{message = "there's no memory for here", at = parameter.at}
                     end = made.end
                 }
                 else {
-                    found :: slop_os.find_grant(block, name, .Channel) or_return EvalError.{message = message("% wasn't given", name), at = parameter.at}
+                    found :: slop_os.find_grant(block, name, .Channel)
+                        or_return EvalError.{message = message("% wasn't given", name), at = parameter.at}
                     end = cast[slop_os.Channel](found)
                 }
                 held :: runtime.new(HandleValue)
@@ -606,7 +728,7 @@ bind_script_parameters :: fn(shell: ptr[mut Shell], param #escaping : ptr[Node])
  * @param name Its name.
  * @return The value; null if none was written for it, as for one left to its default.
  */
-given_value :: fn(type: string, name: string) -> Value? {
+given_value :: fn(type : string, name : string) -> Value? {
     if type == "int" || type == "duration" {
         bytes :: runtime.slop_os_argument(name, type_info_of(i64)) or_return null
         number :: schema.read_value[i64](bytes) or_return null
@@ -633,7 +755,7 @@ given_value :: fn(type: string, name: string) -> Value? {
  * @param at Where the error is, in bytes from the text's start.
  * @param what What's wrong.
  */
-script_error :: fn(shell: ptr[mut Shell], text: string, at: usize, what: string) {
+script_error :: fn(shell : ptr[mut Shell], text : string, at : usize, what : string) {
     bytes :: string_bytes(text)
     start := cast[usize](0)
     end := bytes.count
@@ -649,7 +771,12 @@ script_error :: fn(shell: ptr[mut Shell], text: string, at: usize, what: string)
         }
     }
     line :: language.slice(text, start, end)
-    show_error(shell, line, if at > start { at - start } else { 0 }, message("line %1: %2", line_number(text, at), what))
+    show_error(
+        shell,
+        line,
+        if at > start { at - start } else { 0 },
+        message("line %1: %2", line_number(text, at), what)
+    )
 }
 
 /**
@@ -659,7 +786,7 @@ script_error :: fn(shell: ptr[mut Shell], text: string, at: usize, what: string)
  * @param at The place, in bytes.
  * @return The line, from 1.
  */
-line_number :: fn(text: string, at: usize) -> usize {
+line_number :: fn(text : string, at : usize) -> usize {
     count := cast[usize](1)
     for byte, i in string_bytes(text) {
         if i < at && byte == cast[u8]('\n') {
@@ -677,7 +804,7 @@ line_number :: fn(text: string, at: usize) -> usize {
  * @param type The type's name.
  * @return Dir, File or ReadOnlyFile; null for any other type.
  */
-handle_kind_of :: fn(type: string) -> HandleKind? {
+handle_kind_of :: fn(type : string) -> HandleKind? {
     if type == "Dir" {
         return HandleKind.Dir
     }
@@ -696,7 +823,7 @@ handle_kind_of :: fn(type: string) -> HandleKind? {
  * @param parameter The Parameter node.
  * @return True for Dir, File and ReadOnlyFile.
  */
-is_handle_type :: fn(parameter: ptr[Node]) -> bool {
+is_handle_type :: fn(parameter : ptr[Node]) -> bool {
     return handle_kind_of(type_of_parameter(parameter)) is_some
 }
 
@@ -706,7 +833,7 @@ is_handle_type :: fn(parameter: ptr[Node]) -> bool {
  * @param kind The kind.
  * @return Dir, File or ReadOnlyFile.
  */
-giving_of_kind :: fn(kind: HandleKind) -> Giving {
+giving_of_kind :: fn(kind : HandleKind) -> Giving {
     return match kind {
         case .Dir => Giving.Dir
         case .File => Giving.File
@@ -720,7 +847,7 @@ giving_of_kind :: fn(kind: HandleKind) -> Giving {
  * @param giving What it's given.
  * @return Dir for Dir and Here, File, ReadOnlyFile; null for anything else.
  */
-handle_kind_of_giving :: fn(giving: Giving) -> HandleKind? {
+handle_kind_of_giving :: fn(giving : Giving) -> HandleKind? {
     return match giving {
         case .Dir => HandleKind.Dir
         case .Here => HandleKind.Dir

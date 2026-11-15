@@ -6,9 +6,9 @@ package test_file_tree
 
 import runtime from "base:runtime"
 import os from "std:os"
+import dir from "std:os/slop_os/dir"
 import schema from "std:schema"
 import strings from "std:strings"
-import dir from "std:os/slop_os/dir"
 
 /** A script it makes: its name and its text. */
 Script :: struct {
@@ -20,9 +20,15 @@ Script :: struct {
 
 /** The scripts it makes with --scripts. */
 SCRIPTS :: Script.[
-    Script.{name = "report.shell", text = "# Says what it's given, lists here, and searches it\nparam here: Dir, pattern: string, --count = 1\nprint \"looking for $pattern, $count times\"\nlist\nsearch $pattern\n"},
+    Script.{
+        name = "report.shell",
+        text = "# Says what it's given, lists here, and searches it\nparam here: Dir, pattern: string, --count = 1\nprint \"looking for $pattern, $count times\"\nlist\nsearch $pattern\n",
+    },
     Script.{name = "into.shell", text = "param here: Dir, into: Dir\nlist --here $into\n"},
-    Script.{name = "escape.shell", text = "param here: Dir\nprint \"in here\"\nview ../notes.txt\nprint \"not reached\"\n"},
+    Script.{
+        name = "escape.shell",
+        text = "param here: Dir\nprint \"in here\"\nview ../notes.txt\nprint \"not reached\"\n",
+    }
 ]
 
 /** What it made. */
@@ -55,13 +61,14 @@ TreeError :: union {
  *     second "TODO: water the plants"; bytes.bin, the 32 bytes 0 to 31; made.value, a typed file of this program's
  *     Made, of 3 files and 1 directory; and Café.txt, its é one code point, for "did you mean" to find from a name
  *     typed in capitals with a combining accent.
- * @param scripts Whether three scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern and
+ * @param scripts Whether three scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern
+ *     and
  *     a count, says them, lists here and searches it; into.shell, which takes here and into, two directories, and lists
  *     into; and escape.shell, which takes here and tries to view ../notes.txt, beyond it.
  * @return How many files and directories it made.
  * @error Unwritable Something couldn't be written there.
  */
-main :: fn(here: os.Channel[dir.Dir], reading: bool, scripts: bool) -> Result[Made, TreeError] {
+main :: fn(here : os.Channel[dir.Dir], reading : bool, scripts : bool) -> Result[Made, TreeError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "here"}}
     directory, opened :: os.directory_on(here.end)
     if opened is_some {
@@ -106,7 +113,7 @@ main :: fn(here: os.Channel[dir.Dir], reading: bool, scripts: bool) -> Result[Ma
  * @param directory The shell's directory.
  * @return Whether all of it was written.
  */
-make_reading :: fn(directory: os.Directory) -> bool {
+make_reading :: fn(directory : os.Directory) -> bool {
     match os.make_directory_in(directory, "reading") {
         case Some(error) => if error != .AlreadyExists {
             return false
@@ -123,7 +130,8 @@ make_reading :: fn(directory: os.Directory) -> bool {
             runtime.array_add(&long, byte)
         }
     }
-    if long.count == 0 || (os.write_entire_file_in(directory, "reading/long.txt", string_of(&long[0], long.count)) is_some) {
+    if long.count == 0
+        || (os.write_entire_file_in(directory, "reading/long.txt", string_of(&long[0], long.count)) is_some) {
         return false
     }
     if os.write_entire_file_in(directory, "reading/todo.txt", "first\nTODO: water the plants\nlast\n") is_some {

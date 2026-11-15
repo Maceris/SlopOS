@@ -65,7 +65,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return True for every request: asking again gives another handle to the same budget.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return true
 }
 
@@ -84,7 +84,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The caller's end of the new connection, its own to keep and close; null if the channel couldn't be made, or
  *     the Connect couldn't be sent, in which case both its ends are closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Scheduler]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Scheduler]? {
     pair :: os.channel_for[Scheduler](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
@@ -112,7 +112,7 @@ connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBu
  *     be sent, the connection's gone, or the scheduler service has no budget to give, when the service runs on its
  *     starter's budget.
  */
-budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop_os.CpuBudget? {
+budget_for :: fn(end : slop_os.Channel, port : slop_os.Port, name : string) -> slop_os.CpuBudget? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .BudgetFor(os.append(&out, string_bytes(name)))
@@ -129,7 +129,7 @@ budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop
  * @return A handle to the budget, with the right to split it, the caller's to send or close; null if the request
  *     couldn't be sent, the connection's gone, or the service doesn't split its budget or has none of its own.
  */
-splittable_budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: string) -> slop_os.CpuBudget? {
+splittable_budget_for :: fn(end : slop_os.Channel, port : slop_os.Port, name : string) -> slop_os.CpuBudget? {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .SplittableBudgetFor(os.append(&out, string_bytes(name)))
@@ -145,7 +145,7 @@ splittable_budget_for :: fn(end: slop_os.Channel, port: slop_os.Port, name: stri
  * @return The budget's handle, the caller's; null if the request couldn't be sent, the connection's gone, or the
  *     answer was NoBudget.
  */
-ask_budget :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> slop_os.CpuBudget? {
+ask_budget :: fn(end : slop_os.Channel, port : slop_os.Port, out : ptr[mut os.Outgoing]) -> slop_os.CpuBudget? {
     if send_request(end, port, out) is_some {
         return null
     }

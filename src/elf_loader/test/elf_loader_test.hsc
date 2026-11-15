@@ -32,7 +32,7 @@ Hello :: struct {
  * @return The file and what read made of it, which the caller frees with free_hello; Error if there's no folder
  *     argument, the file can't be read, or read refuses it, the failure recorded.
  */
-hello :: fn(t: ptr[mut testing.T]) -> Result[Hello, testing.Stopped] {
+hello :: fn(t : ptr[mut testing.T]) -> Result[Hello, testing.Stopped] {
     arguments :: os.arguments()
     if arguments.count < 2 {
         testing.fail(t, "the first argument is the folder the build put SlopOS's programs in")
@@ -55,7 +55,9 @@ hello :: fn(t: ptr[mut testing.T]) -> Result[Hello, testing.Stopped] {
     }
 }
 
-/** The most bytes of image a changed file may ask for before the fuzzer loads it, so a case doesn't run out of memory. */
+/**
+ * The most bytes of image a changed file may ask for before the fuzzer loads it, so a case doesn't run out of memory.
+ */
 MOST_FUZZED_IMAGE : u64 : 16 << 20
 /** How many bytes a fuzzing case changes at most. */
 MOST_CHANGES :: 16
@@ -116,7 +118,7 @@ make_fuzz_file :: fn() -> FuzzFile? {
  *
  * @param file The file, not used after.
  */
-free_fuzz_file :: fn(file: ptr[mut FuzzFile]) {
+free_fuzz_file :: fn(file : ptr[mut FuzzFile]) {
     runtime.free_array(file.bytes)
     runtime.free_array(file.built)
 }
@@ -132,7 +134,10 @@ free_fuzz_file :: fn(file: ptr[mut FuzzFile]) {
  * @param source The case's source: each change's place and the bits it flips.
  * @return Ok once the case has run; Error(Failed) if hello.elf couldn't be read.
  */
-a_changed_file_is_loaded_or_refused_without_crashing #test :: fn(t: ptr[mut testing.T], source: ptr[mut testing.Source]) -> testing.Outcome {
+a_changed_file_is_loaded_or_refused_without_crashing #test :: fn(
+    t : ptr[mut testing.T],
+    source : ptr[mut testing.Source]
+) -> testing.Outcome {
     kept :: testing.fixture[FuzzFile](source, make_fuzz_file, free_fuzz_file)
     file :: testing.require_some(t, kept, "hello.elf is read from SLOPOS_PROGRAMS or the first argument")?
     bytes :: file.bytes
@@ -174,11 +179,11 @@ a_changed_file_is_loaded_or_refused_without_crashing #test :: fn(t: ptr[mut test
  *
  * @param made What hello gave, whose contents aren't used after.
  */
-free_hello :: fn(made: Hello) {
+free_hello :: fn(made : Hello) {
     strings.free_string(made.contents)
 }
 
-hello_reads_as_a_relocatable_executable #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+hello_reads_as_a_relocatable_executable #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made :: hello(t)?
     defer free_hello(made)
     executable :: made.executable
@@ -188,7 +193,7 @@ hello_reads_as_a_relocatable_executable #test :: fn(t: ptr[mut testing.T]) -> te
     return .Ok
 }
 
-hello_loads_and_relocates_into_a_buffer #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+hello_loads_and_relocates_into_a_buffer #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made :: hello(t)?
     defer free_hello(made)
     executable := made.executable
@@ -201,21 +206,34 @@ hello_loads_and_relocates_into_a_buffer #test :: fn(t: ptr[mut testing.T]) -> te
     relocated :: elf_loader.relocate(&executable, file, image, BASE)
     testing.outcome_of(testing.expect_ok(t, relocated, "its relocations are all into its image"))?
     // Each relocated word is BASE and its addend
-    first :: testing.require_some(t, elf_loader.read_le(file, executable.relocations, 8), "the first relocation's offset is in the file")?
+    first :: testing.require_some(
+        t,
+        elf_loader.read_le(file, executable.relocations, 8),
+        "the first relocation's offset is in the file"
+    )?
     addend :: testing.require_some(t, elf_loader.read_le(file, executable.relocations + 16, 8), "and its addend")?
     word :: testing.require_some(t, elf_loader.read_le(image, first, 8), "the relocated word is in the image")?
     testing.expect_eq(t, word, BASE + addend, "a relative relocation's word is the base and its addend")
     // A segment's bytes are where it says
     segment :: executable.segments[0]
-    loaded :: testing.require_some(t, elf_loader.read_le(image, segment.address, 4), "the first segment's address is in the image")?
+    loaded :: testing.require_some(
+        t,
+        elf_loader.read_le(image, segment.address, 4),
+        "the first segment's address is in the image"
+    )?
     original :: testing.require_some(t, elf_loader.read_le(file, segment.offset, 4), "its offset is in the file")?
     if segment.file_size > 4 {
-        testing.expect_eq(t, loaded, original, "a segment's bytes are copied from its offset in the file to its address")
+        testing.expect_eq(
+            t,
+            loaded,
+            original,
+            "a segment's bytes are copied from its offset in the file to its address"
+        )
     }
     return .Ok
 }
 
-an_image_too_small_is_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+an_image_too_small_is_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made :: hello(t)?
     defer free_hello(made)
     executable := made.executable
@@ -225,14 +243,22 @@ an_image_too_small_is_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
     return .Ok
 }
 
-copies_made_wrong_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+copies_made_wrong_are_refused #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     made :: hello(t)?
     defer free_hello(made)
     file :: string_bytes(made.contents)
     executable :: made.executable
     expect_refused(t, file, 0, 1, 0, .NotElf, .NotElf, "without its magic, it isn't ELF")
-    expect_refused(t, file, 16, 2, 2, .NotPositionIndependent, .NotPositionIndependent,
-        "ET_EXEC is for a fixed address, and programs are loaded anywhere")
+    expect_refused(
+        t,
+        file,
+        16,
+        2,
+        2,
+        .NotPositionIndependent,
+        .NotPositionIndependent,
+        "ET_EXEC is for a fixed address, and programs are loaded anywhere"
+    )
     // For the other architecture: ARM64's on x86-64, x86-64's on ARM64
     other :: if elf_loader.MACHINE == 62 { cast[u64](183) } else { cast[u64](62) }
     expect_refused(t, file, 18, 2, other, .Unsupported, .Unsupported, "an executable for the other architecture")
@@ -247,14 +273,46 @@ copies_made_wrong_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
             break
         }
     }
-    expect_refused(t, file, load_header + 4, 4, elf_loader.PF_R | elf_loader.PF_W | elf_loader.PF_X, .WritableAndExecutable,
-        .WritableAndExecutable, "a segment both writable and executable is refused (W^X)")
-    expect_refused(t, file, load_header + 8, 8, cast[u64](file.count), .SegmentOutsideFile, .BadHeaders,
-        "a loadable segment past the end of the file")
-    expect_refused(t, file, executable.relocations + 8, 8, 1, .UnsupportedRelocation, .UnsupportedRelocation,
-        "only R_X86_64_RELATIVE's kind of relocation is applied")
-    expect_refused(t, file, executable.relocations, 8, executable.size, .RelocationOutsideImage, .RelocationOutsideImage,
-        "a relocation at the image's end is outside it")
+    expect_refused(
+        t,
+        file,
+        load_header + 4,
+        4,
+        elf_loader.PF_R | elf_loader.PF_W | elf_loader.PF_X,
+        .WritableAndExecutable,
+        .WritableAndExecutable,
+        "a segment both writable and executable is refused (W^X)"
+    )
+    expect_refused(
+        t,
+        file,
+        load_header + 8,
+        8,
+        cast[u64](file.count),
+        .SegmentOutsideFile,
+        .BadHeaders,
+        "a loadable segment past the end of the file"
+    )
+    expect_refused(
+        t,
+        file,
+        executable.relocations + 8,
+        8,
+        1,
+        .UnsupportedRelocation,
+        .UnsupportedRelocation,
+        "only R_X86_64_RELATIVE's kind of relocation is applied"
+    )
+    expect_refused(
+        t,
+        file,
+        executable.relocations,
+        8,
+        executable.size,
+        .RelocationOutsideImage,
+        .RelocationOutsideImage,
+        "a relocation at the image's end is outside it"
+    )
     if file.count >= 32 {
         cut :: elf_loader.read(file[0..<32])
         testing.expect(t, cut is_error, "32 bytes are only part of an ELF header")
@@ -277,8 +335,17 @@ copies_made_wrong_are_refused #test :: fn(t: ptr[mut testing.T]) -> testing.Outc
  * @param message Why it should be refused, for whoever reads a failure.
  * @param location Where the check is; the caller's own.
  */
-expect_refused :: fn(t: ptr[mut testing.T], file: u8[], offset: u64, size: u64, value: u64, wanted: elf_loader.LoadError,
-        or_wanted: elf_loader.LoadError, message: string, location := #caller_location) {
+expect_refused :: fn(
+    t : ptr[mut testing.T],
+    file : u8[],
+    offset : u64,
+    size : u64,
+    value : u64,
+    wanted : elf_loader.LoadError,
+    or_wanted : elf_loader.LoadError,
+    message : string,
+    location := #caller_location
+) {
     copy, error :: runtime.new_array(u8, file.count)
     if error != null {
         testing.record(t, message, "the copy couldn't be allocated", location)

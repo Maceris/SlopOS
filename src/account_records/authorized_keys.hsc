@@ -4,6 +4,7 @@
  * once its key's read (std/ssh's parse_key_line) and written again in that form, its comment cut to printable ASCII;
  * one's removed by its key's fingerprint, SHA256:..., as ssh-keygen -l shows it.
  */
+
 package account_records
 
 import ssh from "std:ssh"
@@ -38,7 +39,7 @@ KeyAdded :: union {
  * @param into Where the keys' text with it goes; KEYS_TEXT_BYTES is room enough. It mustn't be keys.
  * @return Added with the new text's length, or why it isn't.
  */
-add_key :: fn(keys: u8[], line: u8[], into: mut u8[]) -> KeyAdded {
+add_key :: fn(keys : u8[], line : u8[], into : mut u8[]) -> KeyAdded {
     if line.count > KEY_LINE_BYTES {
         return .NotAKey
     }
@@ -78,7 +79,7 @@ add_key :: fn(keys: u8[], line: u8[], into: mut u8[]) -> KeyAdded {
  * @param into Where the keys' text without it goes; keys.count is room enough. It mustn't be keys.
  * @return The new text's length; null if no key has that fingerprint.
  */
-remove_key :: fn(keys: u8[], fingerprint: u8[], into: mut u8[]) -> usize? {
+remove_key :: fn(keys : u8[], fingerprint : u8[], into : mut u8[]) -> usize? {
     found := false
     at := cast[usize](0)
     reading := cast[usize](0)
@@ -102,7 +103,7 @@ remove_key :: fn(keys: u8[], fingerprint: u8[], into: mut u8[]) -> usize? {
  * @param blob The key's blob, as SSH sends it.
  * @return True if one of its lines is that key.
  */
-has_key :: fn(keys: u8[], blob: u8[]) -> bool {
+has_key :: fn(keys : u8[], blob : u8[]) -> bool {
     reading := cast[usize](0)
     loop {
         each :: next_line(keys, &reading) or_break
@@ -116,13 +117,13 @@ has_key :: fn(keys: u8[], blob: u8[]) -> bool {
 }
 
 /** Tell whether an account's keys have the key of a line; false if the line isn't a key's. */
-has_key_line :: fn(keys: u8[], line: u8[]) -> bool {
+has_key_line :: fn(keys : u8[], line : u8[]) -> bool {
     key :: ssh.parse_key_line(line) or_return false
     return has_key(keys, ssh.blob_of(&key))
 }
 
 /** How many keys an account's keys' text has: its lines that aren't empty. */
-key_count :: fn(keys: u8[]) -> usize {
+key_count :: fn(keys : u8[]) -> usize {
     count := cast[usize](0)
     reading := cast[usize](0)
     loop {
@@ -139,13 +140,13 @@ key_count :: fn(keys: u8[]) -> usize {
  * @param line The line.
  * @return Its fingerprint, SHA256: and 43 characters of base64, 50 bytes; null if it isn't a key's line.
  */
-key_fingerprint :: fn(line: u8[]) -> u8[50]? {
+key_fingerprint :: fn(line : u8[]) -> u8[50]? {
     key :: ssh.parse_key_line(line) or_return null
     return ssh.fingerprint(ssh.blob_of(&key))
 }
 
 /** Whether a line is a key whose fingerprint is the one given. */
-line_has_fingerprint :: fn(line: u8[], fingerprint: u8[]) -> bool {
+line_has_fingerprint :: fn(line : u8[], fingerprint : u8[]) -> bool {
     printed :: key_fingerprint(line) or_return false
     return ssh.same(printed[0..<50], fingerprint)
 }
@@ -157,7 +158,7 @@ line_has_fingerprint :: fn(line: u8[], fingerprint: u8[]) -> bool {
  * @param at Where to look from, 0 at first; moved past the line.
  * @return The line, a view of the text; null after the last.
  */
-next_line :: fn(keys: u8[], at: ptr[mut usize]) -> u8[]? {
+next_line :: fn(keys : u8[], at : ptr[mut usize]) -> u8[]? {
     loop {
         if at^ >= keys.count {
             return null
@@ -179,7 +180,7 @@ next_line :: fn(keys: u8[], at: ptr[mut usize]) -> u8[]? {
 }
 
 /** A line without the blanks at its ends. */
-trimmed :: fn(line: u8[]) -> u8[] {
+trimmed :: fn(line : u8[]) -> u8[] {
     start := cast[usize](0)
     end := line.count
     loop {
@@ -194,7 +195,7 @@ trimmed :: fn(line: u8[]) -> u8[] {
 }
 
 /** Whether a byte is a space, a tab, a carriage return or a line break. */
-is_blank :: fn(byte: u8) -> bool {
+is_blank :: fn(byte : u8) -> bool {
     return byte == 0x20 || byte == 0x09 || byte == 0x0d || byte == 0x0a
 }
 
@@ -206,7 +207,7 @@ is_blank :: fn(byte: u8) -> bool {
  * @param into Where it goes.
  * @return Its length.
  */
-comment_of :: fn(line: u8[], into: mut u8[]) -> usize {
+comment_of :: fn(line : u8[], into : mut u8[]) -> usize {
     text :: trimmed(line)
     // Past two words and the blanks after each
     at := cast[usize](0)
@@ -231,7 +232,7 @@ comment_of :: fn(line: u8[], into: mut u8[]) -> usize {
 }
 
 /** Put a line and a line break into a text at an offset, as far as it fits; where the next goes, counting all of it. */
-put :: fn(into: mut u8[], at: usize, line: u8[]) -> usize {
+put :: fn(into : mut u8[], at : usize, line : u8[]) -> usize {
     for byte, i in line {
         if at + i < into.count {
             into[at + i] = byte
@@ -245,6 +246,6 @@ put :: fn(into: mut u8[], at: usize, line: u8[]) -> usize {
 }
 
 /** The first count bytes of a view, or all of it if count's past its end. */
-part :: fn(view: u8[], count: usize) -> u8[] {
+part :: fn(view : u8[], count : usize) -> u8[] {
     return if count <= view.count { view[0..<count] } else { view }
 }

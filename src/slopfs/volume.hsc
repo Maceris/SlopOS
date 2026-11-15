@@ -80,7 +80,7 @@ FailedChunk :: struct {
  *     not checked against the file's size.
  * @return True if a failed write was for it, not written since, or more than MAX_FAILED_CHUNKS failed writes were.
  */
-chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
+chunk_failed :: fn(volume : ptr[Volume], file : u64, index : u64) -> bool {
     if volume.failed_count > MAX_FAILED_CHUNKS {
         return true
     }
@@ -101,12 +101,14 @@ chunk_failed :: fn(volume: ptr[Volume], file: u64, index: u64) -> bool {
  *     checked against the file's size.
  * @param failed True if the write failed, so the chunk is remembered; false if it succeeded, so it's forgotten.
  */
-note_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, failed: bool) {
+note_chunk :: fn(volume : ptr[mut Volume], file : u64, index : u64, failed : bool) {
     if volume.failed_count > MAX_FAILED_CHUNKS {
         return void
     }
     for i in cast[usize](0)..<volume.failed_chunks.count {
-        if i < cast[usize](volume.failed_count) && volume.failed_chunks[i].file == file && volume.failed_chunks[i].index == index {
+        if i < cast[usize](volume.failed_count)
+            && volume.failed_chunks[i].file == file
+            && volume.failed_chunks[i].index == index {
             if !failed {
                 last :: cast[usize](volume.failed_count) - 1
                 if last < volume.failed_chunks.count {
@@ -180,7 +182,12 @@ VolumeId :: struct {
  * @error NoSpace No free extent for its root's node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-create_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64) -> Result[ptr[mut Volume], Error] {
+create_volume :: fn(
+    container #escaping : ptr[mut Container],
+    name : string,
+    hash_key : u8[32],
+    now : u64
+) -> Result[ptr[mut Volume], Error] {
     return create_keyed_volume(container, name, hash_key, now, null)
 }
 
@@ -205,9 +212,15 @@ create_volume :: fn(container #escaping : ptr[mut Container], name: string, hash
  * @error NoSpace No free extent for a node.
  * @error Corrupt The first generation couldn't be made, or a node couldn't be read or didn't check out.
  */
-create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64, cipher: Cipher,
-    passphrase: u8[], parameters: crypto.Argon2Parameters) -> Result[ptr[mut Volume], Error] {
-
+create_sealed_volume :: fn(
+    container #escaping : ptr[mut Container],
+    name : string,
+    hash_key : u8[32],
+    now : u64,
+    cipher : Cipher,
+    passphrase : u8[],
+    parameters : crypto.Argon2Parameters
+) -> Result[ptr[mut Volume], Error] {
     if cipher == .None {
         return create_volume(container, name, hash_key, now)
     }
@@ -242,9 +255,13 @@ create_sealed_volume :: fn(container #escaping : ptr[mut Container], name: strin
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node.
  */
-make_first_keys :: fn(container: ptr[mut Container], id: u64, keys: ptr[mut Keys], passphrase: u8[],
-    parameters: crypto.Argon2Parameters) -> Result[void, Error] {
-
+make_first_keys :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    keys : ptr[mut Keys],
+    passphrase : u8[],
+    parameters : crypto.Argon2Parameters
+) -> Result[void, Error] {
     wrap := wrap_with_passphrase(&keys.volume_key, passphrase, parameters, container.id, id) or_return .Error(.WrongKey)
     put_wrap(container, id, 0, &wrap)?
     generation := start_generation(keys, container.nodes.transaction, container.id, id) or_return .Error(.Corrupt)
@@ -267,9 +284,13 @@ make_first_keys :: fn(container: ptr[mut Container], id: u64, keys: ptr[mut Keys
  * @error NoSpace No free extent for its root's node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string, hash_key: u8[32], now: u64,
-    keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
-
+create_keyed_volume :: fn(
+    container #escaping : ptr[mut Container],
+    name : string,
+    hash_key : u8[32],
+    now : u64,
+    keys #escaping : ptr[mut Keys]?
+) -> Result[ptr[mut Volume], Error] {
     if name.count == 0 || name.count > VOLUME_NAME_BYTES {
         match keys {
             case Some(given) => free_keys(given)
@@ -287,8 +308,17 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
             return .Error(error)
         }
     }
-    volume^ = Volume.{nodes = &container.nodes, device = container.device, id = container.next_volume, next_object = ROOT_OBJECT + 1,
-        hash_key = hash_key, created = now, name_bytes = cast[u16](name.count), dirty = true, now = now}
+    volume^ = Volume.{
+        nodes = &container.nodes,
+        device = container.device,
+        id = container.next_volume,
+        next_object = ROOT_OBJECT + 1,
+        hash_key = hash_key,
+        created = now,
+        name_bytes = cast[u16](name.count),
+        dirty = true,
+        now = now,
+    }
     volume.tree = Tree.{kind = .Volume, owner = volume.id, keys = keys}
     for character, i in name {
         if i < volume.name.count {
@@ -296,8 +326,13 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
         }
     }
     container.next_volume += 1
-    root := ObjectRecord.{kind = cast[u32le](cast[u32](ObjectKind.Directory)), parent = cast[u64le](ROOT_OBJECT),
-        created = cast[u64le](now), modified = cast[u64le](now), changed = cast[u64le](container.nodes.transaction)}
+    root := ObjectRecord.{
+        kind = cast[u32le](cast[u32](ObjectKind.Directory)),
+        parent = cast[u64le](ROOT_OBJECT),
+        created = cast[u64le](now),
+        modified = cast[u64le](now),
+        changed = cast[u64le](container.nodes.transaction),
+    }
     match put_object(volume, ROOT_OBJECT, &root) {
         case Ok => {}
         case Error(error) => {
@@ -325,14 +360,15 @@ create_keyed_volume :: fn(container #escaping : ptr[mut Container], name: string
  * @error OutOfMemory No memory for the volume or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[ptr[mut Volume], Error] {
+open_volume :: fn(container #escaping : ptr[mut Container], id : u64) -> Result[ptr[mut Volume], Error] {
     for volume in container.open {
         if volume.id == id {
             return .Ok(volume)
         }
     }
     value : u8[224]
-    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), value)? or_return .Error(.NotFound)
+    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), value)?
+        or_return .Error(.NotFound)
     if bytes != size_of(VolumeRecord) {
         return .Error(.Corrupt)
     }
@@ -365,7 +401,11 @@ open_volume :: fn(container #escaping : ptr[mut Container], id: u64) -> Result[p
  * @error OutOfMemory No memory for the keys, the volume or a node.
  * @error Corrupt A record or a node didn't check out, the cipher isn't one, or a generation doesn't open.
  */
-open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, passphrase: u8[]) -> Result[ptr[mut Volume], Error] {
+open_sealed_volume :: fn(
+    container #escaping : ptr[mut Container],
+    id : u64,
+    passphrase : u8[]
+) -> Result[ptr[mut Volume], Error] {
     for volume in container.open {
         if volume.id == id {
             return .Ok(volume)
@@ -423,12 +463,24 @@ open_sealed_volume :: fn(container #escaping : ptr[mut Container], id: u64, pass
  * @return The volume, the caller's to free with free_volume.
  * @error OutOfMemory No memory for it.
  */
-attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device, id: u64, record: VolumeRecord,
-    keys #escaping : ptr[mut Keys]?) -> Result[ptr[mut Volume], Error] {
-
+attach_volume :: fn(
+    nodes #escaping : ptr[mut Nodes],
+    device #escaping : Device,
+    id : u64,
+    record : VolumeRecord,
+    keys #escaping : ptr[mut Keys]?
+) -> Result[ptr[mut Volume], Error] {
     volume :: make(Volume)?
-    volume^ = Volume.{nodes = nodes, device = device, id = id, next_object = cast[u64](record.next_object), hash_key = record.hash_key,
-        created = cast[u64](record.created), name = record.name, name_bytes = cast[u16](record.name_bytes)}
+    volume^ = Volume.{
+        nodes = nodes,
+        device = device,
+        id = id,
+        next_object = cast[u64](record.next_object),
+        hash_key = record.hash_key,
+        created = cast[u64](record.created),
+        name = record.name,
+        name_bytes = cast[u16](record.name_bytes),
+    }
     volume.tree = Tree.{root = record.root, kind = .Volume, owner = id, keys = keys}
     volume.opened = record
     return .Ok(volume)
@@ -441,7 +493,7 @@ attach_volume :: fn(nodes #escaping : ptr[mut Nodes], device #escaping : Device,
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @return The record, a copy; what the volume doesn't change, as a clone's origin, as it was opened.
  */
-record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
+record_of :: fn(volume : ptr[Volume]) -> VolumeRecord {
     record := volume.opened
     record.root = volume.tree.root
     record.next_object = cast[u64le](volume.next_object)
@@ -472,7 +524,7 @@ record_of :: fn(volume: ptr[Volume]) -> VolumeRecord {
  * @error OutOfMemory No memory to seal an encrypted node in.
  * @error Corrupt An encrypted node couldn't be sealed.
  */
-write_volume :: fn(volume: ptr[mut Volume]) -> Result[VolumeRecord, Error] {
+write_volume :: fn(volume : ptr[mut Volume]) -> Result[VolumeRecord, Error] {
     if volume.failed {
         return .Error(.Failed)
     }
@@ -491,7 +543,7 @@ write_volume :: fn(volume: ptr[mut Volume]) -> Result[VolumeRecord, Error] {
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-next_volume_id :: fn(container: ptr[mut Container], at: u64) -> Result[u64?, Error] {
+next_volume_id :: fn(container : ptr[mut Container], at : u64) -> Result[u64?, Error] {
     value : u8[1]
     found :: tree_next(&container.nodes, &container.volumes, key_of(at, .VolumeEntry, 0), value)? or_return .Ok(null)
     return .Ok(found.key.object)
@@ -506,7 +558,7 @@ next_volume_id :: fn(container: ptr[mut Container], at: u64) -> Result[u64?, Err
  * @param container The container, mounted: what it reads includes its transaction's changes not yet committed.
  * @param id The volume's ID; one that isn't open is no error, and nothing's done.
  */
-close_volume :: fn(container: ptr[mut Container], id: u64) {
+close_volume :: fn(container : ptr[mut Container], id : u64) {
     for volume, i in container.open {
         if volume.id == id {
             runtime.array_remove(&container.open, i)
@@ -522,7 +574,7 @@ close_volume :: fn(container: ptr[mut Container], id: u64) {
  * @param volume The volume; it may not be used again. One among a container's open ones has to be taken out of them
  *     first (close_volume does both).
  */
-free_volume :: fn(volume: ptr[mut Volume]) {
+free_volume :: fn(volume : ptr[mut Volume]) {
     match volume.tree.keys {
         case Some(keys) => free_keys(keys)
         case None => {}
@@ -551,7 +603,13 @@ free_volume :: fn(volume: ptr[mut Volume]) {
  * @error NotFound A volume found by its ID isn't there to read.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32], now: u64, cipher: Cipher) -> Result[u64, Error] {
+register_volume :: fn(
+    container : ptr[mut Container],
+    name : u8[],
+    hash_key : u8[32],
+    now : u64,
+    cipher : Cipher
+) -> Result[u64, Error] {
     if name.count == 0 || name.count > VOLUME_NAME_BYTES {
         return .Error(.InvalidName)
     }
@@ -560,8 +618,13 @@ register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32
         return .Error(.AlreadyExists)
     }
     id :: container.next_volume
-    record := VolumeRecord.{next_object = cast[u64le](ROOT_OBJECT + 1), hash_key = hash_key, created = cast[u64le](now),
-        name_bytes = cast[u16le](cast[u16](name.count)), cipher = cast[u8](cipher)}
+    record := VolumeRecord.{
+        next_object = cast[u64le](ROOT_OBJECT + 1),
+        hash_key = hash_key,
+        created = cast[u64le](now),
+        name_bytes = cast[u16le](cast[u16](name.count)),
+        cipher = cast[u8](cipher),
+    }
     // A sealed one's first generation, which first_keys starts, is 1
     if cipher != .None {
         record.generation = cast[u32le](1)
@@ -582,7 +645,7 @@ register_volume :: fn(container: ptr[mut Container], name: u8[], hash_key: u8[32
  * @param record The volume's record, as volume_record read it.
  * @return True if it has no root and its next object is still the first after the root's.
  */
-is_unfilled :: fn(record: ptr[VolumeRecord]) -> bool {
+is_unfilled :: fn(record : ptr[VolumeRecord]) -> bool {
     return cast[u64](record.root.address) == 0 && cast[u64](record.next_object) == ROOT_OBJECT + 1
 }
 
@@ -614,9 +677,14 @@ FirstKeys :: struct {
  * @error WrongKey The volume key couldn't be wrapped: Argon2id couldn't run with the parameters.
  * @error Corrupt The first generation couldn't be wrapped, or kept for want of memory.
  */
-first_keys :: fn(keys: ptr[mut Keys], passphrase: u8[], parameters: crypto.Argon2Parameters, container: u8[16], id: u64,
-    transaction: u64) -> Result[FirstKeys, Error] {
-
+first_keys :: fn(
+    keys : ptr[mut Keys],
+    passphrase : u8[],
+    parameters : crypto.Argon2Parameters,
+    container : u8[16],
+    id : u64,
+    transaction : u64
+) -> Result[FirstKeys, Error] {
     keys.volume_key = random_key()
     wrap :: wrap_with_passphrase(&keys.volume_key, passphrase, parameters, container, id) or_return .Error(.WrongKey)
     generation :: start_generation(keys, transaction, container, id) or_return .Error(.Corrupt)
@@ -632,9 +700,14 @@ first_keys :: fn(keys: ptr[mut Keys], passphrase: u8[], parameters: crypto.Argon
  * @error NoSpace No free extent for the root's node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
-    root := ObjectRecord.{kind = cast[u32le](cast[u32](ObjectKind.Directory)), parent = cast[u64le](ROOT_OBJECT),
-        created = cast[u64le](now), modified = cast[u64le](now), changed = cast[u64le](volume.nodes.transaction)}
+fill_volume :: fn(volume : ptr[mut Volume], now : u64) -> Result[void, Error] {
+    root := ObjectRecord.{
+        kind = cast[u32le](cast[u32](ObjectKind.Directory)),
+        parent = cast[u64le](ROOT_OBJECT),
+        created = cast[u64le](now),
+        modified = cast[u64le](now),
+        changed = cast[u64le](volume.nodes.transaction),
+    }
     put_object(volume, ROOT_OBJECT, &root)?
     volume.dirty = true
     return .Ok
@@ -651,8 +724,13 @@ fill_volume :: fn(volume: ptr[mut Volume], now: u64) -> Result[void, Error] {
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[VolumeRecord]) -> Result[void, Error] {
-    tree_put(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0), view_of(cast[ptr[u8]](record), size_of(VolumeRecord)))?
+put_volume_record :: fn(container : ptr[mut Container], id : u64, record : ptr[VolumeRecord]) -> Result[void, Error] {
+    tree_put(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .VolumeEntry, 0),
+        view_of(cast[ptr[u8]](record), size_of(VolumeRecord))
+    )?
     return .Ok
 }
 
@@ -666,10 +744,15 @@ put_volume_record :: fn(container: ptr[mut Container], id: u64, record: ptr[Volu
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeRecord, Error] {
+volume_record :: fn(container : ptr[mut Container], id : u64) -> Result[VolumeRecord, Error] {
     record := VolumeRecord.{}
-    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .VolumeEntry, 0),
-        view_of(cast[ptr[mut u8]](&record), size_of(VolumeRecord)))? or_return .Error(.NotFound)
+    bytes :: tree_get(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .VolumeEntry, 0),
+        view_of(cast[ptr[mut u8]](&record), size_of(VolumeRecord))
+    )?
+        or_return .Error(.NotFound)
     if bytes != size_of(VolumeRecord) {
         return .Error(.Corrupt)
     }
@@ -686,7 +769,7 @@ volume_record :: fn(container: ptr[mut Container], id: u64) -> Result[VolumeReco
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, Error] {
+find_volume :: fn(container : ptr[mut Container], name : string) -> Result[u64?, Error] {
     at : u64 = 0
     loop {
         id :: next_volume_id(container, at)? or_return .Ok(null)
@@ -714,10 +797,15 @@ find_volume :: fn(container: ptr[mut Container], name: string) -> Result[u64?, E
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
+get_object :: fn(volume : ptr[mut Volume], object : u64) -> Result[ObjectRecord, Error] {
     record := ObjectRecord.{}
-    bytes :: tree_get(volume.nodes, &volume.tree, key_of(object, .Object, 0),
-        view_of(cast[ptr[mut u8]](&record), size_of(ObjectRecord)))? or_return .Error(.NotFound)
+    bytes :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(object, .Object, 0),
+        view_of(cast[ptr[mut u8]](&record), size_of(ObjectRecord))
+    )?
+        or_return .Error(.NotFound)
     if bytes != size_of(ObjectRecord) {
         return .Error(.Corrupt)
     }
@@ -735,9 +823,14 @@ get_object :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, E
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-put_object :: fn(volume: ptr[mut Volume], object: u64, record: ptr[ObjectRecord]) -> Result[void, Error] {
+put_object :: fn(volume : ptr[mut Volume], object : u64, record : ptr[ObjectRecord]) -> Result[void, Error] {
     volume.dirty = true
-    tree_put(volume.nodes, &volume.tree, key_of(object, .Object, 0), view_of(cast[ptr[u8]](record), size_of(ObjectRecord)))?
+    tree_put(
+        volume.nodes,
+        &volume.tree,
+        key_of(object, .Object, 0),
+        view_of(cast[ptr[u8]](record), size_of(ObjectRecord))
+    )?
     return .Ok
 }
 
@@ -747,7 +840,7 @@ put_object :: fn(volume: ptr[mut Volume], object: u64, record: ptr[ObjectRecord]
  * @param record The object's record, as get_object read it.
  * @return Its kind, as kind_of reads it.
  */
-kind_of_record :: fn(record: ptr[ObjectRecord]) -> ObjectKind {
+kind_of_record :: fn(record : ptr[ObjectRecord]) -> ObjectKind {
     return kind_of(cast[u32](record.kind))
 }
 
@@ -757,7 +850,7 @@ kind_of_record :: fn(record: ptr[ObjectRecord]) -> ObjectKind {
  * @param kind A kind field's value, from an object's record or an entry's head, as stored; any value is taken.
  * @return Directory or Link for theirs; File for any other value, 1 included.
  */
-kind_of :: fn(kind: u32) -> ObjectKind {
+kind_of :: fn(kind : u32) -> ObjectKind {
     if kind == cast[u32](ObjectKind.Directory) {
         return .Directory
     }
@@ -774,11 +867,20 @@ kind_of :: fn(kind: u32) -> ObjectKind {
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
+info :: fn(volume : ptr[mut Volume], object : u64) -> Result[Info, Error] {
     record :: get_object(volume, object)?
-    return .Ok(Info.{object = object, kind = kind_of_record(&record), parent = cast[u64](record.parent), size = cast[u64](record.size),
-        created = cast[u64](record.created), modified = cast[u64](record.modified), changed = cast[u64](record.changed),
-        schema = record.schema})
+    return .Ok(
+        Info.{
+            object = object,
+            kind = kind_of_record(&record),
+            parent = cast[u64](record.parent),
+            size = cast[u64](record.size),
+            created = cast[u64](record.created),
+            modified = cast[u64](record.modified),
+            changed = cast[u64](record.changed),
+            schema = record.schema,
+        }
+    )
 }
 
 /**
@@ -794,7 +896,7 @@ info :: fn(volume: ptr[mut Volume], object: u64) -> Result[Info, Error] {
  * @error NoSpace No free extent for a node.
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  */
-set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result[void, Error] {
+set_schema :: fn(volume : ptr[mut Volume], object : u64, schema : u8[32]) -> Result[void, Error] {
     record := get_object(volume, object)?
     record.schema = schema
     put_object(volume, object, &record)?
@@ -813,7 +915,7 @@ set_schema :: fn(volume: ptr[mut Volume], object: u64, schema: u8[32]) -> Result
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
+directory_record :: fn(volume : ptr[mut Volume], object : u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
     kind :: kind_of_record(&record)
     if kind == .Link {
@@ -836,7 +938,7 @@ directory_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRec
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord]) -> Result[void, Error] {
+touch :: fn(volume : ptr[mut Volume], object : u64, record : ptr[mut ObjectRecord]) -> Result[void, Error] {
     record.modified = cast[u64le](volume.now)
     record.changed = cast[u64le](volume.nodes.transaction)
     return put_object(volume, object, record)
@@ -856,7 +958,7 @@ touch :: fn(volume: ptr[mut Volume], object: u64, record: ptr[mut ObjectRecord])
  * @return True if it can; false if it's empty, longer than NAME_BYTES, "." or "..", or has '/', bytes that aren't
  *     UTF-8, or a code point that isn't visible.
  */
-name_holds :: fn(name: string) -> bool {
+name_holds :: fn(name : string) -> bool {
     if name.count == 0 || name.count > NAME_BYTES || name == "." || name == ".." {
         return false
     }
@@ -884,7 +986,7 @@ name_holds :: fn(name: string) -> bool {
  * @return length Its length in bytes, 1 to 4; 0 at the end, or for bytes that aren't UTF-8, an overlong form, a
  *     surrogate or past 0x10ffff.
  */
-decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
+decode_utf8 :: fn(bytes : u8[], at : usize) -> (point : u32, length : usize) {
     if at >= bytes.count {
         return 0, 0
     }
@@ -939,7 +1041,7 @@ decode_utf8 :: fn(bytes: u8[], at: usize) -> (point: u32, length: usize) {
  * @param point The code point, as decode_utf8 gave it.
  * @return True if it shows; false for U+0000 to U+001F, U+007F to U+009F, and the ranges in INVISIBLE.
  */
-visible :: fn(point: u32) -> bool {
+visible :: fn(point : u32) -> bool {
     if point < 0x20 || (point >= 0x7f && point <= 0x9f) {
         return false
     }
@@ -956,7 +1058,7 @@ visible :: fn(point: u32) -> bool {
 INVISIBLE :: u32.[
     0x00ad, 0x00ad, 0x034f, 0x034f, 0x061c, 0x061c, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180f, 0x200b, 0x200f,
     0x202a, 0x202e, 0x2060, 0x206f, 0x3164, 0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xfeff, 0xffa0, 0xffa0, 0xfff0, 0xfff8,
-    0x1bca0, 0x1bca3, 0x1d173, 0x1d17a, 0xe0000, 0xe0fff,
+    0x1bca0, 0x1bca3, 0x1d173, 0x1d17a, 0xe0000, 0xe0fff
 ]
 
 /** The bits a name's hash has: 56, so a list cursor holds it with a place among those alike in its low 8. */
@@ -969,7 +1071,7 @@ HASH_MASK : u64 : 0x00ffffffffffffff
  * @param name The name's bytes, hashed as they are.
  * @return The hash, 0 to HASH_MASK.
  */
-hash_name :: fn(volume: ptr[Volume], name: string) -> u64 {
+hash_name :: fn(volume : ptr[Volume], name : string) -> u64 {
     hasher := crypto.blake3_start_keyed(crypto.as_secret(volume.hash_key)) or_return 0
     crypto.blake3_update(&hasher, string_bytes(name))
     digest : u8[8]
@@ -1009,7 +1111,7 @@ EntryAt :: struct {
  * @param at The entry's byte offset.
  * @return The head, a copy; null if it doesn't fit in the list's used bytes.
  */
-entry_head :: fn(list: ptr[EntryList], at: usize) -> EntryHead? {
+entry_head :: fn(list : ptr[EntryList], at : usize) -> EntryHead? {
     if at + size_of(EntryHead) > list.count || at >= list.bytes.count {
         return null
     }
@@ -1023,7 +1125,7 @@ entry_head :: fn(list: ptr[EntryList], at: usize) -> EntryHead? {
  * @param at The entry's byte offset.
  * @return The next entry's offset, which may be the list's end; null if the entry doesn't hold together.
  */
-next_entry_at :: fn(list: ptr[EntryList], at: usize) -> usize? {
+next_entry_at :: fn(list : ptr[EntryList], at : usize) -> usize? {
     head :: entry_head(list, at) or_return null
     next :: at + size_of(EntryHead) + cast[usize](cast[u16](head.name_bytes))
     return if next <= list.count { next } else { null }
@@ -1037,7 +1139,7 @@ next_entry_at :: fn(list: ptr[EntryList], at: usize) -> usize? {
  * @param head The entry's head, as entry_head read it at at; its name_bytes says how many bytes the name has.
  * @return The name's bytes, a view into the list, good until it changes; empty if they don't fit in the list.
  */
-entry_name :: fn(list: ptr[EntryList], at: usize, head: ptr[EntryHead]) -> u8[] {
+entry_name :: fn(list : ptr[EntryList], at : usize, head : ptr[EntryHead]) -> u8[] {
     start :: at + size_of(EntryHead)
     count :: cast[usize](cast[u16](head.name_bytes))
     if start + count > list.count || start >= list.bytes.count {
@@ -1053,7 +1155,7 @@ entry_name :: fn(list: ptr[EntryList], at: usize, head: ptr[EntryHead]) -> u8[] 
  * @param b The string, as a caller's name.
  * @return True if they're the same length and byte for byte alike.
  */
-same_bytes :: fn(a: u8[], b: string) -> bool {
+same_bytes :: fn(a : u8[], b : string) -> bool {
     if a.count != b.count {
         return false
     }
@@ -1072,7 +1174,7 @@ same_bytes :: fn(a: u8[], b: string) -> bool {
  * @param name The name looked for.
  * @return Where it is and its head; null if no entry has it, or the list stops holding together before one does.
  */
-find_in_list :: fn(list: ptr[EntryList], name: string) -> EntryAt? {
+find_in_list :: fn(list : ptr[EntryList], name : string) -> EntryAt? {
     at : usize = 0
     loop {
         head :: entry_head(list, at) or_return null
@@ -1095,7 +1197,12 @@ find_in_list :: fn(list: ptr[EntryList], name: string) -> EntryAt? {
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-get_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[mut EntryList]) -> Result[void, Error] {
+get_entries :: fn(
+    volume : ptr[mut Volume],
+    directory : u64,
+    hash : u64,
+    list : ptr[mut EntryList]
+) -> Result[void, Error] {
     list.count = tree_get(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), list.bytes)? or_else 0
     return .Ok
 }
@@ -1112,7 +1219,7 @@ get_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[EntryList]) -> Result[void, Error] {
+put_entries :: fn(volume : ptr[mut Volume], directory : u64, hash : u64, list : ptr[EntryList]) -> Result[void, Error] {
     volume.dirty = true
     key :: key_of(directory, .Entry, hash)
     if list.count == 0 {
@@ -1141,7 +1248,7 @@ put_entries :: fn(volume: ptr[mut Volume], directory: u64, hash: u64, list: ptr[
  * @error OutOfMemory No memory for the list or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u64?, Error] {
+lookup :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> Result[u64?, Error] {
     directory_record(volume, directory)?
     if !name_holds(name) {
         return .Error(.InvalidName)
@@ -1167,7 +1274,13 @@ lookup :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u64, kind: ObjectKind) -> Result[void, Error] {
+add_entry :: fn(
+    volume : ptr[mut Volume],
+    directory : u64,
+    name : string,
+    object : u64,
+    kind : ObjectKind
+) -> Result[void, Error] {
     hash :: hash_name(volume, name)
     list :: make(EntryList)?
     defer runtime.free(list)
@@ -1178,7 +1291,11 @@ add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u
     if list.count + size_of(EntryHead) + name.count > list.bytes.count {
         return .Error(.TooLarge)
     }
-    head := EntryHead.{object = cast[u64le](object), kind = cast[u32le](cast[u32](kind)), name_bytes = cast[u16le](cast[u16](name.count))}
+    head := EntryHead.{
+        object = cast[u64le](object),
+        kind = cast[u32le](cast[u32](kind)),
+        name_bytes = cast[u16le](cast[u16](name.count)),
+    }
     copy_bytes(list.bytes, list.count, view_of(cast[ptr[mut u8]](&head), size_of(EntryHead)))
     copy_bytes(list.bytes, list.count + size_of(EntryHead), string_bytes(name))
     list.count += size_of(EntryHead) + name.count
@@ -1197,7 +1314,7 @@ add_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string, object: u
  * @error NoSpace No free extent for a node's copy.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[void, Error] {
+remove_entry :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> Result[void, Error] {
     hash :: hash_name(volume, name)
     list :: make(EntryList)?
     defer runtime.free(list)
@@ -1232,7 +1349,7 @@ remove_entry :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Res
  * @error OutOfMemory No memory for a list or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-resolve :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[u64, Error] {
+resolve :: fn(volume : ptr[mut Volume], directory : u64, path : string) -> Result[u64, Error] {
     at := directory
     start : usize = 0
     for i in 0..<path.count + 1 {
@@ -1271,7 +1388,7 @@ Leaf :: struct {
  * @error OutOfMemory No memory for a list or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[Leaf, Error] {
+leaf_of :: fn(volume : ptr[mut Volume], directory : u64, path : string) -> Result[Leaf, Error] {
     last := path.count
     for character, i in path {
         if character == '/' {
@@ -1311,7 +1428,7 @@ leaf_of :: fn(volume: ptr[mut Volume], directory: u64, path: string) -> Result[L
  * @error NoSpace No free extent for a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: ObjectKind) -> Result[u64, Error] {
+create :: fn(volume : ptr[mut Volume], directory : u64, name : string, kind : ObjectKind) -> Result[u64, Error] {
     parent := directory_record(volume, directory)?
     if !name_holds(name) {
         return .Error(.InvalidName)
@@ -1319,8 +1436,13 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
     object :: volume.next_object
     add_entry(volume, directory, name, object, kind)?
     volume.next_object += 1
-    record := ObjectRecord.{kind = cast[u32le](cast[u32](kind)), parent = cast[u64le](directory), created = cast[u64le](volume.now),
-        modified = cast[u64le](volume.now), changed = cast[u64le](volume.nodes.transaction)}
+    record := ObjectRecord.{
+        kind = cast[u32le](cast[u32](kind)),
+        parent = cast[u64le](directory),
+        created = cast[u64le](volume.now),
+        modified = cast[u64le](volume.now),
+        changed = cast[u64le](volume.nodes.transaction),
+    }
     put_object(volume, object, &record)?
     touch(volume, directory, &parent)?
     note_change(volume, .Created, object, directory, name)?
@@ -1336,7 +1458,7 @@ create :: fn(volume: ptr[mut Volume], directory: u64, name: string, kind: Object
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-is_empty :: fn(volume: ptr[mut Volume], directory: u64) -> Result[bool, Error] {
+is_empty :: fn(volume : ptr[mut Volume], directory : u64) -> Result[bool, Error] {
     value : u8[1]
     found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, 0), value)? or_return .Ok(true)
     return .Ok(found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry))
@@ -1361,7 +1483,7 @@ is_empty :: fn(volume: ptr[mut Volume], directory: u64) -> Result[bool, Error] {
  * @error NoSpace No free extent for a node's copy.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[void, Error] {
+remove :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> Result[void, Error] {
     parent := directory_record(volume, directory)?
     object :: lookup(volume, directory, name)? or_return .Error(.NotFound)
     record :: get_object(volume, object)?
@@ -1387,12 +1509,16 @@ remove :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[vo
  * @error NoSpace No free extent for a node's copy.
  * @error Corrupt A chunk found can't be taken out, or a node couldn't be read or didn't check out.
  */
-destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
+destroy :: fn(volume : ptr[mut Volume], object : u64) -> Result[void, Error] {
     _ = tree_delete(volume.nodes, &volume.tree, key_of(object, .Link, 0))?
     loop {
         extent := ExtentRecord.{}
-        found :: tree_next(volume.nodes, &volume.tree, key_of(object, .Extent, 0),
-            view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord)))? or_break
+        found :: tree_next(
+            volume.nodes,
+            &volume.tree,
+            key_of(object, .Extent, 0),
+            view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord))
+        )? or_break
         if found.key.object != object || found.key.kind != cast[u8](RecordKind.Extent) {
             break
         }
@@ -1417,7 +1543,7 @@ destroy :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node's copy.
  */
-drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -> Result[void, Error] {
+drop_chunk :: fn(volume : ptr[mut Volume], key : Key, extent : ptr[ExtentRecord]) -> Result[void, Error] {
     if !(tree_delete(volume.nodes, &volume.tree, key)?) {
         return .Error(.Corrupt)
     }
@@ -1433,11 +1559,16 @@ drop_chunk :: fn(volume: ptr[mut Volume], key: Key, extent: ptr[ExtentRecord]) -
  * @param extent The chunk's record; only a Blocks one's pointer is read, its blocks released under the volume's ID
  *     with their birth transaction.
  */
-release_extent :: fn(volume: ptr[mut Volume], extent: ptr[ExtentRecord]) {
+release_extent :: fn(volume : ptr[mut Volume], extent : ptr[ExtentRecord]) {
     if cast[u32](extent.kind) == cast[u32](ExtentKind.Blocks) {
         nodes :: volume.nodes
-        nodes.release(nodes.space, cast[u64](extent.pointer.address), cast[u64](cast[u32](extent.pointer.blocks)), volume.id,
-            cast[u64](extent.pointer.birth))
+        nodes.release(
+            nodes.space,
+            cast[u64](extent.pointer.address),
+            cast[u64](cast[u32](extent.pointer.blocks)),
+            volume.id,
+            cast[u64](extent.pointer.birth)
+        )
     }
 }
 
@@ -1456,7 +1587,7 @@ MAX_DEPTH : u64 : 4096
  *     couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Result[bool, Error] {
+is_beneath :: fn(volume : ptr[mut Volume], directory : u64, ancestor : u64) -> Result[bool, Error] {
     at := directory
     for step in 0..<MAX_DEPTH {
         if at == ancestor {
@@ -1493,7 +1624,13 @@ is_beneath :: fn(volume: ptr[mut Volume], directory: u64, ancestor: u64) -> Resu
  * @error NoSpace No free extent for a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out, or the parents loop.
  */
-rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_name: string) -> Result[void, Error] {
+rename :: fn(
+    volume : ptr[mut Volume],
+    from : u64,
+    from_name : string,
+    to : u64,
+    to_name : string
+) -> Result[void, Error] {
     from_record := directory_record(volume, from)?
     directory_record(volume, to)?
     if !name_holds(to_name) {
@@ -1557,14 +1694,15 @@ rename :: fn(volume: ptr[mut Volume], from: u64, from_name: string, to: u64, to_
  * @error OutOfMemory No memory for the list or a node.
  * @error Corrupt A record's hash is past HASH_MASK, or a record or a node couldn't be read or didn't check out.
  */
-list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[]) -> Result[Listed?, Error] {
+list :: fn(volume : ptr[mut Volume], directory : u64, cursor : u64, name : mut u8[]) -> Result[Listed?, Error] {
     directory_record(volume, directory)?
     entries :: make(EntryList)?
     defer runtime.free(entries)
     hash := cursor >> 8
     skip := cast[usize](cursor & 0xff)
     loop {
-        found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), entries.bytes)? or_return .Ok(null)
+        found :: tree_next(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), entries.bytes)?
+            or_return .Ok(null)
         if found.key.object != directory || found.key.kind != cast[u8](RecordKind.Entry) {
             return .Ok(null)
         }
@@ -1583,8 +1721,14 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
             if cast[usize](index) >= skip {
                 text :: entry_name(entries, at, &head)
                 copy_bytes(name, 0, text)
-                return .Ok(Listed.{name_bytes = text.count, object = cast[u64](head.object), kind = kind_of(cast[u32](head.kind)),
-                    next = hash << 8 | cast[u64](index + 1)})
+                return .Ok(
+                    Listed.{
+                        name_bytes = text.count,
+                        object = cast[u64](head.object),
+                        kind = kind_of(cast[u32](head.kind)),
+                        next = hash << 8 | cast[u64](index + 1),
+                    }
+                )
             }
             at = next_entry_at(entries, at) or_break
         }
@@ -1606,7 +1750,7 @@ list :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[])
  * @param end The byte after its last.
  * @return The part, a view into bytes; empty where start..end isn't inside them.
  */
-part :: fn(bytes: u8[], start: usize, end: usize) -> u8[] {
+part :: fn(bytes : u8[], start : usize, end : usize) -> u8[] {
     if start <= end && end <= bytes.count {
         return bytes[start..<end]
     }
@@ -1621,7 +1765,7 @@ part :: fn(bytes: u8[], start: usize, end: usize) -> u8[] {
  * @param end The byte after its last.
  * @return The part, a view into bytes; empty where start..end isn't inside them.
  */
-mut_part :: fn(bytes: mut u8[], start: usize, end: usize) -> mut u8[] {
+mut_part :: fn(bytes : mut u8[], start : usize, end : usize) -> mut u8[] {
     if start <= end && end <= bytes.count {
         return bytes[start..<end]
     }
@@ -1655,7 +1799,7 @@ ChunkBuffer :: struct {
  *     check out.
  * @error OutOfMemory No memory for a buffer or a node.
  */
-read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[]) -> Result[usize, Error] {
+read_chunk :: fn(volume : ptr[mut Volume], file : u64, index : u64, buffer : mut u8[]) -> Result[usize, Error] {
     // What a failed write should have changed isn't given as if it hadn't (decisions/0112)
     if chunk_failed(volume, file, index) {
         return .Error(.DeviceError)
@@ -1665,7 +1809,8 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
     }
     value :: make(ValueBuffer)?
     defer runtime.free(value)
-    bytes :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, index * CHUNK_BYTES), value.bytes)? or_return .Ok(0)
+    bytes :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, index * CHUNK_BYTES), value.bytes)?
+        or_return .Ok(0)
     if bytes < size_of(ExtentRecord) && bytes < cast[usize](INLINE_HEAD) {
         return .Error(.Corrupt)
     }
@@ -1700,8 +1845,13 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
             if length > buffer.count {
                 return .Error(.Corrupt)
             }
-            if !open_block(keys, owner_at(&volume.tree, cast[u64](extent.pointer.birth)), &extent.pointer, part(sealed.bytes, 0, length),
-                buffer[0..<length]) {
+            if !open_block(
+                keys,
+                owner_at(&volume.tree, cast[u64](extent.pointer.birth)),
+                &extent.pointer,
+                part(sealed.bytes, 0, length),
+                buffer[0..<length]
+            ) {
                 return .Error(.Corrupt)
             }
         }
@@ -1738,7 +1888,14 @@ read_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt It couldn't be sealed, or a node couldn't be read or didn't check out.
  */
-write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8[], used: usize, inline: bool) -> Result[void, Error] {
+write_chunk :: fn(
+    volume : ptr[mut Volume],
+    file : u64,
+    index : u64,
+    buffer : mut u8[],
+    used : usize,
+    inline : bool
+) -> Result[void, Error] {
     key :: key_of(file, .Extent, index * CHUNK_BYTES)
     old := ExtentRecord.{}
     had :: tree_get(volume.nodes, &volume.tree, key, view_of(cast[ptr[mut u8]](&old), size_of(ExtentRecord)))?
@@ -1764,8 +1921,11 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
         address :: nodes.allocate(nodes.space, blocks, volume.id, true) or_return .Error(.NoSpace)
         device :: volume.device
         extent := ExtentRecord.{kind = cast[u32le](cast[u32](ExtentKind.Blocks)), bytes = cast[u32le](cast[u32](used))}
-        extent.pointer = BlockPointer.{address = cast[u64le](address), birth = cast[u64le](nodes.transaction),
-            blocks = cast[u32le](cast[u32](blocks))}
+        extent.pointer = BlockPointer.{
+            address = cast[u64le](address),
+            birth = cast[u64le](nodes.transaction),
+            blocks = cast[u32le](cast[u32](blocks)),
+        }
         // Encrypted, what's written is sealed, and the pointer takes its seal and generation
         written := part(buffer, 0, length)
         sealed : ptr[mut ChunkBuffer]? = null
@@ -1779,7 +1939,13 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
                     }
                 }
                 sealed = made
-                if !seal_block(keys, volume.id, &extent.pointer, part(buffer, 0, length), mut_part(made.bytes, 0, length)) {
+                if !seal_block(
+                    keys,
+                    volume.id,
+                    &extent.pointer,
+                    part(buffer, 0, length),
+                    mut_part(made.bytes, 0, length)
+                ) {
                     runtime.free(made)
                     nodes.release(nodes.space, address, blocks, volume.id, nodes.transaction)
                     return .Error(.Corrupt)
@@ -1820,7 +1986,7 @@ write_chunk :: fn(volume: ptr[mut Volume], file: u64, index: u64, buffer: mut u8
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, Error] {
+file_record :: fn(volume : ptr[mut Volume], object : u64) -> Result[ObjectRecord, Error] {
     record :: get_object(volume, object)?
     kind :: kind_of_record(&record)
     if kind == .Link {
@@ -1849,7 +2015,7 @@ file_record :: fn(volume: ptr[mut Volume], object: u64) -> Result[ObjectRecord, 
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A chunk's record or seal, or a node, doesn't check out.
  */
-read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> Result[usize, Error] {
+read :: fn(volume : ptr[mut Volume], file : u64, offset : u64, into : mut u8[]) -> Result[usize, Error] {
     record :: file_record(volume, file)?
     size :: cast[u64](record.size)
     if offset >= size {
@@ -1893,7 +2059,7 @@ read :: fn(volume: ptr[mut Volume], file: u64, offset: u64, into: mut u8[]) -> R
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A chunk or a node doesn't check out.
  */
-write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Result[void, Error] {
+write :: fn(volume : ptr[mut Volume], file : u64, offset : u64, from : u8[]) -> Result[void, Error] {
     record := file_record(volume, file)?
     end :: offset + cast[u64](from.count)
     if end < offset {
@@ -1909,7 +2075,11 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
         used := read_chunk(volume, file, index, chunk.bytes)?
         start :: at - index * CHUNK_BYTES
         stop :: if end < (index + 1) * CHUNK_BYTES { end - index * CHUNK_BYTES } else { CHUNK_BYTES }
-        copy_bytes(chunk.bytes, cast[usize](start), part(from, cast[usize](at - offset), cast[usize](at - offset + stop - start)))
+        copy_bytes(
+            chunk.bytes,
+            cast[usize](start),
+            part(from, cast[usize](at - offset), cast[usize](at - offset + stop - start))
+        )
         if cast[usize](stop) > used {
             used = cast[usize](stop)
         }
@@ -1939,9 +2109,14 @@ write :: fn(volume: ptr[mut Volume], file: u64, offset: u64, from: u8[]) -> Resu
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt The chunk or a node doesn't check out.
  */
-move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result[void, Error] {
+move_inline :: fn(volume : ptr[mut Volume], file : u64, chunk : mut u8[]) -> Result[void, Error] {
     head := ExtentRecord.{}
-    had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
+    had :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(file, .Extent, 0),
+        view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord))
+    )?
     if (had is_none) || cast[u32](head.kind) != cast[u32](ExtentKind.Inline) {
         return .Ok
     }
@@ -1967,7 +2142,7 @@ move_inline :: fn(volume: ptr[mut Volume], file: u64, chunk: mut u8[]) -> Result
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A chunk or a node doesn't check out.
  */
-set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Error] {
+set_size :: fn(volume : ptr[mut Volume], file : u64, size : u64) -> Result[void, Error] {
     record := file_record(volume, file)?
     old :: cast[u64](record.size)
     if size < old {
@@ -1976,8 +2151,12 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
         defer runtime.free(chunk)
         loop {
             extent := ExtentRecord.{}
-            found :: tree_next(volume.nodes, &volume.tree, key_of(file, .Extent, size),
-                view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord)))? or_break
+            found :: tree_next(
+                volume.nodes,
+                &volume.tree,
+                key_of(file, .Extent, size),
+                view_of(cast[ptr[mut u8]](&extent), size_of(ExtentRecord))
+            )? or_break
             if found.key.object != file || found.key.kind != cast[u8](RecordKind.Extent) {
                 break
             }
@@ -2011,9 +2190,14 @@ set_size :: fn(volume: ptr[mut Volume], file: u64, size: u64) -> Result[void, Er
  * @error OutOfMemory No memory to read a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-is_inline :: fn(volume: ptr[mut Volume], file: u64) -> Result[bool, Error] {
+is_inline :: fn(volume : ptr[mut Volume], file : u64) -> Result[bool, Error] {
     head := ExtentRecord.{}
-    had :: tree_get(volume.nodes, &volume.tree, key_of(file, .Extent, 0), view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord)))?
+    had :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(file, .Extent, 0),
+        view_of(cast[ptr[mut u8]](&head), size_of(ExtentRecord))
+    )?
     return .Ok((had is_some) && cast[u32](head.kind) == cast[u32](ExtentKind.Inline))
 }
 
@@ -2030,8 +2214,13 @@ is_inline :: fn(volume: ptr[mut Volume], file: u64) -> Result[bool, Error] {
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-put_wrap :: fn(container: ptr[mut Container], id: u64, index: u64, record: ptr[WrapRecord]) -> Result[void, Error] {
-    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index), view_of(cast[ptr[u8]](record), size_of(WrapRecord)))?
+put_wrap :: fn(container : ptr[mut Container], id : u64, index : u64, record : ptr[WrapRecord]) -> Result[void, Error] {
+    tree_put(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyWrap, index),
+        view_of(cast[ptr[u8]](record), size_of(WrapRecord))
+    )?
     return .Ok
 }
 
@@ -2046,9 +2235,18 @@ put_wrap :: fn(container: ptr[mut Container], id: u64, index: u64, record: ptr[W
  * @error NoSpace No free extent for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-put_generation :: fn(container: ptr[mut Container], id: u64, number: u32, record: ptr[GenerationRecord]) -> Result[void, Error] {
-    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
-        view_of(cast[ptr[u8]](record), size_of(GenerationRecord)))?
+put_generation :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    number : u32,
+    record : ptr[GenerationRecord]
+) -> Result[void, Error] {
+    tree_put(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyGeneration, cast[u64](number)),
+        view_of(cast[ptr[u8]](record), size_of(GenerationRecord))
+    )?
     return .Ok
 }
 
@@ -2069,11 +2267,16 @@ NumberedGeneration :: struct {
  * @error Corrupt A record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for the list or a node.
  */
-volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRecord[..]]) -> Result[void, Error] {
+volume_wraps :: fn(container : ptr[mut Container], id : u64, found : ptr[mut WrapRecord[..]]) -> Result[void, Error] {
     record := WrapRecord.{}
     at := key_of(id, .KeyWrap, 0)
     loop {
-        item :: tree_next(&container.nodes, &container.volumes, at, view_of(cast[ptr[mut u8]](&record), size_of(WrapRecord)))? or_break
+        item :: tree_next(
+            &container.nodes,
+            &container.volumes,
+            at,
+            view_of(cast[ptr[mut u8]](&record), size_of(WrapRecord))
+        )? or_break
         if item.key.object != id || item.key.kind != cast[u8](RecordKind.KeyWrap) {
             break
         }
@@ -2098,18 +2301,28 @@ volume_wraps :: fn(container: ptr[mut Container], id: u64, found: ptr[mut WrapRe
  *     check out.
  * @error OutOfMemory No memory for the list or a node.
  */
-volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut NumberedGeneration[..]]) -> Result[void, Error] {
+volume_generations :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    found : ptr[mut NumberedGeneration[..]]
+) -> Result[void, Error] {
     record := GenerationRecord.{}
     at := key_of(id, .KeyGeneration, 0)
     loop {
-        item :: tree_next(&container.nodes, &container.volumes, at, view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord)))? or_break
+        item :: tree_next(
+            &container.nodes,
+            &container.volumes,
+            at,
+            view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord))
+        )? or_break
         if item.key.object != id || item.key.kind != cast[u8](RecordKind.KeyGeneration) {
             break
         }
         if item.bytes != size_of(GenerationRecord) || item.key.offset == 0 || item.key.offset > 0xffffffff {
             return .Error(.Corrupt)
         }
-        if runtime.array_try_add(found, NumberedGeneration.{number = cast[u32](item.key.offset), record = record}) != null {
+        if runtime.array_try_add(found, NumberedGeneration.{number = cast[u32](item.key.offset), record = record})
+            != null {
             return .Error(.OutOfMemory)
         }
         at = key_after(item.key) or_break
@@ -2134,9 +2347,15 @@ volume_generations :: fn(container: ptr[mut Container], id: u64, found: ptr[mut 
  * @error WrongKey The passphrase opens none of the wrap records.
  * @error OutOfMemory No memory to keep a generation's key.
  */
-unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord[], generations: NumberedGeneration[],
-    passphrase: u8[], keys: ptr[mut Keys]) -> Result[void, Error] {
-
+unlock :: fn(
+    container : u8[16],
+    id : u64,
+    record : VolumeRecord,
+    wraps : WrapRecord[],
+    generations : NumberedGeneration[],
+    passphrase : u8[],
+    keys : ptr[mut Keys]
+) -> Result[void, Error] {
     cipher :: record.cipher
     if cipher != cast[u8](Cipher.ChaCha20Poly1305) && cipher != cast[u8](Cipher.Aes256Gcm) {
         return .Error(.Corrupt)
@@ -2156,7 +2375,8 @@ unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord
     }
     for each in generations {
         wrapped := each.record
-        generation := unwrap_generation(&keys.volume_key, each.number, &wrapped, container, id) or_return .Error(.Corrupt)
+        generation := unwrap_generation(&keys.volume_key, each.number, &wrapped, container, id)
+            or_return .Error(.Corrupt)
         added :: runtime.array_try_add(&keys.generations, generation)
         zero_key(&generation.key)
         if added != null {
@@ -2186,14 +2406,16 @@ unlock :: fn(container: u8[16], id: u64, record: VolumeRecord, wraps: WrapRecord
  * @error OutOfMemory No memory for a list or a node.
  * @error NoSpace No free extent for a node.
  */
-rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u32, Error] {
+rotate :: fn(container : ptr[mut Container], volume : ptr[mut Volume]) -> Result[u32, Error] {
     keys :: volume.tree.keys or_return .Error(.Locked)
     committed :: volume_record(container, volume.id)?
     key_owner :: key_owner_of(volume.id, &committed)
     // Numbered after the newest of the key records', which a clone shares with its origin
     newest :: newest_generation(container, key_owner)?
-    // What's sealed with until now, restored if the new generation can't be kept, so nothing's sealed with a key no
-    // record holds
+    /*
+     * What's sealed with until now, restored if the new generation can't be kept, so nothing's sealed with a key no
+     * record holds
+     */
     previous :: keys.current
     keys.current = newest
     record := match start_generation(keys, container.nodes.transaction, container.id, key_owner) {
@@ -2223,7 +2445,7 @@ rotate :: fn(container: ptr[mut Container], volume: ptr[mut Volume]) -> Result[u
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for the list or a node.
  */
-newest_generation :: fn(container: ptr[mut Container], key_owner: u64) -> Result[u32, Error] {
+newest_generation :: fn(container : ptr[mut Container], key_owner : u64) -> Result[u32, Error] {
     generations : NumberedGeneration[..]
     defer runtime.array_free(&generations)
     volume_generations(container, key_owner, &generations)?
@@ -2246,10 +2468,15 @@ newest_generation :: fn(container: ptr[mut Container], key_owner: u64) -> Result
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[WrapRecord?, Error] {
+volume_wrap :: fn(container : ptr[mut Container], id : u64, index : u64) -> Result[WrapRecord?, Error] {
     record := WrapRecord.{}
-    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyWrap, index),
-        view_of(cast[ptr[mut u8]](&record), size_of(WrapRecord)))? or_return .Ok(null)
+    bytes :: tree_get(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyWrap, index),
+        view_of(cast[ptr[mut u8]](&record), size_of(WrapRecord))
+    )?
+        or_return .Ok(null)
     if bytes != size_of(WrapRecord) {
         return .Error(.Corrupt)
     }
@@ -2266,10 +2493,15 @@ volume_wrap :: fn(container: ptr[mut Container], id: u64, index: u64) -> Result[
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> Result[GenerationRecord?, Error] {
+volume_generation :: fn(container : ptr[mut Container], id : u64, number : u32) -> Result[GenerationRecord?, Error] {
     record := GenerationRecord.{}
-    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
-        view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord)))? or_return .Ok(null)
+    bytes :: tree_get(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyGeneration, cast[u64](number)),
+        view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord))
+    )?
+        or_return .Ok(null)
     if bytes != size_of(GenerationRecord) {
         return .Error(.Corrupt)
     }
@@ -2290,7 +2522,12 @@ volume_generation :: fn(container: ptr[mut Container], id: u64, number: u32) -> 
  * @error OutOfMemory No memory for a list or a node.
  * @error NoSpace No free extent for a node.
  */
-add_generation :: fn(container: ptr[mut Container], id: u64, number: u32, generation: ptr[GenerationRecord]) -> Result[void, Error] {
+add_generation :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    number : u32,
+    generation : ptr[GenerationRecord]
+) -> Result[void, Error] {
     record := volume_record(container, id)?
     key_owner :: key_owner_of(id, &record)
     if record.cipher == cast[u8](Cipher.None) || number != newest_generation(container, key_owner)? + 1 {
@@ -2315,10 +2552,15 @@ add_generation :: fn(container: ptr[mut Container], id: u64, number: u32, genera
  * @error Corrupt A record is the wrong size or numbered past a u32, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-generation_from :: fn(container: ptr[mut Container], id: u64, number: u32) -> Result[NumberedGeneration?, Error] {
+generation_from :: fn(container : ptr[mut Container], id : u64, number : u32) -> Result[NumberedGeneration?, Error] {
     record := GenerationRecord.{}
-    item :: tree_next(&container.nodes, &container.volumes, key_of(id, .KeyGeneration, cast[u64](number)),
-        view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord)))? or_return .Ok(null)
+    item :: tree_next(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyGeneration, cast[u64](number)),
+        view_of(cast[ptr[mut u8]](&record), size_of(GenerationRecord))
+    )?
+        or_return .Ok(null)
     if item.key.object != id || item.key.kind != cast[u8](RecordKind.KeyGeneration) {
         return .Ok(null)
     }
@@ -2337,10 +2579,15 @@ generation_from :: fn(container: ptr[mut Container], id: u64, number: u32) -> Re
  * @error Corrupt The record is the wrong size, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory to read a node.
  */
-key_floor :: fn(container: ptr[mut Container], id: u64) -> Result[KeyFloorRecord?, Error] {
+key_floor :: fn(container : ptr[mut Container], id : u64) -> Result[KeyFloorRecord?, Error] {
     record := KeyFloorRecord.{}
-    bytes :: tree_get(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0),
-        view_of(cast[ptr[mut u8]](&record), size_of(KeyFloorRecord)))? or_return .Ok(null)
+    bytes :: tree_get(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyFloor, 0),
+        view_of(cast[ptr[mut u8]](&record), size_of(KeyFloorRecord))
+    )?
+        or_return .Ok(null)
     if bytes != size_of(KeyFloorRecord) {
         return .Error(.Corrupt)
     }
@@ -2359,14 +2606,20 @@ key_floor :: fn(container: ptr[mut Container], id: u64) -> Result[KeyFloorRecord
  * @param generations Every generation the volume's records hold, wrapped again, exactly those numbers.
  * @param number The new generation's number, the one after the newest.
  * @param added The new generation's record.
- * @error NotFound The volume isn't there, isn't encrypted, is a clone, or generations or number don't match its records.
+ * @error NotFound The volume isn't there, isn't encrypted, is a clone, or generations or number don't match its
+ *     records.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a list or a node.
  * @error NoSpace No free extent for a node.
  */
-replace_keys :: fn(container: ptr[mut Container], id: u64, wrap: ptr[WrapRecord], generations: NumberedGeneration[], number: u32,
-    added: ptr[GenerationRecord]) -> Result[void, Error] {
-
+replace_keys :: fn(
+    container : ptr[mut Container],
+    id : u64,
+    wrap : ptr[WrapRecord],
+    generations : NumberedGeneration[],
+    number : u32,
+    added : ptr[GenerationRecord]
+) -> Result[void, Error] {
     record := volume_record(container, id)?
     if record.cipher == cast[u8](Cipher.None) || key_owner_of(id, &record) != id {
         return .Error(.NotFound)
@@ -2412,7 +2665,12 @@ replace_keys :: fn(container: ptr[mut Container], id: u64, wrap: ptr[WrapRecord]
     record.generation = cast[u32le](number)
     put_volume_record(container, id, &record)?
     floor := KeyFloorRecord.{floor = cast[u32le](number), state = cast[u32le](cast[u32](FloorState.Sealing))}
-    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0), view_of(cast[ptr[u8]](&floor), size_of(KeyFloorRecord)))?
+    tree_put(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyFloor, 0),
+        view_of(cast[ptr[u8]](&floor), size_of(KeyFloorRecord))
+    )?
     return .Ok
 }
 
@@ -2428,15 +2686,25 @@ replace_keys :: fn(container: ptr[mut Container], id: u64, wrap: ptr[WrapRecord]
  * @error OutOfMemory No memory for a node.
  * @error NoSpace No free extent for a node.
  */
-sealed_again :: fn(container: ptr[mut Container], id: u64, floor: u32) -> Result[bool, Error] {
+sealed_again :: fn(container : ptr[mut Container], id : u64, floor : u32) -> Result[bool, Error] {
     record := key_floor(container, id)? or_return .Ok(false)
     if cast[u32](record.floor) != floor || cast[u32](record.state) != cast[u32](FloorState.Sealing) {
         return .Ok(false)
     }
     record.state = cast[u32le](cast[u32](FloorState.Sealed))
     // The volume's last commit, durable before this, is at or before the container's last
-    record.sealed = cast[u64le](if container.nodes.transaction > 0 { container.nodes.transaction - 1 } else { cast[u64](0) })
-    tree_put(&container.nodes, &container.volumes, key_of(id, .KeyFloor, 0), view_of(cast[ptr[u8]](&record), size_of(KeyFloorRecord)))?
+    record.sealed = cast[u64le](if container.nodes.transaction > 0 {
+        container.nodes.transaction - 1
+    }
+    else {
+        cast[u64](0)
+    })
+    tree_put(
+        &container.nodes,
+        &container.volumes,
+        key_of(id, .KeyFloor, 0),
+        view_of(cast[ptr[u8]](&record), size_of(KeyFloorRecord))
+    )?
     return .Ok(true)
 }
 
@@ -2453,7 +2721,7 @@ sealed_again :: fn(container: ptr[mut Container], id: u64, floor: u32) -> Result
  * @error OutOfMemory No memory for a list or a node.
  * @error NoSpace No free extent for a node.
  */
-drop_old_generations :: fn(container: ptr[mut Container], id: u64) -> Result[u32?, Error] {
+drop_old_generations :: fn(container : ptr[mut Container], id : u64) -> Result[u32?, Error] {
     floor :: key_floor(container, id)? or_return .Ok(null)
     if cast[u32](floor.state) != cast[u32](FloorState.Sealed) {
         return .Ok(null)
@@ -2510,7 +2778,12 @@ drop_old_generations :: fn(container: ptr[mut Container], id: u64) -> Result[u32
  * @error OutOfMemory No memory for a list or a node.
  * @error NoSpace No free extent for a node.
  */
-rekey_volume :: fn(container: ptr[mut Container], volume: ptr[mut Volume], passphrase: u8[], parameters: crypto.Argon2Parameters) -> Result[u32, Error] {
+rekey_volume :: fn(
+    container : ptr[mut Container],
+    volume : ptr[mut Volume],
+    passphrase : u8[],
+    parameters : crypto.Argon2Parameters
+) -> Result[u32, Error] {
     keys :: volume.tree.keys or_return .Error(.Locked)
     generations : NumberedGeneration[..]
     defer runtime.array_free(&generations)

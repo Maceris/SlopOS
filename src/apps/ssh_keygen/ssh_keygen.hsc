@@ -9,8 +9,8 @@ package ssh_keygen
 
 import crypto from "std:crypto"
 import os from "std:os"
-import ssh from "std:ssh"
 import dir from "std:os/slop_os/dir"
+import ssh from "std:ssh"
 import file_tools from "../../file_tools"
 
 /** The key made: where, and its fingerprint. */
@@ -42,7 +42,7 @@ KeygenError :: union {
  * @error AlreadyExists There's a key already; its .pub has its public key.
  * @error Unwritable .ssh or the key's files couldn't be written.
  */
-main :: fn(here: os.Channel[dir.Dir]) -> Result[Made, KeygenError] {
+main :: fn(here : os.Channel[dir.Dir]) -> Result[Made, KeygenError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "here"}}
     directory, opened :: os.directory_on(here.end)
     if opened != null {
@@ -59,7 +59,7 @@ main :: fn(here: os.Channel[dir.Dir]) -> Result[Made, KeygenError] {
 }
 
 /** Make a key and write its files; its fingerprint, or null if they couldn't be written. */
-write_key #constant_time :: fn(directory: os.Directory) -> u8[50]? {
+write_key #constant_time :: fn(directory : os.Directory) -> u8[50]? {
     random : u8[32]
     ssh.random_bytes(random[0..<32])
     key : crypto.Ed25519SecretKey
@@ -69,7 +69,9 @@ write_key #constant_time :: fn(directory: os.Directory) -> u8[50]? {
     }
     text : u8[ssh.PRIVATE_KEY_TEXT_BYTES]
     length :: ssh.private_key_text(&key, "slopos", text[0..<ssh.PRIVATE_KEY_TEXT_BYTES])
-    if length == 0 || length > text.count || (os.write_entire_file_in(directory, ".ssh/id_ed25519", string_of(&text[0], length)) is_some) {
+    if length == 0
+        || length > text.count
+        || (os.write_entire_file_in(directory, ".ssh/id_ed25519", string_of(&text[0], length)) is_some) {
         return null
     }
     for &byte in text {

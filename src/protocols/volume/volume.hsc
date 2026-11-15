@@ -147,7 +147,7 @@ Response :: union {
  * @return True for Unlock, which checks the passphrase again, Commit, and OpenIssued, except for a File that has to be
  *     new; false for Rotate, which starts another generation each time, and IssueTo, whose ticket is taken once.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Unlock(_) => true
         case Rotate => false

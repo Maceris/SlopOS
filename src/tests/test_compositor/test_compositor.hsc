@@ -16,9 +16,9 @@ package test_compositor
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import service_kit from "../../libraries/service_kit"
 import connector from "../../protocols/connector"
 import surface from "../../protocols/surface"
-import service_kit from "../../libraries/service_kit"
 
 /** Each window's width, in pixels. */
 WIDTH : u32 : 300
@@ -50,7 +50,7 @@ Client :: struct {
  * @param compositor A connector to the compositor.
  * @return 2 without the compositor, or when a window can't be made or shown. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, compositor: os.Channel[connector.Connector]?) -> int {
+main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]?) -> int {
     dialing :: compositor or_return 2
     a :: open(dialing, true, 0, 0, 255) or_return 2
     b :: open(dialing, false, 255, 0, 0) or_return 2
@@ -69,8 +69,14 @@ main :: fn(log: slop_os.DebugLog?, compositor: os.Channel[connector.Connector]?)
     if give_buffer(a, BUFFER + 1, 0, 0, 255) {
         out := os.Outgoing.{}
         request :: os.begin[surface.Request](&out)
-        request^ = .Submit(surface.Submission.{surface = a.window, buffer = BUFFER + 1, damage = surface.Rect.{width = WIDTH, height = HEIGHT},
-            mode = .Fifo})
+        request^ = .Submit(
+            surface.Submission.{
+                surface = a.window,
+                buffer = BUFFER + 1,
+                damage = surface.Rect.{width = WIDTH, height = HEIGHT},
+                mode = .Fifo,
+            }
+        )
         _ = surface.send_request(a.end, a.port, &out)
     }
     loop {
@@ -94,7 +100,13 @@ main :: fn(log: slop_os.DebugLog?, compositor: os.Channel[connector.Connector]?)
  * @param red Its red.
  * @return The client, on the heap, its window submitted and a Read held; null if any of it failed.
  */
-open :: fn(dialing: os.Channel[connector.Connector], first: bool, blue: u8, green: u8, red: u8) -> ptr[mut Client]? {
+open :: fn(
+    dialing : os.Channel[connector.Connector],
+    first : bool,
+    blue : u8,
+    green : u8,
+    red : u8
+) -> ptr[mut Client]? {
     startup :: slop_os.startup_block()
     dial_port :: os.port_for(startup.budget, dialing.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](dial_port))
@@ -106,8 +118,15 @@ open :: fn(dialing: os.Channel[connector.Connector], first: bool, blue: u8, gree
 
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
-    request^ = .CreateWindow(surface.WindowSpec.{width = WIDTH, height = HEIGHT, scale = surface.SCALE_ONE, color = .Srgb,
-        title = os.append(&out, string_bytes(client.name))})
+    request^ = .CreateWindow(
+        surface.WindowSpec.{
+            width = WIDTH,
+            height = HEIGHT,
+            scale = surface.SCALE_ONE,
+            color = .Srgb,
+            title = os.append(&out, string_bytes(client.name)),
+        }
+    )
     match ask(client, &out) {
         case Created(id) => client.window = id
         case _ => return null
@@ -118,8 +137,14 @@ open :: fn(dialing: os.Channel[connector.Connector], first: bool, blue: u8, gree
     }
     submitted := os.Outgoing.{}
     submitting :: os.begin[surface.Request](&submitted)
-    submitting^ = .Submit(surface.Submission.{surface = client.window, buffer = BUFFER,
-        damage = surface.Rect.{width = WIDTH, height = HEIGHT}, mode = .Fifo})
+    submitting^ = .Submit(
+        surface.Submission.{
+            surface = client.window,
+            buffer = BUFFER,
+            damage = surface.Rect.{width = WIDTH, height = HEIGHT},
+            mode = .Fifo,
+        }
+    )
     if surface.send_request(client.end, client.port, &submitted) is_some {
         return null
     }
@@ -128,7 +153,7 @@ open :: fn(dialing: os.Channel[connector.Connector], first: bool, blue: u8, gree
 }
 
 /** Make a buffer of the window's size filled with a colour, and give it to the compositor by an id. */
-give_buffer :: fn(client: ptr[mut Client], id: u32, blue: u8, green: u8, red: u8) -> bool {
+give_buffer :: fn(client : ptr[mut Client], id : u32, blue : u8, green : u8, red : u8) -> bool {
     startup :: slop_os.startup_block()
     bytes :: cast[u64](4 * WIDTH * HEIGHT)
     size :: (bytes + 4095) / 4096 * 4096
@@ -141,13 +166,27 @@ give_buffer :: fn(client: ptr[mut Client], id: u32, blue: u8, green: u8, red: u8
     pixels :: view_of(cast[ptr[mut u8]](address), cast[usize](bytes))
     for at in cast[usize](0)..<pixels.count {
         channel :: at % 4
-        pixels[at] = if channel == 0 { blue } else if channel == 1 { green } else if channel == 2 { red } else { cast[u8](255) }
+        pixels[at] = if channel == 0 {
+            blue
+        }
+        else if channel == 1 { green } else if channel == 2 { red } else { cast[u8](255) }
     }
     added := os.Outgoing.{}
     adding :: os.begin[surface.Request](&added)
-    adding^ = .AddBuffer(surface.NewBuffer.{id = id, memory = memory, description = surface.BufferDescription.{
-        format = surface.FORMAT_XRGB8888, modifier = surface.MODIFIER_LINEAR, width = WIDTH, height = HEIGHT, plane_count = 1,
-        planes = surface.Plane.[surface.Plane.{stride = 4 * WIDTH}, surface.Plane.{}, surface.Plane.{}]}})
+    adding^ = .AddBuffer(
+        surface.NewBuffer.{
+            id = id,
+            memory = memory,
+            description = surface.BufferDescription.{
+                format = surface.FORMAT_XRGB8888,
+                modifier = surface.MODIFIER_LINEAR,
+                width = WIDTH,
+                height = HEIGHT,
+                plane_count = 1,
+                planes = surface.Plane.[surface.Plane.{stride = 4 * WIDTH}, surface.Plane.{}, surface.Plane.{}],
+            },
+        }
+    )
     match ask(client, &added) {
         case Added(_) => return true
         case _ => return false
@@ -159,7 +198,7 @@ give_buffer :: fn(client: ptr[mut Client], id: u32, blue: u8, green: u8, red: u8
  *
  * @return The answer; Unsupported if it couldn't be sent, or the connection failed.
  */
-ask :: fn(client: ptr[mut Client], out: ptr[mut os.Outgoing]) -> surface.Response {
+ask :: fn(client : ptr[mut Client], out : ptr[mut os.Outgoing]) -> surface.Response {
     if surface.send_request(client.end, client.port, out) is_some {
         return .Unsupported
     }
@@ -172,7 +211,7 @@ ask :: fn(client: ptr[mut Client], out: ptr[mut os.Outgoing]) -> surface.Respons
 }
 
 /** Hold a Read. */
-read_more :: fn(client: ptr[mut Client]) {
+read_more :: fn(client : ptr[mut Client]) {
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
     request^ = .Read(surface.MAX_EVENTS)
@@ -180,7 +219,7 @@ read_more :: fn(client: ptr[mut Client]) {
 }
 
 /** Take the events a client's been given, logging each, and hold another Read. */
-take :: fn(client: ptr[mut Client]) {
+take :: fn(client : ptr[mut Client]) {
     into := os.Incoming.{}
     loop {
         match surface.receive_response(client.end, client.port, &into, false) {
@@ -204,7 +243,7 @@ take :: fn(client: ptr[mut Client]) {
 }
 
 /** Take one event: logged, A copying the first time it's focused. */
-take_event :: fn(client: ptr[mut Client], event: surface.Event, text: string) {
+take_event :: fn(client : ptr[mut Client], event : surface.Event, text : string) {
     kind :: surface.kind_of(event) or_return void
     match kind {
         case .Presented => client.shown = true
@@ -214,8 +253,13 @@ take_event :: fn(client: ptr[mut Client], event: surface.Event, text: string) {
                 client.copied = true
                 out := os.Outgoing.{}
                 request :: os.begin[surface.Request](&out)
-                request^ = .Copy(surface.Offer.{data = slop_os.memory_create(slop_os.startup_block().budget, 4096)
-                    or_else cast[slop_os.Memory](slop_os.NO_HANDLE), text = os.append(&out, string_bytes("from A"))})
+                request^ = .Copy(
+                    surface.Offer.{
+                        data = slop_os.memory_create(slop_os.startup_block().budget, 4096)
+                            or_else cast[slop_os.Memory](slop_os.NO_HANDLE),
+                        text = os.append(&out, string_bytes("from A")),
+                    }
+                )
                 _ = surface.send_request(client.end, client.port, &out)
             }
         }

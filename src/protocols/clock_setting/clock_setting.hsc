@@ -36,13 +36,15 @@ Request :: union {
      */
     Set(i64),
     /**
-     * Keep the time in this directory, which moves to the clock service: the time saved there is read, and the clock set
+     * Keep the time in this directory, which moves to the clock service: the time saved there is read, and the clock
+     * set
      * forward to it if it's later; the time's saved there now, every SAVE_MINUTES, after each Set, and as the service
      * stops. Answered with Done, or Refused if the directory can't be used; a Keep replaces the one before.
      */
     Keep(os.Channel[dir.Dir]),
     /**
-     * Keep the time from an NTS server (RFC 8915): its NTS-KE server's name, a network connection allowing it and the NTP
+     * Keep the time from an NTS server (RFC 8915): its NTS-KE server's name, a network connection allowing it and the
+     * NTP
      * server it names, and the trust store its certificate's checked against, all of which move to the clock service.
      * The clock's stepped to its time, or slewed to it, now and every so often. Answered with Done once it's taken,
      * before the first exchange; or Refused, if the name's empty or too long. A Synchronize replaces the one before.
@@ -85,10 +87,11 @@ Response :: union {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return True for Set, which sets the time to the same time again, which has moved on since, and Connect; false for Keep
+ * @return True for Set, which sets the time to the same time again, which has moved on since, and Connect; false for
+ *     Keep
  *     and Synchronize, whose channels move.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Keep(_) => false
         case Synchronize(_) => false
@@ -113,7 +116,7 @@ SAVE_MINUTES :: 5
  * @return True if the clock service set it; false if it refused, or the request couldn't be sent, or the connection's
  *     gone.
  */
-set :: fn(end: slop_os.Channel, port: slop_os.Port, utc: i64) -> bool {
+set :: fn(end : slop_os.Channel, port : slop_os.Port, utc : i64) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .Set(utc)
@@ -143,7 +146,7 @@ set :: fn(end: slop_os.Channel, port: slop_os.Port, utc: i64) -> bool {
  * @return True if the clock service keeps the time there; false if it refused, or the request couldn't be sent, or the
  *     connection's gone.
  */
-keep :: fn(end: slop_os.Channel, port: slop_os.Port, directory: os.Channel[dir.Dir]) -> bool {
+keep :: fn(end : slop_os.Channel, port : slop_os.Port, directory : os.Channel[dir.Dir]) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .Keep(directory)
@@ -173,12 +176,18 @@ keep :: fn(end: slop_os.Channel, port: slop_os.Port, directory: os.Channel[dir.D
  * @return True if the clock service took it; false if it refused, or the request couldn't be sent, or the connection's
  *     gone.
  */
-synchronize :: fn(end: slop_os.Channel, port: slop_os.Port, server: string, connection: os.Channel[network.Network],
-    trust: os.Channel[read_only_dir.ReadOnlyDir]) -> bool {
-
+synchronize :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    server : string,
+    connection : os.Channel[network.Network],
+    trust : os.Channel[read_only_dir.ReadOnlyDir]
+) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
-    request^ = .Synchronize(Synchronizing.{server = os.append(&out, string_bytes(server)), network = connection, trust = trust})
+    request^ = .Synchronize(
+        Synchronizing.{server = os.append(&out, string_bytes(server)), network = connection, trust = trust}
+    )
     if send_request(end, port, &out) is_some {
         return false
     }

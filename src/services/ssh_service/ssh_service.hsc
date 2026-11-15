@@ -18,17 +18,17 @@ import runtime from "base:runtime"
 import crypto from "std:crypto"
 import net from "std:net"
 import os from "std:os"
-import ssh from "std:ssh"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import net_address from "std:os/slop_os/net_address"
 import network from "std:os/slop_os/network"
+import ssh from "std:ssh"
+import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import config from "../../protocols/config"
 import connector from "../../protocols/connector"
 import session from "../../protocols/session"
-import service_kit from "../../libraries/service_kit"
 
 /** The most connections at once: each some 1 MiB, its rings and SFTP's state among it, in the service's budget. */
 MAX_CONNECTIONS :: 8
@@ -49,10 +49,10 @@ LISTENER_KEY : u64 : 1
 FIRST_KEY : u64 : 16
 KEYS_EACH : u64 : 4
 /** A connection's keys, after its first: its TCP stream, its session's terminal, its prompts, and its wait. */
-TCP_KEY : u64 : 0
+TCP_KEY      : u64 : 0
 TERMINAL_KEY : u64 : 1
-PROMPTS_KEY : u64 : 2
-WAIT_KEY : u64 : 3
+PROMPTS_KEY  : u64 : 2
+WAIT_KEY     : u64 : 3
 /** What's no channel. */
 NONE :: cast[slop_os.Channel](slop_os.NO_HANDLE)
 
@@ -66,9 +66,9 @@ SshSettings :: struct {
 
 /** The service's state. */
 Service :: struct {
-    log : slop_os.DebugLog,
-    port : slop_os.Port,
-    host : crypto.Ed25519SecretKey,
+    log      : slop_os.DebugLog,
+    port     : slop_os.Port,
+    host     : crypto.Ed25519SecretKey,
     listener : net.Listener,
     /** The connection asked of the listener, while asking. */
     pending : net.Tcp,
@@ -82,10 +82,10 @@ Service :: struct {
     accounts_queue : Queue,
     sessions_queue : Queue,
     /** The serial the next connection's given. */
-    next_serial : u64,
-    sessions_end : slop_os.Channel,
+    next_serial   : u64,
+    sessions_end  : slop_os.Channel,
     sessions_port : slop_os.Port,
-    remotes : Slot[MAX_CONNECTIONS],
+    remotes       : Slot[MAX_CONNECTIONS],
     /** Addresses' wrong passwords in a row, and when each may try again. */
     counted : AddressFailures[COUNTED_ADDRESSES],
 }
@@ -104,9 +104,16 @@ Slot :: struct {
     remote : ptr[mut Remote]?,
 }
 
-main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connector]?, accounts_service: os.Channel[connector.Connector]?,
-    sessions: os.Channel[session.Session]?, store: os.Channel[dir.Dir]?, settings: config.Config[SshSettings]?, command_line: slop_os.Memory?,
-    public: os.Channel[dir.Dir]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    network_service : os.Channel[connector.Connector]?,
+    accounts_service : os.Channel[connector.Connector]?,
+    sessions : os.Channel[session.Session]?,
+    store : os.Channel[dir.Dir]?,
+    settings : config.Config[SshSettings]?,
+    command_line : slop_os.Memory?,
+    public : os.Channel[dir.Dir]?
+) -> int {
     startup :: slop_os.startup_block()
     service :: runtime.new(Service)
     service.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
@@ -127,7 +134,13 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
     service.sessions_end = (sessions or_return 2).end
     service.sessions_port = os.port_for(startup.budget, service.sessions_end) or_return 2
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(service.port, cast[slop_os.Handle](service.sessions_end), signals, SESSIONS_KEY, .Persistent) is_error {
+    if slop_os.port_bind(
+        service.port,
+        cast[slop_os.Handle](service.sessions_end),
+        signals,
+        SESSIONS_KEY,
+        .Persistent
+    ) is_error {
         return 2
     }
     match net.listen(root, asked.port) {
@@ -154,7 +167,8 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
             match slot.remote {
                 case Some(remote) => {
                     pump(service, remote)
-                    if remote.closing || (!remote.authenticated && now > remote.started_at + AUTH_SECONDS * 1000000000) {
+                    if remote.closing
+                        || (!remote.authenticated && now > remote.started_at + AUTH_SECONDS * 1000000000) {
                         close_remote(service, remote)
                         wipe_remote(remote)
                         runtime.free(remote)
@@ -174,7 +188,7 @@ main :: fn(log: slop_os.DebugLog?, network_service: os.Channel[connector.Connect
  *
  * @return The settings; disabled if neither says otherwise.
  */
-read_settings :: fn(settings: config.Config[SshSettings]?, command_line: slop_os.Memory?) -> SshSettings {
+read_settings :: fn(settings : config.Config[SshSettings]?, command_line : slop_os.Memory?) -> SshSettings {
     found := SshSettings.{}
     match settings {
         case Some(given) => {
@@ -213,7 +227,7 @@ read_settings :: fn(settings: config.Config[SshSettings]?, command_line: slop_os
  *
  * @return The key; null without a directory, or if it couldn't be read or kept.
  */
-host_key #constant_time :: fn(service: ptr[mut Service], store: os.Channel[dir.Dir]?) -> crypto.Ed25519SecretKey? {
+host_key #constant_time :: fn(service : ptr[mut Service], store : os.Channel[dir.Dir]?) -> crypto.Ed25519SecretKey? {
     given :: store or_return null
     directory, opened :: os.directory_on(given.end)
     if opened != null {
@@ -233,7 +247,9 @@ host_key #constant_time :: fn(service: ptr[mut Service], store: os.Channel[dir.D
             }
             text : u8[ssh.PRIVATE_KEY_TEXT_BYTES]
             length :: ssh.private_key_text(&key, "slopos host key", text[0..<ssh.PRIVATE_KEY_TEXT_BYTES])
-            if length == 0 || length > text.count || (os.write_entire_file_in(directory, "host_key", string_of(&text[0], length)) is_some) {
+            if length == 0
+                || length > text.count
+                || (os.write_entire_file_in(directory, "host_key", string_of(&text[0], length)) is_some) {
                 return null
             }
             for &byte in text {
@@ -244,7 +260,9 @@ host_key #constant_time :: fn(service: ptr[mut Service], store: os.Channel[dir.D
             line : u8[200]
             made :: ssh.parse_public_key(blob[0..<ssh.ED25519_BLOB_BYTES]) or_return null
             line_length :: ssh.key_line(&made, "", line[0..<200])
-            if line_length == 0 || line_length > line.count || (os.write_entire_file_in(directory, "host_key.pub", string_of(&line[0], line_length)) is_some) {
+            if line_length == 0
+                || line_length > line.count
+                || (os.write_entire_file_in(directory, "host_key.pub", string_of(&line[0], line_length)) is_some) {
                 return null
             }
             log_line.write(service.log, "ssh_service: made a host key")
@@ -258,7 +276,7 @@ host_key #constant_time :: fn(service: ptr[mut Service], store: os.Channel[dir.D
 }
 
 /** Write the host key's public key's line where the trusted path reads it, as host_key.pub in public. */
-show_host_key #constant_time :: fn(service: ptr[mut Service], public: os.Channel[dir.Dir]?) {
+show_host_key #constant_time :: fn(service : ptr[mut Service], public : os.Channel[dir.Dir]?) {
     given :: public or_return void
     directory, opened :: os.directory_on(given.end)
     if opened != null {
@@ -275,7 +293,7 @@ show_host_key #constant_time :: fn(service: ptr[mut Service], public: os.Channel
 }
 
 /** Ask the listener for the next connection, unless one's asked for already. */
-ask_next :: fn(service: ptr[mut Service]) {
+ask_next :: fn(service : ptr[mut Service]) {
     if service.asking {
         return void
     }
@@ -289,7 +307,7 @@ ask_next :: fn(service: ptr[mut Service]) {
 }
 
 /** Take the connection asked for, if it's come: served if there's room, closed if not; then ask for the next. */
-take_accepted :: fn(service: ptr[mut Service]) {
+take_accepted :: fn(service : ptr[mut Service]) {
     if !service.asking {
         ask_next(service)
         return void
@@ -310,7 +328,7 @@ take_accepted :: fn(service: ptr[mut Service]) {
 }
 
 /** Serve the connection that came, from an address, if there's room for it. */
-accept :: fn(service: ptr[mut Service], address: net_address.Address) {
+accept :: fn(service : ptr[mut Service], address : net_address.Address) {
     free := service.remotes.count
     from_there := cast[usize](0)
     logging_in := cast[usize](0)
@@ -366,7 +384,7 @@ accept :: fn(service: ptr[mut Service], address: net_address.Address) {
  * Move what's ready on a connection: bytes from the client to its SSH connection, its events taken, its session's
  * terminal served, and what's to go out written.
  */
-pump :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+pump :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) {
     if !net.poll(&remote.tcp) {
         remote.closing = true
         return void
@@ -379,7 +397,14 @@ pump :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
             remote.inbox_count = net.read_now(&remote.tcp, remote.inbox[0..<remote.inbox.count])
         }
         if remote.inbox_count > 0 {
-            taken :: ssh.received(&remote.conn, ssh.range(remote.inbox[0..<remote.inbox.count], remote.inbox_first, remote.inbox_first + remote.inbox_count))
+            taken :: ssh.received(
+                &remote.conn,
+                ssh.range(
+                    remote.inbox[0..<remote.inbox.count],
+                    remote.inbox_first,
+                    remote.inbox_first + remote.inbox_count
+                )
+            )
             remote.inbox_first += taken
             remote.inbox_count -= taken
             moved = moved || taken > 0
@@ -406,7 +431,7 @@ pump :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
 }
 
 /** Take a connection's SSH events: true if there were any. */
-take_events :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
+take_events :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) -> bool {
     any := false
     loop {
         happened :: ssh.take_event(&remote.conn) or_break
@@ -441,7 +466,7 @@ take_events :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) -> bool {
 }
 
 /** A password offered: the account service opens the home with it, or doesn't; an address trying too often waits. */
-log_in_with_password :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+log_in_with_password :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) {
     now :: slop_os.clock_monotonic() or_else 0
     counted :: counted_of(service, remote.address, now)
     if counted.next > now {
@@ -460,7 +485,9 @@ log_in_with_password :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     }
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    request^ = .OpenHome(accounts.Credentials.{name = os.append(&out, name), password = os.append(&out, password[0..<count])})
+    request^ = .OpenHome(
+        accounts.Credentials.{name = os.append(&out, name), password = os.append(&out, password[0..<count])}
+    )
     for &byte in password {
         byte^ = 0
     }
@@ -474,7 +501,7 @@ log_in_with_password :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
 }
 
 /** The account service's answer to a password: the login answered, and the address's wrong tries counted. */
-password_answered :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[mut os.Incoming]) {
+password_answered :: fn(service : ptr[mut Service], remote : ptr[mut Remote], into : ptr[mut os.Incoming]) {
     now :: slop_os.clock_monotonic() or_else 0
     counted :: counted_of(service, remote.address, now)
     allowed :: opened_home(service, remote, into, "a password")
@@ -497,7 +524,7 @@ password_answered :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into
 }
 
 /** An address's count of wrong passwords: its own, or the oldest place's, given to it. */
-counted_of :: fn(service: ptr[mut Service], address: net_address.Address, now: u64) -> ptr[mut AddressFailures] {
+counted_of :: fn(service : ptr[mut Service], address : net_address.Address, now : u64) -> ptr[mut AddressFailures] {
     oldest := cast[usize](0)
     for &each, i in service.counted {
         if each.used != 0 && same_address(each.address, address) {
@@ -517,22 +544,31 @@ counted_of :: fn(service: ptr[mut Service], address: net_address.Address, now: u
  * A key offered: a query's answered yes, so the client signs; a signed one, whose signature std/ssh has checked, opens
  * the home if it's the account's and its password's unlocked it since the boot.
  */
-log_in_with_key :: fn(service: ptr[mut Service], remote: ptr[mut Remote], signed: bool) {
+log_in_with_key :: fn(service : ptr[mut Service], remote : ptr[mut Remote], signed : bool) {
     if !signed {
         ssh.answer_authentication(&remote.conn, true)
         return void
     }
     out := os.Outgoing.{}
     request :: os.begin[accounts.Request](&out)
-    request^ = .OpenHomeByKey(accounts.KeyChange.{name = os.append(&out, ssh.user_of(&remote.conn)),
-        key = os.append(&out, ssh.blob_of(ssh.offered_key_of(&remote.conn)))})
+    request^ = .OpenHomeByKey(
+        accounts.KeyChange.{
+            name = os.append(&out, ssh.user_of(&remote.conn)),
+            key = os.append(&out, ssh.blob_of(ssh.offered_key_of(&remote.conn))),
+        }
+    )
     if !send_accounts(service, &out, Waiting.{asked = .Key, slot = remote.slot, serial = remote.serial}) {
         ssh.answer_authentication(&remote.conn, false)
     }
 }
 
 /** Take the account service's answer to a login: true, the home kept, for OpenedHome. */
-opened_home :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[mut os.Incoming], how: string) -> bool {
+opened_home :: fn(
+    service : ptr[mut Service],
+    remote : ptr[mut Remote],
+    into : ptr[mut os.Incoming],
+    how : string
+) -> bool {
     name :: ssh.user_of(&remote.conn)
     match os.message_of[accounts.Response](into)^ {
         case OpenedHome(root) => {
@@ -544,7 +580,11 @@ opened_home :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[
             log_line.write(service.log, "ssh_service: % logged in with %", text_of(name), how)
             return true
         }
-        case HomeLocked => log_line.write(service.log, "ssh_service: %'s home is locked until a password login", text_of(name))
+        case HomeLocked => log_line.write(
+            service.log,
+            "ssh_service: %'s home is locked until a password login",
+            text_of(name)
+        )
         case RateLimited(wait) => log_line.write(service.log, "ssh_service: too many tries for %", text_of(name))
         case _ => log_line.write(service.log, "ssh_service: % refused", how)
     }
@@ -552,7 +592,7 @@ opened_home :: fn(service: ptr[mut Service], remote: ptr[mut Remote], into: ptr[
 }
 
 /** Close a connection: its session ended, its home and channels closed. */
-close_remote :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
+close_remote :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) {
     stop_session(service, remote)
     end_session(remote)
     for end in slop_os.Channel.[remote.starting_terminal, remote.starting_prompts] {
@@ -570,14 +610,17 @@ close_remote :: fn(service: ptr[mut Service], remote: ptr[mut Remote]) {
     log_line.write(service.log, "ssh_service: a connection closed")
 }
 
-/** Whether two addresses are the same peer's: the same IPv4 address, or the same IPv6 /64, which one peer may have all of. */
-same_address :: fn(a: net_address.Address, b: net_address.Address) -> bool {
+/**
+ * Whether two addresses are the same peer's: the same IPv4 address, or the same IPv6 /64, which one peer may have all
+ * of.
+ */
+same_address :: fn(a : net_address.Address, b : net_address.Address) -> bool {
     width :: if a.family == .V6 { cast[usize](8) } else { cast[usize](16) }
     return a.family == b.family && ssh.same(ssh.range(a.bytes[0..<16], 0, width), ssh.range(b.bytes[0..<16], 0, width))
 }
 
 /** Zero a connection's memory, its keys among it, before it's given back. */
-wipe_remote :: fn(remote: ptr[mut Remote]) {
+wipe_remote :: fn(remote : ptr[mut Remote]) {
     bytes :: view_of(cast[ptr[mut u8]](remote), size_of(Remote))
     for &byte in bytes {
         byte^ = 0
@@ -585,6 +628,6 @@ wipe_remote :: fn(remote: ptr[mut Remote]) {
 }
 
 /** Bytes as text, for the log. */
-text_of :: fn(bytes: u8[]) -> string {
+text_of :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }

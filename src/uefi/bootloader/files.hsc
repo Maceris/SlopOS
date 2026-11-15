@@ -44,7 +44,7 @@ esp_root :: fn() -> ptr[uefi.File]? {
  * @param storage Where the UTF-16 path goes; it's left unchanged when text doesn't fit.
  * @return True if text fit with its terminating zero, at most 255 bytes; false otherwise.
  */
-path16 :: fn(text: string, storage: ptr[mut u16[256]]) -> bool {
+path16 :: fn(text : string, storage : ptr[mut u16[256]]) -> bool {
     if text.count + 1 > storage^.count {
         return false
     }
@@ -66,7 +66,7 @@ path16 :: fn(text: string, storage: ptr[mut u16[256]]) -> bool {
  * @param path The path, ASCII, at most 255 bytes, folders separated by slashes.
  * @return The file, open, which the caller closes; null if path is too long, or isn't there, or couldn't be opened.
  */
-open_file :: fn(root: ptr[uefi.File], path: string) -> ptr[uefi.File]? {
+open_file :: fn(root : ptr[uefi.File], path : string) -> ptr[uefi.File]? {
     name : u16[256]
     if !path16(path, &name) {
         return null
@@ -86,7 +86,7 @@ open_file :: fn(root: ptr[uefi.File], path: string) -> ptr[uefi.File]? {
  * @param file The file, open.
  * @return The file's size in bytes; null if the firmware couldn't give its information, as when it didn't fit.
  */
-file_size :: fn(file: ptr[uefi.File]) -> u64? {
+file_size :: fn(file : ptr[uefi.File]) -> u64? {
     // The information, then its name, which a file's on the ESP keeps short
     buffer : u64[64]
     size := cast[usize](buffer.count * 8)
@@ -110,7 +110,7 @@ file_size :: fn(file: ptr[uefi.File]) -> u64? {
  * @return The file's pages and its size; null if it isn't there, its size couldn't be read, pages couldn't be had, or
  *     a read failed or returned nothing before the end.
  */
-read_file :: fn(root: ptr[uefi.File], path: string, memory_kind: u32) -> Pages? {
+read_file :: fn(root : ptr[uefi.File], path : string, memory_kind : u32) -> Pages? {
     file :: open_file(root, path) or_return null
     defer _ = file.close(file)
     size :: file_size(file) or_return null
@@ -141,13 +141,14 @@ read_file :: fn(root: ptr[uefi.File], path: string, memory_kind: u32) -> Pages? 
  * @return True if every byte was written and the file flushed; false if bytes was empty, path too long, or the file
  *     couldn't be opened, written whole or flushed.
  */
-write_file :: fn(root: ptr[uefi.File], path: string, bytes: u8[]) -> bool {
+write_file :: fn(root : ptr[uefi.File], path : string, bytes : u8[]) -> bool {
     name : u16[256]
     if !path16(path, &name) || bytes.count == 0 {
         return false
     }
     opened : rawptr = null
-    if root.open(root, &opened, &name[0], uefi.FILE_READ | uefi.FILE_WRITE | uefi.FILE_CREATE, 0) != uefi.SUCCESS || opened == null {
+    if root.open(root, &opened, &name[0], uefi.FILE_READ | uefi.FILE_WRITE | uefi.FILE_CREATE, 0) != uefi.SUCCESS
+        || opened == null {
         return false
     }
     file :: cast[ptr[uefi.File]](opened)
@@ -174,7 +175,7 @@ write_file :: fn(root: ptr[uefi.File], path: string, bytes: u8[]) -> bool {
  * @return The names, in the firmware's order, the array and each name allocated with context's allocator for the
  *     caller to free; null if the folder couldn't be opened.
  */
-folder_names :: fn(root: ptr[uefi.File], path: string) -> string[..]? {
+folder_names :: fn(root : ptr[uefi.File], path : string) -> string[..]? {
     folder :: open_file(root, path) or_return null
     defer _ = folder.close(folder)
     names : string[..]
@@ -208,11 +209,12 @@ folder_names :: fn(root: ptr[uefi.File], path: string) -> string[..]? {
  * @param count How many bytes the pages have to hold, rounded up to whole 4096-byte pages.
  * @return The first page's physical address, 4096-aligned; null if boot services are gone or the firmware refused.
  */
-allocate_pages :: fn(memory_kind: u32, count: u64) -> u64? {
+allocate_pages :: fn(memory_kind : u32, count : u64) -> u64? {
     services :: uefi.boot_services() or_return null
     pages :: (count + 4095) / 4096
     address : u64 = 0
-    if services.allocate_pages(cast[u32](uefi.AllocateKind.AnyPages), memory_kind, cast[usize](pages), &address) != uefi.SUCCESS {
+    if services.allocate_pages(cast[u32](uefi.AllocateKind.AnyPages), memory_kind, cast[usize](pages), &address)
+        != uefi.SUCCESS {
         return null
     }
     zero(address, pages * 4096)
@@ -225,7 +227,7 @@ allocate_pages :: fn(memory_kind: u32, count: u64) -> u64? {
  * @param address The physical address to start at, identity-mapped and 8-aligned.
  * @param size How many bytes to zero; only whole 8-byte words are, so a remainder past the last multiple of 8 isn't.
  */
-zero :: fn(address: u64, size: u64) {
+zero :: fn(address : u64, size : u64) {
     for i in cast[u64](0)..<size / 8 {
         cast[ptr[mut u64]](cast[rawptr](address + i * 8))^ = 0
     }

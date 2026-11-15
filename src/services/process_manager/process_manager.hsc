@@ -12,12 +12,12 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import process_manager as protocol from "std:os/slop_os/process_manager"
+import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import process_builder from "../../process_builder"
-import entropy from "../../protocols/entropy"
 import connector from "../../protocols/connector"
+import entropy from "../../protocols/entropy"
 import random_stream from "../../random_stream"
-import service_kit from "../../libraries/service_kit"
 
 /** The manager's state, all of it main's, kept for its life. */
 Manager :: struct {
@@ -37,7 +37,9 @@ Manager :: struct {
     entropy_connector : slop_os.Channel,
     /** A port bound to entropy_connector alone, waited on for the connector's answers. */
     connector_port : slop_os.Port,
-    /** Where the builder stages each program it loads, kept so loading one after another doesn't use up its addresses. */
+    /**
+     * Where the builder stages each program it loads, kept so loading one after another doesn't use up its addresses.
+     */
     staging : process_builder.Staging,
 }
 
@@ -57,9 +59,17 @@ Manager :: struct {
  * @return 1 when the entropy service can't be reached at start, 2 when no port could be made, 3 when the listener
  *     couldn't be bound to it; it doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[connector.Connector], clients: os.Listener[protocol.ProcessManager]) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    entropy : os.Channel[connector.Connector],
+    clients : os.Listener[protocol.ProcessManager]
+) -> int {
     block :: slop_os.startup_block()
-    manager := Manager.{block = block, entropy_connector = entropy.end, entropy = cast[slop_os.Channel](slop_os.NO_HANDLE)}
+    manager := Manager.{
+        block = block,
+        entropy_connector = entropy.end,
+        entropy = cast[slop_os.Channel](slop_os.NO_HANDLE),
+    }
     manager.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     manager.connector_port = os.port_for(block.budget, manager.entropy_connector) or_return 1
     if !dial_entropy(&manager) {
@@ -98,7 +108,7 @@ main :: fn(log: slop_os.DebugLog?, entropy: os.Channel[connector.Connector], cli
  * @param index Which client, an index in manager.clients; one past its end, or a freed place, is nothing to serve.
  * @param into Where each request is received, reused for each and left holding the last.
  */
-serve :: fn(manager: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incoming]) {
     if index >= manager.clients.ends.count {
         return void
     }
@@ -144,7 +154,8 @@ MAX_EXECUTABLE : u64 : 4 << 20
  *
  * 64 bytes are drawn from the entropy service: the first 32 the program's seed, for its startup block, the rest the
  * seed of the stream that places its parts. The executable is copied to the manager's heap, through memory_read, to
- * be built from, and freed after; only the new process maps it. Whatever happens, the request's handles leave this process: to the program, or closed; when it fails, the
+ * be built from, and freed after; only the new process maps it. Whatever happens, the request's handles leave this
+ * process: to the program, or closed; when it fails, the
  * process, space and budget are the requester's to destroy.
  *
  * @param manager The manager, whose entropy connection may be dialed again.
@@ -155,7 +166,7 @@ MAX_EXECUTABLE : u64 : 4 << 20
  *     dialed again, NoMemory when the heap can't hold its copy or the build ran out, NotAProgram when it isn't an
  *     executable the loader takes, and Failed for any other failure building it.
  */
-load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.Response {
+load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol.Response {
     defer close_all(request)
     grant_count :: cast[usize](request.grant_count)
     if grant_count > protocol.MAX_GRANTS {
@@ -202,15 +213,27 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
         }
     }
     target :: process_builder.Target.{process = request.process, space = request.space, budget = request.budget}
-    match process_builder.build(target, file, view_of(&grants[0], grant_count), seed, &stream, slop_os.ABI_VERSION, &manager.staging) {
+    match process_builder.build(
+        target,
+        file,
+        view_of(&grants[0], grant_count),
+        seed,
+        &stream,
+        slop_os.ABI_VERSION,
+        &manager.staging
+    ) {
         case Ok(built) => {
             log_line.write(manager.log, "process manager: started %", name)
             return .Loaded(protocol.Started.{thread = built.thread, image = built.image, seeds = seeds})
         }
         case Error(error) => {
             log_line.write(manager.log, "process manager: % didn't start: %", name, error)
-            return .NotLoaded(if error == .NotAProgram { protocol.LoadStatus.NotAProgram } else if error == .NoMemory {
-                protocol.LoadStatus.NoMemory } else { protocol.LoadStatus.Failed })
+            return .NotLoaded(
+                if error == .NotAProgram {
+                    protocol.LoadStatus.NotAProgram
+                }
+                else if error == .NoMemory { protocol.LoadStatus.NoMemory } else { protocol.LoadStatus.Failed }
+            )
         }
     }
 }
@@ -224,7 +247,7 @@ load :: fn(manager: ptr[mut Manager], request: ptr[protocol.Load]) -> protocol.R
  * @return Whether there's a connection now: false when the connector didn't give one that speaks the entropy
  *     protocol, or no port could be made for it.
  */
-dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
+dial_entropy :: fn(manager : ptr[mut Manager]) -> bool {
     if cast[slop_os.Handle](manager.entropy) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](manager.entropy))
         _ = slop_os.handle_close(cast[slop_os.Handle](manager.entropy_port))
@@ -245,7 +268,7 @@ dial_entropy :: fn(manager: ptr[mut Manager]) -> bool {
  * @return Whether bytes were all filled; false when the service didn't answer with enough even after a new dial,
  *     bytes then unchanged.
  */
-draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
+draw :: fn(manager : ptr[mut Manager], bytes : mut u8[]) -> bool {
     if draw_once(manager, bytes) {
         return true
     }
@@ -260,7 +283,7 @@ draw :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
  * @return Whether the service answered with at least bytes' count; false when sending or receiving failed, or the
  *     answer was another or too short, bytes then unchanged.
  */
-draw_once :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
+draw_once :: fn(manager : ptr[mut Manager], bytes : mut u8[]) -> bool {
     out := os.Outgoing.{}
     request :: os.begin[entropy.Request](&out)
     request^ = .Fill(cast[u32](bytes.count))
@@ -296,7 +319,7 @@ draw_once :: fn(manager: ptr[mut Manager], bytes: mut u8[]) -> bool {
  *
  * @param request The Load, whose handle fields are left as they were, naming nothing of this process's now.
  */
-close_all :: fn(request: ptr[protocol.Load]) {
+close_all :: fn(request : ptr[protocol.Load]) {
     _ = slop_os.handle_close(cast[slop_os.Handle](request.process))
     _ = slop_os.handle_close(cast[slop_os.Handle](request.space))
     _ = slop_os.handle_close(cast[slop_os.Handle](request.budget))

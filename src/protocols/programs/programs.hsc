@@ -287,7 +287,7 @@ Response :: union {
  * @return False for Install and Uninstall, which change the user's list, and Powerbox, which makes a connection each
  *     time; true for the rest: finding, listing, describing, ending what's ended again change nothing more.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Install(_) => false
         case Uninstall(_) => false
@@ -307,7 +307,7 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @param budget The memory budget that pays for the new channel.
  * @return The caller's end of the new connection; null if it couldn't be made or sent, both its ends then closed.
  */
-connect :: fn(end: slop_os.Channel, port: slop_os.Port, budget: slop_os.MemoryBudget) -> os.Channel[Programs]? {
+connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Programs]? {
     pair :: os.channel_for[Programs](budget, 0) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)

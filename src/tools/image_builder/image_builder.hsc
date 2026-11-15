@@ -22,10 +22,10 @@
 package image_builder
 
 import runtime from "base:runtime"
+import crypto from "std:crypto"
 import io from "std:io"
 import os from "std:os"
 import random from "std:random"
-import crypto from "std:crypto"
 import strings from "std:strings"
 import text_buffer from "std:text_buffer"
 import fat from "../../fat"
@@ -120,7 +120,7 @@ Failure :: enum {
  * @param failure What went wrong.
  * @return A phrase, static text.
  */
-text_of :: fn(failure: Failure) -> string {
+text_of :: fn(failure : Failure) -> string {
     return match failure {
         case .TooSmallForFat => "too small for FAT32, which needs 65525 clusters"
         case .NotMounted => "what it made doesn't mount"
@@ -223,8 +223,13 @@ main :: fn() -> int {
         unique : gpt.Guid
         random.fill(unique)
         if index < table.count {
-            table[index] = gpt.NewPartition.{first = partition.first, count = partition.count, type_guid = type_of(partition.kind),
-                unique_guid = unique, name = partition.name}
+            table[index] = gpt.NewPartition.{
+                first = partition.first,
+                count = partition.count,
+                type_guid = type_of(partition.kind),
+                unique_guid = unique,
+                name = partition.name,
+            }
         }
     }
     disk_guid : gpt.Guid
@@ -259,7 +264,7 @@ main :: fn() -> int {
  * @return 0 once it's written; 2 without a size, 3 if there's no memory for it, 5 if it couldn't be filled, 6 if the
  *     output couldn't be written.
  */
-fat_image :: fn(output: string, sectors: u64) -> int {
+fat_image :: fn(output : string, sectors : u64) -> int {
     // From the arguments, as main's partitions' folders are, which the volume may point at
     arguments :: os.arguments()
     folder :: if arguments.count == 5 { arguments[4] } else { "" }
@@ -297,7 +302,7 @@ fat_image :: fn(output: string, sectors: u64) -> int {
  * @param sector A sector of the image, from 0.
  * @return The least multiple of ALIGN_SECTORS at least sector.
  */
-align :: fn(sector: u64) -> u64 {
+align :: fn(sector : u64) -> u64 {
     return (sector + ALIGN_SECTORS - 1) / ALIGN_SECTORS * ALIGN_SECTORS
 }
 
@@ -308,7 +313,7 @@ align :: fn(sector: u64) -> u64 {
  *     Slopfs SlopOS's own.
  * @return Its type GUID, as its bytes are on the disk.
  */
-type_of :: fn(kind: Kind) -> gpt.Guid {
+type_of :: fn(kind : Kind) -> gpt.Guid {
     return match kind {
         case .Esp => ESP_TYPE
         case .Data => BASIC_DATA_TYPE
@@ -323,7 +328,7 @@ type_of :: fn(kind: Kind) -> gpt.Guid {
  * @param text The digits, nothing else.
  * @return Its value, wrapping past a u64's largest, as it isn't checked; null if text is empty or isn't all digits.
  */
-number_of :: fn(text: string) -> u64? {
+number_of :: fn(text : string) -> u64? {
     if text.count == 0 {
         return null
     }
@@ -344,7 +349,7 @@ number_of :: fn(text: string) -> u64? {
  * @return The partition, its first sector not yet placed, its fields views into text; null for a kind that isn't one,
  *     sectors that aren't a number or are 0, or no folder for a kind that holds one.
  */
-parse :: fn(text: string) -> Wanted? {
+parse :: fn(text : string) -> Wanted? {
     fields : string[4]
     count : usize = 0
     start : usize = 0
@@ -386,7 +391,7 @@ parse :: fn(text: string) -> Wanted? {
  * @param partition The partition, placed.
  * @return Null once it's filled; what went wrong otherwise.
  */
-fill :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
+fill :: fn(image #escaping : mut u8[], partition : ptr[Wanted]) -> Failure? {
     return match partition.kind {
         case .Test => null
         case .Esp => fill_fat(image, partition)
@@ -415,7 +420,7 @@ Region :: struct {
  * @param unit The bytes of a unit: a sector's or a block's.
  * @return True once they're read; false if they run past the region's end, or into is too short for them.
  */
-region_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[], unit: u64) -> bool {
+region_read :: fn(context : rawptr, first : u64, count : u64, into : mut u8[], unit : u64) -> bool {
     region :: cast[ptr[mut Region]](context)
     if (first + count) * unit > region.count * SECTOR_BYTES {
         return false
@@ -441,7 +446,7 @@ region_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[], unit:
  * @param unit The bytes of a unit: a sector's or a block's.
  * @return True once they're written; false if they run past the region's end, or from is too short for them.
  */
-region_write :: fn(context: rawptr, first: u64, count: u64, from: u8[], unit: u64) -> bool {
+region_write :: fn(context : rawptr, first : u64, count : u64, from : u8[], unit : u64) -> bool {
     region :: cast[ptr[mut Region]](context)
     if (first + count) * unit > region.count * SECTOR_BYTES {
         return false
@@ -466,7 +471,7 @@ region_write :: fn(context: rawptr, first: u64, count: u64, from: u8[], unit: u6
  * @param into Where they go.
  * @return True once they're read, as region_read.
  */
-sector_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+sector_read :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     return region_read(context, first, count, into, SECTOR_BYTES)
 }
 
@@ -479,7 +484,7 @@ sector_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bo
  * @param from What's written.
  * @return True once they're written, as region_write.
  */
-sector_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
+sector_write :: fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool {
     return region_write(context, first, count, from, SECTOR_BYTES)
 }
 
@@ -492,7 +497,7 @@ sector_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool 
  * @param into Where they go.
  * @return True once they're read, as region_read.
  */
-block_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> bool {
+block_read :: fn(context : rawptr, first : u64, count : u64, into : mut u8[]) -> bool {
     return region_read(context, first, count, into, slopfs.BLOCK_BYTES)
 }
 
@@ -505,7 +510,7 @@ block_read :: fn(context: rawptr, first: u64, count: u64, into: mut u8[]) -> boo
  * @param from What's written.
  * @return True once they're written, as region_write.
  */
-block_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
+block_write :: fn(context : rawptr, first : u64, count : u64, from : u8[]) -> bool {
     return region_write(context, first, count, from, slopfs.BLOCK_BYTES)
 }
 
@@ -515,7 +520,7 @@ block_write :: fn(context: rawptr, first: u64, count: u64, from: u8[]) -> bool {
  * @param context The Region, not used.
  * @return True.
  */
-flushed :: fn(context: rawptr) -> bool {
+flushed :: fn(context : rawptr) -> bool {
     return true
 }
 
@@ -528,11 +533,16 @@ flushed :: fn(context: rawptr) -> bool {
  * @param partition The partition, placed.
  * @return Null once it's filled; TooSmallForFat, NotMounted, NotWritten, or what copying the tree gave.
  */
-fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
+fill_fat :: fn(image #escaping : mut u8[], partition : ptr[Wanted]) -> Failure? {
     region := runtime.new(Region)
     defer runtime.free(region)
     region^ = Region.{image = image, first = partition.first, count = partition.count}
-    device := fat.Device.{context = cast[rawptr](region), sector_count = partition.count, read = sector_read, write = sector_write}
+    device := fat.Device.{
+        context = cast[rawptr](region),
+        sector_count = partition.count,
+        read = sector_read,
+        write = sector_write,
+    }
     // A sector a cluster, or more for a bigger partition, keeping well past FAT32's fewest clusters
     per_cluster : u64 = 1
     loop {
@@ -563,7 +573,7 @@ fill_fat :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
  * @param name The name of an entry in the folder, as listing it gave it, put after the separator as it is.
  * @return The joined path, a view into the buffer's storage, good until it's next changed.
  */
-joined :: fn(buffer: ptr[mut text_buffer.TextBuffer], path: string, name: string) -> string {
+joined :: fn(buffer : ptr[mut text_buffer.TextBuffer], path : string, name : string) -> string {
     text_buffer.clear(buffer)
     text_buffer.append(buffer, path)
     text_buffer.append(buffer, "/")
@@ -581,7 +591,7 @@ joined :: fn(buffer: ptr[mut text_buffer.TextBuffer], path: string, name: string
  * @return Null once it's copied; TooDeep, Unlisted, Unread, NotMade or NotWritten otherwise, what's copied by then
  *     left.
  */
-copy_to_fat :: fn(volume: ptr[mut fat.Volume], directory: u32, folder: string, depth: int) -> Failure? {
+copy_to_fat :: fn(volume : ptr[mut fat.Volume], directory : u32, folder : string, depth : int) -> Failure? {
     if depth > 16 {
         return .TooDeep
     }
@@ -619,15 +629,20 @@ copy_to_fat :: fn(volume: ptr[mut fat.Volume], directory: u32, folder: string, d
  * @return Null once it's filled and checks; NotWholeBlocks, NotMade, NotMounted, NotWritten, NotCommitted, NotChecked,
  *     or what copying the tree gave.
  */
-fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure? {
+fill_slopfs :: fn(image #escaping : mut u8[], partition : ptr[Wanted]) -> Failure? {
     if partition.first % 8 != 0 || partition.count % 8 != 0 {
         return .NotWholeBlocks
     }
     region := runtime.new(Region)
     defer runtime.free(region)
     region^ = Region.{image = image, first = partition.first, count = partition.count}
-    device := slopfs.Device.{context = cast[rawptr](region), block_count = partition.count / 8, read = block_read, write = block_write,
-        flush = flushed}
+    device := slopfs.Device.{
+        context = cast[rawptr](region),
+        block_count = partition.count / 8,
+        read = block_read,
+        write = block_write,
+        flush = flushed,
+    }
     id : u8[16]
     random.fill(id)
     if slopfs.format(device, id) is_error {
@@ -646,8 +661,16 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
         sealed_key : u8[32]
         random.fill(sealed_key)
         passphrase :: string_bytes(partition.sealed_passphrase)
-        sealed :: slopfs.create_sealed_volume(container, partition.sealed_name, sealed_key, 0, .ChaCha20Poly1305, passphrase,
-            SEALED_ARGON2) or_return .NotMade
+        sealed :: slopfs.create_sealed_volume(
+            container,
+            partition.sealed_name,
+            sealed_key,
+            0,
+            .ChaCha20Poly1305,
+            passphrase,
+            SEALED_ARGON2
+        )
+            or_return .NotMade
         made :: slopfs.create(sealed, slopfs.ROOT_OBJECT, "sealed.txt", .File) or_return .NotMade
         if slopfs.write(sealed, made, 0, string_bytes(SEALED_TEXT)) is_error {
             return .NotWritten
@@ -672,7 +695,7 @@ fill_slopfs :: fn(image #escaping : mut u8[], partition: ptr[Wanted]) -> Failure
  * @return Null once it's copied; TooDeep, Unlisted, Unread, NotMade or NotWritten otherwise, what's copied by then
  *     left.
  */
-copy_to_slopfs :: fn(volume: ptr[mut slopfs.Volume], directory: u64, folder: string, depth: int) -> Failure? {
+copy_to_slopfs :: fn(volume : ptr[mut slopfs.Volume], directory : u64, folder : string, depth : int) -> Failure? {
     if depth > 16 {
         return .TooDeep
     }

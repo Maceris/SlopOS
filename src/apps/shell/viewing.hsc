@@ -1,14 +1,14 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import schema from "std:schema"
-import text_buffer from "std:text_buffer"
-import terminal from "std:terminal"
-import unicode from "std:unicode"
 import slop_os from "std:os/slop_os"
 import terminal as protocol from "std:os/slop_os/terminal"
+import schema from "std:schema"
+import terminal from "std:terminal"
+import text_buffer from "std:text_buffer"
+import unicode from "std:unicode"
+import shell_language as language from "../../shell_language"
 
 /*
  * Reading values (decisions/0179, 11e3): view, a file as a value, and page, a value a screen at a time. A typed
@@ -46,7 +46,7 @@ USAGE_PAGE_DOWN : u16 : 0x4e
  * @return The value: the typed file's; Text for the others, without a text file's last line break, and with a line
  *     saying how many bytes weren't read past MAX_VIEW_BYTES (or MAX_HEX_BYTES, in hexadecimal).
  */
-view_file :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalError] {
+view_file :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalError] {
     if tree.children.count != 1 {
         return error_at(tree.at, "view takes a file's path: view notes.txt")
     }
@@ -68,7 +68,9 @@ view_file :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
         case Error(problem) => {
             if problem == file_problem(.NotFound) {
                 match meant_path(shell, path) {
-                    case Some(meant) => return error_at(argument.at, message("%1: %2; did you mean %3?", path, problem, meant))
+                    case Some(
+                        meant
+                    ) => return error_at(argument.at, message("%1: %2; did you mean %3?", path, problem, meant))
                     case None => {}
                 }
             }
@@ -130,7 +132,7 @@ view_file :: fn(shell: ptr[mut Shell], tree: ptr[Node]) -> Result[Value, EvalErr
  * @param bytes The value, as std/schema's write_value writes one; only read.
  * @return The value, as the shell reads a program's records (decode); null if no manifest has the type.
  */
-typed_value :: fn(shell: ptr[mut Shell], hash: u8[32], bytes: u8[]) -> Value? {
+typed_value :: fn(shell : ptr[mut Shell], hash : u8[32], bytes : u8[]) -> Value? {
     for name in program_names(shell) {
         found :: find_program(shell, name) or_continue
         _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
@@ -153,7 +155,7 @@ typed_value :: fn(shell: ptr[mut Shell], hash: u8[32], bytes: u8[]) -> Value? {
  * @param bytes The bytes; a code point cut off at their end is taken as text, as the file may go on past them.
  * @return True if they're text.
  */
-is_text :: fn(bytes: u8[]) -> bool {
+is_text :: fn(bytes : u8[]) -> bool {
     at := cast[usize](0)
     loop {
         if at >= bytes.count {
@@ -166,8 +168,12 @@ is_text :: fn(bytes: u8[]) -> bool {
         if length == 0 {
             return false
         }
-        // A replacement character that wasn't written as one: bytes that aren't UTF-8, unless they're cut off at the end
-        if point == 0xfffd && !(bytes.count - at >= 3 && bytes[at] == 0xef && bytes[at + 1] == 0xbf && bytes[at + 2] == 0xbd) {
+        /*
+         * A replacement character that wasn't written as one: bytes that aren't UTF-8, unless they're cut off at the
+         * end
+         */
+        if point == 0xfffd
+            && !(bytes.count - at >= 3 && bytes[at] == 0xef && bytes[at + 1] == 0xbf && bytes[at + 2] == 0xbd) {
             return at + 4 > bytes.count && bytes[at] >= 0xc0
         }
         at += length
@@ -181,7 +187,7 @@ is_text :: fn(bytes: u8[]) -> bool {
  * @param unread How many of the file's bytes there are past them; 0 for none, when nothing's said.
  * @return The text, on the heap, never freed.
  */
-file_text :: fn(bytes: u8[], unread: u64) -> string {
+file_text :: fn(bytes : u8[], unread : u64) -> string {
     end := bytes.count
     if end > 0 && bytes[end - 1] == cast[u8]('\n') {
         end -= 1
@@ -211,7 +217,7 @@ file_text :: fn(bytes: u8[], unread: u64) -> string {
  * @param size The file's size in bytes, for the line saying what isn't shown.
  * @return The text, on the heap, never freed.
  */
-hex_of :: fn(bytes: u8[], size: u64) -> string {
+hex_of :: fn(bytes : u8[], size : u64) -> string {
     shown :: if bytes.count < MAX_HEX_BYTES { bytes.count } else { MAX_HEX_BYTES }
     out : u8[..]
     start := cast[usize](0)
@@ -267,7 +273,7 @@ hex_of :: fn(bytes: u8[], size: u64) -> string {
  * @param value 0 to 15; anything larger gives a letter past f.
  * @return Its digit, 0 to 9 then a to f, as ASCII.
  */
-hex_digit :: fn(value: usize) -> u8 {
+hex_digit :: fn(value : usize) -> u8 {
     if value < 10 {
         return cast[u8]('0') + cast[u8](value)
     }
@@ -301,7 +307,7 @@ Pager :: struct {
  * @param given What came before it, of any kind.
  * @return Null, so nothing's shown again after.
  */
-page :: fn(shell: ptr[mut Shell], stage: ptr[Node], given: Value) -> Result[Value, EvalError] {
+page :: fn(shell : ptr[mut Shell], stage : ptr[Node], given : Value) -> Result[Value, EvalError] {
     if stage.children.count > 0 {
         return error_at(stage.at, "page takes nothing: what comes before it is what it shows")
     }
@@ -365,7 +371,7 @@ page :: fn(shell: ptr[mut Shell], stage: ptr[Node], given: Value) -> Result[Valu
  * @param typed The text it typed, if any.
  * @return False for a key that ends the pager; true otherwise, also for a key it doesn't know.
  */
-moved :: fn(pager: ptr[mut Pager], code: u16, typed: u8[]) -> bool {
+moved :: fn(pager : ptr[mut Pager], code : u16, typed : u8[]) -> bool {
     key :: if typed.count == 1 { typed[0] } else { cast[u8](0) }
     screen :: screen_lines(pager)
     last :: if pager.lines.count > screen { pager.lines.count - screen } else { 0 }
@@ -402,7 +408,7 @@ moved :: fn(pager: ptr[mut Pager], code: u16, typed: u8[]) -> bool {
  * @param pager The pager.
  * @return How many lines.
  */
-screen_lines :: fn(pager: ptr[Pager]) -> usize {
+screen_lines :: fn(pager : ptr[Pager]) -> usize {
     rows :: cast[usize](pager.features.rows)
     return if rows > 2 { rows - 1 } else { 1 }
 }
@@ -413,20 +419,27 @@ screen_lines :: fn(pager: ptr[Pager]) -> usize {
  * @param shell The shell, whose terminal it's drawn on; failures are ignored, as say ignores them.
  * @param pager The pager.
  */
-draw :: fn(shell: ptr[mut Shell], pager: ptr[Pager]) {
+draw :: fn(shell : ptr[mut Shell], pager : ptr[Pager]) {
     screen :: screen_lines(pager)
     columns :: cast[usize](pager.features.columns)
     for row in 0..<screen {
         send(shell, .MoveCursor(protocol.Position.{column = 0, row = cast[u16](row)}))
-        send(shell, .Clear(protocol.Area.{column = 0, row = cast[u16](row), columns = pager.features.columns, rows = 1}))
+        send(
+            shell,
+            .Clear(protocol.Area.{column = 0, row = cast[u16](row), columns = pager.features.columns, rows = 1})
+        )
         at :: pager.top + row
         if at < pager.lines.count {
             _ = terminal.write(&shell.console, cut_to(pager.lines[at], columns))
         }
     }
     shown_to :: if pager.top + screen < pager.lines.count { pager.top + screen } else { pager.lines.count }
-    status :: message("lines %1-%2 of %3: Space and b page, Up and Down scroll, q quits", pager.top + 1, shown_to,
-        pager.lines.count)
+    status :: message(
+        "lines %1-%2 of %3: Space and b page, Up and Down scroll, q quits",
+        pager.top + 1,
+        shown_to,
+        pager.lines.count
+    )
     row :: cast[u16](screen)
     send(shell, .MoveCursor(protocol.Position.{column = 0, row = row}))
     send(shell, .Clear(protocol.Area.{column = 0, row = row, columns = pager.features.columns, rows = 1}))
@@ -440,7 +453,7 @@ draw :: fn(shell: ptr[mut Shell], pager: ptr[Pager]) {
  * @param columns The most columns it may take (unicode.grapheme_width).
  * @return A view of its start: all of it if it fits.
  */
-cut_to :: fn(text: string, columns: usize) -> string {
+cut_to :: fn(text : string, columns : usize) -> string {
     bytes :: string_bytes(text)
     taken := cast[usize](0)
     end := cast[usize](0)
@@ -471,7 +484,7 @@ cut_to :: fn(text: string, columns: usize) -> string {
  * @param into Where the lines go, in order; text without a line break is one line, and so is empty text.
  * @param text The text, kept by the views.
  */
-split_lines :: fn(into: ptr[mut string[..]], text #escaping : string) {
+split_lines :: fn(into : ptr[mut string[..]], text #escaping : string) {
     bytes :: string_bytes(text)
     start := cast[usize](0)
     for byte, i in bytes {
@@ -490,7 +503,7 @@ split_lines :: fn(into: ptr[mut string[..]], text #escaping : string) {
  * @param value The value to be written.
  * @return The terminal's columns for a list; 0, no limit, for anything else.
  */
-table_columns :: fn(shell: ptr[mut Shell], value: Value) -> usize {
+table_columns :: fn(shell : ptr[mut Shell], value : Value) -> usize {
     return match value {
         case List(_) => cast[usize](describe(shell).columns)
         case _ => 0
@@ -503,7 +516,7 @@ table_columns :: fn(shell: ptr[mut Shell], value: Value) -> usize {
  * @param shell The shell, whose terminal is asked; a Read held is answered in turn, and its events kept.
  * @return What it answered; DEFAULT_FEATURES if it couldn't be asked or didn't answer, or said it has no rows.
  */
-describe :: fn(shell: ptr[mut Shell]) -> protocol.Features {
+describe :: fn(shell : ptr[mut Shell]) -> protocol.Features {
     console :: &shell.console
     if !protocol.send(console.end, console.port, .Describe) {
         return DEFAULT_FEATURES
@@ -522,7 +535,9 @@ describe :: fn(shell: ptr[mut Shell]) -> protocol.Features {
             case _ => return DEFAULT_FEATURES
         }
         match os.message_of[protocol.Response](&into)^ {
-            case Described(features) => return if features.rows == 0 || features.columns == 0 { DEFAULT_FEATURES } else { features }
+            case Described(
+                features
+            ) => return if features.rows == 0 || features.columns == 0 { DEFAULT_FEATURES } else { features }
             case Input(_) => terminal.take_input(console, &into)
             case _ => return DEFAULT_FEATURES
         }
@@ -535,6 +550,6 @@ describe :: fn(shell: ptr[mut Shell]) -> protocol.Features {
  * @param shell The shell, whose terminal it's sent to.
  * @param request The request.
  */
-send :: fn(shell: ptr[mut Shell], request: protocol.Request) {
+send :: fn(shell : ptr[mut Shell], request : protocol.Request) {
     _ = protocol.send(shell.console.end, shell.console.port, request)
 }

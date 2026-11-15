@@ -1,11 +1,11 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import schema from "std:schema"
 import slop_os from "std:os/slop_os"
+import schema from "std:schema"
 import programs from "../../protocols/programs"
+import shell_language as language from "../../shell_language"
 
 /*
  * Programs' debug files (decisions/0185, 12e): the program linked with its DWARF, after "HDBG", then the debug table,
@@ -60,7 +60,7 @@ DebugLocal :: struct {
  * @return The file, a handle the caller owns and closes; null without a programs connection, or for a program
  *     without one.
  */
-debug_memory :: fn(shell: ptr[mut Shell], name: string) -> slop_os.Memory? {
+debug_memory :: fn(shell : ptr[mut Shell], name : string) -> slop_os.Memory? {
     found :: debug_file_of(shell, name) or_return null
     return found.record
 }
@@ -70,7 +70,7 @@ debug_memory :: fn(shell: ptr[mut Shell], name: string) -> slop_os.Memory? {
  *
  * @return The file and its size, the handle the caller's; null without one.
  */
-debug_file_of :: fn(shell: ptr[mut Shell], name: string) -> programs.ProgramDocumentation? {
+debug_file_of :: fn(shell : ptr[mut Shell], name : string) -> programs.ProgramDocumentation? {
     connection :: shell.programs or_return null
     if name.count == 0 || name.count > programs.MAX_NAME {
         return null
@@ -98,7 +98,7 @@ debug_file_of :: fn(shell: ptr[mut Shell], name: string) -> programs.ProgramDocu
  * @param offsets The frames, as offsets in the image, innermost first.
  * @return The queries, on the heap, never freed.
  */
-line_queries :: fn(offsets: u64[]) -> string {
+line_queries :: fn(offsets : u64[]) -> string {
     text : u8[..]
     for offset, i in offsets {
         line :: message("line %{#x}\n", if i > 0 && offset > 0 { offset - 1 } else { offset })
@@ -120,12 +120,20 @@ line_queries :: fn(offsets: u64[]) -> string {
  * @return The file, mapped, which free_debug_file lets go of; null without a programs connection, for a program
  *     without one, as a system built without debug files has, or a file that doesn't map.
  */
-find_debug_file :: fn(shell: ptr[mut Shell], name: string) -> DebugFile? {
+find_debug_file :: fn(shell : ptr[mut Shell], name : string) -> DebugFile? {
     found :: debug_file_of(shell, name) or_return null
     mapped :: (found.size + 4095) & ~cast[u64](4095)
     address :: runtime.reserve_addresses(cast[usize](mapped)) or_else 0
-    if found.size == 0 || address == 0
-        || (slop_os.memory_map(found.record, slop_os.startup_block().space, address, 0, mapped, slop_os.PROTECTION_READ) is_error) {
+    if found.size == 0
+        || address == 0
+        || (slop_os.memory_map(
+            found.record,
+            slop_os.startup_block().space,
+            address,
+            0,
+            mapped,
+            slop_os.PROTECTION_READ
+        ) is_error) {
         _ = slop_os.handle_close(cast[slop_os.Handle](found.record))
         return null
     }
@@ -139,7 +147,7 @@ find_debug_file :: fn(shell: ptr[mut Shell], name: string) -> DebugFile? {
  *
  * @param file The file, which can't be used after.
  */
-free_debug_file :: fn(file: ptr[mut DebugFile]) {
+free_debug_file :: fn(file : ptr[mut DebugFile]) {
     runtime.array_free(&file.schemas)
     runtime.array_free(&file.locals)
     runtime.array_free(&file.named)
@@ -153,7 +161,7 @@ free_debug_file :: fn(file: ptr[mut DebugFile]) {
  * @param file The file.
  * @return Its bytes, a view of its mapping.
  */
-debug_bytes :: fn(file: ptr[DebugFile]) -> u8[] {
+debug_bytes :: fn(file : ptr[DebugFile]) -> u8[] {
     return view_of(cast[ptr[u8]](file.address), cast[usize](file.size))
 }
 
@@ -162,7 +170,7 @@ debug_bytes :: fn(file: ptr[DebugFile]) -> u8[] {
  *
  * @param file The file, mapped.
  */
-read_debug_table :: fn(file: ptr[mut DebugFile]) {
+read_debug_table :: fn(file : ptr[mut DebugFile]) {
     bytes :: debug_bytes(file)
     elf_size :: number_at(bytes, 8, 8)
     at := 16 + elf_size
@@ -188,7 +196,10 @@ read_debug_table :: fn(file: ptr[mut DebugFile]) {
             line :: table_number(bytes, &at, 4)
             _ = table_number(bytes, &at, 4)
             place :: table_number(bytes, &at, 4)
-            runtime.array_add(&file.locals, DebugLocal.{function = function, name = name, line = line, schema = cast[usize](place)})
+            runtime.array_add(
+                &file.locals,
+                DebugLocal.{function = function, name = name, line = line, schema = cast[usize](place)}
+            )
         }
     }
     named_count :: table_number(bytes, &at, 4)
@@ -207,7 +218,7 @@ read_debug_table :: fn(file: ptr[mut DebugFile]) {
  * @param member The member's name.
  * @return Its offset in bytes; null if the file hasn't the type, or the type hasn't the member.
  */
-member_offset :: fn(file: ptr[DebugFile], type: string, member: string) -> u64? {
+member_offset :: fn(file : ptr[DebugFile], type : string, member : string) -> u64? {
     for named in file.named {
         if named.name != type || named.schema >= file.schemas.count {
             continue
@@ -235,7 +246,7 @@ member_offset :: fn(file: ptr[DebugFile], type: string, member: string) -> u64? 
  * @param count How many bytes.
  * @return Its value; 0 past the end.
  */
-table_number :: fn(bytes: u8[], at: ptr[mut u64], count: u64) -> u64 {
+table_number :: fn(bytes : u8[], at : ptr[mut u64], count : u64) -> u64 {
     value :: number_at(bytes, at^, count)
     at^ += count
     return value
@@ -248,7 +259,7 @@ table_number :: fn(bytes: u8[], at: ptr[mut u64], count: u64) -> u64 {
  * @param at Where it is, moved past it.
  * @return The name; null if it runs past the end.
  */
-table_name :: fn(bytes: u8[], at: ptr[mut u64]) -> string? {
+table_name :: fn(bytes : u8[], at : ptr[mut u64]) -> string? {
     count :: table_number(bytes, at, 4)
     start :: at^
     if start + count > cast[u64](bytes.count) || start >= cast[u64](bytes.count) {
@@ -269,7 +280,7 @@ table_name :: fn(bytes: u8[], at: ptr[mut u64]) -> string? {
  * @param text The text.
  * @return True if all of it's there.
  */
-text_is :: fn(bytes: u8[], at: u64, text: string) -> bool {
+text_is :: fn(bytes : u8[], at : u64, text : string) -> bool {
     wanted :: string_bytes(text)
     for byte, i in wanted {
         index :: at + cast[u64](i)
@@ -289,7 +300,7 @@ text_is :: fn(bytes: u8[], at: u64, text: string) -> bool {
  * @param line The line it's declared on.
  * @return Its schema's bytes; null if the table hasn't it.
  */
-local_schema :: fn(file: ptr[DebugFile], function: string, name: string, line: u64) -> u8[]? {
+local_schema :: fn(file : ptr[DebugFile], function : string, name : string, line : u64) -> u8[]? {
     for local in file.locals {
         if local.function == function && local.name == name && local.line == line && local.schema < file.schemas.count {
             return file.schemas[local.schema]
@@ -327,7 +338,7 @@ Showing :: struct #scoped {
  * @param value Its bytes, in its own layout, as they are in the process.
  * @param depth How many more levels of members and elements are shown.
  */
-show_value :: fn(showing: ptr[mut Showing], place: usize, value: u8[], depth: int) {
+show_value :: fn(showing : ptr[mut Showing], place : usize, value : u8[], depth : int) {
     if place >= showing.types.types.count {
         add_shown(showing, "<?>")
         return void
@@ -405,7 +416,7 @@ show_value :: fn(showing: ptr[mut Showing], place: usize, value: u8[], depth: in
  * Show a struct: its name and each member, "Name{a = 1, b = 2}"; a #union struct's members aren't, as which it holds
  * isn't known.
  */
-show_struct :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], value: u8[], depth: int) {
+show_struct :: fn(showing : ptr[mut Showing], type : ptr[schema.Type], value : u8[], depth : int) {
     add_shown(showing, type.name)
     if type.is_union || depth <= 0 {
         add_shown(showing, "{...}")
@@ -426,7 +437,7 @@ show_struct :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], value: u8[]
  * Show a union: an optional as None or Some(value), anything else as its variant, with what it holds,
  * "Variant(a, b)".
  */
-show_union :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], value: u8[], depth: int) {
+show_union :: fn(showing : ptr[mut Showing], type : ptr[schema.Type], value : u8[], depth : int) {
     if type.null_is_none {
         // Just the pointer, null for None
         if number_at(value, 0, 8) == 0 {
@@ -469,7 +480,7 @@ show_union :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], value: u8[],
  *
  * @param dimension Which dimension the value is, from 0, the outermost.
  */
-show_array :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], dimension: usize, value: u8[], depth: int) {
+show_array :: fn(showing : ptr[mut Showing], type : ptr[schema.Type], dimension : usize, value : u8[], depth : int) {
     if dimension >= type.dimensions.count {
         add_shown(showing, "<?>")
         return void
@@ -526,7 +537,7 @@ show_array :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], dimension: u
  * The size of an array's elements from a dimension on: a static dimension's count times its elements', a view's 16
  * bytes, a dynamic array's 40, and past the last, the element type's.
  */
-dimension_element_size :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], dimension: usize) -> u64 {
+dimension_element_size :: fn(showing : ptr[mut Showing], type : ptr[schema.Type], dimension : usize) -> u64 {
     if dimension >= type.dimensions.count {
         return if type.base < showing.types.types.count { showing.types.types[type.base].size } else { 0 }
     }
@@ -543,12 +554,17 @@ dimension_element_size :: fn(showing: ptr[mut Showing], type: ptr[schema.Type], 
 /**
  * Show a part of a value: a member or what a variant holds, at its offset.
  */
-show_at :: fn(showing: ptr[mut Showing], place: usize, value: u8[], offset: u64, depth: int) {
+show_at :: fn(showing : ptr[mut Showing], place : usize, value : u8[], offset : u64, depth : int) {
     if offset >= cast[u64](value.count) {
         add_shown(showing, "<?>")
         return void
     }
-    show_value(showing, place, view_of(&value[cast[usize](offset)], cast[usize](cast[u64](value.count) - offset)), depth)
+    show_value(
+        showing,
+        place,
+        view_of(&value[cast[usize](offset)], cast[usize](cast[u64](value.count) - offset)),
+        depth
+    )
 }
 
 /**
@@ -558,7 +574,7 @@ show_at :: fn(showing: ptr[mut Showing], place: usize, value: u8[], offset: u64,
  * @param count How many bytes it has, or for a cstring, the most read.
  * @param raw Whether it's a cstring.
  */
-show_text :: fn(showing: ptr[mut Showing], address: u64, count: u64, raw: bool) {
+show_text :: fn(showing : ptr[mut Showing], address : u64, count : u64, raw : bool) {
     if address == 0 {
         add_shown(showing, if raw { "null" } else { "\"\"" })
         return void
@@ -591,7 +607,7 @@ show_text :: fn(showing: ptr[mut Showing], address: u64, count: u64, raw: bool) 
  * @param into Where they go, grown to count.
  * @return True if all of them were read.
  */
-read_remote :: fn(showing: ptr[mut Showing], address: u64, count: u64, into: ptr[mut u8[..]]) -> bool {
+read_remote :: fn(showing : ptr[mut Showing], address : u64, count : u64, into : ptr[mut u8[..]]) -> bool {
     runtime.array_reset(into)
     if count == 0 {
         return true
@@ -611,7 +627,7 @@ read_remote :: fn(showing: ptr[mut Showing], address: u64, count: u64, into: ptr
 }
 
 /** Add text to what's shown. */
-add_shown :: fn(showing: ptr[mut Showing], text: string) {
+add_shown :: fn(showing : ptr[mut Showing], text : string) {
     for byte in string_bytes(text) {
         runtime.array_add(showing.into, byte)
     }
@@ -625,7 +641,7 @@ add_shown :: fn(showing: ptr[mut Showing], text: string) {
  * @param count How many bytes it has, 0 to 8.
  * @return Its value; bytes past the end are taken as 0.
  */
-number_at :: fn(bytes: u8[], at: u64, count: u64) -> u64 {
+number_at :: fn(bytes : u8[], at : u64, count : u64) -> u64 {
     value : u64 = 0
     for i in cast[u64](0)..<count {
         index :: at + i

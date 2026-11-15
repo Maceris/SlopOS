@@ -11,9 +11,9 @@ package gui_kit
 import runtime from "base:runtime"
 import canvas from "std:canvas"
 import os from "std:os"
-import ui from "std:ui"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
+import ui from "std:ui"
 import connector from "../protocols/connector"
 import surface from "../protocols/surface"
 
@@ -85,7 +85,7 @@ Window :: struct {
  * @param height Its height, in pixels.
  * @return The window, on the heap, its first frame due; null if anything failed.
  */
-open :: fn(dialer: os.Channel[connector.Connector], title: string, width: u32, height: u32) -> ptr[mut Window]? {
+open :: fn(dialer : os.Channel[connector.Connector], title : string, width : u32, height : u32) -> ptr[mut Window]? {
     startup :: slop_os.startup_block()
     dial_port :: os.port_for(startup.budget, dialer.end) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](dial_port))
@@ -102,7 +102,7 @@ open :: fn(dialer: os.Channel[connector.Connector], title: string, width: u32, h
  * @param height Its height, in pixels.
  * @return The window, on the heap, its first frame due; null if anything failed.
  */
-open_on :: fn(channel: os.Channel[surface.Surface], title: string, width: u32, height: u32) -> ptr[mut Window]? {
+open_on :: fn(channel : os.Channel[surface.Surface], title : string, width : u32, height : u32) -> ptr[mut Window]? {
     startup :: slop_os.startup_block()
     window :: runtime.new(Window)
     window.end = channel.end
@@ -114,8 +114,15 @@ open_on :: fn(channel: os.Channel[surface.Surface], title: string, width: u32, h
     window.due = true
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
-    request^ = .CreateWindow(surface.WindowSpec.{width = width, height = height, scale = surface.SCALE_ONE, color = .Srgb,
-        title = os.append(&out, string_bytes(title))})
+    request^ = .CreateWindow(
+        surface.WindowSpec.{
+            width = width,
+            height = height,
+            scale = surface.SCALE_ONE,
+            color = .Srgb,
+            title = os.append(&out, string_bytes(title)),
+        }
+    )
     match ask(window, &out) {
         case Created(id) => window.surface = id
         case _ => return null
@@ -130,7 +137,7 @@ open_on :: fn(channel: os.Channel[surface.Surface], title: string, width: u32, h
 }
 
 /** Send a request and wait for its answer, events before it kept for take. */
-ask :: fn(window: ptr[mut Window], out: ptr[mut os.Outgoing]) -> surface.Response {
+ask :: fn(window : ptr[mut Window], out : ptr[mut os.Outgoing]) -> surface.Response {
     if surface.send_request(window.end, window.port, out) is_some {
         return .Unsupported
     }
@@ -153,7 +160,7 @@ ask :: fn(window: ptr[mut Window], out: ptr[mut os.Outgoing]) -> surface.Respons
 }
 
 /** Make a buffer of the window's size in memory of its own, map it, and give it to the compositor. */
-add_buffer :: fn(window: ptr[mut Window], index: u32) -> bool {
+add_buffer :: fn(window : ptr[mut Window], index : u32) -> bool {
     startup :: slop_os.startup_block()
     stride :: 4 * window.width
     bytes :: cast[u64](stride) * cast[u64](window.height)
@@ -167,14 +174,29 @@ add_buffer :: fn(window: ptr[mut Window], index: u32) -> bool {
     if index >= 2 {
         return false
     }
-    window.buffers[index].image = canvas.Image.{pixels = view_of(cast[ptr[mut u8]](address), cast[usize](bytes)),
-        width = cast[usize](window.width), height = cast[usize](window.height), stride = cast[usize](stride)}
+    window.buffers[index].image = canvas.Image.{
+        pixels = view_of(cast[ptr[mut u8]](address), cast[usize](bytes)),
+        width = cast[usize](window.width),
+        height = cast[usize](window.height),
+        stride = cast[usize](stride),
+    }
     window.buffers[index].stale = canvas.Rect.{x1 = cast[i32](window.width), y1 = cast[i32](window.height)}
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
-    request^ = .AddBuffer(surface.NewBuffer.{id = index + 1, memory = memory, description = surface.BufferDescription.{
-        format = surface.FORMAT_XRGB8888, modifier = surface.MODIFIER_LINEAR, width = window.width, height = window.height,
-        plane_count = 1, planes = surface.Plane.[surface.Plane.{stride = stride}, surface.Plane.{}, surface.Plane.{}]}})
+    request^ = .AddBuffer(
+        surface.NewBuffer.{
+            id = index + 1,
+            memory = memory,
+            description = surface.BufferDescription.{
+                format = surface.FORMAT_XRGB8888,
+                modifier = surface.MODIFIER_LINEAR,
+                width = window.width,
+                height = window.height,
+                plane_count = 1,
+                planes = surface.Plane.[surface.Plane.{stride = stride}, surface.Plane.{}, surface.Plane.{}],
+            },
+        }
+    )
     match ask(window, &out) {
         case Added(_) => return true
         case _ => return false
@@ -182,7 +204,7 @@ add_buffer :: fn(window: ptr[mut Window], index: u32) -> bool {
 }
 
 /** Hold a Read for the window's events. */
-read_more :: fn(window: ptr[mut Window]) {
+read_more :: fn(window : ptr[mut Window]) {
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
     request^ = .Read(surface.MAX_EVENTS)
@@ -195,7 +217,7 @@ read_more :: fn(window: ptr[mut Window]) {
  * @param window The window: its input gathers it, and due says whether a frame's needed.
  * @return False once its connection's gone, the compositor with it.
  */
-take :: fn(window: ptr[mut Window]) -> bool {
+take :: fn(window : ptr[mut Window]) -> bool {
     into := os.Incoming.{}
     loop {
         match surface.receive_response(window.end, window.port, &into, false) {
@@ -214,24 +236,35 @@ take :: fn(window: ptr[mut Window]) -> bool {
 }
 
 /** Wait until the compositor sends something, or a deadline in the monotonic clock's nanoseconds passes. */
-wait :: fn(window: ptr[mut Window], deadline: u64 = slop_os.NO_DEADLINE) {
+wait :: fn(window : ptr[mut Window], deadline : u64 = slop_os.NO_DEADLINE) {
     packets : slop_os.Packet[4]
     _ = slop_os.port_wait(window.port, packets, deadline)
 }
 
 /** HID usages of the keys std/ui reads, and what each is. */
 KEYS :: KeyUsage.[
-    KeyUsage.{usage = 0x50, key = .Left}, KeyUsage.{usage = 0x4f, key = .Right}, KeyUsage.{usage = 0x52, key = .Up},
-    KeyUsage.{usage = 0x51, key = .Down}, KeyUsage.{usage = 0x4a, key = .Home}, KeyUsage.{usage = 0x4d, key = .End},
-    KeyUsage.{usage = 0x2a, key = .Backspace}, KeyUsage.{usage = 0x4c, key = .Delete}, KeyUsage.{usage = 0x28, key = .Enter},
-    KeyUsage.{usage = 0x2b, key = .Tab}, KeyUsage.{usage = 0x29, key = .Escape}, KeyUsage.{usage = 0x4b, key = .PageUp},
-    KeyUsage.{usage = 0x4e, key = .PageDown},
+    KeyUsage.{usage = 0x50, key = .Left},
+    KeyUsage.{usage = 0x4f, key = .Right},
+    KeyUsage.{usage = 0x52, key = .Up},
+    KeyUsage.{usage = 0x51, key = .Down},
+    KeyUsage.{usage = 0x4a, key = .Home},
+    KeyUsage.{usage = 0x4d, key = .End},
+    KeyUsage.{usage = 0x2a, key = .Backspace},
+    KeyUsage.{usage = 0x4c, key = .Delete},
+    KeyUsage.{usage = 0x28, key = .Enter},
+    KeyUsage.{usage = 0x2b, key = .Tab},
+    KeyUsage.{usage = 0x29, key = .Escape},
+    KeyUsage.{usage = 0x4b, key = .PageUp},
+    KeyUsage.{usage = 0x4e, key = .PageDown}
 ]
 
 /** With Ctrl held: the HID usages of the keys std/ui reads, and what each is. */
 CONTROL_KEYS :: KeyUsage.[
-    KeyUsage.{usage = 0x04, key = .SelectAll}, KeyUsage.{usage = 0x06, key = .Copy}, KeyUsage.{usage = 0x1b, key = .Cut},
-    KeyUsage.{usage = 0x1d, key = .Undo}, KeyUsage.{usage = 0x1c, key = .Redo},
+    KeyUsage.{usage = 0x04, key = .SelectAll},
+    KeyUsage.{usage = 0x06, key = .Copy},
+    KeyUsage.{usage = 0x1b, key = .Cut},
+    KeyUsage.{usage = 0x1d, key = .Undo},
+    KeyUsage.{usage = 0x1c, key = .Redo}
 ]
 
 /** A key's HID usage and the key std/ui knows it as. */
@@ -243,7 +276,7 @@ KeyUsage :: struct {
 }
 
 /** Gather the compositor's events into the window's input. */
-take_input :: fn(window: ptr[mut Window], into: ptr[os.Incoming], given: surface.Events) {
+take_input :: fn(window : ptr[mut Window], into : ptr[os.Incoming], given : surface.Events) {
     text :: os.items(into, given.text)
     for event in os.items(into, given.events) {
         kind :: surface.kind_of(event) or_else surface.EventKind.Released
@@ -317,7 +350,7 @@ take_input :: fn(window: ptr[mut Window], into: ptr[os.Incoming], given: surface
 }
 
 /** A key: kept as it came, and one std/ui reads as a key, or its text typed. */
-take_key :: fn(window: ptr[mut Window], event: surface.Event, text: u8[]) {
+take_key :: fn(window : ptr[mut Window], event : surface.Event, text : u8[]) {
     raw := event
     raw.text_start = cast[u32](window.raw_text.count)
     raw.text_bytes = cast[u32](text.count)
@@ -346,7 +379,7 @@ take_key :: fn(window: ptr[mut Window], event: surface.Event, text: u8[]) {
  * @param window The window.
  * @return Its UI, for the frame's widgets; finish ends the frame.
  */
-begin :: fn(window: ptr[mut Window]) -> ptr[mut ui.Ui] {
+begin :: fn(window : ptr[mut Window]) -> ptr[mut ui.Ui] {
     input := window.input
     input.text = window.typed[0..<window.typed.count]
     input.pasted = window.pasted[0..<window.pasted.count]
@@ -371,7 +404,7 @@ begin :: fn(window: ptr[mut Window]) -> ptr[mut ui.Ui] {
  * @param window The window.
  * @return The frame's events, until the next begin.
  */
-finish :: fn(window: ptr[mut Window]) -> ui.Event[] {
+finish :: fn(window : ptr[mut Window]) -> ui.Event[] {
     frame :: ui.end(&window.ui)
     for event in ui.events_of(&window.ui) {
         if event.kind == .Copied {
@@ -382,8 +415,10 @@ finish :: fn(window: ptr[mut Window]) -> ui.Event[] {
     for &buffer in window.buffers {
         buffer.stale = grown(buffer.stale, frame.damage)
     }
-    // A buffer the compositor's done with; waited for a little, then the one given it longest ago drawn into anyway: at
-    // worst what's on the screen shows part of a frame a moment, never a window that stops
+    /*
+     * A buffer the compositor's done with; waited for a little, then the one given it longest ago drawn into anyway: at
+     * worst what's on the screen shows part of a frame a moment, never a window that stops
+     */
     free := cast[usize](2)
     deadline :: (slop_os.clock_monotonic() or_else 0) + WAIT_FOR_BUFFER
     for step in cast[usize](0)..<100 {
@@ -413,14 +448,25 @@ finish :: fn(window: ptr[mut Window]) -> ui.Event[] {
     buffer.busy = true
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
-    request^ = .Submit(surface.Submission.{surface = window.surface, buffer = cast[u32](free) + 1, mode = .Fifo,
-        damage = surface.Rect.{x = region.x0, y = region.y0, width = cast[u32](region.x1 - region.x0), height = cast[u32](region.y1 - region.y0)}})
+    request^ = .Submit(
+        surface.Submission.{
+            surface = window.surface,
+            buffer = cast[u32](free) + 1,
+            mode = .Fifo,
+            damage = surface.Rect.{
+                x = region.x0,
+                y = region.y0,
+                width = cast[u32](region.x1 - region.x0),
+                height = cast[u32](region.y1 - region.y0),
+            },
+        }
+    )
     _ = surface.send_request(window.end, window.port, &out)
     return ui.events_of(&window.ui)
 }
 
 /** A rectangle grown to take in another. */
-grown :: fn(a: canvas.Rect, b: canvas.Rect) -> canvas.Rect {
+grown :: fn(a : canvas.Rect, b : canvas.Rect) -> canvas.Rect {
     if canvas.is_empty(b) {
         return a
     }
@@ -428,7 +474,7 @@ grown :: fn(a: canvas.Rect, b: canvas.Rect) -> canvas.Rect {
 }
 
 /** Offer text to be pasted, as plain text, with no typed data. */
-offer :: fn(window: ptr[mut Window], text: u8[]) {
+offer :: fn(window : ptr[mut Window], text : u8[]) {
     data :: slop_os.memory_create(slop_os.startup_block().budget, 4096) or_return void
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
@@ -442,7 +488,7 @@ offer :: fn(window: ptr[mut Window], text: u8[]) {
  *
  * @param window The window.
  */
-hide :: fn(window: ptr[mut Window]) {
+hide :: fn(window : ptr[mut Window]) {
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
     request^ = .Submit(surface.Submission.{surface = window.surface, buffer = 0, mode = .Fifo})
@@ -453,7 +499,7 @@ hide :: fn(window: ptr[mut Window]) {
 }
 
 /** Empty the raw keys, once a program's taken them. */
-take_keys :: fn(window: ptr[mut Window]) {
+take_keys :: fn(window : ptr[mut Window]) {
     runtime.array_reset(&window.raw_keys)
     runtime.array_reset(&window.raw_text)
 }

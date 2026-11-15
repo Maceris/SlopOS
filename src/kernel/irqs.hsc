@@ -2,11 +2,11 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import arch_interface from "../arch_interface"
-import boot_info from "../boot_info"
 import concurrency from "std:concurrency"
 import maps from "std:maps"
 import slop_os from "std:os/slop_os"
+import arch_interface from "../arch_interface"
+import boot_info from "../boot_info"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -104,12 +104,23 @@ Irq :: struct #align(16) {
  * @error NoFreeInterrupt The CPU picked has no device interrupt ID free, or isn't there.
  * @error ObjectGone owner is being destroyed; the IRQ is destroyed again, its line masked and its route forgotten.
  */
-create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u32, line: u32, trigger: arch_interface.Trigger,
-    polarity: arch_interface.Polarity) -> Result[ptr[mut Irq], slop_os.DeviceError] {
+create_irq :: fn(
+    kernel : ptr[mut Kernel],
+    owner : u64,
+    budget : u64,
+    controller : u32,
+    line : u32,
+    trigger : arch_interface.Trigger,
+    polarity : arch_interface.Polarity
+) -> Result[ptr[mut Irq], slop_os.DeviceError] {
     object := cast[u64](0)
     match new_object(kernel, .Irq, budget, 0) {
         case Ok(made) => object = made
-        case Error(error) => return .Error(if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory })
+        case Error(
+            error
+        ) => return .Error(
+            if error == .BudgetExceeded { slop_os.DeviceError.BudgetExceeded } else { slop_os.DeviceError.OutOfMemory }
+        )
     }
     irq :: cast[ptr[mut Irq]](object)
     irq.controller = controller
@@ -186,8 +197,13 @@ create_irq :: fn(kernel: ptr[mut Kernel], owner: u64, budget: u64, controller: u
  * @param id The interrupt ID route_line gave.
  * @return False if no IOMMU remaps the controller's interrupts, or it has no entry free.
  */
-route_remapped :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], source: u32, polarity: arch_interface.Polarity, id: arch_interface.InterruptId)
-    -> bool {
+route_remapped :: fn(
+    kernel : ptr[mut Kernel],
+    irq : ptr[mut Irq],
+    source : u32,
+    polarity : arch_interface.Polarity,
+    id : arch_interface.InterruptId
+) -> bool {
     cpus :: kernel.cpus
     if cast[usize](irq.cpu) >= cpus.count {
         return false
@@ -208,7 +224,11 @@ route_remapped :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq], source: u32, po
  * @param source Its requester ID with its segment.
  * @error NoSuchController No controller is registered at that index.
  */
-set_controller_source :: fn(kernel: ptr[mut Kernel], controller: u32, source: u32) -> Result[void, slop_os.DeviceError] {
+set_controller_source :: fn(
+    kernel : ptr[mut Kernel],
+    controller : u32,
+    source : u32
+) -> Result[void, slop_os.DeviceError] {
     wired :: controller_at(kernel, controller) or_return .Error(.NoSuchController)
     lock_at(&kernel.interrupts_lock, .Interrupts)
     wired.source = source
@@ -223,8 +243,7 @@ set_controller_source :: fn(kernel: ptr[mut Kernel], controller: u32, source: u3
  * @param kernel Unused: the capability holds nothing of the kernel's.
  * @param platform The capability being destroyed.
  */
-destroy_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
-}
+destroy_platform :: fn(kernel : ptr[mut Kernel], platform : ptr[mut Platform]) {}
 
 /**
  * Release a destroyed platform capability, as release_object does each kind: it holds nothing besides itself, so
@@ -233,8 +252,7 @@ destroy_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
  * @param kernel Unused: the capability holds nothing of the kernel's.
  * @param platform The destroyed capability, whose memory release_object frees after this.
  */
-release_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
-}
+release_platform :: fn(kernel : ptr[mut Kernel], platform : ptr[mut Platform]) {}
 
 /**
  * Release a destroyed IRQ, as release_object does each kind: destroy_irq let go of everything it held, so this does
@@ -243,8 +261,7 @@ release_platform :: fn(kernel: ptr[mut Kernel], platform: ptr[mut Platform]) {
  * @param kernel Unused: the IRQ holds nothing of the kernel's by now.
  * @param irq The destroyed IRQ, whose memory release_object frees after this.
  */
-release_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
-}
+release_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq]) {}
 
 /**
  * Destroy an IRQ, as destroy_object does each kind: its line masked, or its message no longer delivered; its route
@@ -257,7 +274,7 @@ release_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
  *     interrupts_lock; called from destroy_object, on any CPU, with interrupts off.
  * @param irq The IRQ being destroyed, already dying.
  */
-destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
+destroy_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq]) {
     if irq.msi {
         destroy_msi_irq(kernel, irq)
     }
@@ -286,7 +303,7 @@ destroy_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
  * @param kernel The kernel, whose controller's lock is taken to unmask the line.
  * @param irq The IRQ, from a handle with the right to acknowledge it.
  */
-irq_ack :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
+irq_ack :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq]) {
     if irq.trigger == .Level {
         unmask_line(kernel, irq.controller, irq.line)
     }
@@ -304,7 +321,7 @@ irq_ack :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
  *     interrupt context, on the CPU the IRQ is routed to.
  * @param irq The IRQ the interrupt is for.
  */
-deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
+deliver_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq]) {
     lock_at(&irq.lock, .Irq)
     defer unlock_at(&irq.lock, .Irq)
     if irq.binding == 0 {
@@ -339,7 +356,13 @@ deliver_irq :: fn(kernel: ptr[mut Kernel], irq: ptr[mut Irq]) {
  *     another binding's; TooManyBindings if the IRQ is bound under another key or port; BudgetExceeded or
  *     OutOfMemory if the binding couldn't be made.
  */
-irq_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], irq: ptr[mut Irq], key: u64, mode: slop_os.BindMode) -> slop_os.PortError? {
+irq_bind :: fn(
+    kernel : ptr[mut Kernel],
+    port : ptr[mut Port],
+    irq : ptr[mut Irq],
+    key : u64,
+    mode : slop_os.BindMode
+) -> slop_os.PortError? {
     lock_at(&irq.lock, .Irq)
     defer unlock_at(&irq.lock, .Irq)
     if is_dying(cast[u64](irq)) {
@@ -354,7 +377,9 @@ irq_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], irq: ptr[mut Irq], 
     match maps.map_get(&port.bindings, key) {
         case Some(address) => {
             existing :: cast[ptr[mut Binding]](address)
-            if existing.kind != .Irq || existing.object != cast[u64](irq) || existing.object_generation != irq.header.generation {
+            if existing.kind != .Irq
+                || existing.object != cast[u64](irq)
+                || existing.object_generation != irq.header.generation {
                 return slop_os.PortError.KeyInUse
             }
             binding = existing
@@ -384,7 +409,7 @@ irq_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], irq: ptr[mut Irq], 
  * @param address The binding, as its address, kept by its object.
  * @param generation The binding's generation when its object took it.
  */
-drop_binding :: fn(kernel: ptr[mut Kernel], address: u64, generation: u32) {
+drop_binding :: fn(kernel : ptr[mut Kernel], address : u64, generation : u32) {
     binding :: cast[ptr[mut Binding]](address)
     port :: lock_bound_port(binding, generation) or_return void
     _ = maps.map_remove(&port.bindings, binding.key)
@@ -399,7 +424,7 @@ drop_binding :: fn(kernel: ptr[mut Kernel], address: u64, generation: u32) {
  * @return The kind, or null for a value that's no kind the kernel knows (whether the architecture has it is checked
  *     when it's registered).
  */
-controller_kind :: fn(kind: u32) -> arch_interface.ControllerKind? {
+controller_kind :: fn(kind : u32) -> arch_interface.ControllerKind? {
     if kind == cast[u32](slop_os.ControllerKind.IoApic) {
         return arch_interface.ControllerKind.IoApic
     }
@@ -421,7 +446,7 @@ controller_kind :: fn(kind: u32) -> arch_interface.ControllerKind? {
  * @param size The memory's size in bytes.
  * @return True if any byte of it is in one of the kernel's RAM ranges.
  */
-overlaps_kernel_ram :: fn(kernel: ptr[Kernel], physical: u64, size: u64) -> bool {
+overlaps_kernel_ram :: fn(kernel : ptr[Kernel], physical : u64, size : u64) -> bool {
     for range in kernel.ram {
         if overlaps(physical, size, cast[u64](range.base), range.size) {
             return true

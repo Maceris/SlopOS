@@ -191,7 +191,7 @@ Response :: union {
  * @param request The request, which isn't changed.
  * @return False for Write and Rollback, which make a version each time; true for the rest.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Write(_) => false
         case Rollback(_) => false
@@ -215,7 +215,12 @@ is_idempotent :: fn(request: ptr[Request]) -> bool {
  * @return The answer, copied out of into, its Relatives into into; Unsupported if the request couldn't be sent or the
  *     connection's gone, or its answer isn't the protocol.
  */
-ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], into: ptr[mut os.Incoming]) -> Response {
+ask :: fn(
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> Response {
     if send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -242,7 +247,7 @@ ask :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing], i
  * @error NotKept The store couldn't write the version, or the connection's gone.
  * @error Refused The connection isn't one to a value.
  */
-declare :: fn[T](config: Config[T], port: slop_os.Port) -> Result[u64, ConfigError] {
+declare :: fn[T](config : Config[T], port : slop_os.Port) -> Result[u64, ConfigError] {
     value := os.Outgoing.{}
     os.begin[T](&value)^ = T.{}
     out := os.Outgoing.{}
@@ -271,7 +276,7 @@ declare :: fn[T](config: Config[T], port: slop_os.Port) -> Result[u64, ConfigErr
  * @error NotKept The connection's gone, or the store answered something else.
  * @error Refused The connection isn't one to a value.
  */
-read :: fn[T](config: Config[T], port: slop_os.Port, value: ptr[mut os.Outgoing]) -> Result[u64, ConfigError] {
+read :: fn[T](config : Config[T], port : slop_os.Port, value : ptr[mut os.Outgoing]) -> Result[u64, ConfigError] {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .Read
     into := os.Incoming.{}
@@ -292,7 +297,12 @@ read :: fn[T](config: Config[T], port: slop_os.Port, value: ptr[mut os.Outgoing]
  * @error NotKept The connection's gone, or the store answered something else.
  * @error Refused The connection isn't one to a value.
  */
-next :: fn[T](config: Config[T], port: slop_os.Port, seen: u64, value: ptr[mut os.Outgoing]) -> Result[u64, ConfigError] {
+next :: fn[T](
+    config : Config[T],
+    port : slop_os.Port,
+    seen : u64,
+    value : ptr[mut os.Outgoing]
+) -> Result[u64, ConfigError] {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .Next(seen)
     into := os.Incoming.{}
@@ -313,7 +323,11 @@ next :: fn[T](config: Config[T], port: slop_os.Port, seen: u64, value: ptr[mut o
  * @error NotDeclared The store answered so: nothing's declared yet, or the newest version can't be read.
  * @error Refused The store answered so: the connection isn't one to a value.
  */
-answer_of :: fn[T](response: Response, into: ptr[os.Incoming], value: ptr[mut os.Outgoing]) -> Result[u64, ConfigError] {
+answer_of :: fn[T](
+    response : Response,
+    into : ptr[os.Incoming],
+    value : ptr[mut os.Outgoing]
+) -> Result[u64, ConfigError] {
     match response {
         case Current(current) => {
             default :: os.items(into, current.default)
@@ -343,7 +357,7 @@ answer_of :: fn[T](response: Response, into: ptr[os.Incoming], value: ptr[mut os
  * @error NotKept The store couldn't write it, or the connection's gone.
  * @error Refused The connection isn't one to a value.
  */
-write :: fn[T](config: Config[T], port: slop_os.Port, value: u8[], fields: u64) -> Result[u64, ConfigError] {
+write :: fn[T](config : Config[T], port : slop_os.Port, value : u8[], fields : u64) -> Result[u64, ConfigError] {
     if !os.holds_value[T](value) {
         return .Error(.WrongType)
     }
@@ -375,7 +389,7 @@ write :: fn[T](config: Config[T], port: slop_os.Port, value: u8[], fields: u64) 
  * @error NotKept The store couldn't write it, or the connection's gone.
  * @error Refused The connection isn't one to a value.
  */
-roll_back :: fn[T](config: Config[T], port: slop_os.Port, version: u64) -> Result[u64, ConfigError] {
+roll_back :: fn[T](config : Config[T], port : slop_os.Port, version : u64) -> Result[u64, ConfigError] {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .Rollback(version)
     into := os.Incoming.{}
@@ -397,7 +411,7 @@ roll_back :: fn[T](config: Config[T], port: slop_os.Port, version: u64) -> Resul
  * @return The version; its author's Relative is into the answer's message, gone once this returns, so author holds
  *     it. Null past the oldest kept, on any other answer, or if author couldn't be grown.
  */
-history :: fn[T](config: Config[T], port: slop_os.Port, back: u64, author: ptr[mut u8[..]]) -> Version? {
+history :: fn[T](config : Config[T], port : slop_os.Port, back : u64, author : ptr[mut u8[..]]) -> Version? {
     out := os.Outgoing.{}
     os.begin[Request](&out)^ = .History(back)
     into := os.Incoming.{}
@@ -420,7 +434,7 @@ history :: fn[T](config: Config[T], port: slop_os.Port, back: u64, author: ptr[m
  * @return 1 shifted by the field's place among T's fields; 0 if T isn't a struct, has no field of that name, or it's
  *     past the 64th.
  */
-field_bit :: fn[T](name: string) -> u64 {
+field_bit :: fn[T](name : string) -> u64 {
     info :: type_info_of(T)
     if info.variant != .STRUCT {
         return 0
@@ -446,7 +460,7 @@ field_bit :: fn[T](name: string) -> u64 {
  * @param value Where the merged T is built, begun again by this.
  * @return True if both were Ts and it fit a message; false otherwise, value left partly built.
  */
-merge :: fn[T](default: u8[], override: u8[], fields: u64, value: ptr[mut os.Outgoing]) -> bool {
+merge :: fn[T](default : u8[], override : u8[], fields : u64, value : ptr[mut os.Outgoing]) -> bool {
     info :: type_info_of(T)
     if info.variant != .STRUCT || !os.holds_value[T](default) || (fields != 0 && !os.holds_value[T](override)) {
         return false
@@ -475,7 +489,7 @@ merge :: fn[T](default: u8[], override: u8[], fields: u64, value: ptr[mut os.Out
  * @param value The value being built, whose used grows by each Relative's items.
  * @return True if every Relative's items were within source and fit value's message; false otherwise.
  */
-relocate :: fn(type: ptr[compiler.TypeInfo], offset: usize, source: u8[], value: ptr[mut os.Outgoing]) -> bool {
+relocate :: fn(type : ptr[compiler.TypeInfo], offset : usize, source : u8[], value : ptr[mut os.Outgoing]) -> bool {
     if type.variant == .ALIAS {
         return relocate(cast[ptr[compiler.TypeInfoAlias]](type).base_type, offset, source, value)
     }
@@ -541,7 +555,7 @@ relocate :: fn(type: ptr[compiler.TypeInfo], offset: usize, source: u8[], value:
  * @param source_at Where they come from, in bytes from source's start.
  * @param count How many bytes; those past either's end are skipped.
  */
-copy :: fn(value: ptr[mut os.Outgoing], at: usize, source: u8[], source_at: usize, count: usize) {
+copy :: fn(value : ptr[mut os.Outgoing], at : usize, source : u8[], source_at : usize, count : usize) {
     words :: view_of(cast[ptr[mut u8]](&value.words[0]), os.MESSAGE_BYTES)
     for i in 0..<count {
         if at + i < words.count && source_at + i < source.count {

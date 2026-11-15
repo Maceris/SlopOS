@@ -1,11 +1,11 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
+import slop_os from "std:os/slop_os"
 import schema from "std:schema"
 import text_buffer from "std:text_buffer"
-import slop_os from "std:os/slop_os"
+import shell_language as language from "../../shell_language"
 
 /*
  * What a program's entry gives back (decisions/0179, Hemera's docs/compilation.md, Entry Results): a program whose
@@ -24,7 +24,7 @@ RESULT_BYTES : u64 : 64 * 1024
  * @param manifest The program's manifest, only read.
  * @return The result type's place; null for an entry that gives back an integer, or nothing.
  */
-result_place :: fn(manifest: ptr[schema.Schema]) -> usize? {
+result_place :: fn(manifest : ptr[schema.Schema]) -> usize? {
     entry :: schema.type_in(manifest, 0) or_return null
     if entry.outputs.count != 1 {
         return null
@@ -44,7 +44,7 @@ result_place :: fn(manifest: ptr[schema.Schema]) -> usize? {
  * @return The handle for the launch, which may only write the memory, and moves to the program; null for an entry
  *     without a result, or if the memory couldn't be made.
  */
-result_grant :: fn(call: ptr[mut Call]) -> slop_os.Memory? {
+result_grant :: fn(call : ptr[mut Call]) -> slop_os.Memory? {
     if result_place(&call.manifest) is_none {
         return null
     }
@@ -73,7 +73,7 @@ result_grant :: fn(call: ptr[mut Call]) -> slop_os.Memory? {
  * @return The error, for a program that gave back an Error; null otherwise, and for one that gave back nothing, or
  *     what doesn't read as its manifest's result type.
  */
-read_result :: fn(shell: ptr[mut Shell], call: ptr[mut Call], code: u64) -> EvalError? {
+read_result :: fn(shell : ptr[mut Shell], call : ptr[mut Call], code : u64) -> EvalError? {
     if !call.has_result || code == slop_os.EXIT_KILLED {
         return null
     }
@@ -119,7 +119,7 @@ read_result :: fn(shell: ptr[mut Shell], call: ptr[mut Call], code: u64) -> Eval
  *     of the variant, holding what it holds.
  * @return The message, on the heap: "name --parameter: Variant: hint", without what isn't there.
  */
-error_message :: fn(shell: ptr[mut Shell], call: ptr[Call], place: usize, error: Value) -> string {
+error_message :: fn(shell : ptr[mut Shell], call : ptr[Call], place : usize, error : Value) -> string {
     variant := ""
     payload := Value.Null
     match error {
@@ -174,7 +174,7 @@ error_message :: fn(shell: ptr[mut Shell], call: ptr[Call], place: usize, error:
  * @param payload What the variant holds, as the shell reads it: a record of its fields.
  * @return The parameter's name; "" if the error names none.
  */
-parameter_named :: fn(manifest: ptr[schema.Schema], place: usize, variant: string, payload: Value) -> string {
+parameter_named :: fn(manifest : ptr[schema.Schema], place : usize, variant : string, payload : Value) -> string {
     record :: match payload {
         case Record(found) => found
         case _ => return ""

@@ -24,22 +24,22 @@
 package storage_manager
 
 import runtime from "base:runtime"
-import log_line from "../../log_line"
-import strings from "std:strings"
-import time from "std:time"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import process_manager from "std:os/slop_os/process_manager"
 import dir from "std:os/slop_os/dir"
 import grant from "std:os/slop_os/grant"
+import process_manager from "std:os/slop_os/process_manager"
 import read_only_dir from "std:os/slop_os/read_only_dir"
+import strings from "std:strings"
+import time from "std:time"
+import service_kit from "../../libraries/service_kit"
+import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
-import partitions from "../../protocols/partitions"
-import storage from "../../protocols/storage"
-import service_kit from "../../libraries/service_kit"
 import container from "../../protocols/container"
 import links from "../../protocols/links"
+import partitions from "../../protocols/partitions"
+import storage from "../../protocols/storage"
 import volume as volume_protocol from "../../protocols/volume"
 import container_service from "../container_service"
 import fat_server from "../fat_server"
@@ -52,7 +52,9 @@ SNAPSHOT_EVERY : u64 : 3600 * 1000000000
 SNAPSHOTS_KEPT : u64 : 24 * SNAPSHOT_EVERY
 /** The start of an automatic snapshot's name, before the seconds since 1970 it was taken at. */
 AUTOMATIC_PREFIX :: "auto-"
-/** The start of the name of a snapshot a dir's Snapshot took (volume_server's ASKED_PREFIX), deleted on the same terms. */
+/**
+ * The start of the name of a snapshot a dir's Snapshot took (volume_server's ASKED_PREFIX), deleted on the same terms.
+ */
 ASKED_PREFIX :: "asked-"
 
 /** The most disks it holds: one connector each, disk0 to disk3. */
@@ -315,15 +317,29 @@ Manager :: struct {
  * @return 1 if its port couldn't be made or the process manager couldn't be dialed, and 2 if clients couldn't be
  *     added. It doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], partition_server_module: slop_os.Memory,
-    fat_server_module: slop_os.Memory, container_service_module: slop_os.Memory, volume_server_module: slop_os.Memory,
-    disk0: os.Channel[connector.Connector]?, disk1: os.Channel[connector.Connector]?,
-    disk2: os.Channel[connector.Connector]?, disk3: os.Channel[connector.Connector]?, clients: os.Listener[storage.Storage],
-    command_line: slop_os.Memory?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    manager : os.Channel[connector.Connector],
+    partition_server_module : slop_os.Memory,
+    fat_server_module : slop_os.Memory,
+    container_service_module : slop_os.Memory,
+    volume_server_module : slop_os.Memory,
+    disk0 : os.Channel[connector.Connector]?,
+    disk1 : os.Channel[connector.Connector]?,
+    disk2 : os.Channel[connector.Connector]?,
+    disk3 : os.Channel[connector.Connector]?,
+    clients : os.Listener[storage.Storage],
+    command_line : slop_os.Memory?
+) -> int {
     startup :: slop_os.startup_block()
-    state := Manager.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), manager_connector = manager.end, fat_server_module = fat_server_module,
-        container_service_module = container_service_module, volume_server_module = volume_server_module,
-        partition_server_module = partition_server_module}
+    state := Manager.{
+        log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE),
+        manager_connector = manager.end,
+        fat_server_module = fat_server_module,
+        container_service_module = container_service_module,
+        volume_server_module = volume_server_module,
+        partition_server_module = partition_server_module,
+    }
     state.snapshot_every = SNAPSHOT_EVERY
     state.snapshots_kept = SNAPSHOTS_KEPT
     match command_line {
@@ -331,7 +347,8 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
             words :: service_kit.text_of(startup, memory) or_else ""
             state.test_restart = service_kit.has_word(words, "test_storage_restart")
             // test_snapshot_seconds=N: automatic snapshots every N seconds, kept 10 N, for tests
-            seconds :: service_kit.number_of(service_kit.word_after(words, "test_snapshot_seconds=") or_else "") or_else 0
+            seconds :: service_kit.number_of(service_kit.word_after(words, "test_snapshot_seconds=") or_else "")
+                or_else 0
             if seconds > 0 {
                 state.snapshot_every = seconds * 1000000000
                 state.snapshots_kept = 10 * state.snapshot_every
@@ -374,7 +391,10 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
     }
     into := os.Incoming.{}
     loop {
-        // Clients that connect meanwhile are read in the same pass, as a channel wakes its reader only once it's found empty
+        /*
+         * Clients that connect meanwhile are read in the same pass, as a channel wakes its reader only once it's found
+         * empty
+         */
         with {
             i : usize = 0
         }
@@ -423,15 +443,22 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[connector.Connector], par
  * @param state The storage manager's state, whose manager and manager_port are replaced.
  * @return Whether there's a connection; false if it couldn't be dialed, or a port for it made.
  */
-dial_manager :: fn(state: ptr[mut Manager]) -> bool {
+dial_manager :: fn(state : ptr[mut Manager]) -> bool {
     again :: cast[slop_os.Handle](state.manager.end) != slop_os.NO_HANDLE
     if again {
         _ = slop_os.handle_close(cast[slop_os.Handle](state.manager.end))
         _ = slop_os.handle_close(cast[slop_os.Handle](state.manager_port))
     }
-    state.manager = connector.dial[process_manager.ProcessManager](state.manager_connector, state.connector_port) or_return false
+    state.manager = connector.dial[process_manager.ProcessManager](state.manager_connector, state.connector_port)
+        or_return false
     state.manager_port = os.port_for(slop_os.startup_block().budget, state.manager.end) or_return false
-    _ = slop_os.port_bind(state.port, cast[slop_os.Handle](state.manager.end), slop_os.SIGNAL_PEER_CLOSED, MANAGER_KEY, .Once)
+    _ = slop_os.port_bind(
+        state.port,
+        cast[slop_os.Handle](state.manager.end),
+        slop_os.SIGNAL_PEER_CLOSED,
+        MANAGER_KEY,
+        .Once
+    )
     if again {
         runtime.log_info("dialed the process manager again")
     }
@@ -447,7 +474,7 @@ dial_manager :: fn(state: ptr[mut Manager]) -> bool {
  *     anything's killed. It isn't checked against disk_count; callers pass a disk that was found.
  * @return Whether it was started again; false for a disk past MAX_DISKS, or one that's ended RESTARTS times.
  */
-kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
+kill_and_restart :: fn(state : ptr[mut Manager], index : usize) -> bool {
     if index >= MAX_DISKS {
         return false
     }
@@ -465,7 +492,8 @@ kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
             }
         }
     }
-    while state.partition_server_starts == starts && !(state.disk_running[index].ended && state.disk_running[index].restarts >= RESTARTS)
+    while state.partition_server_starts == starts
+        && !(state.disk_running[index].ended && state.disk_running[index].restarts >= RESTARTS)
     return state.partition_server_starts != starts
 }
 
@@ -479,7 +507,7 @@ kill_and_restart :: fn(state: ptr[mut Manager], index: usize) -> bool {
  * @return Whether it started; false if the driver couldn't be dialed, a channel or a port for it made, or the launch
  *     failed. The port is made before the launch, so a server that's launched is always kept.
  */
-start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
+start_partition_server :: fn(state : ptr[mut Manager], index : usize) -> bool {
     startup :: slop_os.startup_block()
     if index >= MAX_DISKS {
         return false
@@ -496,10 +524,22 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
             return false
         }
     }
-    grants := PartitionServerGrants.{log = duplicate_log(state.log), disk = disk, clients = os.Listener[partitions.Partitions].{end = pair.a},
-        command_line = command_line_copy(state)}
-    match os.launch(state.manager, state.manager_port, "partition_server", state.partition_server_module, PARTITION_SERVER_BUDGET,
-        partition_server.main, grants, watched(state, PARTITION_SERVER_KEY + cast[u64](index))) {
+    grants := PartitionServerGrants.{
+        log = duplicate_log(state.log),
+        disk = disk,
+        clients = os.Listener[partitions.Partitions].{end = pair.a},
+        command_line = command_line_copy(state),
+    }
+    match os.launch(
+        state.manager,
+        state.manager_port,
+        "partition_server",
+        state.partition_server_module,
+        PARTITION_SERVER_BUDGET,
+        partition_server.main,
+        grants,
+        watched(state, PARTITION_SERVER_KEY + cast[u64](index))
+    ) {
         case Ok(launched) => keep(&state.disk_running[index], launched)
         case Error(error) => {
             runtime.log_info("no partition server for disk %: %", index, error)
@@ -521,12 +561,17 @@ start_partition_server :: fn(state: ptr[mut Manager], index: usize) -> bool {
  * @return The options, with a read-only copy of the clock page the storage manager was given, if it was and it could
  *     be duplicated.
  */
-watched :: fn(state: ptr[Manager], key: u64) -> os.LaunchOptions {
+watched :: fn(state : ptr[Manager], key : u64) -> os.LaunchOptions {
     options := os.LaunchOptions.{watch = os.LaunchWatch.{port = state.port, key = key}}
-    // The clock page the storage manager was given, so its servers have the wall clock too, as a FAT server's times need
+    /*
+     * The clock page the storage manager was given, so its servers have the wall clock too, as a FAT server's times
+     * need
+     */
     clock :: runtime.os_entry_grant("clock", "Memory", "", false)
     if clock != 0 {
-        rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+        rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+            | cast[u32](slop_os.RIGHT_DUPLICATE)
+            | cast[u32](slop_os.RIGHT_TRANSFER))
         match slop_os.handle_duplicate(cast[slop_os.Handle](clock), rights) {
             case Ok(copy) => options.clock = cast[slop_os.Memory](copy)
             case Error(error) => {}
@@ -541,7 +586,7 @@ watched :: fn(state: ptr[Manager], key: u64) -> os.LaunchOptions {
  * @param running Where it's kept, its restarts left as they were.
  * @param launched The launched process's handle and its budget's, which move to running.
  */
-keep :: fn(running: ptr[mut Running], launched: os.Launched) {
+keep :: fn(running : ptr[mut Running], launched : os.Launched) {
     running.process = launched.process
     running.budget = launched.budget
     running.ended = false
@@ -552,7 +597,7 @@ keep :: fn(running: ptr[mut Running], launched: os.Launched) {
  *
  * @param running The server, marked ended.
  */
-let_go :: fn(running: ptr[mut Running]) {
+let_go :: fn(running : ptr[mut Running]) {
     for each in slop_os.Handle.[cast[slop_os.Handle](running.process), cast[slop_os.Handle](running.budget)] {
         if each != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(each)
@@ -568,7 +613,7 @@ let_go :: fn(running: ptr[mut Running]) {
  *
  * @param running The server; one already let go of is left alone.
  */
-kill_running :: fn(running: ptr[Running]) {
+kill_running :: fn(running : ptr[Running]) {
     if cast[slop_os.Handle](running.process) != slop_os.NO_HANDLE {
         _ = slop_os.process_kill(running.process)
     }
@@ -581,7 +626,7 @@ kill_running :: fn(running: ptr[Running]) {
  * @param running The server, whose restarts is counted, and its window begun again once it's past.
  * @return Whether it may be started.
  */
-may_start :: fn(running: ptr[mut Running]) -> bool {
+may_start :: fn(running : ptr[mut Running]) -> bool {
     if !running.ended {
         return true
     }
@@ -601,14 +646,15 @@ may_start :: fn(running: ptr[mut Running]) -> bool {
  * Handle a server it started having ended, by its key.
  *
  * A partition server is started again at once, once everything served from its disk is killed, since each holds a
- * connection it narrowed, or tried again shortly if its driver can't be dialed yet (restart_disk); a FAT server, a container service or a volume server is let go, and started again the next
+ * connection it narrowed, or tried again shortly if its driver can't be dialed yet (restart_disk); a FAT server, a
+ * container service or a volume server is let go, and started again the next
  * time it's asked for. A container service's volume servers go with it, and an encrypted volume served again is
  * locked until its passphrase is given again.
  *
  * @param state The storage manager's state.
  * @param key The key the server was watched under, PARTITION_SERVER_KEY or above, which is unbound.
  */
-ended :: fn(state: ptr[mut Manager], key: u64) {
+ended :: fn(state : ptr[mut Manager], key : u64) {
     _ = slop_os.port_unbind(state.port, key)
     if key >= VOLUME_KEY {
         slot :: cast[usize](key - VOLUME_KEY)
@@ -632,8 +678,10 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
     let_go(&state.disk_running[index])
     close_disk(&state.disks[index])
     runtime.log_info("the partition server for disk % ended", index)
-    // What's served from its partitions held connections it narrowed: gone now, so a client asking again meanwhile
-    // finds nothing it was served before, and has it started again
+    /*
+     * What's served from its partitions held connections it narrowed: gone now, so a client asking again meanwhile
+     * finds nothing it was served before, and has it started again
+     */
     for partition, i in state.partitions {
         if i < state.partition_count && cast[usize](partition.disk) == index && i < MAX_PARTITIONS {
             if cast[slop_os.Handle](state.files_running[i].process) != slop_os.NO_HANDLE {
@@ -664,7 +712,7 @@ ended :: fn(state: ptr[mut Manager], key: u64) {
  *     a timer under DISK_RETRY_KEY plus index for the next try, up to DISK_RETRIES in a row.
  * @param index Which disk; past MAX_DISKS, or one whose server is running, does nothing.
  */
-restart_disk :: fn(state: ptr[mut Manager], index: usize) {
+restart_disk :: fn(state : ptr[mut Manager], index : usize) {
     if index >= MAX_DISKS || cast[slop_os.Handle](state.disk_running[index].process) != slop_os.NO_HANDLE {
         return void
     }
@@ -678,7 +726,11 @@ restart_disk :: fn(state: ptr[mut Manager], index: usize) {
         return void
     }
     state.disk_retries[index] += 1
-    _ = slop_os.port_set_timer(state.port, DISK_RETRY_KEY + cast[u64](index), (slop_os.clock_monotonic() or_else 0) + DISK_RETRY)
+    _ = slop_os.port_set_timer(
+        state.port,
+        DISK_RETRY_KEY + cast[u64](index),
+        (slop_os.clock_monotonic() or_else 0) + DISK_RETRY
+    )
 }
 
 /**
@@ -687,7 +739,7 @@ restart_disk :: fn(state: ptr[mut Manager], index: usize) {
  * @param state The storage manager's state.
  * @param index Its partition's index; one past MAX_PARTITIONS is ignored.
  */
-files_gone :: fn(state: ptr[mut Manager], index: usize) {
+files_gone :: fn(state : ptr[mut Manager], index : usize) {
     if index >= MAX_PARTITIONS {
         return void
     }
@@ -702,7 +754,7 @@ files_gone :: fn(state: ptr[mut Manager], index: usize) {
  * @param state The storage manager's state.
  * @param index Its partition's index; one past MAX_PARTITIONS is ignored.
  */
-container_gone :: fn(state: ptr[mut Manager], index: usize) {
+container_gone :: fn(state : ptr[mut Manager], index : usize) {
     if index >= MAX_PARTITIONS {
         return void
     }
@@ -718,7 +770,7 @@ container_gone :: fn(state: ptr[mut Manager], index: usize) {
  * @param state The storage manager's state.
  * @param index The container's partition's index.
  */
-kill_volumes :: fn(state: ptr[mut Manager], index: usize) {
+kill_volumes :: fn(state : ptr[mut Manager], index : usize) {
     for i in 0..<state.served_count {
         if i < state.served.count && state.served[i].partition == index && !state.served[i].gone {
             _ = slop_os.port_unbind(state.port, VOLUME_KEY + cast[u64](i))
@@ -735,7 +787,7 @@ kill_volumes :: fn(state: ptr[mut Manager], index: usize) {
  * @param state The storage manager's state.
  * @param slot Its place in served, taken modulo MAX_VOLUMES.
  */
-volume_gone :: fn(state: ptr[mut Manager], slot: usize) {
+volume_gone :: fn(state : ptr[mut Manager], slot : usize) {
     served :: &state.served[slot % MAX_VOLUMES]
     let_go(&served.running)
     close_disk(&served.root)
@@ -748,7 +800,10 @@ volume_gone :: fn(state: ptr[mut Manager], slot: usize) {
     served.gone = true
     served.unlocked = false
     count :: if served.name_bytes < served.name.count { served.name_bytes } else { served.name.count }
-    runtime.log_info("the volume server for the % volume ended", if count > 0 { string_of(&served.name[0], count) } else { "" })
+    runtime.log_info(
+        "the volume server for the % volume ended",
+        if count > 0 { string_of(&served.name[0], count) } else { "" }
+    )
 }
 
 /**
@@ -756,7 +811,7 @@ volume_gone :: fn(state: ptr[mut Manager], slot: usize) {
  *
  * @param disk The end and its port, both NO_HANDLE afterwards.
  */
-close_disk :: fn(disk: ptr[mut Disk]) {
+close_disk :: fn(disk : ptr[mut Disk]) {
     for each in slop_os.Handle.[cast[slop_os.Handle](disk.end), cast[slop_os.Handle](disk.port)] {
         if each != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(each)
@@ -772,7 +827,7 @@ close_disk :: fn(disk: ptr[mut Disk]) {
  * @param state The storage manager's state.
  * @param disk The disk's index. Listing stops once MAX_PARTITIONS are listed, from every disk.
  */
-list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
+list_partitions :: fn(state : ptr[mut Manager], disk : usize) {
     for index in 0..<cast[u32](MAX_PARTITIONS) {
         match ask(state, disk, .Describe(index)) {
             case Described(info) => {
@@ -783,8 +838,14 @@ list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
                 state.partitions[slot] = storage.Partition.{disk = cast[u32](disk), index = index, info = info}
                 state.partition_count = slot + 1
                 described := info
-                runtime.log_info("disk % partition %: %, % blocks from %", disk, index, partitions.name_of(&described),
-                    info.count, info.first)
+                runtime.log_info(
+                    "disk % partition %: %, % blocks from %",
+                    disk,
+                    index,
+                    partitions.name_of(&described),
+                    info.count,
+                    info.first
+                )
             }
             case _ => return void
         }
@@ -802,7 +863,7 @@ list_partitions :: fn(state: ptr[mut Manager], disk: usize) {
  * @param index The client's index in state.clients; one past them, or one dropped, is left alone.
  * @param into Where each request is read into, reused.
  */
-serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
+serve_client :: fn(state : ptr[mut Manager], index : usize, into : ptr[mut os.Incoming]) {
     if index >= state.clients.ends.count {
         return void
     }
@@ -843,16 +904,29 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                 }
             }
             case OpenVolume(at) => {
-                if cast[usize](at.partition) < state.partition_count && cast[usize](at.partition) < state.partitions.count
+                if cast[usize](at.partition) < state.partition_count
+                    && cast[usize](at.partition) < state.partitions.count
                     && state.partitions[cast[usize](at.partition)].info.type_guid == CONTAINER_TYPE {
                     passphrase :: os.items(into, at.passphrase)
-                    response = volume_of(state, cast[usize](at.partition), os.items(into, at.name), passphrase, passphrase.count > 0)
+                    response = volume_of(
+                        state,
+                        cast[usize](at.partition),
+                        os.items(into, at.name),
+                        passphrase,
+                        passphrase.count > 0
+                    )
                 }
             }
             case CreateVolume(creation) => {
                 if is_container(state, creation.partition) {
-                    response = create_volume(state, cast[usize](creation.partition), os.items(into, creation.name),
-                        os.items(into, creation.passphrase), creation.cipher, creation.now)
+                    response = create_volume(
+                        state,
+                        cast[usize](creation.partition),
+                        os.items(into, creation.name),
+                        os.items(into, creation.passphrase),
+                        creation.cipher,
+                        creation.now
+                    )
                 }
             }
             case Rotate(named) => {
@@ -862,20 +936,35 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
             }
             case Rekey(rekeyed) => {
                 if cast[usize](rekeyed.partition) < state.partition_count {
-                    response = rekey(state, cast[usize](rekeyed.partition), os.items(into, rekeyed.name), os.items(into, rekeyed.passphrase))
+                    response = rekey(
+                        state,
+                        cast[usize](rekeyed.partition),
+                        os.items(into, rekeyed.name),
+                        os.items(into, rekeyed.passphrase)
+                    )
                 }
             }
             case TakeSnapshot(of) => {
                 if is_container(state, of.partition) {
-                    response = take_snapshot(state, cast[usize](of.partition), os.items(into, of.volume), os.items(into, of.snapshot), of.now)
+                    response = take_snapshot(
+                        state,
+                        cast[usize](of.partition),
+                        os.items(into, of.volume),
+                        os.items(into, of.snapshot),
+                        of.now
+                    )
                 }
             }
             case DeleteSnapshot(of) => {
                 if is_container(state, of.partition) {
                     out := os.Outgoing.{}
                     request :: os.begin[container.Request](&out)
-                    request^ = .DeleteSnapshot(container.SnapshotNamed.{volume = os.append(&out, os.items(into, of.volume)),
-                        snapshot = os.append(&out, os.items(into, of.snapshot))})
+                    request^ = .DeleteSnapshot(
+                        container.SnapshotNamed.{
+                            volume = os.append(&out, os.items(into, of.volume)),
+                            snapshot = os.append(&out, os.items(into, of.snapshot)),
+                        }
+                    )
                     response = to_container(state, cast[usize](of.partition), &out, null)
                 }
             }
@@ -883,7 +972,9 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                 if is_container(state, at.partition) {
                     out := os.Outgoing.{}
                     request :: os.begin[container.Request](&out)
-                    request^ = .SnapshotAt(container.SnapshotIndex.{volume = os.append(&out, os.items(into, at.volume)), index = at.index})
+                    request^ = .SnapshotAt(
+                        container.SnapshotIndex.{volume = os.append(&out, os.items(into, at.volume)), index = at.index}
+                    )
                     response = to_container(state, cast[usize](at.partition), &out, &reply)
                 }
             }
@@ -891,7 +982,12 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                 if is_container(state, quota.partition) {
                     out := os.Outgoing.{}
                     request :: os.begin[container.Request](&out)
-                    request^ = .SetQuota(container.QuotaOf.{volume = os.append(&out, os.items(into, quota.volume)), blocks = quota.blocks})
+                    request^ = .SetQuota(
+                        container.QuotaOf.{
+                            volume = os.append(&out, os.items(into, quota.volume)),
+                            blocks = quota.blocks,
+                        }
+                    )
                     response = to_container(state, cast[usize](quota.partition), &out, null)
                 }
             }
@@ -907,8 +1003,14 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                 if is_container(state, of.partition) {
                     out := os.Outgoing.{}
                     request :: os.begin[container.Request](&out)
-                    request^ = .Clone(container.Cloning.{volume = os.append(&out, os.items(into, of.volume)),
-                        snapshot = os.append(&out, os.items(into, of.snapshot)), name = os.append(&out, os.items(into, of.name)), now = of.now})
+                    request^ = .Clone(
+                        container.Cloning.{
+                            volume = os.append(&out, os.items(into, of.volume)),
+                            snapshot = os.append(&out, os.items(into, of.snapshot)),
+                            name = os.append(&out, os.items(into, of.name)),
+                            now = of.now,
+                        }
+                    )
                     response = to_container(state, cast[usize](of.partition), &out, null)
                 }
             }
@@ -934,7 +1036,12 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
                     response = .Done
                 }
             }
-            case CommitAll => response = if committed_all(state) { storage.Response.Done } else { storage.Response.Failed }
+            case CommitAll => response = if committed_all(state) {
+                storage.Response.Done
+            }
+            else {
+                storage.Response.Failed
+            }
         }
         made^ = response
         _ = storage.send_response(end, state.port, &reply)
@@ -951,7 +1058,7 @@ serve_client :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incom
  * @return The connection, which the caller owns and passes on; null for a partition of another kind, an encrypted
  *     system volume, or if the server can't be started or connected to.
  */
-files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
+files_of :: fn(state : ptr[mut Manager], index : usize) -> os.Channel[dir.Dir]? {
     if index >= state.partitions.count || index >= state.files.count {
         return null
     }
@@ -986,9 +1093,21 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
                 return null
             }
         }
-        grants := FatServerGrants.{log = duplicate_log(state.log), partition = narrowed, clients = os.Listener[dir.Dir].{end = pair.a}}
-        match os.launch(state.manager, state.manager_port, "fat_server", state.fat_server_module, FAT_SERVER_BUDGET, fat_server.main, grants,
-            watched(state, FAT_SERVER_KEY + cast[u64](index))) {
+        grants := FatServerGrants.{
+            log = duplicate_log(state.log),
+            partition = narrowed,
+            clients = os.Listener[dir.Dir].{end = pair.a},
+        }
+        match os.launch(
+            state.manager,
+            state.manager_port,
+            "fat_server",
+            state.fat_server_module,
+            FAT_SERVER_BUDGET,
+            fat_server.main,
+            grants,
+            watched(state, FAT_SERVER_KEY + cast[u64](index))
+        ) {
             case Ok(launched) => keep(&state.files_running[index], launched)
             case Error(error) => {
                 runtime.log_info("no FAT server for disk % partition %: %", partition.disk, partition.index, error)
@@ -1014,7 +1133,7 @@ files_of :: fn(state: ptr[mut Manager], index: usize) -> os.Channel[dir.Dir]? {
  *     partition couldn't be opened, a channel or port couldn't be made, or the launch failed. The port is made before
  *     the launch, so a service that's launched is always kept.
  */
-container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
+container_of :: fn(state : ptr[mut Manager], index : usize) -> Disk? {
     if index >= state.partitions.count || index >= state.containers.count {
         return null
     }
@@ -1042,10 +1161,21 @@ container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
             return null
         }
     }
-    grants := ContainerServiceGrants.{log = duplicate_log(state.log), partition = narrowed,
-        clients = os.Listener[container.Container].{end = listener.a}}
-    match os.launch(state.manager, state.manager_port, "container_service", state.container_service_module, CONTAINER_SERVICE_BUDGET,
-        container_service.main, grants, watched(state, CONTAINER_KEY + cast[u64](index))) {
+    grants := ContainerServiceGrants.{
+        log = duplicate_log(state.log),
+        partition = narrowed,
+        clients = os.Listener[container.Container].{end = listener.a},
+    }
+    match os.launch(
+        state.manager,
+        state.manager_port,
+        "container_service",
+        state.container_service_module,
+        CONTAINER_SERVICE_BUDGET,
+        container_service.main,
+        grants,
+        watched(state, CONTAINER_KEY + cast[u64](index))
+    ) {
         case Ok(launched) => keep(&state.containers_running[index], launched)
         case Error(error) => {
             runtime.log_info("no container service for disk % partition %: %", partition.disk, partition.index, error)
@@ -1067,11 +1197,14 @@ container_of :: fn(state: ptr[mut Manager], index: usize) -> Disk? {
  * @param name The volume's name, or "volume@snapshot".
  * @return Its place in served, good while the storage manager runs; null if it isn't served, or its server's gone.
  */
-served_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> ptr[mut Served]? {
+served_volume :: fn(state : ptr[mut Manager], index : usize, name : u8[]) -> ptr[mut Served]? {
     for i in 0..<state.served_count {
         if i < state.served.count {
             each :: &state.served[i]
-            if !each.gone && each.partition == index && each.name_bytes == name.count && each.name_bytes <= each.name.count
+            if !each.gone
+                && each.partition == index
+                && each.name_bytes == name.count
+                && each.name_bytes <= each.name.count
                 && same_bytes(each.name[0..<each.name_bytes], name) {
                 return each
             }
@@ -1087,7 +1220,7 @@ served_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> ptr[mu
  * @param b The other's bytes, read only; a different count is never the same.
  * @return Whether they're as long as each other, with the same bytes.
  */
-same_bytes :: fn(a: u8[], b: u8[]) -> bool {
+same_bytes :: fn(a : u8[], b : u8[]) -> bool {
     if a.count != b.count {
         return false
     }
@@ -1115,7 +1248,13 @@ same_bytes :: fn(a: u8[], b: u8[]) -> bool {
  *     owns; Locked, WrongKey, NoVolume if the container service hasn't it, or Failed if a name, a place in served, the
  *     container service, a channel or the launch couldn't be had.
  */
-volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[], given: bool) -> storage.Response {
+volume_of :: fn(
+    state : ptr[mut Manager],
+    index : usize,
+    name : u8[],
+    passphrase : u8[],
+    given : bool
+) -> storage.Response {
     startup :: slop_os.startup_block()
     match served_volume(state, index, name) {
         case Some(served) => {
@@ -1175,8 +1314,13 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     pair :: os.channel_for[dir.Dir](startup.budget, 0) or_return .Failed
     control :: os.channel_for[volume_protocol.Volume](startup.budget, 0) or_return .Failed
     stored_links :: os.channel_for[links.Links](startup.budget, 0) or_return .Failed
-    volume_grants := VolumeServerGrants.{log = duplicate_log(state.log), volume = volume, clients = os.Listener[dir.Dir].{end = pair.a},
-        control = os.Listener[volume_protocol.Volume].{end = control.a}, stored_links = os.Channel[links.Links].{end = stored_links.a}}
+    volume_grants := VolumeServerGrants.{
+        log = duplicate_log(state.log),
+        volume = volume,
+        clients = os.Listener[dir.Dir].{end = pair.a},
+        control = os.Listener[volume_protocol.Volume].{end = control.a},
+        stored_links = os.Channel[links.Links].{end = stored_links.a},
+    }
     budget :: if encrypted { SEALED_VOLUME_SERVER_BUDGET } else { VOLUME_SERVER_BUDGET }
     /*
      * The ports and the links binding first: any of them failing after the launch would leave a server running
@@ -1185,12 +1329,26 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     root_port :: os.port_for(startup.budget, pair.b) or_return .Failed
     control_port :: os.port_for(startup.budget, control.b) or_return .Failed
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(state.port, cast[slop_os.Handle](stored_links.b), signals, LINKS_KEY + cast[u64](slot), .Persistent) is_error {
+    if slop_os.port_bind(
+        state.port,
+        cast[slop_os.Handle](stored_links.b),
+        signals,
+        LINKS_KEY + cast[u64](slot),
+        .Persistent
+    ) is_error {
         return .Failed
     }
     launched_volume := Running.{}
-    match os.launch(state.manager, state.manager_port, "volume_server", state.volume_server_module, budget, volume_server.main, volume_grants,
-        watched(state, VOLUME_KEY + cast[u64](slot))) {
+    match os.launch(
+        state.manager,
+        state.manager_port,
+        "volume_server",
+        state.volume_server_module,
+        budget,
+        volume_server.main,
+        volume_grants,
+        watched(state, VOLUME_KEY + cast[u64](slot))
+    ) {
         case Ok(launched) => keep(&launched_volume, launched)
         case Error(error) => {
             runtime.log_info("no volume server for the % volume: %", string_of(&name[0], name.count), error)
@@ -1203,9 +1361,18 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
             return .Failed
         }
     }
-    served := Served.{partition = index, container = identity.container, id = identity.id, links = stored_links.b, name_bytes = name.count,
-        root = Disk.{end = pair.b, port = root_port}, control = Disk.{end = control.b, port = control_port}, encrypted = encrypted,
-        read_only = is_snapshot(name), running = launched_volume}
+    served := Served.{
+        partition = index,
+        container = identity.container,
+        id = identity.id,
+        links = stored_links.b,
+        name_bytes = name.count,
+        root = Disk.{end = pair.b, port = root_port},
+        control = Disk.{end = control.b, port = control_port},
+        encrypted = encrypted,
+        read_only = is_snapshot(name),
+        running = launched_volume,
+    }
     for byte, i in name {
         if i < served.name.count {
             served.name[i] = byte
@@ -1215,8 +1382,11 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
     if slot == state.served_count {
         state.served_count = slot + 1
     }
-    runtime.log_info("started a volume server for the % volume%", string_of(&name[0], name.count),
-        if encrypted { ", encrypted" } else { "" })
+    runtime.log_info(
+        "started a volume server for the % volume%",
+        string_of(&name[0], name.count),
+        if encrypted { ", encrypted" } else { "" }
+    )
     if encrypted {
         // A wrong passphrase leaves it waiting, locked, for the next
         answer :: unlock(&state.served[slot], passphrase)
@@ -1241,7 +1411,14 @@ volume_of :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u
  * @return What opening it answers: OpenedFiles with its root, which the caller owns, or why not; AlreadyExists for a
  *     name taken, or Failed for arguments that don't agree or a container that couldn't make it.
  */
-create_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[], cipher: u8, now: u64) -> storage.Response {
+create_volume :: fn(
+    state : ptr[mut Manager],
+    index : usize,
+    name : u8[],
+    passphrase : u8[],
+    cipher : u8,
+    now : u64
+) -> storage.Response {
     sealed :: cipher != 0
     if sealed != (passphrase.count > 0) || name.count == 0 || name.count > VOLUME_NAME_BYTES || is_snapshot(name) {
         return .Failed
@@ -1264,7 +1441,7 @@ create_volume :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphras
  * @param name A volume's name as a client gave it, any bytes.
  * @return Whether it has an '@' in it.
  */
-is_snapshot :: fn(name: u8[]) -> bool {
+is_snapshot :: fn(name : u8[]) -> bool {
     for byte in name {
         if byte == cast[u8]('@') {
             return true
@@ -1280,7 +1457,7 @@ is_snapshot :: fn(name: u8[]) -> bool {
  * @return OpenedFiles with a dir connection, or OpenedReadOnlyFiles with a snapshot's read_only_dir, which the caller
  *     owns; Failed if it couldn't be made.
  */
-root_of :: fn(served: ptr[Served]) -> storage.Response {
+root_of :: fn(served : ptr[Served]) -> storage.Response {
     startup :: slop_os.startup_block()
     if served.read_only {
         root :: read_only_dir.connect(served.root.end, served.root.port, startup.budget) or_return .Failed
@@ -1298,7 +1475,7 @@ root_of :: fn(served: ptr[Served]) -> storage.Response {
  * @param passphrase The passphrase's bytes, copied into the request; not kept.
  * @return The volume server's answer: Unlocked, WrongKey, or another failure; Failed if it couldn't be asked.
  */
-unlock :: fn(served: ptr[Served], passphrase: u8[]) -> volume_protocol.Response {
+unlock :: fn(served : ptr[Served], passphrase : u8[]) -> volume_protocol.Response {
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)
     request^ = .Unlock(os.append(&out, passphrase))
@@ -1313,7 +1490,7 @@ unlock :: fn(served: ptr[Served], passphrase: u8[]) -> volume_protocol.Response 
  * @param out The request; its handles are moved out when it's sent.
  * @return The answer, a copy, whose handles the caller owns; Failed if it couldn't be sent or the connection failed.
  */
-ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_protocol.Response {
+ask_volume :: fn(served : ptr[Served], out : ptr[mut os.Outgoing]) -> volume_protocol.Response {
     if volume_protocol.send_request(served.control.end, served.control.port, out) is_some {
         return .Failed
     }
@@ -1337,7 +1514,7 @@ ask_volume :: fn(served: ptr[Served], out: ptr[mut os.Outgoing]) -> volume_proto
  * @return Rotated with the new generation's number; NoVolume if it isn't served, NotEncrypted, Locked if it hasn't
  *     been unlocked, or Failed.
  */
-rotate :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> storage.Response {
+rotate :: fn(state : ptr[mut Manager], index : usize, name : u8[]) -> storage.Response {
     served :: served_volume(state, index, name) or_return .NoVolume
     if !served.encrypted {
         return .NotEncrypted
@@ -1366,7 +1543,7 @@ rotate :: fn(state: ptr[mut Manager], index: usize, name: u8[]) -> storage.Respo
  * @return Rotated with the new generation's number, its floor; NoVolume if it isn't served, NotEncrypted, Locked if it
  *     hasn't been unlocked, or Failed.
  */
-rekey :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[]) -> storage.Response {
+rekey :: fn(state : ptr[mut Manager], index : usize, name : u8[], passphrase : u8[]) -> storage.Response {
     served :: served_volume(state, index, name) or_return .NoVolume
     if !served.encrypted {
         return .NotEncrypted
@@ -1394,7 +1571,7 @@ rekey :: fn(state: ptr[mut Manager], index: usize, name: u8[], passphrase: u8[])
  * @return The answer, a copy, whose handles the caller owns; its Relatives point into a message that's gone, so they
  *     aren't read. Unsupported if it couldn't be sent or the connection failed.
  */
-ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Outgoing]) -> container.Response {
+ask_container :: fn(end : slop_os.Channel, port : slop_os.Port, out : ptr[mut os.Outgoing]) -> container.Response {
     if container.send_request(end, port, out) is_some {
         return .Unsupported
     }
@@ -1417,7 +1594,7 @@ ask_container :: fn(end: slop_os.Channel, port: slop_os.Port, out: ptr[mut os.Ou
  * @return The answer, a copy, whose handles the caller owns; Unsupported for a disk with no partition server, or if it
  *     couldn't be asked.
  */
-ask :: fn(state: ptr[mut Manager], disk: usize, request: partitions.Request) -> partitions.Response {
+ask :: fn(state : ptr[mut Manager], disk : usize, request : partitions.Request) -> partitions.Response {
     if disk >= state.disk_count || disk >= state.disks.count {
         return .Unsupported
     }
@@ -1445,8 +1622,10 @@ ask :: fn(state: ptr[mut Manager], disk: usize, request: partitions.Request) -> 
  * @return A new handle to it, to write, duplicate and transfer, which the caller gives away; null if there's no log or
  *     it couldn't be duplicated.
  */
-duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+duplicate_log :: fn(log : slop_os.DebugLog) -> slop_os.DebugLog? {
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     match slop_os.handle_duplicate(cast[slop_os.Handle](log), rights) {
         case Ok(copy) => return cast[slop_os.DebugLog](copy)
         case Error(error) => return null
@@ -1460,7 +1639,7 @@ duplicate_log :: fn(log: slop_os.DebugLog) -> slop_os.DebugLog? {
  * @return A new handle to it, to read and transfer, which the caller gives away; null without a command line, or if it
  *     couldn't be duplicated.
  */
-command_line_copy :: fn(state: ptr[Manager]) -> slop_os.Memory? {
+command_line_copy :: fn(state : ptr[Manager]) -> slop_os.Memory? {
     if cast[slop_os.Handle](state.command_line) == slop_os.NO_HANDLE {
         return null
     }
@@ -1481,9 +1660,11 @@ command_line_copy :: fn(state: ptr[Manager]) -> slop_os.Memory? {
  *     is safe, and one past the list gives false.
  * @return Whether it's listed and its type is CONTAINER_TYPE.
  */
-is_container :: fn(state: ptr[Manager], partition: u32) -> bool {
+is_container :: fn(state : ptr[Manager], partition : u32) -> bool {
     index :: cast[usize](partition)
-    return index < state.partition_count && index < state.partitions.count && state.partitions[index].info.type_guid == CONTAINER_TYPE
+    return index < state.partition_count
+        && index < state.partitions.count
+        && state.partitions[index].info.type_guid == CONTAINER_TYPE
 }
 
 /**
@@ -1499,7 +1680,13 @@ is_container :: fn(state: ptr[Manager], partition: u32) -> bool {
  * @return Done once it's durable; Failed if the volume server didn't commit, or the container's answer, as
  *     to_container gives it.
  */
-take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapshot: u8[], now: u64) -> storage.Response {
+take_snapshot :: fn(
+    state : ptr[mut Manager],
+    index : usize,
+    volume : u8[],
+    snapshot : u8[],
+    now : u64
+) -> storage.Response {
     match served_volume(state, index, volume) {
         case Some(served) => {
             if !served.encrypted || served.unlocked {
@@ -1516,7 +1703,9 @@ take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapsho
     }
     out := os.Outgoing.{}
     request :: os.begin[container.Request](&out)
-    request^ = .TakeSnapshot(container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, snapshot), now = now})
+    request^ = .TakeSnapshot(
+        container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, snapshot), now = now}
+    )
     return to_container(state, index, &out, null)
 }
 
@@ -1526,7 +1715,7 @@ take_snapshot :: fn(state: ptr[mut Manager], index: usize, volume: u8[], snapsho
  * @param state The storage manager's state, whose served volumes' servers are each asked, and waited for.
  * @return Whether each committed; false if any couldn't, the rest asked all the same.
  */
-committed_all :: fn(state: ptr[mut Manager]) -> bool {
+committed_all :: fn(state : ptr[mut Manager]) -> bool {
     all := true
     for i in 0..<state.served_count {
         if i >= state.served.count {
@@ -1556,7 +1745,7 @@ committed_all :: fn(state: ptr[mut Manager]) -> bool {
  *
  * @param state The storage manager's state, whose served volumes are snapshotted, each committed first.
  */
-automatic_snapshots :: fn(state: ptr[mut Manager]) {
+automatic_snapshots :: fn(state : ptr[mut Manager]) {
     now :: match time.now() {
         case Ok(instant) => cast[u64](instant.seconds) * 1000000000 + cast[u64](instant.nanos)
         case Error(error) => return void
@@ -1568,7 +1757,11 @@ automatic_snapshots :: fn(state: ptr[mut Manager]) {
             break
         }
         served :: state.served[i]
-        if served.gone || served.read_only || (served.encrypted && !served.unlocked) || served.name_bytes == 0 || served.name_bytes > served.name.count {
+        if served.gone
+            || served.read_only
+            || (served.encrypted && !served.unlocked)
+            || served.name_bytes == 0
+            || served.name_bytes > served.name.count {
             continue
         }
         volume :: served.name[0..<served.name_bytes]
@@ -1593,7 +1786,7 @@ automatic_snapshots :: fn(state: ptr[mut Manager]) {
  * @param now The wall clock's time, in nanoseconds since 1970.
  * @return How many were deleted; those the container wouldn't delete, as one a clone keeps, are left.
  */
-delete_old_snapshots :: fn(state: ptr[mut Manager], index: usize, volume: u8[], now: u64) -> u32 {
+delete_old_snapshots :: fn(state : ptr[mut Manager], index : usize, volume : u8[], now : u64) -> u32 {
     service :: container_of(state, index) or_return 0
     // Their names first, oldest first, as deleting one moves the others' places
     old : string[..]
@@ -1622,7 +1815,9 @@ delete_old_snapshots :: fn(state: ptr[mut Manager], index: usize, volume: u8[], 
         }
         place += 1
         name :: os.items(&into, info.name)
-        if info.created + state.snapshots_kept < now && (has_prefix(name, AUTOMATIC_PREFIX) || has_prefix(name, ASKED_PREFIX)) && name.count > 0 {
+        if info.created + state.snapshots_kept < now
+            && (has_prefix(name, AUTOMATIC_PREFIX) || has_prefix(name, ASKED_PREFIX))
+            && name.count > 0 {
             copy :: strings.clone(string_of(&name[0], name.count)) or_continue
             runtime.array_add(&old, copy)
         }
@@ -1631,7 +1826,9 @@ delete_old_snapshots :: fn(state: ptr[mut Manager], index: usize, volume: u8[], 
     for each in old {
         out := os.Outgoing.{}
         request :: os.begin[container.Request](&out)
-        request^ = .DeleteSnapshot(container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, string_bytes(each))})
+        request^ = .DeleteSnapshot(
+            container.SnapshotNamed.{volume = os.append(&out, volume), snapshot = os.append(&out, string_bytes(each))}
+        )
         if to_container(state, index, &out, null) == .Done {
             deleted += 1
         }
@@ -1646,7 +1843,7 @@ delete_old_snapshots :: fn(state: ptr[mut Manager], index: usize, volume: u8[], 
  * @param prefix The prefix, compared byte for byte.
  * @return Whether name is at least as long, and its first bytes are prefix's.
  */
-has_prefix :: fn(name: u8[], prefix: string) -> bool {
+has_prefix :: fn(name : u8[], prefix : string) -> bool {
     if name.count < prefix.count {
         return false
     }
@@ -1669,7 +1866,12 @@ has_prefix :: fn(name: u8[], prefix: string) -> bool {
  * @return Done, NoVolume, NoSnapshot, AlreadyExists, InUse, NoMore, Used or Snapshot as the container answers; Failed
  *     for any other answer, a Snapshot without a reply to copy its name into, or a service that couldn't be had.
  */
-to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoing], answer: ptr[mut os.Outgoing]?) -> storage.Response {
+to_container :: fn(
+    state : ptr[mut Manager],
+    index : usize,
+    out : ptr[mut os.Outgoing],
+    answer : ptr[mut os.Outgoing]?
+) -> storage.Response {
     service :: container_of(state, index) or_return .Failed
     if container.send_request(service.end, service.port, out) is_some {
         return .Failed
@@ -1691,8 +1893,15 @@ to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoi
         case NoMore => .NoMore
         case Used(usage) => .Used(usage)
         case Snapshot(info) => match answer {
-            case Some(reply) => .Snapshot(container.SnapshotInfo.{name = os.append(reply, os.items(&into, info.name)),
-                transaction = info.transaction, created = info.created})
+            case Some(
+                reply
+            ) => .Snapshot(
+                container.SnapshotInfo.{
+                    name = os.append(reply, os.items(&into, info.name)),
+                    transaction = info.transaction,
+                    created = info.created,
+                }
+            )
             case None => .Failed
         }
         case _ => .Failed
@@ -1711,7 +1920,7 @@ to_container :: fn(state: ptr[mut Manager], index: usize, out: ptr[mut os.Outgoi
  * @param index The volume's place in served.
  * @param into Where each request is read into, reused.
  */
-serve_links :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incoming]) {
+serve_links :: fn(state : ptr[mut Manager], index : usize, into : ptr[mut os.Incoming]) {
     if index >= state.served_count || index >= state.served.count {
         return void
     }
@@ -1752,11 +1961,15 @@ serve_links :: fn(state: ptr[mut Manager], index: usize, into: ptr[mut os.Incomi
  * @return Its place in served: not a snapshot, and unlocked if it's encrypted; null if there's none, which a link
  *     calls Unavailable.
  */
-linked_volume :: fn(state: ptr[mut Manager], container: u8[16], id: u64) -> ptr[mut Served]? {
+linked_volume :: fn(state : ptr[mut Manager], container : u8[16], id : u64) -> ptr[mut Served]? {
     for i in 0..<state.served_count {
         if i < state.served.count {
             each :: &state.served[i]
-            if !each.gone && each.id == id && each.container == container && !each.read_only && (!each.encrypted || each.unlocked) {
+            if !each.gone
+                && each.id == id
+                && each.container == container
+                && !each.read_only
+                && (!each.encrypted || each.unlocked) {
                 return each
             }
         }
@@ -1773,7 +1986,7 @@ linked_volume :: fn(state: ptr[mut Manager], container: u8[16], id: u64) -> ptr[
  * @return Issued with the link's number; Failed with the issuing volume's refusal, or Unavailable if it isn't served,
  *     unlocked, or couldn't be asked.
  */
-issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.Response {
+issue :: fn(state : ptr[mut Manager], index : usize, claim : grant.Claim) -> links.Response {
     if index >= state.served.count {
         return .Failed(.Unavailable)
     }
@@ -1781,7 +1994,9 @@ issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.
     target :: linked_volume(state, claim.container, claim.volume) or_return .Failed(.Unavailable)
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)
-    request^ = .IssueTo(volume_protocol.IssueTo.{ticket = claim.ticket, recipient_container = asking.container, recipient = asking.id})
+    request^ = .IssueTo(
+        volume_protocol.IssueTo.{ticket = claim.ticket, recipient_container = asking.container, recipient = asking.id}
+    )
     return match ask_volume(target, &out) {
         case Issued(number) => links.Response.Issued(number)
         case Refused(error) => links.Response.Failed(error)
@@ -1800,7 +2015,7 @@ issue :: fn(state: ptr[mut Manager], index: usize, claim: grant.Claim) -> links.
  * @return The connection opened, a file's or a directory's, read only or not, which goes back to the volume server
  *     that asked; Failed with the volume's refusal, or Unavailable if it isn't served, unlocked, or couldn't be asked.
  */
-resolve :: fn(state: ptr[mut Manager], index: usize, resolving: links.Resolving, path: u8[]) -> links.Response {
+resolve :: fn(state : ptr[mut Manager], index : usize, resolving : links.Resolving, path : u8[]) -> links.Response {
     if index >= state.served.count {
         return .Failed(.Unavailable)
     }
@@ -1808,8 +2023,15 @@ resolve :: fn(state: ptr[mut Manager], index: usize, resolving: links.Resolving,
     target :: linked_volume(state, resolving.container, resolving.volume) or_return .Failed(.Unavailable)
     out := os.Outgoing.{}
     request :: os.begin[volume_protocol.Request](&out)
-    request^ = .OpenIssued(volume_protocol.OpenIssued.{number = resolving.number, recipient_container = asking.container,
-        recipient = asking.id, path = os.append(&out, path), opening = resolving.opening})
+    request^ = .OpenIssued(
+        volume_protocol.OpenIssued.{
+            number = resolving.number,
+            recipient_container = asking.container,
+            recipient = asking.id,
+            path = os.append(&out, path),
+            opening = resolving.opening,
+        }
+    )
     return match ask_volume(target, &out) {
         case OpenedFile(made) => links.Response.OpenedFile(made)
         case OpenedReadOnlyFile(made) => links.Response.OpenedReadOnlyFile(made)

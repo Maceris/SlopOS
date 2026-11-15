@@ -11,8 +11,8 @@ package scheduler
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
-import log_line from "../../log_line"
 import service_kit from "../../libraries/service_kit"
+import log_line from "../../log_line"
 import scheduler as protocol from "../../protocols/scheduler"
 import system_records from "../../system_records"
 
@@ -70,10 +70,17 @@ Scheduler :: struct {
  * @return 1 when no port could be made, 2 when the listener couldn't be bound to it, 3 when the system configuration
  *     doesn't check out; it doesn't return otherwise.
  */
-main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Listener[protocol.Scheduler], system: slop_os.Memory) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    cpu_budget : slop_os.CpuBudget,
+    clients : os.Listener[protocol.Scheduler],
+    system : slop_os.Memory
+) -> int {
     block :: slop_os.startup_block()
-    service := Scheduler.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE),
-        default_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE)}
+    service := Scheduler.{
+        log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE),
+        default_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE),
+    }
     service.port = slop_os.port_create(block.budget) or_return 1
     records :: match service_kit.read_records(block, system) {
         case Ok(read) => read
@@ -109,7 +116,9 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
                 if own.cpus != 0 {
                     match slop_os.cpu_budget_set_cpus(made, own.cpus) {
                         case Ok => {}
-                        case Error(error) => log_line.write(service.log, "scheduler: % can't run on CPUs %: %", name, own.cpus, error)
+                        case Error(
+                            error
+                        ) => log_line.write(service.log, "scheduler: % can't run on CPUs %: %", name, own.cpus, error)
                     }
                 }
             }
@@ -117,8 +126,13 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
         }
     }
     root :: slop_os.cpu_budget_describe(cpu_budget) or_else slop_os.CpuBudgetInfo.{}
-    log_line.write(service.log, "scheduler: % budgets and the default split off the root's, % of its % millionths of a CPU", service.count,
-        root.children_share, root.share)
+    log_line.write(
+        service.log,
+        "scheduler: % budgets and the default split off the root's, % of its % millionths of a CPU",
+        service.count,
+        root.children_share,
+        root.share
+    )
     connected := service_kit.Clients.{}
     if !service_kit.add_client(&connected, service.port, clients.end) {
         return 2
@@ -152,7 +166,12 @@ main :: fn(log: slop_os.DebugLog?, cpu_budget: slop_os.CpuBudget, clients: os.Li
  * @param index Which client, an index in connected; one past its end, or a freed place, is nothing to serve.
  * @param into Where each request is received, reused for each and left holding the last.
  */
-serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients], index: usize, into: ptr[mut os.Incoming]) {
+serve :: fn(
+    service : ptr[mut Scheduler],
+    connected : ptr[mut service_kit.Clients],
+    index : usize,
+    into : ptr[mut os.Incoming]
+) {
     if index >= connected.ends.count {
         return void
     }
@@ -216,7 +235,7 @@ serve :: fn(service: ptr[mut Scheduler], connected: ptr[mut service_kit.Clients]
  * @return The budget split for name, or the default budget when it has none, which is NO_HANDLE when the default
  *     couldn't be made.
  */
-budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
+budget_of :: fn(service : ptr[Scheduler], name : string) -> slop_os.CpuBudget {
     for each, i in service.budgets {
         if i < service.count && each.name == name {
             return each.budget
@@ -234,10 +253,11 @@ budget_of :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget {
  * @return The copy, the caller's to send or close; null for a service without a budget of its own, one that doesn't
  *     split it, or a copy that can't be made.
  */
-splittable :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget? {
+splittable :: fn(service : ptr[Scheduler], name : string) -> slop_os.CpuBudget? {
     for each, i in service.budgets {
         if i < service.count && each.name == name && each.splits {
-            rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT) | cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND)
+            rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT)
+                | cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND)
                 | cast[u32](slop_os.RIGHT_TRANSFER))
             match slop_os.handle_duplicate(cast[slop_os.Handle](each.budget), rights) {
                 case Ok(copy) => return cast[slop_os.CpuBudget](copy)
@@ -254,7 +274,7 @@ splittable :: fn(service: ptr[Scheduler], name: string) -> slop_os.CpuBudget? {
  * @param budget The budget, which stays the caller's, unchanged.
  * @return The copy, the caller's to send or close; null when budget is NO_HANDLE or can't be duplicated.
  */
-bindable :: fn(budget: slop_os.CpuBudget) -> slop_os.CpuBudget? {
+bindable :: fn(budget : slop_os.CpuBudget) -> slop_os.CpuBudget? {
     if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
         return null
     }

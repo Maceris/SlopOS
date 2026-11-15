@@ -13,7 +13,7 @@ import runtime from "base:runtime"
  * @param b The other integer, any value.
  * @return Their sum, wrapping as int's does.
  */
-add #export :: fn(a: int, b: int) -> int {
+add #export :: fn(a : int, b : int) -> int {
     return a + b
 }
 
@@ -24,7 +24,7 @@ add #export :: fn(a: int, b: int) -> int {
  * @param times How many times; 0 or fewer gives empty text.
  * @return text that many times over, from the caller's context's allocator, the caller's to free.
  */
-repeat #export :: fn(text: string, times: int) -> string {
+repeat #export :: fn(text : string, times : int) -> string {
     bytes : u8[..]
     for i in 0..<times {
         for byte in string_bytes(text) {

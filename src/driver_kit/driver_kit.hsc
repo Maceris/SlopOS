@@ -17,7 +17,7 @@ import slop_os from "std:os/slop_os"
  * @return The address it's mapped at, or null if its size couldn't be read, the free range hasn't room, or the
  *     mapping failed.
  */
-map_device :: fn(memory: slop_os.Memory) -> u64? {
+map_device :: fn(memory : slop_os.Memory) -> u64? {
     block :: slop_os.startup_block()
     size :: slop_os.memory_size(memory) or_return null
     at :: runtime.reserve_addresses(cast[usize](size)) or_return null
@@ -39,8 +39,14 @@ map_device :: fn(memory: slop_os.Memory) -> u64? {
  * @param bar5 BAR 5's memory, or null if the driver wasn't given it.
  * @return Where each BAR is mapped, in order, or 0 for one that's null or couldn't be mapped.
  */
-map_bars :: fn(bar0: slop_os.Memory?, bar1: slop_os.Memory?, bar2: slop_os.Memory?, bar3: slop_os.Memory?, bar4: slop_os.Memory?,
-    bar5: slop_os.Memory?) -> u64[6] {
+map_bars :: fn(
+    bar0 : slop_os.Memory?,
+    bar1 : slop_os.Memory?,
+    bar2 : slop_os.Memory?,
+    bar3 : slop_os.Memory?,
+    bar4 : slop_os.Memory?,
+    bar5 : slop_os.Memory?
+) -> u64[6] {
     return u64.[map_bar(bar0), map_bar(bar1), map_bar(bar2), map_bar(bar3), map_bar(bar4), map_bar(bar5)]
 }
 
@@ -50,7 +56,7 @@ map_bars :: fn(bar0: slop_os.Memory?, bar1: slop_os.Memory?, bar2: slop_os.Memor
  * @param bar The BAR's memory, or null if the driver wasn't given it.
  * @return Where it's mapped, or 0 if bar is null or couldn't be mapped.
  */
-map_bar :: fn(bar: slop_os.Memory?) -> u64 {
+map_bar :: fn(bar : slop_os.Memory?) -> u64 {
     memory :: bar or_return 0
     return map_device(memory) or_else 0
 }

@@ -19,9 +19,14 @@ import maps from "std:maps"
  * @error Corrupt The state's record isn't a ChangeState, or a node couldn't be read or didn't check out.
  * @error OutOfMemory No memory for a node.
  */
-history_state :: fn(volume: ptr[mut Volume]) -> Result[ChangeState, Error] {
+history_state :: fn(volume : ptr[mut Volume]) -> Result[ChangeState, Error] {
     state := ChangeState.{first = cast[u64le](1), next = cast[u64le](1)}
-    bytes :: tree_get(volume.nodes, &volume.tree, key_of(0, .Change, 0), view_of(cast[ptr[mut u8]](&state), size_of(ChangeState)))?
+    bytes :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(0, .Change, 0),
+        view_of(cast[ptr[mut u8]](&state), size_of(ChangeState))
+    )?
     match bytes {
         case Some(count) => {
             if count != size_of(ChangeState) {
@@ -48,7 +53,13 @@ history_state :: fn(volume: ptr[mut Volume]) -> Result[ChangeState, Error] {
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt The history's state or a node couldn't be read or didn't check out.
  */
-note_change :: fn(volume: ptr[mut Volume], kind: ChangeKind, object: u64, parent: u64, name: string) -> Result[void, Error] {
+note_change :: fn(
+    volume : ptr[mut Volume],
+    kind : ChangeKind,
+    object : u64,
+    parent : u64,
+    name : string
+) -> Result[void, Error] {
     if volume.history_bytes == 0 {
         return .Ok
     }
@@ -62,7 +73,9 @@ note_change :: fn(volume: ptr[mut Volume], kind: ChangeKind, object: u64, parent
     if kind == .Written && next > first {
         found :: tree_get(volume.nodes, &volume.tree, key_of(0, .Change, next - 1), value.bytes)?
         last :: cast[ptr[ChangeRecord]](&value.bytes[0])
-        if (found is_some) && cast[u32](last.kind) == cast[u32](ChangeKind.Written) && cast[u64](last.object) == object
+        if (found is_some)
+            && cast[u32](last.kind) == cast[u32](ChangeKind.Written)
+            && cast[u64](last.object) == object
             && cast[u64](last.transaction) == transaction {
             return .Ok
         }
@@ -70,8 +83,13 @@ note_change :: fn(volume: ptr[mut Volume], kind: ChangeKind, object: u64, parent
     most :: cast[usize](NAME_BYTES)
     count :: if name.count > most { most } else { name.count }
     record :: cast[ptr[mut ChangeRecord]](&value.bytes[0])
-    record^ = ChangeRecord.{transaction = cast[u64le](transaction), object = cast[u64le](object), parent = cast[u64le](parent),
-        kind = cast[u32le](cast[u32](kind)), name_bytes = cast[u16le](cast[u16](count))}
+    record^ = ChangeRecord.{
+        transaction = cast[u64le](transaction),
+        object = cast[u64le](object),
+        parent = cast[u64le](parent),
+        kind = cast[u32le](cast[u32](kind)),
+        name_bytes = cast[u16le](cast[u16](count)),
+    }
     copy_bytes(value.bytes, size_of(ChangeRecord), view_of(cast[ptr[u8]](name.data), count))
     length :: size_of(ChangeRecord) + count
     tree_put(volume.nodes, &volume.tree, key_of(0, .Change, next), part(value.bytes, 0, length))?
@@ -133,7 +151,12 @@ ChangesFound :: struct {
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt The history's state or a node couldn't be read or didn't check out.
  */
-changes_since :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: mut u8[]) -> Result[ChangesFound, Error] {
+changes_since :: fn(
+    volume : ptr[mut Volume],
+    directory : u64,
+    cursor : u64,
+    name : mut u8[]
+) -> Result[ChangesFound, Error] {
     state :: history_state(volume)?
     first :: cast[u64](state.first)
     next :: cast[u64](state.next)
@@ -160,8 +183,16 @@ changes_since :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: 
         count :: cast[usize](cast[u16](record.name_bytes))
         copy_bytes(name, 0, part(value.bytes, size_of(ChangeRecord), size_of(ChangeRecord) + count))
         kind :: cast[u32](record.kind)
-        return .Ok(ChangesFound.{are = .Found, kind = kind_of_change(kind), object = cast[u64](record.object),
-            name_bytes = if count < name.count { count } else { name.count }, transaction = cast[u64](record.transaction), next = sequence + 1})
+        return .Ok(
+            ChangesFound.{
+                are = .Found,
+                kind = kind_of_change(kind),
+                object = cast[u64](record.object),
+                name_bytes = if count < name.count { count } else { name.count },
+                transaction = cast[u64](record.transaction),
+                next = sequence + 1,
+            }
+        )
     }
     return .Ok(ChangesFound.{are = .UpToDate, next = next})
 }
@@ -172,9 +203,14 @@ changes_since :: fn(volume: ptr[mut Volume], directory: u64, cursor: u64, name: 
  * @param kind A change record's kind field, as stored; any value is taken.
  * @return Its ChangeKind; Written for any value that isn't another's, 2 included.
  */
-kind_of_change :: fn(kind: u32) -> ChangeKind {
-    return if kind == 1 { .Created } else if kind == 3 { .Removed } else if kind == 4 { .MovedOut } else if kind == 5 { .MovedIn }
-        else if kind == 6 { .Replaced } else { .Written }
+kind_of_change :: fn(kind : u32) -> ChangeKind {
+    return if kind == 1 {
+        .Created
+    }
+    else if kind == 3 {
+        .Removed
+    }
+    else if kind == 4 { .MovedOut } else if kind == 5 { .MovedIn } else if kind == 6 { .Replaced } else { .Written }
 }
 
 // Orphans
@@ -185,7 +221,7 @@ kind_of_change :: fn(kind: u32) -> ChangeKind {
  * @param object The orphan's object ID, the key's offset.
  * @return The key (0, Orphan, object).
  */
-orphan_key :: fn(object: u64) -> Key {
+orphan_key :: fn(object : u64) -> Key {
     return key_of(0, .Orphan, object)
 }
 
@@ -198,7 +234,7 @@ orphan_key :: fn(object: u64) -> Key {
  * @error OutOfMemory No memory for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-is_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[bool, Error] {
+is_orphan :: fn(volume : ptr[mut Volume], object : u64) -> Result[bool, Error] {
     return tree_has(volume.nodes, &volume.tree, orphan_key(object))
 }
 
@@ -217,12 +253,17 @@ is_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[bool, Error] {
  * @error OutOfMemory No memory for a node.
  * @error Corrupt A node couldn't be read or didn't check out.
  */
-create_orphan :: fn(volume: ptr[mut Volume], directory: u64) -> Result[u64, Error] {
+create_orphan :: fn(volume : ptr[mut Volume], directory : u64) -> Result[u64, Error] {
     directory_record(volume, directory)?
     object :: volume.next_object
     volume.next_object += 1
-    record := ObjectRecord.{kind = cast[u32le](cast[u32](ObjectKind.File)), parent = cast[u64le](directory), created = cast[u64le](volume.now),
-        modified = cast[u64le](volume.now), changed = cast[u64le](volume.nodes.transaction)}
+    record := ObjectRecord.{
+        kind = cast[u32le](cast[u32](ObjectKind.File)),
+        parent = cast[u64le](directory),
+        created = cast[u64le](volume.now),
+        modified = cast[u64le](volume.now),
+        changed = cast[u64le](volume.nodes.transaction),
+    }
     put_object(volume, object, &record)?
     scratch : u8[1]
     tree_put(volume.nodes, &volume.tree, orphan_key(object), scratch[0..<0])?
@@ -251,7 +292,7 @@ create_orphan :: fn(volume: ptr[mut Volume], directory: u64) -> Result[u64, Erro
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-install :: fn(volume: ptr[mut Volume], directory: u64, name: string, replacement: u64) -> Result[u64?, Error] {
+install :: fn(volume : ptr[mut Volume], directory : u64, name : string, replacement : u64) -> Result[u64?, Error] {
     parent := directory_record(volume, directory)?
     if !name_holds(name) {
         return .Error(.InvalidName)
@@ -300,7 +341,7 @@ install :: fn(volume: ptr[mut Volume], directory: u64, name: string, replacement
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
-unlink :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u64, Error] {
+unlink :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> Result[u64, Error] {
     parent := directory_record(volume, directory)?
     object :: lookup(volume, directory, name)? or_return .Error(.NotFound)
     record :: get_object(volume, object)?
@@ -323,7 +364,7 @@ unlink :: fn(volume: ptr[mut Volume], directory: u64, name: string) -> Result[u6
  * @error OutOfMemory No memory for a node.
  * @error Corrupt A chunk's record or a node couldn't be read or didn't check out.
  */
-release_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error] {
+release_orphan :: fn(volume : ptr[mut Volume], object : u64) -> Result[void, Error] {
     if !(tree_delete(volume.nodes, &volume.tree, orphan_key(object))?) {
         return .Ok
     }
@@ -338,7 +379,7 @@ release_orphan :: fn(volume: ptr[mut Volume], object: u64) -> Result[void, Error
  * @error OutOfMemory No memory for a node; those destroyed before stay destroyed.
  * @error Corrupt A chunk's record or a node couldn't be read or didn't check out.
  */
-sweep_orphans :: fn(volume: ptr[mut Volume]) -> Result[u64, Error] {
+sweep_orphans :: fn(volume : ptr[mut Volume]) -> Result[u64, Error] {
     swept : u64 = 0
     value : u8[1]
     loop {
@@ -364,7 +405,7 @@ sweep_orphans :: fn(volume: ptr[mut Volume]) -> Result[u64, Error] {
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param record The volume's record as its last commit left it.
  */
-forget :: fn(volume: ptr[mut Volume], record: VolumeRecord) {
+forget :: fn(volume : ptr[mut Volume], record : VolumeRecord) {
     dropped : u64[..]
     defer runtime.array_free(&dropped)
     dirty :: &volume.nodes.dirty

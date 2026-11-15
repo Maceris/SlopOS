@@ -1,7 +1,7 @@
 package aml
 
-import memory from "std:memory"
 import runtime from "base:runtime"
+import memory from "std:memory"
 import text_buffer from "std:text_buffer"
 
 /*
@@ -87,7 +87,7 @@ Target :: union {
  * @error Steps The budget of steps is spent.
  * @error Depth Terms are nested as deep as they may be.
  */
-enter :: fn(interpreter: ptr[mut Interpreter]) -> Result[void, Error] {
+enter :: fn(interpreter : ptr[mut Interpreter]) -> Result[void, Error] {
     if interpreter.steps >= interpreter.limits.steps {
         return .Error(.Steps)
     }
@@ -104,7 +104,7 @@ enter :: fn(interpreter: ptr[mut Interpreter]) -> Result[void, Error] {
  *
  * @param interpreter The interpreter.
  */
-leave :: fn(interpreter: ptr[mut Interpreter]) {
+leave :: fn(interpreter : ptr[mut Interpreter]) {
     interpreter.nesting -= 1
 }
 
@@ -115,7 +115,7 @@ leave :: fn(interpreter: ptr[mut Interpreter]) {
  * @return The byte.
  * @error Truncated At the end.
  */
-read_byte :: fn(cursor: ptr[mut Cursor]) -> Result[u8, Error] {
+read_byte :: fn(cursor : ptr[mut Cursor]) -> Result[u8, Error] {
     at :: cursor.at
     if at >= cursor.end || at >= cursor.code.count {
         return .Error(.Truncated)
@@ -131,7 +131,7 @@ read_byte :: fn(cursor: ptr[mut Cursor]) -> Result[u8, Error] {
  * @param ahead How many bytes past the next: 0 for the next itself.
  * @return The byte; null past the end.
  */
-peek_byte :: fn(cursor: ptr[Cursor], ahead: usize = 0) -> u8? {
+peek_byte :: fn(cursor : ptr[Cursor], ahead : usize = 0) -> u8? {
     if ahead >= cursor.code.count {
         return null
     }
@@ -150,7 +150,7 @@ peek_byte :: fn(cursor: ptr[Cursor], ahead: usize = 0) -> u8? {
  * @return The integer.
  * @error Truncated At the end before it.
  */
-read_integer :: fn(cursor: ptr[mut Cursor], count: u32) -> Result[u64, Error] {
+read_integer :: fn(cursor : ptr[mut Cursor], count : u32) -> Result[u64, Error] {
     value : u64 = 0
     for i in 0..<count {
         value |= cast[u64](read_byte(cursor)?) << (8 * cast[u64](i))
@@ -165,7 +165,7 @@ read_integer :: fn(cursor: ptr[mut Cursor], count: u32) -> Result[u64, Error] {
  * @return Where the term ends, in the cursor's code.
  * @error Truncated At the end before it, or a length that runs past the cursor's end.
  */
-package_end :: fn(cursor: ptr[mut Cursor]) -> Result[usize, Error] {
+package_end :: fn(cursor : ptr[mut Cursor]) -> Result[usize, Error] {
     start :: cursor.at
     lead :: read_byte(cursor)?
     following :: cast[u32](lead >> 6)
@@ -191,8 +191,13 @@ package_end :: fn(cursor: ptr[mut Cursor]) -> Result[usize, Error] {
  * @param byte The byte.
  * @return True for `\`, `^`, a dual or multiple name prefix, A to Z, or `_`.
  */
-starts_name :: fn(byte: u8) -> bool {
-    return byte == 0x5c || byte == 0x5e || byte == 0x2e || byte == 0x2f || (byte >= cast[u8]('A') && byte <= cast[u8]('Z')) || byte == cast[u8]('_')
+starts_name :: fn(byte : u8) -> bool {
+    return byte == 0x5c
+        || byte == 0x5e
+        || byte == 0x2e
+        || byte == 0x2f
+        || (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+        || byte == cast[u8]('_')
 }
 
 /**
@@ -203,7 +208,7 @@ starts_name :: fn(byte: u8) -> bool {
  * @error Truncated At the end before it ends.
  * @error BadOpcode A segment that doesn't start as one can.
  */
-read_name :: fn(cursor: ptr[mut Cursor]) -> Result[NameString, Error] {
+read_name :: fn(cursor : ptr[mut Cursor]) -> Result[NameString, Error] {
     name := NameString.{start = cursor.at, stop = cursor.at}
     match peek_byte(cursor) {
         case Some(first) => {
@@ -268,11 +273,14 @@ read_name :: fn(cursor: ptr[mut Cursor]) -> Result[NameString, Error] {
  * @param index Which segment, below name.segments.count / 4.
  * @return The segment; 0 past its last.
  */
-segment_at :: fn(name: ptr[NameString], index: usize) -> u32 {
+segment_at :: fn(name : ptr[NameString], index : usize) -> u32 {
     segments :: name.segments
     at :: index * 4
     if at < segments.count && at + 3 < segments.count {
-        return cast[u32](segments[at]) | (cast[u32](segments[at + 1]) << 8) | (cast[u32](segments[at + 2]) << 16) | (cast[u32](segments[at + 3]) << 24)
+        return cast[u32](segments[at])
+            | (cast[u32](segments[at + 1]) << 8)
+            | (cast[u32](segments[at + 2]) << 16)
+            | (cast[u32](segments[at + 3]) << 24)
     }
     return 0
 }
@@ -285,7 +293,7 @@ segment_at :: fn(name: ptr[NameString], index: usize) -> u32 {
  * @param name The name.
  * @return The scope; the root if `^` would go past it.
  */
-start_of :: fn(interpreter: ptr[mut Interpreter], scope: ptr[mut Node], name: ptr[NameString]) -> ptr[mut Node] {
+start_of :: fn(interpreter : ptr[mut Interpreter], scope : ptr[mut Node], name : ptr[NameString]) -> ptr[mut Node] {
     if name.from_root {
         return interpreter.root
     }
@@ -305,7 +313,7 @@ start_of :: fn(interpreter: ptr[mut Interpreter], scope: ptr[mut Node], name: pt
  * @param name The name.
  * @return The node; for a prefix alone, the scope it reaches; null if there's none, or for the null name.
  */
-resolve :: fn(interpreter: ptr[mut Interpreter], scope: ptr[mut Node], name: ptr[NameString]) -> ptr[mut Node]? {
+resolve :: fn(interpreter : ptr[mut Interpreter], scope : ptr[mut Node], name : ptr[NameString]) -> ptr[mut Node]? {
     count :: name.segments.count / 4
     start :: start_of(interpreter, scope, name)
     if count == 0 {
@@ -338,7 +346,7 @@ resolve :: fn(interpreter: ptr[mut Interpreter], scope: ptr[mut Node], name: ptr
  * @param name The name.
  * @return NotFound.
  */
-not_found :: fn(interpreter: ptr[mut Interpreter], name: ptr[NameString]) -> Error {
+not_found :: fn(interpreter : ptr[mut Interpreter], name : ptr[NameString]) -> Error {
     count :: name.segments.count / 4
     interpreter.missing = if count > 0 { segment_at(name, count - 1) } else { 0 }
     return .NotFound
@@ -351,7 +359,7 @@ not_found :: fn(interpreter: ptr[mut Interpreter], name: ptr[NameString]) -> Err
  * @param cursor The cursor the term was read from.
  * @param start Where the term started.
  */
-note_failure :: fn(interpreter: ptr[mut Interpreter], cursor: ptr[Cursor], start: usize) {
+note_failure :: fn(interpreter : ptr[mut Interpreter], cursor : ptr[Cursor], start : usize) {
     if interpreter.failure_noted {
         return void
     }
@@ -376,7 +384,12 @@ note_failure :: fn(interpreter: ptr[mut Interpreter], cursor: ptr[Cursor], start
  * @error AlreadyExists Something of that name is in that scope already.
  * @error Memory The namespace's budget can't hold it.
  */
-define :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], name: ptr[NameString], kind: NodeKind) -> Result[ptr[mut Node], Error] {
+define :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    name : ptr[NameString],
+    kind : NodeKind
+) -> Result[ptr[mut Node], Error] {
     count :: name.segments.count / 4
     if count == 0 {
         return .Error(.NotFound)
@@ -410,7 +423,13 @@ define :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], name: ptr
  * @param to Where it ends, at most code.count.
  * @return How it ended.
  */
-run_terms :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], code #escaping : u8[], from: usize, to: usize) -> Result[Flow, Error] {
+run_terms :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    code #escaping : u8[],
+    from : usize,
+    to : usize
+) -> Result[Flow, Error] {
     cursor := Cursor.{code = code, at = from, end = if to <= code.count { to } else { code.count }}
     loop {
         if cursor.at >= cursor.end {
@@ -432,7 +451,11 @@ run_terms :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], code #
  * @param cursor Where it starts; moved past it.
  * @return How it ended: Next unless it's a Return, Break or Continue, or holds one.
  */
-run_term :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Flow, Error] {
+run_term :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Flow, Error] {
     start :: cursor.at
     flow :: run_term_counted(interpreter, frame, cursor)
     match flow {
@@ -450,7 +473,11 @@ run_term :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor:
  * @param cursor Where it starts; moved past it.
  * @return How it ended.
  */
-run_term_counted :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Flow, Error] {
+run_term_counted :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Flow, Error] {
     enter(interpreter)?
     defer leave(interpreter)
     opcode :: peek_byte(cursor) or_return .Error(.Truncated)
@@ -475,10 +502,27 @@ run_term_counted :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame],
  * @param opcode The byte after 0x5b.
  * @return True for those that aren't expressions.
  */
-is_extended_statement :: fn(opcode: u8) -> bool {
-    return opcode == 0x01 || opcode == 0x02 || opcode == 0x13 || opcode == 0x20 || opcode == 0x21 || opcode == 0x22 || opcode == 0x24
-        || opcode == 0x26 || opcode == 0x27 || opcode == 0x2a || opcode == 0x32 || opcode == 0x80 || opcode == 0x81 || opcode == 0x82
-        || opcode == 0x83 || opcode == 0x84 || opcode == 0x85 || opcode == 0x86 || opcode == 0x87 || opcode == 0x88
+is_extended_statement :: fn(opcode : u8) -> bool {
+    return opcode == 0x01
+        || opcode == 0x02
+        || opcode == 0x13
+        || opcode == 0x20
+        || opcode == 0x21
+        || opcode == 0x22
+        || opcode == 0x24
+        || opcode == 0x26
+        || opcode == 0x27
+        || opcode == 0x2a
+        || opcode == 0x32
+        || opcode == 0x80
+        || opcode == 0x81
+        || opcode == 0x82
+        || opcode == 0x83
+        || opcode == 0x84
+        || opcode == 0x85
+        || opcode == 0x86
+        || opcode == 0x87
+        || opcode == 0x88
 }
 
 /**
@@ -487,9 +531,20 @@ is_extended_statement :: fn(opcode: u8) -> bool {
  * @param opcode The byte.
  * @return True for those that aren't expressions.
  */
-is_statement :: fn(opcode: u8) -> bool {
-    return opcode == 0x06 || opcode == 0x08 || opcode == 0x10 || opcode == 0x14 || opcode == 0x15 || opcode == 0x86 || opcode == 0x8a
-        || opcode == 0x8b || opcode == 0x8c || opcode == 0x8d || opcode == 0x8f || opcode == 0x9f || (opcode >= 0xa0 && opcode <= 0xa5)
+is_statement :: fn(opcode : u8) -> bool {
+    return opcode == 0x06
+        || opcode == 0x08
+        || opcode == 0x10
+        || opcode == 0x14
+        || opcode == 0x15
+        || opcode == 0x86
+        || opcode == 0x8a
+        || opcode == 0x8b
+        || opcode == 0x8c
+        || opcode == 0x8d
+        || opcode == 0x8f
+        || opcode == 0x9f
+        || (opcode >= 0xa0 && opcode <= 0xa5)
         || opcode == 0xcc
 }
 
@@ -502,7 +557,12 @@ is_statement :: fn(opcode: u8) -> bool {
  * @param opcode The opcode, one is_statement takes.
  * @return How it ended.
  */
-run_statement :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor], opcode: u8) -> Result[Flow, Error] {
+run_statement :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor],
+    opcode : u8
+) -> Result[Flow, Error] {
     if opcode == 0x10 {
         // Scope
         end :: package_end(cursor)?
@@ -565,7 +625,10 @@ run_statement :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cu
         source :: evaluate_term(interpreter, frame, cursor)?
         index :: evaluate_integer(interpreter, frame, cursor)?
         name := read_name(cursor)?
-        bits : u64 = if opcode == 0x8a { 32 } else if opcode == 0x8b { 16 } else if opcode == 0x8c { 8 } else if opcode == 0x8d { 1 } else { 64 }
+        bits : u64 = if opcode == 0x8a {
+            32
+        }
+        else if opcode == 0x8b { 16 } else if opcode == 0x8c { 8 } else if opcode == 0x8d { 1 } else { 64 }
         offset :: if opcode == 0x8d { index } else { index * 8 }
         return create_buffer_field(interpreter, frame, source, offset, bits, &name)
     }
@@ -649,7 +712,13 @@ run_statement :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cu
  * @param end Where the term list ends.
  * @return How it ended.
  */
-run_inside :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node #escaping : ptr[mut Node], cursor: ptr[mut Cursor], end: usize) -> Result[Flow, Error] {
+run_inside :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    node #escaping : ptr[mut Node],
+    cursor : ptr[mut Cursor],
+    end : usize
+) -> Result[Flow, Error] {
     outer :: frame.scope
     frame.scope = node
     flow :: run_terms(interpreter, frame, cursor.code, cursor.at, end)
@@ -667,7 +736,12 @@ run_inside :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node 
  * @param opcode The opcode's second byte, one is_extended_statement takes.
  * @return How it ended.
  */
-run_extended_statement :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor], opcode: u8) -> Result[Flow, Error] {
+run_extended_statement :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor],
+    opcode : u8
+) -> Result[Flow, Error] {
     if opcode == 0x82 || opcode == 0x85 {
         // Device, ThermalZone
         end :: package_end(cursor)?
@@ -743,7 +817,15 @@ run_extended_statement :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut F
     if opcode == 0x22 {
         // Sleep, in milliseconds
         milliseconds :: evaluate_integer(interpreter, frame, cursor)?
-        interpreter.host.sleep(interpreter.host.state, if milliseconds < interpreter.limits.sleep_milliseconds { milliseconds } else { interpreter.limits.sleep_milliseconds })
+        interpreter.host.sleep(
+            interpreter.host.state,
+            if milliseconds < interpreter.limits.sleep_milliseconds {
+                milliseconds
+            }
+            else {
+                interpreter.limits.sleep_milliseconds
+            }
+        )
         return .Ok(.Next)
     }
     if opcode == 0x21 {
@@ -790,7 +872,11 @@ run_extended_statement :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut F
  * @return The node, a reference to one followed.
  * @error WrongType A target that isn't a named object, nor a reference to one.
  */
-named_target :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[ptr[mut Node], Error] {
+named_target :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[ptr[mut Node], Error] {
     match read_target(interpreter, frame, cursor)? {
         case Named(node) => return .Ok(node)
         case Referred(value) => match value {
@@ -823,7 +909,11 @@ named_target :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cur
  * @param cursor At the term; moved past it.
  * @return The integer, masked.
  */
-evaluate_integer :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[u64, Error] {
+evaluate_integer :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[u64, Error] {
     value :: evaluate_term(interpreter, frame, cursor)?
     return integer_of(interpreter, value)
 }
@@ -836,7 +926,7 @@ evaluate_integer :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame],
  * @return The value, as it is: a reference in it isn't followed.
  * @error BadOpcode A table's load, which has no locals.
  */
-local_value :: fn(frame: ptr[Frame], index: u8) -> Result[Value, Error] {
+local_value :: fn(frame : ptr[Frame], index : u8) -> Result[Value, Error] {
     locals :: frame.locals
     at :: cast[usize](index)
     if at >= locals.count {
@@ -853,7 +943,7 @@ local_value :: fn(frame: ptr[Frame], index: u8) -> Result[Value, Error] {
  * @return The value, as it is.
  * @error BadOpcode A table's load, which has no arguments.
  */
-argument_value :: fn(frame: ptr[Frame], index: u8) -> Result[Value, Error] {
+argument_value :: fn(frame : ptr[Frame], index : u8) -> Result[Value, Error] {
     arguments :: frame.arguments
     at :: cast[usize](index)
     if at >= arguments.count {
@@ -871,7 +961,11 @@ argument_value :: fn(frame: ptr[Frame], index: u8) -> Result[Value, Error] {
  * @param cursor At the term; moved past it.
  * @return Its value. An argument holding a reference gives what it refers to; a local, the reference itself.
  */
-evaluate_term :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Value, Error] #unrestricted {
+evaluate_term :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Value, Error] #unrestricted {
     start :: cursor.at
     value :: evaluate_term_counted(interpreter, frame, cursor)
     match value {
@@ -889,7 +983,11 @@ evaluate_term :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cu
  * @param cursor At the term; moved past it.
  * @return Its value.
  */
-evaluate_term_counted :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Value, Error] #unrestricted {
+evaluate_term_counted :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Value, Error] #unrestricted {
     enter(interpreter)?
     defer leave(interpreter)
     opcode :: peek_byte(cursor) or_return .Error(.Truncated)
@@ -958,7 +1056,11 @@ evaluate_term_counted :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Fr
  * @param value The value.
  * @return What it refers to, or itself.
  */
-dereferenced :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], value #escaping : Value) -> Result[Value, Error] #unrestricted {
+dereferenced :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    value #escaping : Value
+) -> Result[Value, Error] #unrestricted {
     match value {
         case Reference(node) => return value_of_node(interpreter, frame, node)
         case Element(slot) => return .Ok(slot.slot^)
@@ -983,7 +1085,11 @@ dereferenced :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], val
  * @param node The node.
  * @return The value.
  */
-value_of_node :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], node #escaping : ptr[mut Node]) -> Result[Value, Error] #unrestricted {
+value_of_node :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    node #escaping : ptr[mut Node]
+) -> Result[Value, Error] #unrestricted {
     match node.kind {
         case .Name => return .Ok(node.value)
         case .Field => return read_field(interpreter, frame, node)
@@ -1004,7 +1110,11 @@ value_of_node :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], no
  * @param cursor Just past the opcode; moved past the term.
  * @return The buffer, in the arena: its size's bytes, or as many as it starts with if they're more, the rest zero.
  */
-evaluate_buffer :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Value, Error] #unrestricted {
+evaluate_buffer :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Value, Error] #unrestricted {
     end :: package_end(cursor)?
     size :: evaluate_integer(interpreter, frame, cursor)?
     start :: cursor.at
@@ -1029,7 +1139,12 @@ evaluate_buffer :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], 
  * @return The package, in the arena: its count's elements, or as many as given if they're more, the rest
  *     Uninitialized.
  */
-evaluate_package :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor], variable: bool) -> Result[Value, Error] #unrestricted {
+evaluate_package :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor],
+    variable : bool
+) -> Result[Value, Error] #unrestricted {
     end :: package_end(cursor)?
     count :: if variable { evaluate_integer(interpreter, frame, cursor)? } else { cast[u64](read_byte(cursor)?) }
     elements : Value[..]
@@ -1077,7 +1192,7 @@ evaluate_package :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame],
  * @param name The name, whose segments are a view into code.
  * @return The bytes: its prefixes, then its segments with the prefix their count needs.
  */
-name_bytes :: fn(code: u8[], name: ptr[NameString]) -> u8[] {
+name_bytes :: fn(code : u8[], name : ptr[NameString]) -> u8[] {
     start :: name.start
     stop :: name.stop
     if start <= stop && stop <= code.count {
@@ -1093,7 +1208,7 @@ name_bytes :: fn(code: u8[], name: ptr[NameString]) -> u8[] {
  * @param path The name.
  * @return The node; null if there's none.
  */
-resolve_path :: fn(interpreter: ptr[mut Interpreter], path: ptr[PathName]) -> ptr[mut Node]? {
+resolve_path :: fn(interpreter : ptr[mut Interpreter], path : ptr[PathName]) -> ptr[mut Node]? {
     cursor := Cursor.{code = path.path, at = 0, end = path.path.count}
     match read_name(&cursor) {
         case Ok(name) => {
@@ -1112,7 +1227,11 @@ resolve_path :: fn(interpreter: ptr[mut Interpreter], path: ptr[PathName]) -> pt
  * @param cursor Just past 0x5b; moved past the term.
  * @return Its value.
  */
-evaluate_extended :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Value, Error] #unrestricted {
+evaluate_extended :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Value, Error] #unrestricted {
     opcode :: read_byte(cursor)?
     if opcode == 0x30 {
         // Revision: this interpreter's
@@ -1201,7 +1320,7 @@ REVISION : u64 : 0x20261107
  * @param value The BCD, a decimal digit each 4 bits.
  * @return Its number; a nibble past 9 counts as its value.
  */
-from_bcd :: fn(value: u64) -> u64 {
+from_bcd :: fn(value : u64) -> u64 {
     result : u64 = 0
     scale : u64 = 1
     for i in 0..<16 {
@@ -1217,7 +1336,7 @@ from_bcd :: fn(value: u64) -> u64 {
  * @param value The number.
  * @return Its BCD, a decimal digit each 4 bits; its digits past 16 are lost.
  */
-to_bcd :: fn(value: u64) -> u64 {
+to_bcd :: fn(value : u64) -> u64 {
     result : u64 = 0
     rest := value
     for i in 0..<16 {
@@ -1239,7 +1358,11 @@ to_bcd :: fn(value: u64) -> u64 {
  * @error NotFound A name that isn't there.
  * @error WrongType A term that gives no reference.
  */
-read_target :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], cursor: ptr[mut Cursor]) -> Result[Target, Error] {
+read_target :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    cursor : ptr[mut Cursor]
+) -> Result[Target, Error] {
     opcode :: peek_byte(cursor) or_return .Error(.Truncated)
     if opcode == 0x00 {
         cursor.at += 1
@@ -1279,7 +1402,7 @@ read_target :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], curs
  * @return The reference.
  * @error BadOpcode A table's load, which has no locals.
  */
-local_reference :: fn(frame: ptr[mut Frame], index: u8) -> Result[ElementReference, Error] {
+local_reference :: fn(frame : ptr[mut Frame], index : u8) -> Result[ElementReference, Error] {
     locals :: frame.locals
     at :: cast[usize](index)
     if at >= locals.count {
@@ -1296,7 +1419,7 @@ local_reference :: fn(frame: ptr[mut Frame], index: u8) -> Result[ElementReferen
  * @return The reference.
  * @error BadOpcode A table's load, which has no arguments.
  */
-argument_reference :: fn(frame: ptr[mut Frame], index: u8) -> Result[ElementReference, Error] {
+argument_reference :: fn(frame : ptr[mut Frame], index : u8) -> Result[ElementReference, Error] {
     arguments :: frame.arguments
     at :: cast[usize](index)
     if at >= arguments.count {
@@ -1314,7 +1437,11 @@ argument_reference :: fn(frame: ptr[mut Frame], index: u8) -> Result[ElementRefe
  * @return The value.
  * @error WrongType Nothing, or the debug object.
  */
-target_value :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], target #escaping : Target) -> Result[Value, Error] #unrestricted {
+target_value :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    target #escaping : Target
+) -> Result[Value, Error] #unrestricted {
     match target {
         case Local(index) => return dereferenced(interpreter, frame, local_value(frame, index)?)
         case Argument(index) => return dereferenced(interpreter, frame, argument_value(frame, index)?)
@@ -1337,7 +1464,12 @@ target_value :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], tar
  * @error WrongType A target that can't hold it.
  * @error Memory What it's copied into can't hold it.
  */
-store :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], value #escaping : Value, target: Target) -> Result[void, Error] {
+store :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    value #escaping : Value,
+    target : Target
+) -> Result[void, Error] {
     match target {
         case Nothing => return .Ok
         case Debug => {
@@ -1399,7 +1531,12 @@ store :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], value #esc
  * @param value The value.
  * @param node The object.
  */
-store_to_node :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], value #escaping : Value, node: ptr[mut Node]) -> Result[void, Error] {
+store_to_node :: fn(
+    interpreter : ptr[mut Interpreter],
+    frame : ptr[mut Frame],
+    value #escaping : Value,
+    node : ptr[mut Node]
+) -> Result[void, Error] {
     match node.kind {
         case .Name => {
             match node.value {
@@ -1445,7 +1582,7 @@ store_to_node :: fn(interpreter: ptr[mut Interpreter], frame: ptr[mut Frame], va
  * @param interpreter The interpreter, whose host's debug is called.
  * @param value The value: an integer in hex, a string as it is, a buffer's bytes in hex, anything else by its type.
  */
-show :: fn(interpreter: ptr[mut Interpreter], value: Value) {
+show :: fn(interpreter : ptr[mut Interpreter], value : Value) {
     storage : u8[256]
     out := text_buffer.make(storage)
     match value {
@@ -1488,7 +1625,12 @@ show :: fn(interpreter: ptr[mut Interpreter], value: Value) {
  * @return What it returned; Uninitialized if it returned nothing.
  * @error Depth Methods are called as deep as they may be.
  */
-call :: fn(interpreter: ptr[mut Interpreter], caller: ptr[mut Frame], method #escaping : ptr[mut Node], arguments: Value[]) -> Result[Value, Error] #unrestricted {
+call :: fn(
+    interpreter : ptr[mut Interpreter],
+    caller : ptr[mut Frame],
+    method #escaping : ptr[mut Node],
+    arguments : Value[]
+) -> Result[Value, Error] #unrestricted {
     if method.kind == .Builtin {
         return osi(interpreter, arguments)
     }
@@ -1537,7 +1679,7 @@ call :: fn(interpreter: ptr[mut Interpreter], caller: ptr[mut Frame], method #es
  * @return Ones if it's claimed, 0 if not.
  * @error WrongType An argument that isn't a string.
  */
-osi :: fn(interpreter: ptr[mut Interpreter], arguments: Value[]) -> Result[Value, Error] #unrestricted {
+osi :: fn(interpreter : ptr[mut Interpreter], arguments : Value[]) -> Result[Value, Error] #unrestricted {
     if arguments.count == 0 {
         return .Error(.WrongType)
     }

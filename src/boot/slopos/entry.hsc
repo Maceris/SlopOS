@@ -42,7 +42,7 @@ EARLY_LOGGER :: runtime.Logger.{
  * @param params The values format_string formats.
  * @param location Where the log call is; unused.
  */
-early_log : runtime.LogFunction : fn(format_string: string, params: any..., location := #caller_location) {
+early_log : runtime.LogFunction : fn(format_string : string, params : any..., location := #caller_location) {
     storage : u8[256]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "[boot] ")
@@ -72,7 +72,7 @@ BOOT_STACK_SLACK :: 4096
  *
  * @param handoff_address The virtual address, in the bootloader's direct map, of its boot_protocol.Handoff.
  */
-kernel_entry #calling_convention(.c) #no_context :: fn(handoff_address: u64) #never_returns {
+kernel_entry #calling_convention(.c) #no_context :: fn(handoff_address : u64) #never_returns {
     carrier : runtime.CarrierBlock
     stack :: cast[u64](intrinsics.stack_pointer())
     carrier.stack_limit = cast[rawptr](stack - boot_protocol.BOOT_STACK_SIZE + BOOT_STACK_SLACK + runtime.STACK_GUARD)
@@ -105,7 +105,7 @@ kernel_entry #calling_convention(.c) #no_context :: fn(handoff_address: u64) #ne
  *     image_segments, boot_cpus, boot_modules, framebuffers and starting rooms are written.
  * @param info Where the BootInfo goes; every field is set. What it points to stays valid while the direct map does.
  */
-build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
+build_boot_info :: fn(handoff_address : u64, info : ptr[mut boot_info.BootInfo]) {
     handoff :: cast[ptr[mut boot_protocol.Handoff]](handoff_address)
     info.command_line = text_of(handoff.command_line[0..<handoff.command_line.count])
     info.bootloader = "SlopOS's bootloader"
@@ -124,22 +124,32 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
         if cast[u64](i) >= handoff.segment_count || i >= handoff.image_segments.count {
             break
         }
-        handoff.image_segments[i] = boot_info.ImageSegment.{virtual_base = cast[boot_info.VirtualAddress](segment.virtual_base),
-            size = segment.size, writable = segment.writable != 0, executable = segment.executable != 0}
+        handoff.image_segments[i] = boot_info.ImageSegment.{
+            virtual_base = cast[boot_info.VirtualAddress](segment.virtual_base),
+            size = segment.size,
+            writable = segment.writable != 0,
+            executable = segment.executable != 0,
+        }
         segment_count = i + 1
     }
     if segment_count <= handoff.image_segments.count {
         info.kernel_image.segments = handoff.image_segments[0..<segment_count]
     }
     // CPUs, each other one parked on its mailbox, which its StartingCpu points at
-    starting :: view_of(cast[ptr[mut StartingCpu]](cast[rawptr](&handoff.starting[0])), handoff.starting.count * 8 / size_of(StartingCpu))
+    starting :: view_of(
+        cast[ptr[mut StartingCpu]](cast[rawptr](&handoff.starting[0])),
+        handoff.starting.count * 8 / size_of(StartingCpu)
+    )
     cpu_count := cast[usize](0)
     for &cpu, i in handoff.cpus {
         if cast[u64](i) >= handoff.cpu_count || i >= handoff.boot_cpus.count || i >= starting.count {
             break
         }
         starting[i] = StartingCpu.{mailbox = cast[u64](cast[rawptr](cpu))}
-        handoff.boot_cpus[i] = boot_info.BootCpu.{hardware_id = cpu.hardware_id, boot_handle = cast[uintptr](cast[rawptr](&starting[i]))}
+        handoff.boot_cpus[i] = boot_info.BootCpu.{
+            hardware_id = cpu.hardware_id,
+            boot_handle = cast[uintptr](cast[rawptr](&starting[i])),
+        }
         cpu_count = i + 1
     }
     if cpu_count <= handoff.boot_cpus.count {
@@ -152,8 +162,11 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
         if cast[u64](i) >= handoff.module_count || i >= handoff.boot_modules.count {
             break
         }
-        handoff.boot_modules[i] = boot_info.BootModule.{name = text_of(module.name[0..<module.name.count]), command_line = "",
-            contents = module.contents}
+        handoff.boot_modules[i] = boot_info.BootModule.{
+            name = text_of(module.name[0..<module.name.count]),
+            command_line = "",
+            contents = module.contents,
+        }
         module_count = i + 1
     }
     if module_count <= handoff.boot_modules.count {
@@ -164,7 +177,10 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
         frame :: handoff.framebuffer
         handoff.framebuffers[0] = boot_info.Framebuffer.{
             memory = boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](frame.base), frame.size},
-            width = frame.width, height = frame.height, pitch = frame.pitch, bits_per_pixel = frame.bits_per_pixel,
+            width = frame.width,
+            height = frame.height,
+            pitch = frame.pitch,
+            bits_per_pixel = frame.bits_per_pixel,
             red = boot_info.ColorChannel.{frame.red_size, frame.red_shift},
             green = boot_info.ColorChannel.{frame.green_size, frame.green_shift},
             blue = boot_info.ColorChannel.{frame.blue_size, frame.blue_shift},
@@ -176,9 +192,14 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
     info.counter_frequency_hint = null
     info.boot_wall_time = null
     info.panic_record = if handoff.panic_record != 0 {
-        boot_info.PhysicalRange.{cast[boot_info.PhysicalAddress](handoff.panic_record), cast[u64](size_of(boot_info.PanicRecord))}
+        boot_info.PhysicalRange.{
+            cast[boot_info.PhysicalAddress](handoff.panic_record),
+            cast[u64](size_of(boot_info.PanicRecord))
+        }
     }
-    else { null }
+    else {
+        null
+    }
 }
 
 /**
@@ -187,7 +208,7 @@ build_boot_info :: fn(handoff_address: u64, info: ptr[mut boot_info.BootInfo]) {
  * @param handoff The handoff, which isn't changed.
  * @return Each table's physical address, or null where the handoff gives 0, for a table the firmware hasn't.
  */
-firmware_tables :: fn(handoff: ptr[boot_protocol.Handoff]) -> boot_info.FirmwareTables {
+firmware_tables :: fn(handoff : ptr[boot_protocol.Handoff]) -> boot_info.FirmwareTables {
     tables : boot_info.FirmwareTables
     tables.acpi_rsdp = address_or_none(handoff.acpi_rsdp)
     tables.devicetree = address_or_none(handoff.devicetree)
@@ -202,7 +223,7 @@ firmware_tables :: fn(handoff: ptr[boot_protocol.Handoff]) -> boot_info.Firmware
  * @param address A physical address from the handoff, 0 for none.
  * @return The address, or null when it's 0.
  */
-address_or_none :: fn(address: u64) -> boot_info.PhysicalAddress? {
+address_or_none :: fn(address : u64) -> boot_info.PhysicalAddress? {
     if address == 0 {
         return null
     }
@@ -252,7 +273,11 @@ StartingCpu :: struct {
  * @param carrier The carrier block the CPU loads, valid until entry loads one of its own.
  * @param entry Where the CPU begins in the kernel.
  */
-start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escaping : ptr[mut runtime.CarrierBlock], entry: boot_info.CpuEntry) {
+start_cpu : boot_info.StartCpu : fn(
+    cpu : ptr[boot_info.BootCpu],
+    carrier #escaping : ptr[mut runtime.CarrierBlock],
+    entry : boot_info.CpuEntry
+) {
     starting :: cast[ptr[mut StartingCpu]](cast[rawptr](cpu.boot_handle))
     starting.carrier = carrier
     starting.entry = entry
@@ -271,7 +296,7 @@ start_cpu : boot_info.StartCpu : fn(cpu: ptr[boot_info.BootCpu], carrier #escapi
  *
  * @param argument The address of the CPU's StartingCpu, from its mailbox's argument.
  */
-cpu_entry #calling_convention(.c) #no_context :: fn(argument: u64) #never_returns {
+cpu_entry #calling_convention(.c) #no_context :: fn(argument : u64) #never_returns {
     starting :: cast[ptr[StartingCpu]](cast[rawptr](argument))
     carrier :: starting.carrier
     stack :: cast[u64](intrinsics.stack_pointer())

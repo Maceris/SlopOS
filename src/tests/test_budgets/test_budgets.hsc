@@ -22,9 +22,9 @@ import compiler from "base:compiler"
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
-import testing from "std:testing"
 import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
+import testing from "std:testing"
 import log_line from "../../log_line"
 import test_kit from "../../test_kit"
 
@@ -74,7 +74,7 @@ CopyGrants :: struct {
  *
  * @param slot The slot, a u64 in the shared page, which only this thread writes; it wraps after 2^64 counts.
  */
-counter #calling_convention(.c) #no_context :: fn(slot: ptr[mut u64]) #never_returns {
+counter #calling_convention(.c) #no_context :: fn(slot : ptr[mut u64]) #never_returns {
     loop {
         intrinsics.volatile_store_u64(slot, intrinsics.volatile_load_u64(slot) + 1)
     }
@@ -101,23 +101,49 @@ Given :: struct {
  * @return Ok once it's run; Error if main wasn't given the root budget, the process manager or its module, or the
  *     manager's port, the memory budget, a CPU budget, the page, a copy or the port it sleeps on couldn't be made.
  */
-budgeted_threads_run_their_time_at_their_priority_and_share_it_alike #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+budgeted_threads_run_their_time_at_their_priority_and_share_it_alike #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     root :: testing.require_some(t, given.cpu_budget, "the root task grants the root CPU budget")?
     loader :: testing.require_some(t, given.manager, "the root task grants the process manager")?
     executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
-    manager_port :: testing.require_some(t, os.port_for(block.budget, loader.end), "a port for the process manager's replies")?
-    memory :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a memory budget for the CPU budgets")?
-    pair_budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 10, 100 * MILLISECOND, 30 * MILLISECOND), "the pair's CPU budget, 30 ms every 100 ms at priority 10")?
-    rival_budget :: testing.require_ok(t, slop_os.cpu_budget_create(root, memory, 5, 100 * MILLISECOND, 60 * MILLISECOND), "the rival's CPU budget, 60 ms every 100 ms at priority 5")?
+    manager_port :: testing.require_some(
+        t,
+        os.port_for(block.budget, loader.end),
+        "a port for the process manager's replies"
+    )?
+    memory :: testing.require_ok(
+        t,
+        slop_os.memory_budget_create(block.budget, 1 << 20),
+        "a memory budget for the CPU budgets"
+    )?
+    pair_budget :: testing.require_ok(
+        t,
+        slop_os.cpu_budget_create(root, memory, 10, 100 * MILLISECOND, 30 * MILLISECOND),
+        "the pair's CPU budget, 30 ms every 100 ms at priority 10"
+    )?
+    rival_budget :: testing.require_ok(
+        t,
+        slop_os.cpu_budget_create(root, memory, 5, 100 * MILLISECOND, 60 * MILLISECOND),
+        "the rival's CPU budget, 60 ms every 100 ms at priority 5"
+    )?
     counts :: testing.require_ok(t, slop_os.memory_create(block.budget, PAGE), "the page the copies count in")?
     counts_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGE)), "addresses to map the page at")?
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     mapped :: slop_os.memory_map(counts, block.space, counts_at, 0, PAGE, read_write)
     testing.require_ok(t, mapped, "the page is mapped to read the counts")?
-    pair :: testing.require_some(t, launch_copy(given.log, loader, manager_port, executable, counts, pair_budget, ROLE_PAIR), "P, the pair's copy, is launched on its budget")?
-    rival :: testing.require_some(t, launch_copy(given.log, loader, manager_port, executable, counts, rival_budget, ROLE_RIVAL), "Q, the rival's copy, is launched on its budget")?
+    pair :: testing.require_some(
+        t,
+        launch_copy(given.log, loader, manager_port, executable, counts, pair_budget, ROLE_PAIR),
+        "P, the pair's copy, is launched on its budget"
+    )?
+    rival :: testing.require_some(
+        t,
+        launch_copy(given.log, loader, manager_port, executable, counts, rival_budget, ROLE_RIVAL),
+        "Q, the rival's copy, is launched on its budget"
+    )?
     // Asleep while they count, so this, on the root budget, takes none of the CPU
     sleeper :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to sleep on")?
     packets : slop_os.Packet[1]
@@ -131,9 +157,23 @@ budgeted_threads_run_their_time_at_their_priority_and_share_it_alike #test :: fn
     total :: budgeted + other
     share :: if total > 0 { budgeted * 100 / total } else { cast[u64](0) }
     split :: if budgeted > 0 { first * 100 / budgeted } else { cast[u64](0) }
-    log_line.write(given.log, "%: the pair counted % percent of the counts, the first % percent of theirs", NAME, share, split)
-    testing.expect(t, share >= 20 && share <= 55, "the pair runs its 30 ms first, at its priority, then shares what's left with the rival: about a third of the counts, 20 to 55 percent allowing for ticks")
-    testing.expect(t, split >= 35 && split <= 65, "the pair's threads share its budget alike, one that waited moved up when it comes back: 35 to 65 percent each")
+    log_line.write(
+        given.log,
+        "%: the pair counted % percent of the counts, the first % percent of theirs",
+        NAME,
+        share,
+        split
+    )
+    testing.expect(
+        t,
+        share >= 20 && share <= 55,
+        "the pair runs its 30 ms first, at its priority, then shares what's left with the rival: about a third of the counts, 20 to 55 percent allowing for ticks"
+    )
+    testing.expect(
+        t,
+        split >= 35 && split <= 65,
+        "the pair's threads share its budget alike, one that waited moved up when it comes back: 35 to 65 percent each"
+    )
     return .Ok
 }
 
@@ -152,8 +192,16 @@ budgeted_threads_run_their_time_at_their_priority_and_share_it_alike #test :: fn
  * @return How many tests failed: 0 when every one passed. A copy ends only if it can't start counting: with 1 if it
  *     wasn't given the page, otherwise what run_copy gives.
  */
-main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop_os.Memory?, firmware: slop_os.Memory?,
-    manager: os.Channel[process_manager.ProcessManager]?, program: slop_os.Memory?, peer: slop_os.Channel?, cpu_budget: slop_os.CpuBudget?) -> int {
+main :: fn(
+    log : slop_os.DebugLog,
+    platform : slop_os.Platform?,
+    test_device : slop_os.Memory?,
+    firmware : slop_os.Memory?,
+    manager : os.Channel[process_manager.ProcessManager]?,
+    program : slop_os.Memory?,
+    peer : slop_os.Channel?,
+    cpu_budget : slop_os.CpuBudget?
+) -> int {
     match peer {
         case Some(end) => return run_copy(end, test_device or_return 1)
         case None => {}
@@ -176,19 +224,40 @@ main :: fn(log: slop_os.DebugLog, platform: slop_os.Platform?, test_device: slop
  * @return An owning handle to the copy's process, which the test kills; or null if any step failed, leaving behind
  *     whatever it had made.
  */
-launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.ProcessManager], manager_port: slop_os.Port,
-    program: slop_os.Memory, counts: slop_os.Memory, budget: slop_os.CpuBudget, role: u64) -> slop_os.Process? {
+launch_copy :: fn(
+    log : slop_os.DebugLog,
+    manager : os.Channel[process_manager.ProcessManager],
+    manager_port : slop_os.Port,
+    program : slop_os.Memory,
+    counts : slop_os.Memory,
+    budget : slop_os.CpuBudget,
+    role : u64
+) -> slop_os.Process? {
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
-    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE) | cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     log_copy :: cast[slop_os.DebugLog](slop_os.handle_duplicate(cast[slop_os.Handle](log), log_rights) or_return null)
-    page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_MEMORY_WRITE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    page_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
     page :: cast[slop_os.Memory](slop_os.handle_duplicate(cast[slop_os.Handle](counts), page_rights) or_return null)
     // A handle that may only bind, which the launch closes; the budget stays this program's
     bind_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_TRANSFER))
-    binding :: cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](budget), bind_rights) or_return null)
-    launched :: os.launch(manager, manager_port, "test_budgets copy", program, COPY_BUDGET, main,
-        CopyGrants.{log = log_copy, test_device = page, peer = pair.b}, os.LaunchOptions.{cpu_budget = binding}) or_return null
+    binding :: cast[slop_os.CpuBudget](slop_os.handle_duplicate(cast[slop_os.Handle](budget), bind_rights)
+        or_return null)
+    launched :: os.launch(
+        manager,
+        manager_port,
+        "test_budgets copy",
+        program,
+        COPY_BUDGET,
+        main,
+        CopyGrants.{log = log_copy, test_device = page, peer = pair.b},
+        os.LaunchOptions.{cpu_budget = binding}
+    )
+        or_return null
     port :: os.port_for(block.budget, pair.a) or_return null
     told := role
     none : slop_os.Handle[1]
@@ -208,7 +277,7 @@ launch_copy :: fn(log: slop_os.DebugLog, manager: os.Channel[process_manager.Pro
  *     5 if the threads' memory budget couldn't be made, 6 if a thread couldn't be started, 7 if the port to sleep on
  *     couldn't be made; it doesn't return otherwise.
  */
-run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
+run_copy :: fn(peer : slop_os.Channel, counts : slop_os.Memory) -> int {
     block :: slop_os.startup_block()
     port :: os.port_for(block.budget, peer) or_return 2
     role : u64 = 0
@@ -218,7 +287,10 @@ run_copy :: fn(peer: slop_os.Channel, counts: slop_os.Memory) -> int {
     read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
     slop_os.memory_map(counts, block.space, at, 0, PAGE, read_write) or_return 4
     threads :: slop_os.memory_budget_create(block.budget, 1 << 20) or_return 5
-    // Every counter a thread started at counter, not this one calling it, which could count with a copy inlined elsewhere
+    /*
+     * Every counter a thread started at counter, not this one calling it, which could count with a copy inlined
+     * elsewhere
+     */
     if role == ROLE_PAIR {
         _ = test_kit.start_thread(threads, cast[u64](counter), at + SLOT_FIRST * 8) or_return 6
         _ = test_kit.start_thread(threads, cast[u64](counter), at + SLOT_SECOND * 8) or_return 6

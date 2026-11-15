@@ -2,8 +2,8 @@ package kernel
 
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
-import fiber from "std:fiber"
 import concurrency from "std:concurrency"
+import fiber from "std:fiber"
 import testing from "std:testing"
 
 #if TARGET_ARCH == .x86_64 {
@@ -90,7 +90,7 @@ PoolTest :: struct {
  *
  * @param kernel Not used: the test finds the kernel through per_cpu.
  */
-test_pool :: fn(kernel: ptr[mut Kernel]) {
+test_pool :: fn(kernel : ptr[mut Kernel]) {
     _ = run_tests("test_pool", testing.Test.[.{name = "two_pools_share_five_cpus", run = two_pools_share_five_cpus}])
 }
 
@@ -106,10 +106,15 @@ test_pool :: fn(kernel: ptr[mut Kernel]) {
  * @return Ok once it's run; Error if there are too few CPUs, no memory for the test's state, or the other CPUs didn't
  *     all leave their pools in time.
  */
-two_pools_share_five_cpus #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+two_pools_share_five_cpus #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
-    testing.require_within(t, cast[i64](kernel.online_cpus), cast[i64](POOL_CPUS), cast[i64](0xffffffff),
-        "the test is booted with the boot CPU and five more to run the pools")?
+    testing.require_within(
+        t,
+        cast[i64](kernel.online_cpus),
+        cast[i64](POOL_CPUS),
+        cast[i64](0xffffffff),
+        "the test is booted with the boot CPU and five more to run the pools"
+    )?
     made :: allocate_object[PoolTest](&kernel.frames)
     test :: testing.require_ok(t, made, "a boot's free frames hold the test's state")?
     spawned := false
@@ -132,22 +137,38 @@ two_pools_share_five_cpus #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
     loop {
         arch.spin_hint()
     }
-    while intrinsics.atomic_load_u64_acquire(&test.carriers_done) < cast[u64](POOL_CPUS - 1) && arch.counter() < deadline
+    while intrinsics.atomic_load_u64_acquire(&test.carriers_done) < cast[u64](POOL_CPUS - 1)
+        && arch.counter() < deadline
     done :: intrinsics.atomic_load_u64_acquire(&test.carriers_done)
-    testing.require_eq(t, done, cast[u64](POOL_CPUS - 1),
-        "every pool CPU runs its pool until its fibers are done, well within POOL_TEST_TIMEOUT_SECONDS, and leaves it")?
+    testing.require_eq(
+        t,
+        done,
+        cast[u64](POOL_CPUS - 1),
+        "every pool CPU runs its pool until its fibers are done, well within POOL_TEST_TIMEOUT_SECONDS, and leaves it"
+    )?
     expect_pool_counts(t, &test.first_counts, FIRST_POOL_FIBERS, FIRST_POOL_CPUS)
     expect_pool_counts(t, &test.second_counts, SECOND_POOL_FIBERS, SECOND_POOL_CPUS)
-    testing.expect_eq(t, test.counter, cast[u64]((FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS),
-        "every turn adds one with the mutex held across a yield, so none is lost however fibers park and wake")
-    testing.expect_eq(t, test.children, cast[u64](CHILD_FIBERS + 1),
-        "every fiber spawned from a fiber runs, the ones past its CPU's queue taken from the shared queue")
+    testing.expect_eq(
+        t,
+        test.counter,
+        cast[u64]((FIRST_POOL_FIBERS + SECOND_POOL_FIBERS) * POOL_TURNS),
+        "every turn adds one with the mutex held across a yield, so none is lost however fibers park and wake"
+    )
+    testing.expect_eq(
+        t,
+        test.children,
+        cast[u64](CHILD_FIBERS + 1),
+        "every fiber spawned from a fiber runs, the ones past its CPU's queue taken from the shared queue"
+    )
     if testing.passed(t) {
         fiber.destroy_fiber_pool(test.first)
         fiber.destroy_fiber_pool(test.second)
     }
-    runtime.log_info("test_pool: fibers moved between CPUs % times in the first pool and % in the second",
-        test.first_counts.moves, test.second_counts.moves)
+    runtime.log_info(
+        "test_pool: fibers moved between CPUs % times in the first pool and % in the second",
+        test.first_counts.moves,
+        test.second_counts.moves
+    )
     return .Ok
 }
 
@@ -159,7 +180,7 @@ two_pools_share_five_cpus #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome 
  * @param count How many fibers to spawn.
  * @return True if all were spawned, false if one ran out of memory, with those before it spawned.
  */
-spawn_into :: fn(pool #escaping : ptr[mut fiber.FiberPool], function: runtime.ThreadFunction, count: usize) -> bool {
+spawn_into :: fn(pool #escaping : ptr[mut fiber.FiberPool], function : runtime.ThreadFunction, count : usize) -> bool {
     for i in 0..<count {
         _, error :: fiber.spawn(pool, function)
         if error != null {
@@ -178,10 +199,28 @@ spawn_into :: fn(pool #escaping : ptr[mut fiber.FiberPool], function: runtime.Th
  * @param cpus The CPUs it should have run on, every one of them, a bit per CPU index.
  * @param location Where the test asked, which a failure is recorded at, telling the pools apart: the caller's own.
  */
-expect_pool_counts :: fn(t: ptr[mut testing.T], counts: ptr[PoolCounts], fibers: u64, cpus: u64, location := #caller_location) {
-    testing.expect_eq(t, counts.turns, fibers * POOL_TURNS, "each of the pool's fibers takes its POOL_TURNS turns", location)
+expect_pool_counts :: fn(
+    t : ptr[mut testing.T],
+    counts : ptr[PoolCounts],
+    fibers : u64,
+    cpus : u64,
+    location := #caller_location
+) {
+    testing.expect_eq(
+        t,
+        counts.turns,
+        fibers * POOL_TURNS,
+        "each of the pool's fibers takes its POOL_TURNS turns",
+        location
+    )
     testing.expect_eq(t, counts.strays, 0, "a pool's fibers run only on its own CPUs, never another pool's", location)
-    testing.expect_eq(t, counts.cpus, cpus, "every CPU of the pool runs some of its fibers, as they wait for each to have", location)
+    testing.expect_eq(
+        t,
+        counts.cpus,
+        cpus,
+        "every CPU of the pool runs some of its fibers, as they wait for each to have",
+        location
+    )
     testing.expect_ne(t, counts.moves, 0, "a pool's CPUs take fibers from each other, so some fiber moves", location)
 }
 
@@ -195,7 +234,7 @@ expect_pool_counts :: fn(t: ptr[mut testing.T], counts: ptr[PoolCounts], fibers:
  * @param kernel The kernel, whose pool_test it waits for.
  * @param index This CPU's index; a CPU in neither pool returns at once.
  */
-join_pool_test :: fn(kernel: ptr[Kernel], index: u32) {
+join_pool_test :: fn(kernel : ptr[Kernel], index : u32) {
     deadline :: arch.counter() + kernel.counter_frequency * POOL_TEST_TIMEOUT_SECONDS
     loop {
         arch.spin_hint()
@@ -224,7 +263,8 @@ join_pool_test :: fn(kernel: ptr[Kernel], index: u32) {
     loop {
         arch.spin_hint()
     }
-    while intrinsics.atomic_load_u64_acquire(&test.carriers_ready) < cast[u64](POOL_CPUS - 1) && arch.counter() < deadline
+    while intrinsics.atomic_load_u64_acquire(&test.carriers_ready) < cast[u64](POOL_CPUS - 1)
+        && arch.counter() < deadline
     fiber.run_carrier(pool)
     intrinsics.interlocked_increment_u64(&test.carriers_done)
 }
@@ -289,7 +329,7 @@ child_worker : runtime.ThreadFunction : fn(data #escaping : any) {
  *
  * @param test The test's state, whose counter goes up by one under its counter_lock, held across a yield.
  */
-add_one :: fn(test: ptr[mut PoolTest]) {
+add_one :: fn(test : ptr[mut PoolTest]) {
     concurrency.mutex_lock(&test.counter_lock)
     defer concurrency.mutex_unlock(&test.counter_lock)
     before :: test.counter
@@ -304,7 +344,7 @@ add_one :: fn(test: ptr[mut PoolTest]) {
  * @param counts The pool's counts, added to atomically.
  * @param cpus The pool's CPUs, a bit per CPU index; a turn elsewhere counts as a stray.
  */
-take_turns :: fn(counts: ptr[mut PoolCounts], cpus: u64) {
+take_turns :: fn(counts : ptr[mut PoolCounts], cpus : u64) {
     previous := per_cpu().index
     for turn in 0..<POOL_TURNS {
         here :: per_cpu().index
@@ -325,7 +365,8 @@ take_turns :: fn(counts: ptr[mut PoolCounts], cpus: u64) {
     kernel :: per_cpu().kernel
     deadline :: arch.counter() + kernel.counter_frequency * COVER_SECONDS
     loop {
-        if (intrinsics.atomic_load_u64_acquire(&counts.cpus) == cpus && intrinsics.atomic_load_u64_acquire(&counts.moves) > 0)
+        if (intrinsics.atomic_load_u64_acquire(&counts.cpus) == cpus
+            && intrinsics.atomic_load_u64_acquire(&counts.moves) > 0)
             || arch.counter() >= deadline {
             break
         }

@@ -50,13 +50,13 @@ TCP_PSH : u8 : 0x08
 TCP_ACK : u8 : 0x10
 
 // Options
-TCP_OPTION_END : u8 : 0
-TCP_OPTION_NOP : u8 : 1
-TCP_OPTION_MSS : u8 : 2
-TCP_OPTION_WINDOW_SCALE : u8 : 3
+TCP_OPTION_END            : u8 : 0
+TCP_OPTION_NOP            : u8 : 1
+TCP_OPTION_MSS            : u8 : 2
+TCP_OPTION_WINDOW_SCALE   : u8 : 3
 TCP_OPTION_SACK_PERMITTED : u8 : 4
-TCP_OPTION_SACK : u8 : 5
-TCP_OPTION_TIMESTAMPS : u8 : 8
+TCP_OPTION_SACK           : u8 : 5
+TCP_OPTION_TIMESTAMPS     : u8 : 8
 
 // Times
 /** The retransmission timeout before any round trip is measured: 1 s (RFC 6298 §2.1). */
@@ -114,8 +114,10 @@ Ring :: struct {
     bytes : u64,
     /**
      * On SlopOS, a handle to a memory object holding the ring from at, with RIGHT_MEMORY_READ and RIGHT_MEMORY_WRITE,
-     * the caller's while the connection lasts: copied with the kernel's memory_read and memory_write rather than mapped,
-     * so the memory's owner destroying it fails a copy, which ends the connection, rather than faulting. 0 for memory at
+     * the caller's while the connection lasts: copied with the kernel's memory_read and memory_write rather than
+     * mapped,
+     * so the memory's owner destroying it fails a copy, which ends the connection, rather than faulting. 0 for memory
+     * at
      * the address at.
      */
     memory : u64,
@@ -192,9 +194,9 @@ Tcb :: struct {
     /** Counts up each time the entry's reused, so a stale connection number is refused. */
     generation : u16,
     /** Its index in the table. */
-    index : u16,
-    remote : IpAddress,
-    local_port : u16,
+    index       : u16,
+    remote      : IpAddress,
+    local_port  : u16,
     remote_port : u16,
     /** The listener it arrived at, plus one; 0 for one connected out. */
     listener : u32,
@@ -232,7 +234,9 @@ Tcb :: struct {
      * is still counted as its own, not data's (13h).
      */
     fin_resend : bool,
-    /** The largest window the peer's advertised, scaled: how far below snd_una an acknowledgement may be (RFC 5961 §5). */
+    /**
+     * The largest window the peer's advertised, scaled: how far below snd_una an acknowledgement may be (RFC 5961 §5).
+     */
     max_snd_wnd : u64,
     /** Whether the peer's SYN had a window scale option, so a SYN-ACK has one too. */
     peer_scales : bool,
@@ -263,9 +267,9 @@ Tcb :: struct {
     // Timers
     /** When the retransmission timer fires; 0 when it's off. */
     rto_deadline : u64,
-    rto : u64,
-    srtt : u64,
-    rttvar : u64,
+    rto          : u64,
+    srtt         : u64,
+    rttvar       : u64,
     /** How many times in a row the timer has fired without progress. */
     retries : u32,
     /** When a held acknowledgement is sent; 0 for none held. */
@@ -280,10 +284,10 @@ Tcb :: struct {
     timing : bool,
 
     // Congestion
-    cwnd : u64,
-    ssthresh : u64,
+    cwnd           : u64,
+    ssthresh       : u64,
     duplicate_acks : u32,
-    in_recovery : bool,
+    in_recovery    : bool,
     /** Recovery ends once this is acknowledged. */
     recover : u32,
     /** The next sequence number recovery may retransmit from. */
@@ -307,34 +311,34 @@ TcpListener :: struct {
 
 /** What a segment says. */
 Segment :: struct {
-    source_port : u16,
+    source_port      : u16,
     destination_port : u16,
-    seq : u32,
-    ack : u32,
-    flags : u8,
-    window : u32,
+    seq              : u32,
+    ack              : u32,
+    flags            : u8,
+    window           : u32,
     /** Where its data is in the segment, and how long. */
-    data_at : usize,
-    data_length : usize,
-    mss : u32,
-    window_scale : i32,
+    data_at        : usize,
+    data_length    : usize,
+    mss            : u32,
+    window_scale   : i32,
     sack_permitted : bool,
     has_timestamps : bool,
-    ts_value : u32,
-    ts_echo : u32,
-    sacks : SackBlock[SACK_BLOCKS],
-    sack_count : usize,
+    ts_value       : u32,
+    ts_echo        : u32,
+    sacks          : SackBlock[SACK_BLOCKS],
+    sack_count     : usize,
 }
 
 // ---- Sequence numbers, which wrap
 
 /** a < b, sequence numbers. */
-seq_lt :: fn(a: u32, b: u32) -> bool {
+seq_lt :: fn(a : u32, b : u32) -> bool {
     return cast[i32](a - b) < 0
 }
 
 /** a <= b, sequence numbers. */
-seq_le :: fn(a: u32, b: u32) -> bool {
+seq_le :: fn(a : u32, b : u32) -> bool {
     return cast[i32](a - b) <= 0
 }
 
@@ -349,7 +353,7 @@ seq_le :: fn(a: u32, b: u32) -> bool {
  * @param rings Its rings, the caller's, which stay as they are until it's ended.
  * @return The connection's number; null if every entry's taken, or there's no address of the family to send from.
  */
-tcp_connect :: fn(stack: ptr[mut Stack], remote: IpAddress, remote_port: u16, rings: TcpRings) -> u32? {
+tcp_connect :: fn(stack : ptr[mut Stack], remote : IpAddress, remote_port : u16, rings : TcpRings) -> u32? {
     if !has_source(stack, remote) || rings.send.bytes == 0 || rings.receive.bytes == 0 {
         return null
     }
@@ -372,7 +376,7 @@ tcp_connect :: fn(stack: ptr[mut Stack], remote: IpAddress, remote_port: u16, ri
  * @param port The port, 1 to 65535.
  * @return The listener's number; null if the port's listened on already, or every listener's taken.
  */
-tcp_listen :: fn(stack: ptr[mut Stack], port: u16) -> u32? {
+tcp_listen :: fn(stack : ptr[mut Stack], port : u16) -> u32? {
     if port == 0 {
         return null
     }
@@ -398,7 +402,7 @@ tcp_listen :: fn(stack: ptr[mut Stack], port: u16) -> u32? {
  * @param stack The stack.
  * @param listener The listener's number.
  */
-tcp_unlisten :: fn(stack: ptr[mut Stack], listener: u32) {
+tcp_unlisten :: fn(stack : ptr[mut Stack], listener : u32) {
     index :: cast[usize](listener & 0xffff)
     if index < stack.listeners.count && cast[u32](stack.listeners[index].generation) == listener >> 16 {
         stack.listeners[index].active = false
@@ -413,7 +417,7 @@ tcp_unlisten :: fn(stack: ptr[mut Stack], listener: u32) {
  * @param rings Its rings, the caller's, which stay as they are until it's ended.
  * @return True once it's answered; false if it's gone, or isn't waiting.
  */
-tcp_accept :: fn(stack: ptr[mut Stack], connection: u32, rings: TcpRings) -> bool {
+tcp_accept :: fn(stack : ptr[mut Stack], connection : u32, rings : TcpRings) -> bool {
     tcb :: find_tcb(stack, connection) or_return false
     if tcb.state != .Incoming || rings.send.bytes == 0 || rings.receive.bytes == 0 {
         return false
@@ -434,7 +438,7 @@ tcp_accept :: fn(stack: ptr[mut Stack], connection: u32, rings: TcpRings) -> boo
  * @param written The bytes written, from the start: no less than before, and at most the send ring's size past what's
  *     acknowledged.
  */
-tcp_wrote :: fn(stack: ptr[mut Stack], connection: u32, written: u64) {
+tcp_wrote :: fn(stack : ptr[mut Stack], connection : u32, written : u64) {
     tcb :: find_tcb(stack, connection) or_return void
     if tcb.finishing || written < tcb.written || written > tcb.acknowledged + tcb.rings.send.bytes {
         return void
@@ -450,7 +454,7 @@ tcp_wrote :: fn(stack: ptr[mut Stack], connection: u32, written: u64) {
  * @param connection The connection.
  * @param read The bytes read, from the start: no less than before, and at most what's delivered.
  */
-tcp_read :: fn(stack: ptr[mut Stack], connection: u32, read: u64) {
+tcp_read :: fn(stack : ptr[mut Stack], connection : u32, read : u64) {
     tcb :: find_tcb(stack, connection) or_return void
     if read < tcb.read || read > tcb.delivered {
         return void
@@ -470,7 +474,7 @@ tcp_read :: fn(stack: ptr[mut Stack], connection: u32, read: u64) {
  * @param stack The stack.
  * @param connection The connection.
  */
-tcp_finish :: fn(stack: ptr[mut Stack], connection: u32) {
+tcp_finish :: fn(stack : ptr[mut Stack], connection : u32) {
     tcb :: find_tcb(stack, connection) or_return void
     if tcb.finishing {
         return void
@@ -489,7 +493,7 @@ tcp_finish :: fn(stack: ptr[mut Stack], connection: u32) {
  * @param stack The stack.
  * @param connection The connection.
  */
-tcp_abort :: fn(stack: ptr[mut Stack], connection: u32) {
+tcp_abort :: fn(stack : ptr[mut Stack], connection : u32) {
     tcb :: find_tcb(stack, connection) or_return void
     if tcb.state != .Incoming && tcb.state != .SynSent && tcb.state != .TimeWait {
         send_reset(stack, tcb.remote, tcb.local_port, tcb.remote_port, tcb.snd_nxt)
@@ -504,14 +508,21 @@ tcp_abort :: fn(stack: ptr[mut Stack], connection: u32) {
  * @param connection The connection.
  * @return Its status; ended, with nothing else, for one that's gone.
  */
-tcp_status :: fn(stack: ptr[Stack], connection: u32) -> TcpStatus {
+tcp_status :: fn(stack : ptr[Stack], connection : u32) -> TcpStatus {
     index :: cast[usize](connection & 0xffff)
-    if index >= stack.tcbs.count || cast[u32](stack.tcbs[index].generation) != connection >> 16 || stack.tcbs[index].state == .Free {
+    if index >= stack.tcbs.count
+        || cast[u32](stack.tcbs[index].generation) != connection >> 16
+        || stack.tcbs[index].state == .Free {
         return TcpStatus.{ended = true}
     }
     tcb :: &stack.tcbs[index]
-    return TcpStatus.{state = tcb.state, delivered = tcb.delivered, acknowledged = tcb.acknowledged,
-        peer_finished = tcb.peer_finished, ended = tcb.state == .TimeWait}
+    return TcpStatus.{
+        state = tcb.state,
+        delivered = tcb.delivered,
+        acknowledged = tcb.acknowledged,
+        peer_finished = tcb.peer_finished,
+        ended = tcb.state == .TimeWait,
+    }
 }
 
 /**
@@ -520,7 +531,7 @@ tcp_status :: fn(stack: ptr[Stack], connection: u32) -> TcpStatus {
  * @param stack The stack.
  * @return The connection's number; null if none changed.
  */
-take_changed :: fn(stack: ptr[mut Stack]) -> u32? {
+take_changed :: fn(stack : ptr[mut Stack]) -> u32? {
     for &tcb, i in stack.tcbs {
         if tcb.changed {
             tcb.changed = false
@@ -538,7 +549,7 @@ take_changed :: fn(stack: ptr[mut Stack]) -> u32? {
  * @param tcb The entry.
  * @return The number.
  */
-connection_number :: fn(tcb: ptr[Tcb]) -> u32 {
+connection_number :: fn(tcb : ptr[Tcb]) -> u32 {
     return (cast[u32](tcb.generation) << 16) | cast[u32](tcb.index)
 }
 
@@ -549,7 +560,7 @@ connection_number :: fn(tcb: ptr[Tcb]) -> u32 {
  * @param connection The number.
  * @return Its entry; null if it's gone, or never was.
  */
-find_tcb :: fn(stack: ptr[mut Stack], connection: u32) -> ptr[mut Tcb]? {
+find_tcb :: fn(stack : ptr[mut Stack], connection : u32) -> ptr[mut Tcb]? {
     index :: cast[usize](connection & 0xffff)
     if index >= stack.tcbs.count {
         return null
@@ -569,7 +580,7 @@ find_tcb :: fn(stack: ptr[mut Stack], connection: u32) -> ptr[mut Tcb]? {
  * @param reserve How many free entries to leave: TCP_RESERVED for an incoming connection, 0 for one made.
  * @return Its index; null if there's none to have.
  */
-free_tcb :: fn(stack: ptr[Stack], reserve: usize = 0) -> usize? {
+free_tcb :: fn(stack : ptr[Stack], reserve : usize = 0) -> usize? {
     free := cast[usize](0)
     first : usize? = null
     waiting : usize? = null
@@ -603,8 +614,15 @@ free_tcb :: fn(stack: ptr[Stack], reserve: usize = 0) -> usize? {
  * @param remote_port Its peer's port.
  * @param rings Its rings; an Incoming connection's are set by tcp_accept.
  */
-open_tcb :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], index: usize, remote: IpAddress, local_port: u16, remote_port: u16,
-    rings: TcpRings) {
+open_tcb :: fn(
+    stack : ptr[mut Stack],
+    tcb : ptr[mut Tcb],
+    index : usize,
+    remote : IpAddress,
+    local_port : u16,
+    remote_port : u16,
+    rings : TcpRings
+) {
     generation :: tcb.generation + 1
     tcb^ = Tcb.{}
     tcb.generation = if generation == 0 { cast[u16](1) } else { generation }
@@ -632,13 +650,16 @@ open_tcb :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], index: usize, remote: I
  * @param tcb The connection.
  * @param why Why.
  */
-end_tcb :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], why: TcpEnding) {
+end_tcb :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], why : TcpEnding) {
     number :: connection_number(tcb)
     tcb.state = .Free
     tcb.changed = false
     tcb.rto_deadline = 0
     tcb.ack_deadline = 0
-    event(stack, .Ended(TcpEnded.{connection = number, why = why, delivered = tcb.delivered, acknowledged = tcb.acknowledged}))
+    event(
+        stack,
+        .Ended(TcpEnded.{connection = number, why = why, delivered = tcb.delivered, acknowledged = tcb.acknowledged})
+    )
 }
 
 /**
@@ -646,7 +667,7 @@ end_tcb :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], why: TcpEnding) {
  *
  * @param tcb The connection.
  */
-mark :: fn(tcb: ptr[mut Tcb]) {
+mark :: fn(tcb : ptr[mut Tcb]) {
     tcb.changed = true
 }
 
@@ -656,7 +677,7 @@ mark :: fn(tcb: ptr[mut Tcb]) {
  * @param bytes The ring's size.
  * @return The shift.
  */
-scale_for :: fn(bytes: u64) -> u8 {
+scale_for :: fn(bytes : u64) -> u8 {
     shift := cast[u8](0)
     loop {
         if (bytes >> cast[u64](shift)) <= 0xffff || shift >= 14 {
@@ -675,7 +696,7 @@ scale_for :: fn(bytes: u64) -> u8 {
  * @param remote The peer.
  * @return The MSS.
  */
-default_mss :: fn(stack: ptr[Stack], remote: IpAddress) -> u32 {
+default_mss :: fn(stack : ptr[Stack], remote : IpAddress) -> u32 {
     header :: match remote {
         case V4(_) => cast[u32](IPV4_HEADER + TCP_HEADER)
         case V6(_) => cast[u32](IPV6_HEADER + TCP_HEADER)
@@ -690,7 +711,7 @@ default_mss :: fn(stack: ptr[Stack], remote: IpAddress) -> u32 {
  * @param remote The peer.
  * @return True if it has.
  */
-has_source :: fn(stack: ptr[Stack], remote: IpAddress) -> bool {
+has_source :: fn(stack : ptr[Stack], remote : IpAddress) -> bool {
     return match remote {
         case V4(_) => !is_zero_ipv4(stack.ipv4)
         case V6(address) => !is_zero_ipv6(source_for(stack, address))
@@ -705,14 +726,17 @@ has_source :: fn(stack: ptr[Stack], remote: IpAddress) -> bool {
  * @param remote_port Its port.
  * @return The port; null if every one's taken.
  */
-ephemeral_port :: fn(stack: ptr[mut Stack], remote: IpAddress, remote_port: u16) -> u16? {
+ephemeral_port :: fn(stack : ptr[mut Stack], remote : IpAddress, remote_port : u16) -> u16? {
     span :: cast[u64](65536) - cast[u64](EPHEMERAL_FIRST)
     start :: next_random(stack) % span
     for i in cast[u64](0)..<span {
         port :: cast[u16](cast[u64](EPHEMERAL_FIRST) + (start + i) % span)
         used := false
         for each in stack.tcbs {
-            if each.state != .Free && each.local_port == port && each.remote_port == remote_port && same_address(each.remote, remote) {
+            if each.state != .Free
+                && each.local_port == port
+                && each.remote_port == remote_port
+                && same_address(each.remote, remote) {
                 used = true
                 break
             }
@@ -735,7 +759,7 @@ ephemeral_port :: fn(stack: ptr[mut Stack], remote: IpAddress, remote_port: u16)
  * @param remote_port The peer's port.
  * @return The number.
  */
-initial_sequence :: fn(stack: ptr[Stack], remote: IpAddress, local_port: u16, remote_port: u16) -> u32 {
+initial_sequence :: fn(stack : ptr[Stack], remote : IpAddress, local_port : u16, remote_port : u16) -> u32 {
     address :: match remote {
         case V4(v4) => ipv6_of4(v4)
         case V6(v6) => v6
@@ -765,7 +789,7 @@ initial_sequence :: fn(stack: ptr[Stack], remote: IpAddress, local_port: u16, re
  * @param ring The ring.
  * @return Its bytes.
  */
-ring_bytes :: fn(ring: Ring) -> mut u8[] {
+ring_bytes :: fn(ring : Ring) -> mut u8[] {
     return view_of(cast[ptr[mut u8]](ring.at), cast[usize](ring.bytes))
 }
 
@@ -777,7 +801,7 @@ ring_bytes :: fn(ring: Ring) -> mut u8[] {
  * @param into Where they go, all of it filled.
  * @return False if a memory object's ring couldn't be read, its memory gone; into is then partly filled.
  */
-ring_read :: fn(ring: Ring, offset: u64, into: mut u8[]) -> bool {
+ring_read :: fn(ring : Ring, offset : u64, into : mut u8[]) -> bool {
     if ring.memory != 0 {
         return read_with_memory(ring, offset, into)
     }
@@ -802,7 +826,7 @@ ring_read :: fn(ring: Ring, offset: u64, into: mut u8[]) -> bool {
  * @param from What's copied.
  * @return False if a memory object's ring couldn't be written, its memory gone.
  */
-ring_write :: fn(ring: Ring, offset: u64, from: u8[]) -> bool {
+ring_write :: fn(ring : Ring, offset : u64, from : u8[]) -> bool {
     if ring.memory != 0 {
         return write_with_memory(ring, offset, from)
     }
@@ -827,7 +851,7 @@ ring_write :: fn(ring: Ring, offset: u64, from: u8[]) -> bool {
  * @param into Where they go, all of it filled.
  * @return False if a read failed, the memory gone or the ring running past its end; always false but on SlopOS.
  */
-read_with_memory :: fn(ring: Ring, offset: u64, into: mut u8[]) -> bool {
+read_with_memory :: fn(ring : Ring, offset : u64, into : mut u8[]) -> bool {
     #if base.OS == .SlopOS {
         if ring.bytes == 0 || into.count == 0 {
             return true
@@ -853,7 +877,7 @@ read_with_memory :: fn(ring: Ring, offset: u64, into: mut u8[]) -> bool {
  * @param from What's copied.
  * @return False if a write failed, the memory gone or the ring running past its end; always false but on SlopOS.
  */
-write_with_memory :: fn(ring: Ring, offset: u64, from: u8[]) -> bool {
+write_with_memory :: fn(ring : Ring, offset : u64, from : u8[]) -> bool {
     #if base.OS == .SlopOS {
         if ring.bytes == 0 || from.count == 0 {
             return true
@@ -879,7 +903,7 @@ write_with_memory :: fn(ring: Ring, offset: u64, from: u8[]) -> bool {
  * @param count The copy's bytes.
  * @return The bytes before the end.
  */
-ring_head :: fn(ring: Ring, first: u64, count: usize) -> usize {
+ring_head :: fn(ring : Ring, first : u64, count : usize) -> usize {
     to_end :: ring.bytes - first
     return if cast[u64](count) < to_end { count } else { cast[usize](to_end) }
 }
@@ -892,7 +916,7 @@ ring_head :: fn(ring: Ring, first: u64, count: usize) -> usize {
  * @param to Where it ends, past its last byte.
  * @return The part; empty if from to to isn't within bytes.
  */
-part_mut :: fn(bytes: mut u8[], from: usize, to: usize) -> mut u8[] {
+part_mut :: fn(bytes : mut u8[], from : usize, to : usize) -> mut u8[] {
     if from > to || to > bytes.count {
         return bytes[0..<0]
     }
@@ -905,7 +929,7 @@ part_mut :: fn(bytes: mut u8[], from: usize, to: usize) -> mut u8[] {
  * @param tcb The connection.
  * @return The bytes.
  */
-receive_window :: fn(tcb: ptr[Tcb]) -> u64 {
+receive_window :: fn(tcb : ptr[Tcb]) -> u64 {
     held :: tcb.delivered - tcb.read
     return if held < tcb.rings.receive.bytes { tcb.rings.receive.bytes - held } else { cast[u64](0) }
 }
@@ -920,7 +944,7 @@ receive_window :: fn(tcb: ptr[Tcb]) -> u64 {
  * @param tcb The connection.
  * @param answering Whether it's a SYN-ACK.
  */
-send_syn :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], answering: bool) {
+send_syn :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], answering : bool) {
     // At most 40 bytes of options a segment; a SYN's take 24
     options : u8[40]
     o :: view_of(&options[0], options.count)
@@ -982,7 +1006,7 @@ nothing :: fn() -> u8[] {
  * @param stack The stack.
  * @return It.
  */
-timestamp :: fn(stack: ptr[Stack]) -> u32 {
+timestamp :: fn(stack : ptr[Stack]) -> u32 {
     return cast[u32](stack.now / 1_000_000)
 }
 
@@ -993,18 +1017,26 @@ timestamp :: fn(stack: ptr[Stack]) -> u32 {
  * @param stack The stack.
  * @param tcb The connection.
  */
-tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+tcp_output :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb]) {
     // Its memory's gone: it can't go on, so it's reset
     if tcb.ring_gone && tcb.state != .Free {
         tcp_abort(stack, connection_number(tcb))
         return void
     }
-    if tcb.state != .Established && tcb.state != .CloseWait && tcb.state != .FinWait1 && tcb.state != .Closing
-        && tcb.state != .LastAck && tcb.state != .FinWait2 && tcb.state != .TimeWait {
+    if tcb.state != .Established
+        && tcb.state != .CloseWait
+        && tcb.state != .FinWait1
+        && tcb.state != .Closing
+        && tcb.state != .LastAck
+        && tcb.state != .FinWait2
+        && tcb.state != .TimeWait {
         return void
     }
     sent_any := false
-    can_send :: tcb.state == .Established || tcb.state == .CloseWait || tcb.state == .FinWait1 || tcb.state == .Closing
+    can_send :: tcb.state == .Established
+        || tcb.state == .CloseWait
+        || tcb.state == .FinWait1
+        || tcb.state == .Closing
         || tcb.state == .LastAck
     loop {
         // No room to queue it: it waits for tcp_resume, as the outbox drains
@@ -1095,7 +1127,7 @@ tcp_output :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
  * @param tcb The connection.
  * @return The bytes, a multiple of 4.
  */
-option_bytes :: fn(tcb: ptr[Tcb]) -> u32 {
+option_bytes :: fn(tcb : ptr[Tcb]) -> u32 {
     bytes := if tcb.timestamps { cast[u32](12) } else { cast[u32](0) }
     if tcb.sack {
         count := cast[u32](0)
@@ -1117,7 +1149,7 @@ option_bytes :: fn(tcb: ptr[Tcb]) -> u32 {
  * @param tcb The connection.
  * @return The bytes, at least 1.
  */
-segment_data :: fn(tcb: ptr[Tcb]) -> u32 {
+segment_data :: fn(tcb : ptr[Tcb]) -> u32 {
     options :: option_bytes(tcb)
     return if tcb.mss > options { tcb.mss - options } else { cast[u32](1) }
 }
@@ -1128,7 +1160,7 @@ segment_data :: fn(tcb: ptr[Tcb]) -> u32 {
  * @param tcb The connection.
  * @return The bytes.
  */
-in_flight :: fn(tcb: ptr[Tcb]) -> u64 {
+in_flight :: fn(tcb : ptr[Tcb]) -> u64 {
     total := cast[u64](tcb.snd_nxt - tcb.snd_una)
     for block in tcb.sacked {
         if seq_lt(block.start, block.end) && seq_le(tcb.snd_una, block.start) && seq_le(block.end, tcb.snd_nxt) {
@@ -1146,7 +1178,7 @@ in_flight :: fn(tcb: ptr[Tcb]) -> u64 {
  * @param seq A sequence number from snd_una on.
  * @return Its offset.
  */
-offset_of :: fn(tcb: ptr[Tcb], seq: u32) -> u64 {
+offset_of :: fn(tcb : ptr[Tcb], seq : u32) -> u64 {
     return tcb.acknowledged + cast[u64](seq - tcb.snd_una)
 }
 
@@ -1158,7 +1190,7 @@ offset_of :: fn(tcb: ptr[Tcb], seq: u32) -> u64 {
  * @param seq Where it starts.
  * @param length How many bytes, at most segment_data.
  */
-send_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, length: u32) -> bool {
+send_data :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], seq : u32, length : u32) -> bool {
     data : u8[MAX_FRAME]
     count :: if cast[usize](length) < data.count { cast[usize](length) } else { data.count }
     bytes :: view_of(&data[0], count)
@@ -1196,7 +1228,7 @@ send_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, length: u32)
  * @param stack The stack.
  * @param tcb The connection.
  */
-send_ack :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+send_ack :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb]) {
     send_segment(stack, tcb, tcb.snd_nxt, TCP_ACK, nothing(), advertise(tcb))
     tcb.ack_deadline = 0
     tcb.ack_now = false
@@ -1209,7 +1241,7 @@ send_ack :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
  * @param tcb The connection.
  * @return The window, in bytes, unscaled.
  */
-advertise :: fn(tcb: ptr[mut Tcb]) -> u64 {
+advertise :: fn(tcb : ptr[mut Tcb]) -> u64 {
     window :: receive_window(tcb)
     tcb.advertised = window
     return window
@@ -1225,7 +1257,7 @@ advertise :: fn(tcb: ptr[mut Tcb]) -> u64 {
  * @param payload Its options for a SYN, or its data.
  * @param window The window to advertise, in bytes, scaled here unless it's a SYN's.
  */
-send_segment :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, flags: u8, payload: u8[], window: u64) {
+send_segment :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], seq : u32, flags : u8, payload : u8[], window : u64) {
     segment : u8[MAX_FRAME]
     bytes :: view_of(&segment[0], segment.count)
     put_u16(bytes, 0, tcb.local_port)
@@ -1296,16 +1328,24 @@ send_segment :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], seq: u32, flags: u8
  * @param remote The peer.
  * @param segment The segment, its checksum field written here.
  */
-send_tcp :: fn(stack: ptr[mut Stack], remote: IpAddress, segment: mut u8[]) {
+send_tcp :: fn(stack : ptr[mut Stack], remote : IpAddress, segment : mut u8[]) {
     put_u16(segment, 16, 0)
     match remote {
         case V4(to) => {
-            put_u16(segment, 16, checksum_finish(pseudo_sum_v4(stack.ipv4, to, PROTOCOL_TCP, segment.count) + checksum_add(0, segment)))
+            put_u16(
+                segment,
+                16,
+                checksum_finish(pseudo_sum_v4(stack.ipv4, to, PROTOCOL_TCP, segment.count) + checksum_add(0, segment))
+            )
             _ = send_ipv4(stack, to, PROTOCOL_TCP, segment)
         }
         case V6(to) => {
             from :: source_for(stack, to)
-            put_u16(segment, 16, checksum_finish(pseudo_sum_v6(from, to, PROTOCOL_TCP, segment.count) + checksum_add(0, segment)))
+            put_u16(
+                segment,
+                16,
+                checksum_finish(pseudo_sum_v6(from, to, PROTOCOL_TCP, segment.count) + checksum_add(0, segment))
+            )
             _ = send_ipv6(stack, from, to, PROTOCOL_TCP, segment, stack.hop_limit)
         }
     }
@@ -1320,7 +1360,7 @@ send_tcp :: fn(stack: ptr[mut Stack], remote: IpAddress, segment: mut u8[]) {
  * @param remote_port The port it's to.
  * @param seq Its sequence number.
  */
-send_reset :: fn(stack: ptr[mut Stack], remote: IpAddress, local_port: u16, remote_port: u16, seq: u32) {
+send_reset :: fn(stack : ptr[mut Stack], remote : IpAddress, local_port : u16, remote_port : u16, seq : u32) {
     segment : u8[TCP_HEADER]
     bytes :: view_of(&segment[0], segment.count)
     put_u16(bytes, 0, local_port)
@@ -1338,7 +1378,7 @@ send_reset :: fn(stack: ptr[mut Stack], remote: IpAddress, local_port: u16, remo
  * @param remote Who sent it.
  * @param segment What it says.
  */
-refuse_segment :: fn(stack: ptr[mut Stack], remote: IpAddress, segment: ptr[Segment]) {
+refuse_segment :: fn(stack : ptr[mut Stack], remote : IpAddress, segment : ptr[Segment]) {
     if segment.flags & TCP_RST != 0 {
         return void
     }
@@ -1373,7 +1413,7 @@ refuse_segment :: fn(stack: ptr[mut Stack], remote: IpAddress, segment: ptr[Segm
  * @param bytes The segment.
  * @return What it says; null if its header doesn't fit it.
  */
-read_segment :: fn(bytes: u8[]) -> Segment? {
+read_segment :: fn(bytes : u8[]) -> Segment? {
     if bytes.count < TCP_HEADER {
         return null
     }
@@ -1381,9 +1421,17 @@ read_segment :: fn(bytes: u8[]) -> Segment? {
     if header < TCP_HEADER || header > bytes.count {
         return null
     }
-    segment := Segment.{source_port = u16_at(bytes, 0), destination_port = u16_at(bytes, 2), seq = u32_at(bytes, 4),
-        ack = u32_at(bytes, 8), flags = byte_at(bytes, 13), window = cast[u32](u16_at(bytes, 14)), data_at = header,
-        data_length = bytes.count - header, window_scale = -1}
+    segment := Segment.{
+        source_port = u16_at(bytes, 0),
+        destination_port = u16_at(bytes, 2),
+        seq = u32_at(bytes, 4),
+        ack = u32_at(bytes, 8),
+        flags = byte_at(bytes, 13),
+        window = cast[u32](u16_at(bytes, 14)),
+        data_at = header,
+        data_length = bytes.count - header,
+        window_scale = -1,
+    }
     at := cast[usize](TCP_HEADER)
     loop {
         if at >= header {
@@ -1420,7 +1468,10 @@ read_segment :: fn(bytes: u8[]) -> Segment? {
             count :: (length - 2) / 8
             for i in cast[usize](0)..<count {
                 if segment.sack_count < segment.sacks.count {
-                    segment.sacks[segment.sack_count] = SackBlock.{start = u32_at(bytes, at + 2 + i * 8), end = u32_at(bytes, at + 6 + i * 8)}
+                    segment.sacks[segment.sack_count] = SackBlock.{
+                        start = u32_at(bytes, at + 2 + i * 8),
+                        end = u32_at(bytes, at + 6 + i * 8),
+                    }
                     segment.sack_count += 1
                 }
             }
@@ -1439,14 +1490,16 @@ read_segment :: fn(bytes: u8[]) -> Segment? {
  * @param pseudo The sum of its pseudo-header, by its family.
  * @param bytes The segment.
  */
-receive_tcp :: fn(stack: ptr[mut Stack], source: IpAddress, pseudo: u64, bytes: u8[]) {
+receive_tcp :: fn(stack : ptr[mut Stack], source : IpAddress, pseudo : u64, bytes : u8[]) {
     if checksum_finish(pseudo + checksum_add(0, bytes)) != 0 {
         return void
     }
     segment := read_segment(bytes) or_return void
     data :: part(bytes, segment.data_at, bytes.count)
     for &tcb in stack.tcbs {
-        if tcb.state != .Free && tcb.local_port == segment.destination_port && tcb.remote_port == segment.source_port
+        if tcb.state != .Free
+            && tcb.local_port == segment.destination_port
+            && tcb.remote_port == segment.source_port
             && same_address(tcb.remote, source) {
             segment_arrives(stack, tcb, &segment, data)
             return void
@@ -1472,7 +1525,7 @@ receive_tcp :: fn(stack: ptr[mut Stack], source: IpAddress, pseudo: u64, bytes: 
  * @param source Who's connecting.
  * @param segment The SYN.
  */
-incoming :: fn(stack: ptr[mut Stack], listener: u32, source: IpAddress, segment: ptr[Segment]) {
+incoming :: fn(stack : ptr[mut Stack], listener : u32, source : IpAddress, segment : ptr[Segment]) {
     // The listener's backlog: past it, a SYN's dropped, as is one past the entries kept for connections made
     waiting := cast[usize](0)
     for each in stack.tcbs {
@@ -1495,8 +1548,17 @@ incoming :: fn(stack: ptr[mut Stack], listener: u32, source: IpAddress, segment:
     take_syn_options(tcb, segment)
     tcb.irs = segment.seq
     tcb.rcv_nxt = segment.seq + 1
-    event(stack, .Incoming(TcpIncoming.{listener = listener, connection = connection_number(tcb), remote = source,
-        remote_port = segment.source_port}))
+    event(
+        stack,
+        .Incoming(
+            TcpIncoming.{
+                listener = listener,
+                connection = connection_number(tcb),
+                remote = source,
+                remote_port = segment.source_port,
+            }
+        )
+    )
 }
 
 /**
@@ -1505,7 +1567,7 @@ incoming :: fn(stack: ptr[mut Stack], listener: u32, source: IpAddress, segment:
  * @param tcb The connection.
  * @param segment The SYN.
  */
-take_syn_options :: fn(tcb: ptr[mut Tcb], segment: ptr[Segment]) {
+take_syn_options :: fn(tcb : ptr[mut Tcb], segment : ptr[Segment]) {
     if segment.mss != 0 && segment.mss < tcb.mss {
         tcb.mss = segment.mss
     }
@@ -1531,7 +1593,7 @@ take_syn_options :: fn(tcb: ptr[mut Tcb], segment: ptr[Segment]) {
  * @param segment What the segment says.
  * @param data Its data.
  */
-segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment], data: u8[]) {
+segment_arrives :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], segment : ptr[Segment], data : u8[]) {
     flags :: segment.flags
     if tcb.state == .Incoming {
         // A retransmitted SYN while waiting for tcp_accept
@@ -1556,8 +1618,14 @@ segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
      */
     closed :: window == 0 && length > 0
     acceptable :: if length == 0 || window == 0 {
-        if window == 0 { segment.seq == tcb.rcv_nxt } else { seq_le(tcb.rcv_nxt, segment.seq) && seq_lt(segment.seq, tcb.rcv_nxt + cast[u32](window)) }
-    } else {
+        if window == 0 {
+            segment.seq == tcb.rcv_nxt
+        }
+        else {
+            seq_le(tcb.rcv_nxt, segment.seq) && seq_lt(segment.seq, tcb.rcv_nxt + cast[u32](window))
+        }
+    }
+    else {
         last :: segment.seq + length - 1
         (seq_le(tcb.rcv_nxt, segment.seq) && seq_lt(segment.seq, tcb.rcv_nxt + cast[u32](window)))
             || (seq_le(tcb.rcv_nxt, last) && seq_lt(last, tcb.rcv_nxt + cast[u32](window)))
@@ -1638,7 +1706,7 @@ segment_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
  * @param tcb The connection, SYN-SENT.
  * @param segment What arrived.
  */
-syn_sent_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment]) {
+syn_sent_arrives :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], segment : ptr[Segment]) {
     flags :: segment.flags
     acks_syn :: flags & TCP_ACK != 0 && seq_lt(tcb.iss, segment.ack) && seq_le(segment.ack, tcb.snd_nxt)
     if flags & TCP_ACK != 0 && !acks_syn {
@@ -1699,9 +1767,13 @@ syn_sent_arrives :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Se
  * @return False if the acknowledgement's not one to take, past what was sent or further back than the peer's largest
  *     window, when an ACK's to be sent and the rest of the segment dropped; true otherwise.
  */
-acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment], data_length: usize) -> bool {
+acknowledgement :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], segment : ptr[Segment], data_length : usize) -> bool {
     ack :: segment.ack
-    if seq_lt(tcb.snd_max, ack) || seq_lt(ack, tcb.snd_una - cast[u32](if tcb.max_snd_wnd > 0x7fffffff { cast[u64](0x7fffffff) } else { tcb.max_snd_wnd })) {
+    if seq_lt(tcb.snd_max, ack)
+        || seq_lt(
+            ack,
+            tcb.snd_una - cast[u32](if tcb.max_snd_wnd > 0x7fffffff { cast[u64](0x7fffffff) } else { tcb.max_snd_wnd })
+        ) {
         // It acknowledges what wasn't sent, or is older than any window could make it: likely made up
         tcb.ack_now = true
         return false
@@ -1741,12 +1813,17 @@ acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
         }
         mark(tcb)
     }
-    else if ack == tcb.snd_una && data_length == 0 && window == tcb.snd_wnd && tcb.snd_una != tcb.snd_max
+    else if ack == tcb.snd_una
+        && data_length == 0
+        && window == tcb.snd_wnd
+        && tcb.snd_una != tcb.snd_max
         && segment.flags & TCP_FIN == 0 {
         tcb.duplicate_acks += 1
     }
     // Loss: three duplicates, or SACK past three segments (RFC 6675 §5)
-    if !tcb.in_recovery && tcb.snd_una != tcb.snd_max && (tcb.duplicate_acks >= 3 || sacked_past(tcb) >= 3 * cast[u64](tcb.mss)) {
+    if !tcb.in_recovery
+        && tcb.snd_una != tcb.snd_max
+        && (tcb.duplicate_acks >= 3 || sacked_past(tcb) >= 3 * cast[u64](tcb.mss)) {
         enter_recovery(stack, tcb)
     }
     if seq_lt(tcb.snd_wl1, segment.seq) || (tcb.snd_wl1 == segment.seq && seq_le(tcb.snd_wl2, ack)) {
@@ -1757,7 +1834,10 @@ acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
             tcb.max_snd_wnd = window
         }
     }
-    // Answered while its window's closed: the peer's there, so probing goes on as long as it answers (RFC 9293 §3.8.6.1)
+    /*
+     * Answered while its window's closed: the peer's there, so probing goes on as long as it answers (RFC 9293
+     * §3.8.6.1)
+     */
     if tcb.snd_wnd == 0 {
         tcb.retries = 0
     }
@@ -1785,7 +1865,7 @@ acknowledgement :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Seg
  * @param tcb The connection.
  * @param segment The segment.
  */
-take_sacks :: fn(tcb: ptr[mut Tcb], segment: ptr[Segment]) {
+take_sacks :: fn(tcb : ptr[mut Tcb], segment : ptr[Segment]) {
     for &block in tcb.sacked {
         if seq_le(block.end, tcb.snd_una) || !seq_lt(block.start, block.end) {
             block^ = SackBlock.{}
@@ -1810,7 +1890,7 @@ take_sacks :: fn(tcb: ptr[mut Tcb], segment: ptr[Segment]) {
  * @param low Ranges are kept only above this.
  * @param high And at most this.
  */
-add_block :: fn(blocks: mut SackBlock[], block: SackBlock, low: u32, high: u32) {
+add_block :: fn(blocks : mut SackBlock[], block : SackBlock, low : u32, high : u32) {
     start := block.start
     end := block.end
     if !seq_lt(start, end) || seq_le(end, low) || seq_lt(high, end) {
@@ -1855,7 +1935,7 @@ add_block :: fn(blocks: mut SackBlock[], block: SackBlock, low: u32, high: u32) 
  * @param tcb The connection.
  * @return The bytes.
  */
-sacked_past :: fn(tcb: ptr[Tcb]) -> u64 {
+sacked_past :: fn(tcb : ptr[Tcb]) -> u64 {
     total := cast[u64](0)
     for block in tcb.sacked {
         if seq_lt(block.start, block.end) {
@@ -1872,7 +1952,7 @@ sacked_past :: fn(tcb: ptr[Tcb]) -> u64 {
  * @param tcb The connection.
  * @return It; null if there's none.
  */
-next_hole :: fn(tcb: ptr[Tcb]) -> u32? {
+next_hole :: fn(tcb : ptr[Tcb]) -> u32? {
     highest := tcb.snd_una
     for block in tcb.sacked {
         if seq_lt(block.start, block.end) && seq_lt(highest, block.end) {
@@ -1906,7 +1986,7 @@ next_hole :: fn(tcb: ptr[Tcb]) -> u32? {
  * @param hole Where it starts.
  * @return The bytes; 0 if there's no data there.
  */
-hole_length :: fn(tcb: ptr[Tcb], hole: u32) -> u32 {
+hole_length :: fn(tcb : ptr[Tcb], hole : u32) -> u32 {
     end := hole + segment_data(tcb)
     for block in tcb.sacked {
         if seq_lt(block.start, block.end) && seq_lt(hole, block.start) && seq_lt(block.start, end) {
@@ -1926,7 +2006,7 @@ hole_length :: fn(tcb: ptr[Tcb], hole: u32) -> u32 {
  * @param stack The stack.
  * @param tcb The connection.
  */
-enter_recovery :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+enter_recovery :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb]) {
     stack.fast_retransmits += 1
     reduce_window(stack, tcb)
     tcb.in_recovery = true
@@ -1945,7 +2025,7 @@ enter_recovery :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
  * @param stack The stack.
  * @param tcb The connection.
  */
-reduce_window :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+reduce_window :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb]) {
     mss :: cast[f64](tcb.mss)
     current :: cast[f64](tcb.cwnd) / mss
     tcb.w_max = current
@@ -1967,7 +2047,7 @@ reduce_window :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
  * @param tcb The connection.
  * @param acked The bytes newly acknowledged.
  */
-grow_window :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], acked: u64) {
+grow_window :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], acked : u64) {
     mss :: cast[u64](tcb.mss)
     if tcb.cwnd < tcb.ssthresh {
         tcb.cwnd += if acked < 2 * mss { acked } else { 2 * mss }
@@ -2007,7 +2087,7 @@ grow_window :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], acked: u64) {
  * @param x The value, at least 0.
  * @return Its cube root.
  */
-cube_root :: fn(x: f64) -> f64 {
+cube_root :: fn(x : f64) -> f64 {
     if x <= 0.0 {
         return 0.0
     }
@@ -2024,7 +2104,7 @@ cube_root :: fn(x: f64) -> f64 {
  * @param tcb The connection.
  * @param rtt The round trip, in nanoseconds.
  */
-sample_rtt :: fn(tcb: ptr[mut Tcb], rtt: u64) {
+sample_rtt :: fn(tcb : ptr[mut Tcb], rtt : u64) {
     measured :: if rtt == 0 { cast[u64](1_000_000) } else { rtt }
     if tcb.srtt == 0 {
         tcb.srtt = measured
@@ -2054,7 +2134,7 @@ sample_rtt :: fn(tcb: ptr[mut Tcb], rtt: u64) {
  * @param segment The segment.
  * @param data Its data.
  */
-take_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment], data: u8[]) {
+take_data :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb], segment : ptr[Segment], data : u8[]) {
     receiving :: tcb.state == .Established || tcb.state == .FinWait1 || tcb.state == .FinWait2
     if data.count > 0 && receiving {
         // What fits the window, from rcv_nxt on
@@ -2090,8 +2170,12 @@ take_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment],
                 }
             }
             else {
-                add_block(view_of(&tcb.out_of_order[0], tcb.out_of_order.count), SackBlock.{start = start, end = end},
-                    tcb.rcv_nxt, tcb.rcv_nxt + cast[u32](window))
+                add_block(
+                    view_of(&tcb.out_of_order[0], tcb.out_of_order.count),
+                    SackBlock.{start = start, end = end},
+                    tcb.rcv_nxt,
+                    tcb.rcv_nxt + cast[u32](window)
+                )
                 tcb.ack_now = true
             }
         }
@@ -2128,7 +2212,7 @@ take_data :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb], segment: ptr[Segment],
  * @param tcb The connection.
  * @return True if some is.
  */
-has_blocks :: fn(tcb: ptr[Tcb]) -> bool {
+has_blocks :: fn(tcb : ptr[Tcb]) -> bool {
     for block in tcb.out_of_order {
         if seq_lt(block.start, block.end) {
             return true
@@ -2142,7 +2226,7 @@ has_blocks :: fn(tcb: ptr[Tcb]) -> bool {
  *
  * @param tcb The connection.
  */
-advance_over_blocks :: fn(tcb: ptr[mut Tcb]) {
+advance_over_blocks :: fn(tcb : ptr[mut Tcb]) {
     loop {
         moved := false
         for &block in tcb.out_of_order {
@@ -2175,13 +2259,22 @@ advance_over_blocks :: fn(tcb: ptr[mut Tcb]) {
  * @param stack The stack.
  * @param tcb The connection.
  */
-enter_time_wait :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+enter_time_wait :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb]) {
     tcb.state = .TimeWait
     tcb.deadline = stack.now + TIME_WAIT
     tcb.rto_deadline = 0
     mark(tcb)
-    event(stack, .Ended(TcpEnded.{connection = connection_number(tcb), why = .Closed, delivered = tcb.delivered,
-        acknowledged = tcb.acknowledged}))
+    event(
+        stack,
+        .Ended(
+            TcpEnded.{
+                connection = connection_number(tcb),
+                why = .Closed,
+                delivered = tcb.delivered,
+                acknowledged = tcb.acknowledged,
+            }
+        )
+    )
 }
 
 // ---- Time
@@ -2191,7 +2284,7 @@ enter_time_wait :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
  *
  * @param stack The stack.
  */
-tick_tcp :: fn(stack: ptr[mut Stack]) {
+tick_tcp :: fn(stack : ptr[mut Stack]) {
     now :: stack.now
     for &tcb in stack.tcbs {
         if tcb.state == .Free {
@@ -2228,10 +2321,13 @@ tick_tcp :: fn(stack: ptr[mut Stack]) {
  * @param stack The stack.
  * @param tcb The connection.
  */
-retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
+retransmit :: fn(stack : ptr[mut Stack], tcb : ptr[mut Tcb]) {
     tcb.retries += 1
     syn :: tcb.state == .SynSent || tcb.state == .SynReceived
-    tries :: if tcb.state == .SynReceived { cast[u32](PASSIVE_SYN_TRIES) } else if syn { cast[u32](SYN_TRIES) } else { cast[u32](DATA_TRIES) }
+    tries :: if tcb.state == .SynReceived {
+        cast[u32](PASSIVE_SYN_TRIES)
+    }
+    else if syn { cast[u32](SYN_TRIES) } else { cast[u32](DATA_TRIES) }
     if tcb.retries > tries {
         send_reset(stack, tcb.remote, tcb.local_port, tcb.remote_port, tcb.snd_nxt)
         end_tcb(stack, tcb, .TimedOut)
@@ -2277,12 +2373,15 @@ retransmit :: fn(stack: ptr[mut Stack], tcb: ptr[mut Tcb]) {
  *
  * @param stack The stack.
  */
-tcp_resume :: fn(stack: ptr[mut Stack]) {
+tcp_resume :: fn(stack : ptr[mut Stack]) {
     for &tcb in stack.tcbs {
         if outbox_full(stack) {
             return void
         }
-        if tcb.state == .Established || tcb.state == .CloseWait || tcb.state == .FinWait1 || tcb.state == .Closing
+        if tcb.state == .Established
+            || tcb.state == .CloseWait
+            || tcb.state == .FinWait1
+            || tcb.state == .Closing
             || tcb.state == .LastAck {
             tcp_output(stack, tcb)
         }
@@ -2296,7 +2395,7 @@ tcp_resume :: fn(stack: ptr[mut Stack]) {
  * @param soonest The soonest so far.
  * @return The soonest, with TCP's.
  */
-tcp_deadline :: fn(stack: ptr[Stack], soonest: u64) -> u64 {
+tcp_deadline :: fn(stack : ptr[Stack], soonest : u64) -> u64 {
     result := soonest
     for tcb in stack.tcbs {
         if tcb.state == .Free {

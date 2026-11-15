@@ -1,8 +1,8 @@
 package kernel
 
 import intrinsics from "base:intrinsics"
-import arch_interface from "../arch_interface"
 import concurrency from "std:concurrency"
+import arch_interface from "../arch_interface"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -34,7 +34,13 @@ import concurrency from "std:concurrency"
  * @return True if every byte was copied; false if the range leaves the user half, or a page of it isn't mapped,
  *     isn't user memory or isn't writable, in which case the pages before it may have been written.
  */
-copy_to_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, source: u64, size: u64) -> bool {
+copy_to_user :: fn(
+    kernel : ptr[Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    source : u64,
+    size : u64
+) -> bool {
     return copy_user(kernel, space, address, source, size, true)
 }
 
@@ -52,7 +58,13 @@ copy_to_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u
  * @return True if every byte was copied; false if the range leaves the user half or a page of it isn't mapped for user
  *     mode, in which case the bytes of the pages before it have been copied.
  */
-copy_from_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, destination: u64, size: u64) -> bool {
+copy_from_user :: fn(
+    kernel : ptr[Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    destination : u64,
+    size : u64
+) -> bool {
     return copy_user(kernel, space, address, destination, size, false)
 }
 
@@ -71,7 +83,14 @@ copy_from_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address:
  *     memory, device memory or a framebuffer (which the direct map doesn't reach), or, copying to user, not writable,
  *     with the pages before it copied.
  */
-copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, other: u64, size: u64, to_user: bool) -> bool {
+copy_user :: fn(
+    kernel : ptr[Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    other : u64,
+    size : u64,
+    to_user : bool
+) -> bool {
     if size == 0 {
         return true
     }
@@ -121,13 +140,21 @@ copy_user :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64,
  * @param write Whether the page will be written, which the mapping has to allow.
  * @return The page's translation; null if it isn't mapped, the mapping doesn't allow the access, or it can't be had.
  */
-present_user_page :: fn(kernel: ptr[Kernel], space: ptr[mut AddressSpace], address: u64, write: bool) -> arch_interface.Translation? {
+present_user_page :: fn(
+    kernel : ptr[Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    write : bool
+) -> arch_interface.Translation? {
     match arch.translate(&space.table, cast[arch_interface.VirtualAddress](address)) {
         case Some(found) => return found
         case None => {}
     }
-    fault :: arch_interface.PageFault.{address = cast[arch_interface.VirtualAddress](address), access = if write { arch_interface.Access.Write }
-        else { arch_interface.Access.Read }, present = false}
+    fault :: arch_interface.PageFault.{
+        address = cast[arch_interface.VirtualAddress](address),
+        access = if write { arch_interface.Access.Write } else { arch_interface.Access.Read },
+        present = false,
+    }
     if resolve_fault_locked(cast[ptr[mut Kernel]](kernel), null, space, fault) != .Mapped {
         return null
     }

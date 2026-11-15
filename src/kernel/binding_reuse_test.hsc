@@ -56,9 +56,16 @@ BindingReuseTest :: struct {
  *
  * @param kernel Not used: the test finds the kernel through per_cpu.
  */
-test_binding_reuse :: fn(kernel: ptr[mut Kernel]) {
-    _ = run_tests("test_binding_reuse", testing.Test.[.{name = "a_binding_slot_reads_whole_while_it_is_made_anew",
-        run = a_binding_slot_reads_whole_while_it_is_made_anew}])
+test_binding_reuse :: fn(kernel : ptr[mut Kernel]) {
+    _ = run_tests(
+        "test_binding_reuse",
+        testing.Test.[
+            .{
+                name = "a_binding_slot_reads_whole_while_it_is_made_anew",
+                run = a_binding_slot_reads_whole_while_it_is_made_anew,
+            }
+        ]
+    )
 }
 
 /**
@@ -72,7 +79,7 @@ test_binding_reuse :: fn(kernel: ptr[mut Kernel]) {
  * @return Ok once it's run; Error if there's only one CPU, no memory for the state or the ports, a bind fails, the pool
  *     doesn't give the slot back, or the other CPUs don't start or stop reading in time.
  */
-a_binding_slot_reads_whole_while_it_is_made_anew #test :: fn(t: ptr[mut testing.T]) -> testing.Outcome {
+a_binding_slot_reads_whole_while_it_is_made_anew #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     kernel :: per_cpu().kernel
     others :: kernel.online_cpus - 1
     testing.require_ge(t, others, 1, "the test is booted with other CPUs to read the slot")?
@@ -118,14 +125,25 @@ a_binding_slot_reads_whole_while_it_is_made_anew #test :: fn(t: ptr[mut testing.
     testing.require(t, same, "unbinding and binding again gives back the binding pool's slot the readers read")?
     storage : u8[testing.TEXT_BYTES]
     message := text_buffer.make(storage)
-    text_buffer.append_format(&message, "the slot's port reads 0 or a port, never part of an address (the last: %{#x})",
-        intrinsics.atomic_load_u64(&test.torn_port))
+    text_buffer.append_format(
+        &message,
+        "the slot's port reads 0 or a port, never part of an address (the last: %{#x})",
+        intrinsics.atomic_load_u64(&test.torn_port)
+    )
     torn_ports :: intrinsics.atomic_load_u64(&test.torn_ports)
     ports_whole :: testing.expect_eq(t, torn_ports, 0, text_buffer.as_string(&message))
-    generations_whole :: testing.expect_eq(t, intrinsics.atomic_load_u64(&test.torn_generations), 0,
-        "the slot's generation never reads behind what it read before, as it would part zeroed")
-    read :: testing.expect_gt(t, intrinsics.atomic_load_u64(&test.reads), 0,
-        "the other CPUs read the slot while it was made anew")
+    generations_whole :: testing.expect_eq(
+        t,
+        intrinsics.atomic_load_u64(&test.torn_generations),
+        0,
+        "the slot's generation never reads behind what it read before, as it would part zeroed"
+    )
+    read :: testing.expect_gt(
+        t,
+        intrinsics.atomic_load_u64(&test.reads),
+        0,
+        "the other CPUs read the slot while it was made anew"
+    )
     return testing.outcome_of(ports_whole && generations_whole && read)
 }
 
@@ -137,7 +155,7 @@ a_binding_slot_reads_whole_while_it_is_made_anew #test :: fn(t: ptr[mut testing.
  * @param wanted The number it has to reach.
  * @return True if it reached wanted in time.
  */
-wait_for_readers :: fn(kernel: ptr[Kernel], count: ptr[u32], wanted: u32) -> bool {
+wait_for_readers :: fn(kernel : ptr[Kernel], count : ptr[u32], wanted : u32) -> bool {
     deadline :: arch.counter() + kernel.counter_frequency / 1000 * BINDING_REUSE_TIMEOUT_MS
     loop {
         arch.spin_hint()

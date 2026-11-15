@@ -11,8 +11,10 @@ import platform as protocol from "../../protocols/platform"
  * I/O ports 0x70 and 0x71, unless ACPI's FADT says there's no CMOS RTC. On AArch64 it's the device tree's PL031,
  * disabled or not: UEFI's runtime services keep it for themselves, but SlopOS doesn't call them.
  */
-//SPEC: ACPI 6.5, §5.2.9 (FADT: IAPC_BOOT_ARCH's CMOS RTC Not Present)
-//SPEC: Linux's arm,pl031 binding
+/*
+ * SPEC: ACPI 6.5, §5.2.9 (FADT: IAPC_BOOT_ARCH's CMOS RTC Not Present)
+ * SPEC: Linux's arm,pl031 binding
+ */
 
 /** The MC146818's first I/O port, its index register; its data register is the next. */
 RTC_PORTS : u32 : 0x70
@@ -45,11 +47,12 @@ Clock :: struct {
  * @return The clock, or null if there's none: the FADT says so, or on AArch64 there's no device tree, no PL031 in it,
  *     or no registers for it.
  */
-find_clock :: fn(tables: u64, size: u64) -> Clock? {
+find_clock :: fn(tables : u64, size : u64) -> Clock? {
     #if TARGET_ARCH == .x86_64 {
         match pci.firmware_table(tables, size, "FACP") {
             case Some(fadt) => {
-                if fadt.size >= FADT_IAPC_BOOT_ARCH + 2 && (pci.read_u16(fadt.address, FADT_IAPC_BOOT_ARCH) & IAPC_NO_CMOS_RTC) != 0 {
+                if fadt.size >= FADT_IAPC_BOOT_ARCH + 2
+                    && (pci.read_u16(fadt.address, FADT_IAPC_BOOT_ARCH) & IAPC_NO_CMOS_RTC) != 0 {
                     return null
                 }
             }
@@ -82,14 +85,22 @@ find_clock :: fn(tables: u64, size: u64) -> Clock? {
  *     the client with the response; or NoDevice if there's no clock, another client claimed it, or its ports or
  *     registers couldn't be made.
  */
-claim_clock :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[mut Platform], client: usize) -> protocol.Response {
+claim_clock :: fn(
+    to : slop_os.DebugLog,
+    platform : slop_os.Platform,
+    state : ptr[mut Platform],
+    client : usize
+) -> protocol.Response {
     clock :: state.clock or_return .NoDevice
     if state.clock_claimed && state.clock_claimer != client {
         return .NoDevice
     }
     block :: slop_os.startup_block()
-    result := protocol.RealTimeClock.{kind = clock.kind, ports = cast[slop_os.IoPortRange](slop_os.NO_HANDLE),
-        registers = cast[slop_os.Memory](slop_os.NO_HANDLE)}
+    result := protocol.RealTimeClock.{
+        kind = clock.kind,
+        ports = cast[slop_os.IoPortRange](slop_os.NO_HANDLE),
+        registers = cast[slop_os.Memory](slop_os.NO_HANDLE),
+    }
     match clock.kind {
         case .Mc146818 => {
             match slop_os.io_ports_create(platform, block.budget, RTC_PORTS, RTC_PORT_COUNT) {
@@ -104,7 +115,12 @@ claim_clock :: fn(to: slop_os.DebugLog, platform: slop_os.Platform, state: ptr[m
             match slop_os.memory_create_physical(platform, block.budget, clock.registers, PL031_SIZE, .Device) {
                 case Ok(registers) => result.registers = registers
                 case Error(error) => {
-                    log_line.write(to, "platform: the real-time clock's registers at %{#018x} can't be given out: %", clock.registers, error)
+                    log_line.write(
+                        to,
+                        "platform: the real-time clock's registers at %{#018x} can't be given out: %",
+                        clock.registers,
+                        error
+                    )
                     return .NoDevice
                 }
             }

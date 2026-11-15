@@ -16,44 +16,44 @@ import os from "std:os"
 import ssh from "std:ssh"
 
 // Requests and answers
-SSH_FXP_INIT : u8 : 1
-SSH_FXP_VERSION : u8 : 2
-SSH_FXP_OPEN : u8 : 3
-SSH_FXP_CLOSE : u8 : 4
-SSH_FXP_READ : u8 : 5
-SSH_FXP_WRITE : u8 : 6
-SSH_FXP_LSTAT : u8 : 7
-SSH_FXP_FSTAT : u8 : 8
-SSH_FXP_SETSTAT : u8 : 9
+SSH_FXP_INIT     : u8 : 1
+SSH_FXP_VERSION  : u8 : 2
+SSH_FXP_OPEN     : u8 : 3
+SSH_FXP_CLOSE    : u8 : 4
+SSH_FXP_READ     : u8 : 5
+SSH_FXP_WRITE    : u8 : 6
+SSH_FXP_LSTAT    : u8 : 7
+SSH_FXP_FSTAT    : u8 : 8
+SSH_FXP_SETSTAT  : u8 : 9
 SSH_FXP_FSETSTAT : u8 : 10
-SSH_FXP_OPENDIR : u8 : 11
-SSH_FXP_READDIR : u8 : 12
-SSH_FXP_REMOVE : u8 : 13
-SSH_FXP_MKDIR : u8 : 14
-SSH_FXP_RMDIR : u8 : 15
+SSH_FXP_OPENDIR  : u8 : 11
+SSH_FXP_READDIR  : u8 : 12
+SSH_FXP_REMOVE   : u8 : 13
+SSH_FXP_MKDIR    : u8 : 14
+SSH_FXP_RMDIR    : u8 : 15
 SSH_FXP_REALPATH : u8 : 16
-SSH_FXP_STAT : u8 : 17
-SSH_FXP_RENAME : u8 : 18
-SSH_FXP_STATUS : u8 : 101
-SSH_FXP_HANDLE : u8 : 102
-SSH_FXP_DATA : u8 : 103
-SSH_FXP_NAME : u8 : 104
-SSH_FXP_ATTRS : u8 : 105
+SSH_FXP_STAT     : u8 : 17
+SSH_FXP_RENAME   : u8 : 18
+SSH_FXP_STATUS   : u8 : 101
+SSH_FXP_HANDLE   : u8 : 102
+SSH_FXP_DATA     : u8 : 103
+SSH_FXP_NAME     : u8 : 104
+SSH_FXP_ATTRS    : u8 : 105
 // Statuses
-SSH_FX_OK : u32 : 0
-SSH_FX_EOF : u32 : 1
-SSH_FX_NO_SUCH_FILE : u32 : 2
+SSH_FX_OK                : u32 : 0
+SSH_FX_EOF               : u32 : 1
+SSH_FX_NO_SUCH_FILE      : u32 : 2
 SSH_FX_PERMISSION_DENIED : u32 : 3
-SSH_FX_FAILURE : u32 : 4
-SSH_FX_BAD_MESSAGE : u32 : 5
-SSH_FX_OP_UNSUPPORTED : u32 : 8
+SSH_FX_FAILURE           : u32 : 4
+SSH_FX_BAD_MESSAGE       : u32 : 5
+SSH_FX_OP_UNSUPPORTED    : u32 : 8
 // OPEN's flags
-SSH_FXF_READ : u32 : 1
-SSH_FXF_WRITE : u32 : 2
+SSH_FXF_READ   : u32 : 1
+SSH_FXF_WRITE  : u32 : 2
 SSH_FXF_APPEND : u32 : 4
-SSH_FXF_CREAT : u32 : 8
-SSH_FXF_TRUNC : u32 : 16
-SSH_FXF_EXCL : u32 : 32
+SSH_FXF_CREAT  : u32 : 8
+SSH_FXF_TRUNC  : u32 : 16
+SSH_FXF_EXCL   : u32 : 32
 // Attributes' flags
 SSH_FILEXFER_ATTR_SIZE : u32 : 1
 SSH_FILEXFER_ATTR_PERMISSIONS : u32 : 4
@@ -71,25 +71,25 @@ SFTP_NAMES_AT_ONCE :: 32
 
 /** An open file or directory. */
 SftpHandle :: struct {
-    used : bool,
-    directory : bool,
-    file : os.File,
-    writing : bool,
-    position : u64,
-    path : u8[SFTP_PATH_BYTES],
+    used       : bool,
+    directory  : bool,
+    file       : os.File,
+    writing    : bool,
+    position   : u64,
+    path       : u8[SFTP_PATH_BYTES],
     path_count : usize,
-    listing : os.DirectoryEntry[..],
-    listed : bool,
-    next : usize,
+    listing    : os.DirectoryEntry[..],
+    listed     : bool,
+    next       : usize,
 }
 
 /** An SFTP stream's state: its home, what's come and what's to go, and its handles. */
 Sftp :: struct {
-    home : os.Directory,
-    inbox : u8[SFTP_PACKET_BYTES],
+    home        : os.Directory,
+    inbox       : u8[SFTP_PACKET_BYTES],
     inbox_count : usize,
-    handles : SftpHandle[SFTP_HANDLES],
-    message : u8[SFTP_READ_BYTES + 1024],
+    handles     : SftpHandle[SFTP_HANDLES],
+    message     : u8[SFTP_READ_BYTES + 1024],
     /** Answers to be sent, their first outbox_count bytes. */
     outbox : u8[OUTBOX_BYTES],
     outbox_count : usize,
@@ -104,7 +104,7 @@ OUTBOX_BYTES :: SFTP_READ_BYTES + 4096
  * @param home The home, its root; the Sftp's from now on, closed by end_sftp.
  * @return The Sftp, which end_sftp gives back.
  */
-start_sftp :: fn(home: os.Directory) -> ptr[mut Sftp] {
+start_sftp :: fn(home : os.Directory) -> ptr[mut Sftp] {
     made :: runtime.new(Sftp)
     made.home = home
     return made
@@ -116,13 +116,15 @@ start_sftp :: fn(home: os.Directory) -> ptr[mut Sftp] {
  * @param sftp The Sftp; its inbox, filled by the caller up to inbox_count, is taken from as packets are answered.
  * @return False if a packet's length can't be: the caller ends the stream.
  */
-serve :: fn(sftp: ptr[mut Sftp]) -> bool {
+serve :: fn(sftp : ptr[mut Sftp]) -> bool {
     loop {
         if sftp.outbox_count + SFTP_READ_BYTES + 2048 > sftp.outbox.count || sftp.inbox_count < 4 {
             break
         }
-        length :: (cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 0)) << 24) | (cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 1)) << 16)
-            | (cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 2)) << 8) | cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 3))
+        length :: (cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 0)) << 24)
+            | (cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 1)) << 16)
+            | (cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 2)) << 8)
+            | cast[usize](ssh.byte_at(sftp.inbox[0..<SFTP_PACKET_BYTES], 3))
         if length == 0 || length + 4 > SFTP_PACKET_BYTES {
             return false
         }
@@ -137,12 +139,12 @@ serve :: fn(sftp: ptr[mut Sftp]) -> bool {
 }
 
 /** Take what's been sent from the outbox: count bytes from its front. */
-sent :: fn(sftp: ptr[mut Sftp], count: usize) {
+sent :: fn(sftp : ptr[mut Sftp], count : usize) {
     sftp.outbox_count = ssh.drop_front(sftp.outbox[0..<OUTBOX_BYTES], sftp.outbox_count, count)
 }
 
 /** Answer one request. */
-request :: fn(sftp: ptr[mut Sftp], packet: u8[]) {
+request :: fn(sftp : ptr[mut Sftp], packet : u8[]) {
     reader := ssh.Reader.{at = 1, end = packet.count}
     kind :: ssh.byte_at(packet, 0)
     if kind == SSH_FXP_INIT {
@@ -170,19 +172,25 @@ request :: fn(sftp: ptr[mut Sftp], packet: u8[]) {
     }
     if kind == SSH_FXP_STAT || kind == SSH_FXP_LSTAT {
         relative : u8[SFTP_PATH_BYTES]
-        count :: normalize(ssh.get_string(packet, &reader), relative[0..<SFTP_PATH_BYTES]) or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
+        count :: normalize(ssh.get_string(packet, &reader), relative[0..<SFTP_PATH_BYTES])
+            or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
         path :: ssh.range(relative[0..<SFTP_PATH_BYTES], 0, count)
         attrs_answer(sftp, id, path)
         return void
     }
     if kind == SSH_FXP_OPEN || kind == SSH_FXP_OPENDIR {
         relative : u8[SFTP_PATH_BYTES]
-        count :: normalize(ssh.get_string(packet, &reader), relative[0..<SFTP_PATH_BYTES]) or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
+        count :: normalize(ssh.get_string(packet, &reader), relative[0..<SFTP_PATH_BYTES])
+            or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
         flags :: if kind == SSH_FXP_OPEN { ssh.get_u32(packet, &reader) } else { cast[u32](0) }
         open(sftp, id, ssh.range(relative[0..<SFTP_PATH_BYTES], 0, count), kind == SSH_FXP_OPENDIR, flags)
         return void
     }
-    if kind == SSH_FXP_CLOSE || kind == SSH_FXP_READ || kind == SSH_FXP_WRITE || kind == SSH_FXP_READDIR || kind == SSH_FXP_FSTAT
+    if kind == SSH_FXP_CLOSE
+        || kind == SSH_FXP_READ
+        || kind == SSH_FXP_WRITE
+        || kind == SSH_FXP_READDIR
+        || kind == SSH_FXP_FSTAT
         || kind == SSH_FXP_FSETSTAT {
         index :: handle_index(ssh.get_string(packet, &reader)) or_return status(sftp, id, SSH_FX_FAILURE)
         if index >= sftp.handles.count || !sftp.handles[index].used {
@@ -197,7 +205,13 @@ request :: fn(sftp: ptr[mut Sftp], packet: u8[]) {
         else if kind == SSH_FXP_READ {
             offset :: (cast[u64](ssh.get_u32(packet, &reader)) << 32) | cast[u64](ssh.get_u32(packet, &reader))
             wanted :: ssh.get_u32(packet, &reader)
-            read(sftp, id, handle, offset, if wanted < cast[u32](SFTP_READ_BYTES) { cast[usize](wanted) } else { cast[usize](SFTP_READ_BYTES) })
+            read(
+                sftp,
+                id,
+                handle,
+                offset,
+                if wanted < cast[u32](SFTP_READ_BYTES) { cast[usize](wanted) } else { cast[usize](SFTP_READ_BYTES) }
+            )
         }
         else if kind == SSH_FXP_WRITE {
             offset :: (cast[u64](ssh.get_u32(packet, &reader)) << 32) | cast[u64](ssh.get_u32(packet, &reader))
@@ -230,22 +244,32 @@ request :: fn(sftp: ptr[mut Sftp], packet: u8[]) {
     }
     if kind == SSH_FXP_REMOVE || kind == SSH_FXP_MKDIR || kind == SSH_FXP_RMDIR {
         relative : u8[SFTP_PATH_BYTES]
-        count :: normalize(ssh.get_string(packet, &reader), relative[0..<SFTP_PATH_BYTES]) or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
+        count :: normalize(ssh.get_string(packet, &reader), relative[0..<SFTP_PATH_BYTES])
+            or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
         if count == 0 {
             status(sftp, id, SSH_FX_PERMISSION_DENIED)
             return void
         }
         path :: string_of(&relative[0], count)
-        failed :: if kind == SSH_FXP_REMOVE { os.delete_file_in(sftp.home, path) } else if kind == SSH_FXP_MKDIR { os.make_directory_in(sftp.home, path) }
-            else { os.remove_directory_in(sftp.home, path) }
+        failed :: if kind == SSH_FXP_REMOVE {
+            os.delete_file_in(sftp.home, path)
+        }
+        else if kind == SSH_FXP_MKDIR {
+            os.make_directory_in(sftp.home, path)
+        }
+        else {
+            os.remove_directory_in(sftp.home, path)
+        }
         status(sftp, id, code_of(failed))
         return void
     }
     if kind == SSH_FXP_RENAME {
         from : u8[SFTP_PATH_BYTES]
         to : u8[SFTP_PATH_BYTES]
-        from_count :: normalize(ssh.get_string(packet, &reader), from[0..<SFTP_PATH_BYTES]) or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
-        to_count :: normalize(ssh.get_string(packet, &reader), to[0..<SFTP_PATH_BYTES]) or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
+        from_count :: normalize(ssh.get_string(packet, &reader), from[0..<SFTP_PATH_BYTES])
+            or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
+        to_count :: normalize(ssh.get_string(packet, &reader), to[0..<SFTP_PATH_BYTES])
+            or_return status(sftp, id, SSH_FX_NO_SUCH_FILE)
         if from_count == 0 || to_count == 0 {
             status(sftp, id, SSH_FX_PERMISSION_DENIED)
             return void
@@ -257,7 +281,7 @@ request :: fn(sftp: ptr[mut Sftp], packet: u8[]) {
 }
 
 /** Open a file or a directory as a new handle, answered with it. */
-open :: fn(sftp: ptr[mut Sftp], id: u32, path: u8[], directory: bool, flags: u32) {
+open :: fn(sftp : ptr[mut Sftp], id : u32, path : u8[], directory : bool, flags : u32) {
     free := sftp.handles.count
     for &each, i in sftp.handles {
         if !each.used && free == sftp.handles.count {
@@ -285,13 +309,19 @@ open :: fn(sftp: ptr[mut Sftp], id: u32, path: u8[], directory: bool, flags: u32
             status(sftp, id, SSH_FX_FAILURE)
             return void
         }
-        mode :: if !writing { os.OpenMode.READ } else if flags & SSH_FXF_APPEND != 0 { os.OpenMode.APPEND }
-            else if flags & SSH_FXF_TRUNC != 0 || there == .NOTHING { os.OpenMode.WRITE } else { os.OpenMode.READ_WRITE }
+        mode :: if !writing {
+            os.OpenMode.READ
+        }
+        else if flags & SSH_FXF_APPEND != 0 {
+            os.OpenMode.APPEND
+        }
+        else if flags & SSH_FXF_TRUNC != 0 || there == .NOTHING { os.OpenMode.WRITE } else { os.OpenMode.READ_WRITE }
         if writing && there == .NOTHING && flags & SSH_FXF_CREAT == 0 {
             status(sftp, id, SSH_FX_NO_SUCH_FILE)
             return void
         }
-        file :: os.open_in(sftp.home, text, mode) or_return status(sftp, id, if there == .NOTHING { SSH_FX_NO_SUCH_FILE } else { SSH_FX_PERMISSION_DENIED })
+        file :: os.open_in(sftp.home, text, mode)
+            or_return status(sftp, id, if there == .NOTHING { SSH_FX_NO_SUCH_FILE } else { SSH_FX_PERMISSION_DENIED })
         handle^ = SftpHandle.{used = true, file = file, writing = writing}
     }
     for byte, i in path {
@@ -311,14 +341,15 @@ open :: fn(sftp: ptr[mut Sftp], id: u32, path: u8[], directory: bool, flags: u32
 }
 
 /** Read from a file's handle, from an offset: from where it is, or opened again and read on to it. */
-read :: fn(sftp: ptr[mut Sftp], id: u32, handle: ptr[mut SftpHandle], offset: u64, wanted: usize) {
+read :: fn(sftp : ptr[mut Sftp], id : u32, handle : ptr[mut SftpHandle], offset : u64, wanted : usize) {
     if handle.directory || handle.writing {
         status(sftp, id, SSH_FX_FAILURE)
         return void
     }
     if offset < handle.position {
         os.close(handle.file)
-        handle.file = os.open_in(sftp.home, string_of(&handle.path[0], handle.path_count), .READ) or_return status(sftp, id, SSH_FX_FAILURE)
+        handle.file = os.open_in(sftp.home, string_of(&handle.path[0], handle.path_count), .READ)
+            or_return status(sftp, id, SSH_FX_FAILURE)
         handle.position = 0
     }
     writer := ssh.Writer.{}
@@ -331,8 +362,17 @@ read :: fn(sftp: ptr[mut Sftp], id: u32, handle: ptr[mut SftpHandle], offset: u6
     loop {
         // What's before the offset read and passed over
         skipping :: handle.position < offset
-        room :: if skipping { if offset - handle.position < cast[u64](data.count) { cast[usize](offset - handle.position) } else { data.count } }
-            else { data.count - got }
+        room :: if skipping {
+            if offset - handle.position < cast[u64](data.count) {
+                cast[usize](offset - handle.position)
+            }
+            else {
+                data.count
+            }
+        }
+        else {
+            data.count - got
+        }
         into :: if skipping { ssh.range_mut(data, 0, room) } else { ssh.range_mut(data, got, got + room) }
         count :: os.read(handle.file, into) or_else 0
         if count == 0 {
@@ -354,7 +394,7 @@ read :: fn(sftp: ptr[mut Sftp], id: u32, handle: ptr[mut SftpHandle], offset: u6
 }
 
 /** Answer a READDIR with the next entries, or EOF. */
-read_directory :: fn(sftp: ptr[mut Sftp], id: u32, handle: ptr[mut SftpHandle]) {
+read_directory :: fn(sftp : ptr[mut Sftp], id : u32, handle : ptr[mut SftpHandle]) {
     if !handle.directory || handle.next >= handle.listing.count {
         status(sftp, id, SSH_FX_EOF)
         return void
@@ -387,7 +427,7 @@ read_directory :: fn(sftp: ptr[mut Sftp], id: u32, handle: ptr[mut SftpHandle]) 
 }
 
 /** The size of a file in a listed directory. */
-size_of_in :: fn(sftp: ptr[mut Sftp], handle: ptr[SftpHandle], name: u8[]) -> u64 {
+size_of_in :: fn(sftp : ptr[mut Sftp], handle : ptr[SftpHandle], name : u8[]) -> u64 {
     path : u8[SFTP_PATH_BYTES]
     at := cast[usize](0)
     for byte in ssh.range(handle.path[0..<SFTP_PATH_BYTES], 0, handle.path_count) {
@@ -409,14 +449,14 @@ size_of_in :: fn(sftp: ptr[mut Sftp], handle: ptr[SftpHandle], name: u8[]) -> u6
 }
 
 /** A file's size, by its path; 0 if it can't be read. */
-file_size_at :: fn(sftp: ptr[mut Sftp], path: string) -> u64 {
+file_size_at :: fn(sftp : ptr[mut Sftp], path : string) -> u64 {
     file :: os.open_in(sftp.home, path, .READ) or_return 0
     defer os.close(file)
     return os.file_size(file) or_else 0
 }
 
 /** Answer with a path's attributes, or NO_SUCH_FILE. */
-attrs_answer :: fn(sftp: ptr[mut Sftp], id: u32, path: u8[]) {
+attrs_answer :: fn(sftp : ptr[mut Sftp], id : u32, path : u8[]) {
     directory := path.count == 0
     size := cast[u64](0)
     if path.count > 0 {
@@ -439,7 +479,7 @@ attrs_answer :: fn(sftp: ptr[mut Sftp], id: u32, path: u8[]) {
 }
 
 /** Answer with one name: a path, as REALPATH's answer, its attributes a directory's. */
-name_answer :: fn(sftp: ptr[mut Sftp], id: u32, name: u8[], directory: bool, size: u64) {
+name_answer :: fn(sftp : ptr[mut Sftp], id : u32, name : u8[], directory : bool, size : u64) {
     writer := ssh.Writer.{}
     out :: sftp.message[0..<sftp.message.count]
     put_header(out, &writer, SSH_FXP_NAME)
@@ -452,7 +492,7 @@ name_answer :: fn(sftp: ptr[mut Sftp], id: u32, name: u8[], directory: bool, siz
 }
 
 /** Write attributes: a size and permissions, 0755 for a directory, 0644 for a file. */
-put_attrs :: fn(out: mut u8[], writer: ptr[mut ssh.Writer], directory: bool, size: u64) {
+put_attrs :: fn(out : mut u8[], writer : ptr[mut ssh.Writer], directory : bool, size : u64) {
     ssh.put_u32(out, writer, SSH_FILEXFER_ATTR_SIZE | SSH_FILEXFER_ATTR_PERMISSIONS)
     ssh.put_u32(out, writer, cast[u32](size >> 32))
     ssh.put_u32(out, writer, cast[u32](size))
@@ -460,9 +500,15 @@ put_attrs :: fn(out: mut u8[], writer: ptr[mut ssh.Writer], directory: bool, siz
 }
 
 /** Write ls -l's line for a name, which sftp's ls -l shows. */
-put_long_name :: fn(out: mut u8[], writer: ptr[mut ssh.Writer], name: u8[], directory: bool, size: u64) {
+put_long_name :: fn(out : mut u8[], writer : ptr[mut ssh.Writer], name : u8[], directory : bool, size : u64) {
     at :: ssh.start_string(out, writer)
-    ssh.put_bytes(out, writer, string_bytes(if directory { "drwxr-xr-x    1 user     user     " } else { "-rw-r--r--    1 user     user     " }))
+    ssh.put_bytes(
+        out,
+        writer,
+        string_bytes(
+            if directory { "drwxr-xr-x    1 user     user     " } else { "-rw-r--r--    1 user     user     " }
+        )
+    )
     digits : u8[20]
     count := cast[usize](0)
     left := size
@@ -485,34 +531,54 @@ put_long_name :: fn(out: mut u8[], writer: ptr[mut ssh.Writer], name: u8[], dire
 }
 
 /** Answer with a status. */
-status :: fn(sftp: ptr[mut Sftp], id: u32, code: u32) {
+status :: fn(sftp : ptr[mut Sftp], id : u32, code : u32) {
     writer := ssh.Writer.{}
     out :: sftp.message[0..<sftp.message.count]
     put_header(out, &writer, SSH_FXP_STATUS)
     ssh.put_u32(out, &writer, id)
     ssh.put_u32(out, &writer, code)
-    ssh.put_text(out, &writer, if code == SSH_FX_OK { "OK" } else if code == SSH_FX_EOF { "end of file" } else if code == SSH_FX_NO_SUCH_FILE { "no such file" }
-        else if code == SSH_FX_PERMISSION_DENIED { "not allowed" } else if code == SSH_FX_OP_UNSUPPORTED { "not supported" } else { "failed" })
+    ssh.put_text(
+        out,
+        &writer,
+        if code == SSH_FX_OK {
+            "OK"
+        }
+        else if code == SSH_FX_EOF {
+            "end of file"
+        }
+        else if code == SSH_FX_NO_SUCH_FILE {
+            "no such file"
+        }
+        else if code == SSH_FX_PERMISSION_DENIED {
+            "not allowed"
+        }
+        else if code == SSH_FX_OP_UNSUPPORTED { "not supported" } else { "failed" }
+    )
     ssh.put_text(out, &writer, "en")
     send(sftp, out, &writer)
 }
 
 /** A status for what a file call gave. */
-code_of :: fn(error: os.OsError?) -> u32 {
+code_of :: fn(error : os.OsError?) -> u32 {
     match error {
         case None => return SSH_FX_OK
-        case Some(failure) => return if failure == .NotFound { SSH_FX_NO_SUCH_FILE } else if failure == .AccessDenied { SSH_FX_PERMISSION_DENIED } else { SSH_FX_FAILURE }
+        case Some(
+            failure
+        ) => return if failure == .NotFound {
+            SSH_FX_NO_SUCH_FILE
+        }
+        else if failure == .AccessDenied { SSH_FX_PERMISSION_DENIED } else { SSH_FX_FAILURE }
     }
 }
 
 /** Start an answer: room for its length, then its type. */
-put_header :: fn(out: mut u8[], writer: ptr[mut ssh.Writer], kind: u8) {
+put_header :: fn(out : mut u8[], writer : ptr[mut ssh.Writer], kind : u8) {
     ssh.put_u32(out, writer, 0)
     ssh.put_u8(out, writer, kind)
 }
 
 /** Send an answer: its length filled in, and added to the outbox. */
-send :: fn(sftp: ptr[mut Sftp], out: mut u8[], writer: ptr[mut ssh.Writer]) {
+send :: fn(sftp : ptr[mut Sftp], out : mut u8[], writer : ptr[mut ssh.Writer]) {
     if writer.overflow || writer.at < 4 {
         return void
     }
@@ -529,7 +595,7 @@ send :: fn(sftp: ptr[mut Sftp], out: mut u8[], writer: ptr[mut ssh.Writer]) {
 }
 
 /** A handle's index, from its one byte. */
-handle_index :: fn(handle: u8[]) -> usize? {
+handle_index :: fn(handle : u8[]) -> usize? {
     if handle.count != 1 || handle[0] < 0x30 {
         return null
     }
@@ -537,7 +603,7 @@ handle_index :: fn(handle: u8[]) -> usize? {
 }
 
 /** Close a handle. */
-close_handle :: fn(handle: ptr[mut SftpHandle]) {
+close_handle :: fn(handle : ptr[mut SftpHandle]) {
     if handle.directory {
         os.free_directory_listing(handle.listing)
     }
@@ -548,7 +614,7 @@ close_handle :: fn(handle: ptr[mut SftpHandle]) {
 }
 
 /** Close every handle and the home, as the stream ends, and give the Sftp back. */
-end_sftp :: fn(sftp: ptr[mut Sftp]) {
+end_sftp :: fn(sftp : ptr[mut Sftp]) {
     for &handle in sftp.handles {
         if handle.used {
             close_handle(handle)
@@ -566,7 +632,7 @@ end_sftp :: fn(sftp: ptr[mut Sftp]) {
  * @param into Where the path goes, its parts between '/'; empty for the home itself.
  * @return Its length; null if it's too long, or has a 0 byte.
  */
-normalize :: fn(path: u8[], into: mut u8[]) -> usize? {
+normalize :: fn(path : u8[], into : mut u8[]) -> usize? {
     count := cast[usize](0)
     start := cast[usize](0)
     for i in cast[usize](0)..<path.count + 1 {

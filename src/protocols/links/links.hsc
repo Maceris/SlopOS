@@ -121,7 +121,7 @@ Response :: union {
  * @return False for Issue, which issues a link each time; true for Resolve, which opens again, except a File that has
  *     to be new, which the first open made.
  */
-is_idempotent :: fn(request: ptr[Request]) -> bool {
+is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Issue(_) => false
         case Resolve(resolving) => resolving.opening.kind != .File || resolving.opening.creation != .New

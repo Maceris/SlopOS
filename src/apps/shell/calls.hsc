@@ -1,17 +1,17 @@
 package shell
 
 import runtime from "base:runtime"
-import shell_language as language from "../../shell_language"
 import os from "std:os"
-import schema from "std:schema"
 import slop_os from "std:os/slop_os"
-import process_manager from "std:os/slop_os/process_manager"
-import network from "std:os/slop_os/network"
-import lifecycle from "std:os/slop_os/lifecycle"
 import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
+import lifecycle from "std:os/slop_os/lifecycle"
+import network from "std:os/slop_os/network"
+import process_manager from "std:os/slop_os/process_manager"
 import terminal as protocol from "std:os/slop_os/terminal"
+import schema from "std:schema"
 import programs from "../../protocols/programs"
+import shell_language as language from "../../shell_language"
 
 /*
  * Calls to programs through their manifests (design/shell.md §3, decisions/0170): the program found in the bundle
@@ -89,7 +89,7 @@ Parameter :: struct {
  * @param tree The Call node, its text the program's name.
  * @return The program's value: its output's records, or Null without an output (run_programs).
  */
-run_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+run_program :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
     trees : ptr[Node][..]
     defer runtime.array_free(&trees)
     runtime.array_add(&trees, tree)
@@ -109,8 +109,13 @@ run_program :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[V
  *     can't, and one for which it's optional goes without.
  * @return The call, on the heap, the caller's to start and then end with end_call.
  */
-prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], background: bool) -> Result[ptr[mut Call], EvalError] {
-    found :: find_program(shell, tree.text) or_return .Error(EvalError.{message = message("there's no command named %", tree.text), at = tree.at})
+prepare_call :: fn(
+    shell : ptr[mut Shell],
+    tree #escaping : ptr[Node],
+    background : bool
+) -> Result[ptr[mut Call], EvalError] {
+    found :: find_program(shell, tree.text)
+        or_return .Error(EvalError.{message = message("there's no command named %", tree.text), at = tree.at})
     call := runtime.new(Call)
     call.tree = tree
     call.executable = found.executable
@@ -122,9 +127,14 @@ prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], background
     }
     manifest :: read_manifest(found)
     _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
-    call.manifest = manifest or_return .Error(EvalError.{message = message("%'s manifest isn't one the shell can read", tree.text), at = tree.at})
-    entry :: schema.type_in(&call.manifest, 0) or_return .Error(EvalError.{message = message("%'s manifest isn't one the shell can read", tree.text),
-        at = tree.at})
+    call.manifest = manifest
+        or_return .Error(
+            EvalError.{message = message("%'s manifest isn't one the shell can read", tree.text), at = tree.at}
+        )
+    entry :: schema.type_in(&call.manifest, 0)
+        or_return .Error(
+            EvalError.{message = message("%'s manifest isn't one the shell can read", tree.text), at = tree.at}
+        )
     if entry.kind != .Function {
         return .Error(EvalError.{message = message("%'s manifest isn't an entry's", tree.text), at = tree.at})
     }
@@ -140,15 +150,23 @@ prepare_call :: fn(shell: ptr[mut Shell], tree #escaping : ptr[Node], background
             match value_for(shell, &call.manifest, tree, parameter)? {
                 case Some(bytes) => {
                     runtime.array_add(&call.written, bytes)
-                    runtime.array_add(&call.values, os.NamedValue.{name = parameter.name, hash = schema.hash_rooted(&call.manifest, parameter.held),
-                        value = bytes})
+                    runtime.array_add(
+                        &call.values,
+                        os.NamedValue.{
+                            name = parameter.name,
+                            hash = schema.hash_rooted(&call.manifest, parameter.held),
+                            value = bytes,
+                        }
+                    )
                 }
                 case None => {}
             }
         }
         else if parameter.giving != .Input && parameter.giving != .Output {
             match grant_for(shell, tree, parameter, background)? {
-                case Some(handle) => runtime.array_add(&call.grants, os.NamedGrant.{label = parameter.name, handle = handle})
+                case Some(
+                    handle
+                ) => runtime.array_add(&call.grants, os.NamedGrant.{label = parameter.name, handle = handle})
                 case None => {}
             }
         }
@@ -203,10 +221,13 @@ Call :: struct {
     has_result : bool,
     /** What its program's entry gave back as an Ok, once it's ended (read_result); Null for nothing. */
     returned : Value,
-    /** The memory it's given to run on, in bytes; 0 for PROGRAM_BUDGET, a program's, and SCRIPT_BUDGET for a script's. */
+    /**
+     * The memory it's given to run on, in bytes; 0 for PROGRAM_BUDGET, a program's, and SCRIPT_BUDGET for a script's.
+     */
     budget : u64,
     /**
-     * Once it's started: the CPU budget it runs on, a child of the session's (decisions/0187), the owning handle, closed
+     * Once it's started: the CPU budget it runs on, a child of the session's (decisions/0187), the owning handle,
+     * closed
      * by end_call; NO_HANDLE when it runs on the shell's.
      */
     cpu_budget : slop_os.CpuBudget,
@@ -219,7 +240,7 @@ Call :: struct {
  * @param giving The kind, like Input or Output.
  * @return The first parameter given it, in the call; null if none is.
  */
-parameter_giving :: fn(call: ptr[Call], giving: Giving) -> ptr[Parameter]? {
+parameter_giving :: fn(call : ptr[Call], giving : Giving) -> ptr[Parameter]? {
     for &parameter in call.parameters {
         if parameter.giving == giving {
             return parameter
@@ -234,15 +255,18 @@ parameter_giving :: fn(call: ptr[Call], giving: Giving) -> ptr[Parameter]? {
  *
  * @param call The call, freed: it can't be used after.
  */
-end_call :: fn(call: ptr[mut Call]) {
+end_call :: fn(call : ptr[mut Call]) {
     if !call.started {
         for grant in call.grants {
             _ = slop_os.handle_close(grant.handle)
         }
     }
     else {
-        for handle in slop_os.Handle.[cast[slop_os.Handle](call.launched.process), cast[slop_os.Handle](call.launched.budget),
-            cast[slop_os.Handle](call.lifecycle)] {
+        for handle in slop_os.Handle.[
+            cast[slop_os.Handle](call.launched.process),
+            cast[slop_os.Handle](call.launched.budget),
+            cast[slop_os.Handle](call.lifecycle)
+        ] {
             _ = slop_os.handle_close(handle)
         }
         match call.launched.faults {
@@ -283,7 +307,7 @@ PROGRAM_SHARE_PARTS : u64 : 8
  * @param shell The shell, whose cpu_budget it's split off, and whose memory budget pays for it.
  * @return The owning handle, the call's to keep while it runs; NO_HANDLE for none.
  */
-program_cpu_budget :: fn(shell: ptr[Shell]) -> slop_os.CpuBudget {
+program_cpu_budget :: fn(shell : ptr[Shell]) -> slop_os.CpuBudget {
     none :: cast[slop_os.CpuBudget](slop_os.NO_HANDLE)
     if cast[slop_os.Handle](shell.cpu_budget) == slop_os.NO_HANDLE {
         return none
@@ -293,7 +317,14 @@ program_cpu_budget :: fn(shell: ptr[Shell]) -> slop_os.CpuBudget {
     if time == 0 {
         return none
     }
-    return slop_os.cpu_budget_create(shell.cpu_budget, slop_os.startup_block().budget, cast[u32](session.priority), session.period, time) or_else none
+    return slop_os.cpu_budget_create(
+        shell.cpu_budget,
+        slop_os.startup_block().budget,
+        cast[u32](session.priority),
+        session.period,
+        time
+    )
+        or_else none
 }
 
 /**
@@ -302,7 +333,7 @@ program_cpu_budget :: fn(shell: ptr[Shell]) -> slop_os.CpuBudget {
  * @param budget The budget, kept by the caller; NO_HANDLE for none.
  * @return The copy, which moves to the launch; null for none, or one that can't be copied.
  */
-bindable_copy :: fn(budget: slop_os.CpuBudget) -> slop_os.CpuBudget? {
+bindable_copy :: fn(budget : slop_os.CpuBudget) -> slop_os.CpuBudget? {
     if cast[slop_os.Handle](budget) == slop_os.NO_HANDLE {
         return null
     }
@@ -325,13 +356,17 @@ bindable_copy :: fn(budget: slop_os.CpuBudget) -> slop_os.CpuBudget? {
  *     the launch's error. A launch that fails leaves the lifecycle channel and the grants' copies the shell's, and
  *     they're closed.
  */
-start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalError? {
+start_call :: fn(shell : ptr[mut Shell], call : ptr[mut Call], key : u64) -> EvalError? {
     tree :: call.tree
-    manager :: shell.manager or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
+    manager :: shell.manager
+        or_return EvalError.{message = "the shell can't start programs: it has no process manager", at = tree.at}
     block :: slop_os.startup_block()
     ends :: lifecycle.make(block.budget) or_return EvalError.{message = "there's no memory to start it", at = tree.at}
-    options := os.LaunchOptions.{watch = os.LaunchWatch.{port = watch_port(shell), key = key}, lifecycle = ends.b,
-        faults = os.LaunchFaults.{port = watch_port(shell), key = key + FAULT_KEY}}
+    options := os.LaunchOptions.{
+        watch = os.LaunchWatch.{port = watch_port(shell), key = key},
+        lifecycle = ends.b,
+        faults = os.LaunchFaults.{port = watch_port(shell), key = key + FAULT_KEY},
+    }
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
@@ -339,7 +374,16 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
     own_cpu :: program_cpu_budget(shell)
     options.cpu_budget = bindable_copy(own_cpu)
     budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
-    match os.launch_named(manager, shell.manager_port, tree.text, call.executable, budget, call.grants, call.values, options) {
+    match os.launch_named(
+        manager,
+        shell.manager_port,
+        tree.text,
+        call.executable,
+        budget,
+        call.grants,
+        call.values,
+        options
+    ) {
         case Ok(made) => {
             call.started = true
             call.launched = made
@@ -347,7 +391,13 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
             call.lifecycle = ends.a
             call.key = key
             // Its lifecycle channel wakes the shell when it says its progress; without the binding, it's read anyway
-            _ = slop_os.port_bind(watch_port(shell), cast[slop_os.Handle](ends.a), slop_os.SIGNAL_READABLE, key + LIFECYCLE_KEY, .Persistent)
+            _ = slop_os.port_bind(
+                watch_port(shell),
+                cast[slop_os.Handle](ends.a),
+                slop_os.SIGNAL_READABLE,
+                key + LIFECYCLE_KEY,
+                .Persistent
+            )
             return null
         }
         case Error(error) => {
@@ -375,7 +425,7 @@ start_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], key: u64) -> EvalEr
  *     an error saying it was ended, or with what code, if not, or that the shell's port couldn't be waited on, when
  *     its end's never seen.
  */
-wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Running]) -> EvalError? {
+wait_call :: fn(shell : ptr[mut Shell], call : ptr[mut Call], running : ptr[mut Running]) -> EvalError? {
     if !call.started || call.waited {
         return null
     }
@@ -384,7 +434,8 @@ wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Run
     call.waited = true
     _ = slop_os.port_unbind(watch_port(shell), call.key)
     _ = slop_os.port_unbind(watch_port(shell), call.key + LIFECYCLE_KEY)
-    ended :: waited or_return EvalError.{message = message("the shell couldn't wait for % to end", tree.text), at = tree.at}
+    ended :: waited
+        or_return EvalError.{message = message("the shell couldn't wait for % to end", tree.text), at = tree.at}
     // What its entry gave back, which an Error makes its error
     match read_result(shell, call, ended) {
         case Some(error) => return error
@@ -394,7 +445,10 @@ wait_call :: fn(shell: ptr[mut Shell], call: ptr[mut Call], running: ptr[mut Run
         return null
     }
     if call.crashed {
-        return EvalError.{message = message("% crashed: %; crashes shows where", tree.text, slop_os.fault_name(call.fault)), at = tree.at}
+        return EvalError.{
+            message = message("% crashed: %; crashes shows where", tree.text, slop_os.fault_name(call.fault)),
+            at = tree.at,
+        }
     }
     if ended == slop_os.EXIT_KILLED {
         return EvalError.{message = message("% was ended", tree.text), at = tree.at}
@@ -417,7 +471,7 @@ EndedProgram :: struct {
  * @return The copy, a handle that can only be read and moved, which the launch gives the program; null if the shell
  *     wasn't given one, or it couldn't be copied.
  */
-copy_of_grant :: fn(label: string) -> slop_os.Memory? {
+copy_of_grant :: fn(label : string) -> slop_os.Memory? {
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
     for &grant in slop_os.grants_of(slop_os.startup_block()) {
         if grant.kind == .Memory && slop_os.label_of(grant) == label {
@@ -435,7 +489,7 @@ copy_of_grant :: fn(label: string) -> slop_os.Memory? {
  *
  * @param copy The copy, as copy_of_grant made it, closed; null for none, when nothing is.
  */
-close_copy :: fn(copy: slop_os.Memory?) {
+close_copy :: fn(copy : slop_os.Memory?) {
     match copy {
         case Some(memory) => _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         case None => {}
@@ -451,7 +505,7 @@ close_copy :: fn(copy: slop_os.Memory?) {
  * @return Its executable and manifest, handles the caller owns and closes; null without a programs connection, for a
  *     name too short or long, if it couldn't be asked, or if there's no such program.
  */
-find_program :: fn(shell: ptr[mut Shell], name: string) -> programs.Program? {
+find_program :: fn(shell : ptr[mut Shell], name : string) -> programs.Program? {
     connection :: shell.programs or_return null
     if name.count == 0 || name.count > programs.MAX_NAME {
         return null
@@ -482,13 +536,20 @@ find_program :: fn(shell: ptr[mut Shell], name: string) -> programs.Program? {
  * @param found The program, whose manifest memory stays the caller's to close.
  * @return The manifest, the caller's to free; null if it's empty, couldn't be mapped, or isn't a schema.
  */
-read_manifest :: fn(found: programs.Program) -> schema.Schema? {
+read_manifest :: fn(found : programs.Program) -> schema.Schema? {
     size :: (found.manifest_size + 4095) & ~cast[u64](4095)
     if found.manifest_size == 0 {
         return null
     }
     address :: runtime.reserve_addresses(cast[usize](size)) or_return null
-    if slop_os.memory_map(found.manifest, slop_os.startup_block().space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+    if slop_os.memory_map(
+        found.manifest,
+        slop_os.startup_block().space,
+        address,
+        0,
+        size,
+        slop_os.PROTECTION_READ
+    ) is_error {
         return null
     }
     defer {
@@ -507,7 +568,7 @@ read_manifest :: fn(found: programs.Program) -> schema.Schema? {
  * @param input The entry's input, whose name the parameter views.
  * @return The parameter, given no argument yet.
  */
-parameter_of :: fn(manifest: ptr[schema.Schema], input: schema.Input) -> Parameter {
+parameter_of :: fn(manifest : ptr[schema.Schema], input : schema.Input) -> Parameter {
     made := Parameter.{name = input.name, type = input.type, held = input.type}
     match some_of(manifest, input.type) {
         case Some(held) => {
@@ -542,7 +603,7 @@ parameter_of :: fn(manifest: ptr[schema.Schema], input: schema.Input) -> Paramet
  * @param place The type's place among the manifest's types, taken as it is: an alias isn't followed.
  * @return The place of T; null if the type isn't such an optional.
  */
-some_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize? {
+some_of :: fn(manifest : ptr[schema.Schema], place : usize) -> usize? {
     type :: schema.type_in(manifest, place) or_return null
     if type.kind != .Union || type.null_is_none || type.variants.count != 2 {
         return null
@@ -565,7 +626,7 @@ some_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize? {
  * @return Input for a Stream, Output for a Sink, Terminal, Dir, File or ReadOnlyFile for a Channel of those protocols,
  *     Other for any other handle or a type not in the manifest, and Value for anything else.
  */
-giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
+giving_of :: fn(manifest : ptr[schema.Schema], place : usize) -> Giving {
     type :: schema.type_in(manifest, place) or_return Giving.Other
     if type.size != 4 || (type.kind != .Struct && type.kind != .Alias) {
         return .Value
@@ -624,7 +685,7 @@ giving_of :: fn(manifest: ptr[schema.Schema], place: usize) -> Giving {
  * @param place The Stream's or Sink's type's place among the manifest's types.
  * @return The records' type's place; schema.NOWHERE if the type has no records member that's an array.
  */
-records_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize {
+records_of :: fn(manifest : ptr[schema.Schema], place : usize) -> usize {
     type :: schema.type_in(manifest, place) or_return schema.NOWHERE
     for member in type.members {
         if member.name == "records" {
@@ -648,21 +709,28 @@ records_of :: fn(manifest: ptr[schema.Schema], place: usize) -> usize {
  * @param parameters The program's parameters, whose argument and flag are set.
  * @return Null.
  */
-match_arguments :: fn(tree: ptr[Node], parameters: ptr[mut Parameter[..]]) -> Result[Value, EvalError] {
+match_arguments :: fn(tree : ptr[Node], parameters : ptr[mut Parameter[..]]) -> Result[Value, EvalError] {
     at : usize = 0
     loop {
         argument :: child(tree, at) or_break
         at += 1
         if argument.kind == .Named {
-            parameter :: named_parameter(parameters, argument.text) or_return error_at(argument.at, message("% takes no --%", tree.text, argument.text))
+            parameter :: named_parameter(parameters, argument.text)
+                or_return error_at(argument.at, message("% takes no --%", tree.text, argument.text))
             if (parameter.argument is_some) || parameter.flag {
                 return error_at(argument.at, message("--% is given twice", argument.text))
             }
             if parameter.giving == .Terminal {
-                return error_at(argument.at, message("--% is the shell's terminal, which it's given without asking", argument.text))
+                return error_at(
+                    argument.at,
+                    message("--% is the shell's terminal, which it's given without asking", argument.text)
+                )
             }
             if parameter.giving == .Powerbox {
-                return error_at(argument.at, message("--% is the session's powerbox, which it's given without asking", argument.text))
+                return error_at(
+                    argument.at,
+                    message("--% is the session's powerbox, which it's given without asking", argument.text)
+                )
             }
             if parameter.giving == .Input || parameter.giving == .Output {
                 return error_at(argument.at, message("--% is a pipeline's, given by |", argument.text))
@@ -680,7 +748,8 @@ match_arguments :: fn(tree: ptr[Node], parameters: ptr[mut Parameter[..]]) -> Re
             at += 1
             continue
         }
-        parameter :: next_positional(parameters) or_return error_at(argument.at, message("% takes no more arguments", tree.text))
+        parameter :: next_positional(parameters)
+            or_return error_at(argument.at, message("% takes no more arguments", tree.text))
         parameter.argument = argument
     }
     return .Ok(.Null)
@@ -695,7 +764,7 @@ match_arguments :: fn(tree: ptr[Node], parameters: ptr[mut Parameter[..]]) -> Re
  *     Hemera's names have no -, so --ignore-case names ignore_case.
  * @return The parameter, in parameters; null if none has the name.
  */
-named_parameter :: fn(parameters: ptr[mut Parameter[..]], name: string) -> ptr[mut Parameter]? {
+named_parameter :: fn(parameters : ptr[mut Parameter[..]], name : string) -> ptr[mut Parameter]? {
     for &parameter in parameters^ {
         if same_option(parameter.name, name) {
             return parameter
@@ -711,7 +780,7 @@ named_parameter :: fn(parameters: ptr[mut Parameter[..]], name: string) -> ptr[m
  * @param typed The name typed, without its --.
  * @return True if they match.
  */
-same_option :: fn(parameter: string, typed: string) -> bool {
+same_option :: fn(parameter : string, typed : string) -> bool {
     named :: string_bytes(parameter)
     given :: string_bytes(typed)
     if named.count != given.count {
@@ -731,7 +800,7 @@ same_option :: fn(parameter: string, typed: string) -> bool {
  * @param name The parameter's name.
  * @return The name typed, on the heap, never freed; the name itself when it has no _.
  */
-option_name :: fn(name: string) -> string {
+option_name :: fn(name : string) -> string {
     bytes :: string_bytes(name)
     changed : u8[..]
     for byte in bytes {
@@ -749,10 +818,14 @@ option_name :: fn(name: string) -> string {
  * @param parameters The program's parameters, searched in order: one that's flagged or has an argument is taken.
  * @return The parameter, in parameters; null if none is left.
  */
-next_positional :: fn(parameters: ptr[mut Parameter[..]]) -> ptr[mut Parameter]? {
+next_positional :: fn(parameters : ptr[mut Parameter[..]]) -> ptr[mut Parameter]? {
     for &parameter in parameters^ {
-        if (parameter.argument is_none) && !parameter.flag && (parameter.giving == .Value || parameter.giving == .Dir || parameter.giving == .File
-            || parameter.giving == .ReadOnlyFile) {
+        if (parameter.argument is_none)
+            && !parameter.flag
+            && (parameter.giving == .Value
+                || parameter.giving == .Dir
+                || parameter.giving == .File
+                || parameter.giving == .ReadOnlyFile) {
             return parameter
         }
     }
@@ -765,7 +838,7 @@ next_positional :: fn(parameters: ptr[mut Parameter[..]]) -> ptr[mut Parameter]?
  * @param node The argument; null for none.
  * @return True for a Word of true or false.
  */
-is_bool_word :: fn(node: ptr[mut Node]?) -> bool {
+is_bool_word :: fn(node : ptr[mut Node]?) -> bool {
     found :: node or_return false
     return found.kind == .Word && (found.text == "true" || found.text == "false")
 }
@@ -786,8 +859,14 @@ is_bool_word :: fn(node: ptr[mut Node]?) -> bool {
  * @return The value's bytes, laid out as std/schema's write_value lays them out, from the heap, the caller's; null for
  *     an optional parameter given nothing. A bool given nothing is false.
  */
-value_for :: fn(shell: ptr[mut Shell], manifest: ptr[schema.Schema], tree: ptr[Node], parameter: ptr[Parameter]) -> Result[u8[..]?, EvalError] {
-    held :: schema.type_in(manifest, parameter.held) or_return .Error(EvalError.{message = "its manifest is cut short", at = tree.at})
+value_for :: fn(
+    shell : ptr[mut Shell],
+    manifest : ptr[schema.Schema],
+    tree : ptr[Node],
+    parameter : ptr[Parameter]
+) -> Result[u8[..]?, EvalError] {
+    held :: schema.type_in(manifest, parameter.held)
+        or_return .Error(EvalError.{message = "its manifest is cut short", at = tree.at})
     given : Value = .Null
     bare := false
     at := tree.at
@@ -813,8 +892,17 @@ value_for :: fn(shell: ptr[mut Shell], manifest: ptr[schema.Schema], tree: ptr[N
                 given = .Bool(false)
             }
             else {
-                return .Error(EvalError.{message = message("% needs its % (%)", tree.text, parameter.name, type_text(manifest, parameter.held)),
-                    at = tree.at})
+                return .Error(
+                    EvalError.{
+                        message = message(
+                            "% needs its % (%)",
+                            tree.text,
+                            parameter.name,
+                            type_text(manifest, parameter.held)
+                        ),
+                        at = tree.at,
+                    }
+                )
             }
         }
     }
@@ -846,18 +934,30 @@ value_for :: fn(shell: ptr[mut Shell], manifest: ptr[schema.Schema], tree: ptr[N
  * @return The grant's handle, the caller's, which a launch gives the program; null for an optional one given nothing,
  *     and for an optional terminal in the background. A terminal it needs there is an error.
  */
-grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter], background: bool) -> Result[slop_os.Handle?, EvalError] {
+grant_for :: fn(
+    shell : ptr[mut Shell],
+    tree : ptr[Node],
+    parameter : ptr[Parameter],
+    background : bool
+) -> Result[slop_os.Handle?, EvalError] {
     budget :: slop_os.startup_block().budget
     if parameter.giving == .Terminal && background {
         if parameter.optional {
             return .Ok(null)
         }
-        return .Error(EvalError.{message = message("% needs the terminal, which a job in the background hasn't: run it without &", tree.text),
-            at = tree.at})
+        return .Error(
+            EvalError.{
+                message = message(
+                    "% needs the terminal, which a job in the background hasn't: run it without &",
+                    tree.text
+                ),
+                at = tree.at,
+            }
+        )
     }
     if parameter.giving == .Terminal {
-        made :: protocol.connect(shell.console.end, shell.console.port, budget) or_return .Error(EvalError.{
-            message = "there's no memory for its terminal connection", at = tree.at})
+        made :: protocol.connect(shell.console.end, shell.console.port, budget)
+            or_return .Error(EvalError.{message = "there's no memory for its terminal connection", at = tree.at})
         return .Ok(cast[slop_os.Handle](made.end))
     }
     if parameter.giving == .Network {
@@ -871,7 +971,12 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
                 if parameter.optional {
                     return .Ok(null)
                 }
-                return .Error(EvalError.{message = message("% needs the network, which this session hasn't", tree.text), at = tree.at})
+                return .Error(
+                    EvalError.{
+                        message = message("% needs the network, which this session hasn't", tree.text),
+                        at = tree.at,
+                    }
+                )
             }
         }
     }
@@ -882,7 +987,12 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
                 if parameter.optional {
                     return .Ok(null)
                 }
-                return .Error(EvalError.{message = message("% needs the session's powerbox, which this session hasn't", tree.text), at = tree.at})
+                return .Error(
+                    EvalError.{
+                        message = message("% needs the session's powerbox, which this session hasn't", tree.text),
+                        at = tree.at,
+                    }
+                )
             }
         }
     }
@@ -893,16 +1003,25 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
                 made :: opened_beneath_home(shell, ".", .Dir)
                 return match made {
                     case Ok(handle) => .Ok(handle)
-                    case Error(problem) => .Error(EvalError.{message = message("its directory: %", problem), at = tree.at})
+                    case Error(
+                        problem
+                    ) => .Error(EvalError.{message = message("its directory: %", problem), at = tree.at})
                 }
             }
             if parameter.optional {
                 return .Ok(null)
             }
             if parameter.giving == .Other {
-                return .Error(EvalError.{message = message("% needs a %, which the shell can't give", tree.text, parameter.name), at = tree.at})
+                return .Error(
+                    EvalError.{
+                        message = message("% needs a %, which the shell can't give", tree.text, parameter.name),
+                        at = tree.at,
+                    }
+                )
             }
-            return .Error(EvalError.{message = message("% needs its % (a path)", tree.text, parameter.name), at = tree.at})
+            return .Error(
+                EvalError.{message = message("% needs its % (a path)", tree.text, parameter.name), at = tree.at}
+            )
         }
     }
     path := ""
@@ -919,7 +1038,12 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
                 case Ok(handle) => .Ok(handle)
                 case Error(error) => .Error(error)
             }
-            case _ => return .Error(EvalError.{message = message("--% takes a path, not %", parameter.name, type_name(got)), at = argument.at})
+            case _ => return .Error(
+                EvalError.{
+                    message = message("--% takes a path, not %", parameter.name, type_name(got)),
+                    at = argument.at,
+                }
+            )
         }
     }
     made :: opened_beneath_home(shell, path, if parameter.giving == .Here { Giving.Dir } else { parameter.giving })
@@ -929,7 +1053,14 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
             // Nothing there, but a name that looks the same: said (paths.hsc)
             if problem == file_problem(.NotFound) && parameter.giving != .File {
                 match meant_path(shell, path) {
-                    case Some(meant) => return .Error(EvalError.{message = message("%1: %2; did you mean %3?", path, problem, meant), at = argument.at})
+                    case Some(
+                        meant
+                    ) => return .Error(
+                        EvalError.{
+                            message = message("%1: %2; did you mean %3?", path, problem, meant),
+                            at = argument.at,
+                        }
+                    )
                     case None => {}
                 }
             }
@@ -950,7 +1081,11 @@ grant_for :: fn(shell: ptr[mut Shell], tree: ptr[Node], parameter: ptr[Parameter
  * @param giving Dir, File, made if it isn't there, or ReadOnlyFile; anything else opens it read only.
  * @return The opened end's handle, the caller's to give away or close.
  */
-opened_beneath_home :: fn(shell: ptr[mut Shell], given #escaping : string, giving: Giving) -> Result[slop_os.Handle, string] {
+opened_beneath_home :: fn(
+    shell : ptr[mut Shell],
+    given #escaping : string,
+    giving : Giving
+) -> Result[slop_os.Handle, string] {
     home :: shell.home or_return .Error("the shell has no home to find it in")
     budget :: slop_os.startup_block().budget
     path :: match resolve_path(shell, given) {
@@ -1002,7 +1137,7 @@ opened_beneath_home :: fn(shell: ptr[mut Shell], given #escaping : string, givin
  *     are said in words, any other by its name.
  * @return A sentence for a person; a literal, or the failure's name, on the heap.
  */
-file_problem :: fn(failure: files.FileError) -> string {
+file_problem :: fn(failure : files.FileError) -> string {
     return match failure {
         case .NotFound => "there's nothing there"
         case .NotADirectory => "that isn't a directory"

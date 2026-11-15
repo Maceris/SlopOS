@@ -25,7 +25,7 @@ import reflection from "std:reflection"
  * @param program The target's program, as the compiler describes it once it's checked.
  * @return True if every rule holds; false if any reported a problem.
  */
-check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_program :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     tiers_hold := check_tiers(target, program)
     arch_holds := check_arch_interface(program)
     iommus_hold := check_iommu_interface(program)
@@ -38,8 +38,18 @@ check_program :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Pr
     layouts_hold := check_hardware_layouts(program)
     discards_hold := check_kernel_discards(target, program)
     locks_hold := check_kernel_locks(target, program)
-    return tiers_hold && arch_holds && iommus_hold && protocols_hold && floats_hold && results_hold && interrupts_hold
-        && imports_hold && raw_hold && layouts_hold && discards_hold && locks_hold
+    return tiers_hold
+        && arch_holds
+        && iommus_hold
+        && protocols_hold
+        && floats_hold
+        && results_hold
+        && interrupts_hold
+        && imports_hold
+        && raw_hold
+        && layouts_hold
+        && discards_hold
+        && locks_hold
 }
 
 // ---- std tiers
@@ -65,12 +75,19 @@ NO_TIER :: -1
  *     checked, the imported package found by its path.
  * @return True if it holds; false if a problem was reported, at the import or the package.
  */
-check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_tiers :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &importer in program.packages {
         importer_tier :: tier_of(target, program, importer)
         if importer_tier == NO_TIER {
-            compiler.report(.Error, #package_name, "E0001", importer.location, "% is in std but declares no PACKAGE_TIER", importer.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                "E0001",
+                importer.location,
+                "% is in std but declares no PACKAGE_TIER",
+                importer.name
+            )
             holds = false
             continue
         }
@@ -79,8 +96,17 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
             imported_tier :: tier_of(target, program, imported)
             // A missing tier is reported on that package's own turn
             if imported_tier > importer_tier {
-                compiler.report(.Error, #package_name, "E0001", edge.location, "% (tier %) imports % (tier %)", importer.name,
-                    tier_name(importer_tier), edge.alias, tier_name(imported_tier))
+                compiler.report(
+                    .Error,
+                    #package_name,
+                    "E0001",
+                    edge.location,
+                    "% (tier %) imports % (tier %)",
+                    importer.name,
+                    tier_name(importer_tier),
+                    edge.alias,
+                    tier_name(imported_tier)
+                )
                 holds = false
             }
         }
@@ -97,7 +123,11 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
  * @return FREESTANDING for base's; for std's, its PACKAGE_TIER's, NO_TIER if it declares none or another; for the
  *     project's, ALLOCATING for a target with no operating system, OS otherwise.
  */
-tier_of :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageInfo]) -> int {
+tier_of :: fn(
+    target : ptr[compiler.BuildOptions],
+    program : ptr[compiler.ProgramInfo],
+    package : ptr[compiler.PackageInfo]
+) -> int {
     // base's packages are the compiler's, at paths like <base>/runtime
     if starts_with(package.path, "<base>/") {
         return FREESTANDING
@@ -132,7 +162,7 @@ tier_of :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramI
  * @param tier FREESTANDING, ALLOCATING or OS.
  * @return Its name as std's tiers.Tier has it; "Os" for any other number.
  */
-tier_name :: fn(tier: int) -> string {
+tier_name :: fn(tier : int) -> string {
     if tier == FREESTANDING {
         return "Freestanding"
     }
@@ -152,9 +182,11 @@ tier_name :: fn(tier: int) -> string {
  *     "\std\", is std's whatever imports it.
  * @return True if it's std's.
  */
-is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
-    // What the compiler loads itself, as std/schema into a build that makes or calls a typed library, has no edge
-    // importing it: it's std's by where it is, Hemera's std folder
+is_std :: fn(program : ptr[compiler.ProgramInfo], path : string) -> bool {
+    /*
+     * What the compiler loads itself, as std/schema into a build that makes or calls a typed library, has no edge
+     * importing it: it's std's by where it is, Hemera's std folder
+     */
     if contains(path, "/std/") || contains(path, "\\std\\") {
         return true
     }
@@ -185,7 +217,7 @@ is_std :: fn(program: ptr[compiler.ProgramInfo], path: string) -> bool {
  * @param program The target's program; one without arch_interface holds.
  * @return True if it holds; false if a problem was reported.
  */
-check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+check_arch_interface :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
     interface :: package_named(program, "arch_interface") or_return true
     holds := true
     for &candidate in program.packages {
@@ -204,7 +236,7 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * @param program The target's program; one without iommu_interface holds.
  * @return True if it holds; false if a problem was reported.
  */
-check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+check_iommu_interface :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
     interface :: package_named(program, "iommu_interface") or_return true
     holds := true
     for &candidate in program.packages {
@@ -225,18 +257,32 @@ check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  *     validate_request is checked.
  * @return True if it holds; false if a problem was reported, at the package.
  */
-check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+check_protocols :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &candidate in program.packages {
         if compiler.find_function(candidate, "validate_request") is_none {
             continue
         }
         if compiler.find_constant(candidate, "PROTOCOL") is_none {
-            compiler.report(.Error, #package_name, "E0004", candidate.location, "% is a protocol, so it declares PROTOCOL, a slop_os.Protocol (decisions/0040)", candidate.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                "E0004",
+                candidate.location,
+                "% is a protocol, so it declares PROTOCOL, a slop_os.Protocol (decisions/0040)",
+                candidate.name
+            )
             holds = false
         }
         if compiler.find_function(candidate, "is_idempotent") is_none {
-            compiler.report(.Error, #package_name, "E0004", candidate.location, "% is a protocol, so it declares is_idempotent(request) (decisions/0040)", candidate.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                "E0004",
+                candidate.location,
+                "% is a protocol, so it declares is_idempotent(request) (decisions/0040)",
+                candidate.name
+            )
             holds = false
         }
     }
@@ -253,7 +299,7 @@ check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * @param prefix Whether alias is a prefix, as "iommu_" is, rather than the whole alias.
  * @return True if some import of the package is under that alias.
  */
-imported_as :: fn(program: ptr[compiler.ProgramInfo], path: string, alias: string, prefix: bool) -> bool {
+imported_as :: fn(program : ptr[compiler.ProgramInfo], path : string, alias : string, prefix : bool) -> bool {
     for &package in program.packages {
         for &edge in package.imports {
             if (edge.alias == alias || (prefix && starts_with(edge.alias, alias))) && edge.path == path {
@@ -272,18 +318,40 @@ imported_as :: fn(program: ptr[compiler.ProgramInfo], path: string, alias: strin
  * @param code The rule's code its problems are reported with, check_arch_interface's or check_iommu_interface's.
  * @return True if it implements it; false if a problem was reported, each where it's best fixed.
  */
-implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compiler.PackageInfo], code: string) -> bool {
+implements :: fn(
+    implementation : ptr[compiler.PackageInfo],
+    interface : ptr[compiler.PackageInfo],
+    code : string
+) -> bool {
     holds := true
     gaps :: compiler.find_constant(implementation, "NOT_YET_IMPLEMENTED") or_else compiler.ConstantInfo.{}
     for name in listed_names(gaps.value) {
         function :: compiler.find_function(implementation, name) or_else compiler.FunctionInfo.{}
-        implemented :: declares_type(implementation, name) || (function.name != "" && !is_stub(function.location.file_path))
+        implemented :: declares_type(implementation, name)
+            || (function.name != "" && !is_stub(function.location.file_path))
         if implemented {
-            compiler.report(.Error, #package_name, code, gaps.location, "%.% is there now, so take it off NOT_YET_IMPLEMENTED", implementation.name, name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                gaps.location,
+                "%.% is there now, so take it off NOT_YET_IMPLEMENTED",
+                implementation.name,
+                name
+            )
             holds = false
         }
         else if !declares_type(interface, name) && (compiler.find_function(interface, name) is_none) {
-            compiler.report(.Error, #package_name, code, gaps.location, "% lists %, which % doesn't declare", implementation.name, name, interface.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                gaps.location,
+                "% lists %, which % doesn't declare",
+                implementation.name,
+                name,
+                interface.name
+            )
             holds = false
         }
     }
@@ -292,8 +360,16 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             continue
         }
         if is_architecture_type(declared.type) && !declares_type(implementation, declared.name) {
-            compiler.report(.Error, #package_name, code, declared.location, "% doesn't declare %, which % leaves to each implementation",
-                implementation.name, declared.name, interface.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                declared.location,
+                "% doesn't declare %, which % leaves to each implementation",
+                implementation.name,
+                declared.name,
+                interface.name
+            )
             holds = false
         }
     }
@@ -306,25 +382,55 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
         }
         found := compiler.find_function(implementation, required.name) or_else compiler.FunctionInfo.{}
         if found.name != "" && is_stub(found.location.file_path) {
-            compiler.report(.Error, #package_name, code, found.location, "%.% is a stub, so list it in NOT_YET_IMPLEMENTED", implementation.name,
-                required.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                found.location,
+                "%.% is a stub, so list it in NOT_YET_IMPLEMENTED",
+                implementation.name,
+                required.name
+            )
             holds = false
             continue
         }
         if found.name == "" {
-            compiler.report(.Error, #package_name, code, required.location, "% doesn't implement %", implementation.name, required.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                required.location,
+                "% doesn't implement %",
+                implementation.name,
+                required.name
+            )
             holds = false
             continue
         }
         if !found.has_body {
-            compiler.report(.Error, #package_name, code, found.location, "%.% is a declaration, not an implementation", implementation.name,
-                required.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                found.location,
+                "%.% is a declaration, not an implementation",
+                implementation.name,
+                required.name
+            )
             holds = false
             continue
         }
         if !signatures_match(found, required) {
-            compiler.report(.Error, #package_name, code, found.location, "%.% doesn't match the signature % declares",
-                implementation.name, required.name, interface.name)
+            compiler.report(
+                .Error,
+                #package_name,
+                code,
+                found.location,
+                "%.% doesn't match the signature % declares",
+                implementation.name,
+                required.name,
+                interface.name
+            )
             holds = false
         }
     }
@@ -337,7 +443,7 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
  * @param path The path of the file a function is declared in, as its location gives it; only its end is compared.
  * @return True if it ends with not_yet_implemented.hsc.
  */
-is_stub :: fn(path: string) -> bool {
+is_stub :: fn(path : string) -> bool {
     return ends_with(path, "not_yet_implemented.hsc")
 }
 
@@ -351,7 +457,7 @@ is_stub :: fn(path: string) -> bool {
  *     read.
  * @return True if they match.
  */
-signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[compiler.FunctionInfo]) -> bool {
+signatures_match :: fn(implementation : compiler.FunctionInfo, interface : ptr[compiler.FunctionInfo]) -> bool {
     // Copies of the views, which types_match can't change, so their counts stay compared
     parameters :: interface.parameters
     return_values :: interface.return_values
@@ -362,8 +468,10 @@ signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[com
     }
     for &parameter, index in implementation.parameters {
         other :: &parameters[index]
-        if parameter.name != other.name || !types_match(parameter.type, other.type)
-            || parameter.is_escaping != other.is_escaping || parameter.is_varargs != other.is_varargs {
+        if parameter.name != other.name
+            || !types_match(parameter.type, other.type)
+            || parameter.is_escaping != other.is_escaping
+            || parameter.is_varargs != other.is_varargs {
             return false
         }
     }
@@ -383,7 +491,7 @@ signatures_match :: fn(implementation: compiler.FunctionInfo, interface: ptr[com
  * @param interface The type in the interface's.
  * @return True if they match; pointers match when they're both mutable or both not, and their targets match.
  */
-types_match :: fn(implementation: type, interface: type) -> bool {
+types_match :: fn(implementation : type, interface : type) -> bool {
     if implementation == interface {
         return true
     }
@@ -412,7 +520,7 @@ types_match :: fn(implementation: type, interface: type) -> bool {
  * @param declared A type an interface package declares, as its PackageInfo's types list it.
  * @return True for a struct without members.
  */
-is_architecture_type :: fn(declared: type) -> bool {
+is_architecture_type :: fn(declared : type) -> bool {
     info :: type_info_of(declared)
     return info.variant == .STRUCT && cast[ptr[compiler.TypeInfoStruct]](info).members.count == 0
 }
@@ -423,7 +531,7 @@ is_architecture_type :: fn(declared: type) -> bool {
  * @param info The type's descriptor, which has to be a struct's.
  * @return Its name, as the compiler gives it.
  */
-struct_name :: fn(info: ptr[compiler.TypeInfo]) -> string {
+struct_name :: fn(info : ptr[compiler.TypeInfo]) -> string {
     return cast[ptr[compiler.TypeInfoStruct]](info).name
 }
 
@@ -434,7 +542,7 @@ struct_name :: fn(info: ptr[compiler.TypeInfo]) -> string {
  *     reinterpreted.
  * @return The type value whose descriptor info is, for comparing with ==.
  */
-described_type :: fn(info: ptr[compiler.TypeInfo]) -> type {
+described_type :: fn(info : ptr[compiler.TypeInfo]) -> type {
     return bit_cast[type](info)
 }
 
@@ -445,7 +553,7 @@ described_type :: fn(info: ptr[compiler.TypeInfo]) -> type {
  * @param name The name to find, compared whole with each declared type's own name, without a package prefix.
  * @return True if one of its types has it.
  */
-declares_type :: fn(package: ptr[compiler.PackageInfo], name: string) -> bool {
+declares_type :: fn(package : ptr[compiler.PackageInfo], name : string) -> bool {
     for &declared in package.types {
         if declared.name == name {
             return true
@@ -461,7 +569,7 @@ declares_type :: fn(package: ptr[compiler.PackageInfo], name: string) -> bool {
  * @return The strings, a view into the constant's value; none if there's no constant, or it's anything but a static
  *     array of strings.
  */
-listed_names :: fn(names: any) -> string[] {
+listed_names :: fn(names : any) -> string[] {
     none : string[]
     if names.data == null {
         return none
@@ -484,7 +592,7 @@ listed_names :: fn(names: any) -> string[] {
  * @param name The name looked for, compared whole and exactly.
  * @return True if it's one of the strings.
  */
-is_listed :: fn(names: any, name: string) -> bool {
+is_listed :: fn(names : any, name : string) -> bool {
     for listed in listed_names(names) {
         if listed == name {
             return true
@@ -501,7 +609,7 @@ is_listed :: fn(names: any, name: string) -> bool {
  * @param target The target being built.
  * @return True if its operating system is None.
  */
-is_kernel :: fn(target: ptr[compiler.BuildOptions]) -> bool {
+is_kernel :: fn(target : ptr[compiler.BuildOptions]) -> bool {
     return target.target_options.os == .None
 }
 
@@ -512,7 +620,7 @@ is_kernel :: fn(target: ptr[compiler.BuildOptions]) -> bool {
  * @param package One of program's packages.
  * @return True if it's the project's.
  */
-is_own :: fn(program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageInfo]) -> bool {
+is_own :: fn(program : ptr[compiler.ProgramInfo], package : ptr[compiler.PackageInfo]) -> bool {
     return !starts_with(package.path, "<base>/") && !is_std(program, package.path)
 }
 
@@ -525,7 +633,7 @@ is_own :: fn(program: ptr[compiler.ProgramInfo], package: ptr[compiler.PackageIn
  *     checked, not base's or std's.
  * @return True if it holds; false if a problem was reported.
  */
-check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_kernel_floats :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
         return true
     }
@@ -537,20 +645,42 @@ check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compi
         for &function in package.functions {
             for &parameter in function.parameters {
                 if is_floating(parameter.type) {
-                    compiler.report(.Error, #package_name, "E0005", function.location, "%.% takes floating point (%), which the kernel has none of",
-                        package.name, function.name, parameter.name)
+                    compiler.report(
+                        .Error,
+                        #package_name,
+                        "E0005",
+                        function.location,
+                        "%.% takes floating point (%), which the kernel has none of",
+                        package.name,
+                        function.name,
+                        parameter.name
+                    )
                     holds = false
                 }
             }
             for &result in function.return_values {
                 if is_floating(result.type) {
-                    compiler.report(.Error, #package_name, "E0005", function.location, "%.% gives floating point, which the kernel has none of", package.name, function.name)
+                    compiler.report(
+                        .Error,
+                        #package_name,
+                        "E0005",
+                        function.location,
+                        "%.% gives floating point, which the kernel has none of",
+                        package.name,
+                        function.name
+                    )
                     holds = false
                 }
             }
             for &use in function.used_types {
                 if is_floating(use.type) {
-                    compiler.report(.Error, #package_name, "E0005", use.location, "floating point, which the kernel has none of")
+                    compiler.report(
+                        .Error,
+                        #package_name,
+                        "E0005",
+                        use.location,
+                        "floating point, which the kernel has none of"
+                    )
                     holds = false
                 }
             }
@@ -565,7 +695,7 @@ check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compi
  * @param checked A type a kernel function takes, gives or uses; its aliases are followed.
  * @return True if it is; false for a vector of bits.
  */
-is_floating :: fn(checked: type) -> bool {
+is_floating :: fn(checked : type) -> bool {
     info :: unaliased(type_info_of(checked))
     if info.variant == .FLOAT || info.variant == .COMPLEX || info.variant == .QUATERNION {
         return true
@@ -583,7 +713,7 @@ is_floating :: fn(checked: type) -> bool {
  * @param info Any type's descriptor; an alias's is followed through its base types, however many.
  * @return The first descriptor along the aliases that isn't an alias's; info itself if it isn't one.
  */
-unaliased :: fn(info: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
+unaliased :: fn(info : ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
     at := info
     loop {
         if at.variant != .ALIAS {
@@ -601,7 +731,7 @@ unaliased :: fn(info: ptr[compiler.TypeInfo]) -> ptr[compiler.TypeInfo] {
  * @param program The target's program; one without a kernel package holds.
  * @return True if it holds; false if a problem was reported, at the function.
  */
-check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_syscall_results :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
         return true
     }
@@ -615,8 +745,14 @@ check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
             seen : uintptr[..]
             defer runtime.array_free(&seen)
             if has_pointer(type_info_of(result.type), &seen) {
-                compiler.report(.Error, #package_name, "E0006", function.location, "%'s result has a pointer in it, which would give user space a kernel address",
-                    function.name)
+                compiler.report(
+                    .Error,
+                    #package_name,
+                    "E0006",
+                    function.location,
+                    "%'s result has a pointer in it, which would give user space a kernel address",
+                    function.name
+                )
                 holds = false
             }
         }
@@ -633,7 +769,7 @@ check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
  *     once, and false the second time.
  * @return True if it holds a pointer.
  */
-has_pointer :: fn(info: ptr[compiler.TypeInfo], seen: ptr[mut uintptr[..]]) -> bool {
+has_pointer :: fn(info : ptr[compiler.TypeInfo], seen : ptr[mut uintptr[..]]) -> bool {
     for each in seen^ {
         if each == cast[uintptr](info) {
             return false
@@ -677,7 +813,7 @@ has_pointer :: fn(info: ptr[compiler.TypeInfo], seen: ptr[mut uintptr[..]]) -> b
  * @param program The target's program; one without the interrupt entry holds.
  * @return True if it holds; false if a problem was reported, at each call to an allocator.
  */
-check_interrupt_allocation :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_interrupt_allocation :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
         return true
     }
@@ -689,7 +825,15 @@ check_interrupt_allocation :: fn(target: ptr[compiler.BuildOptions], program: pt
 }
 
 /** The allocators, by the names they're called by: base's, and the kernel's heap's and objects'. */
-ALLOCATORS :: string.["new", "new_aligned", "new_array", "new_array_aligned", "array_reserve", "allocate_block", "new_object"]
+ALLOCATORS :: string.[
+    "new",
+    "new_aligned",
+    "new_array",
+    "new_array_aligned",
+    "array_reserve",
+    "allocate_block",
+    "new_object"
+]
 
 /**
  * Tell whether a function, or anything it calls by name in the project's packages or base's, calls an allocator,
@@ -702,8 +846,12 @@ ALLOCATORS :: string.["new", "new_aligned", "new_array", "new_array_aligned", "a
  * @param visited The calls already followed, which this adds to, so each is followed once.
  * @return True if an allocator is called.
  */
-allocates :: fn(program: ptr[compiler.ProgramInfo], function: compiler.FunctionInfo, package: string,
-    visited: ptr[mut compiler.FunctionCall[..]]) -> bool {
+allocates :: fn(
+    program : ptr[compiler.ProgramInfo],
+    function : compiler.FunctionInfo,
+    package : string,
+    visited : ptr[mut compiler.FunctionCall[..]]
+) -> bool {
     if is_listed_function(INTERRUPT_ALLOCATIONS, package, function.name) {
         return false
     }
@@ -715,7 +863,14 @@ allocates :: fn(program: ptr[compiler.ProgramInfo], function: compiler.FunctionI
         called_name :: generic_name(call.name)
         for name in ALLOCATORS {
             if called_name == name {
-                compiler.report(.Error, #package_name, "E0007", call.location, "% allocates, and an interrupt handler reaches it", function.name)
+                compiler.report(
+                    .Error,
+                    #package_name,
+                    "E0007",
+                    call.location,
+                    "% allocates, and an interrupt handler reaches it",
+                    function.name
+                )
                 found = true
             }
         }
@@ -748,7 +903,7 @@ PROGRAM_FOLDERS :: string.["/src/apps/", "/src/services/", "/src/drivers/", "/sr
  * @param package One of the program's packages, by its path and its functions.
  * @return True if it's a program.
  */
-is_program :: fn(package: ptr[compiler.PackageInfo]) -> bool {
+is_program :: fn(package : ptr[compiler.PackageInfo]) -> bool {
     if compiler.find_function(package, "main") is_none {
         return false
     }
@@ -768,7 +923,7 @@ is_program :: fn(package: ptr[compiler.PackageInfo]) -> bool {
  *     into another it imports is reported.
  * @return True if it holds; false if a problem was reported, at each call.
  */
-check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+check_program_imports :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &importer in program.packages {
         if !is_program(importer) {
@@ -782,8 +937,16 @@ check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
             for &function in importer.functions {
                 for &call in function.calls {
                     if call.package_path == imported.path {
-                        compiler.report(.Error, #package_name, "E0008", call.location, "% calls %.%, but programs don't share code: move it to a library package",
-                            importer.name, imported.name, call.name)
+                        compiler.report(
+                            .Error,
+                            #package_name,
+                            "E0008",
+                            call.location,
+                            "% calls %.%, but programs don't share code: move it to a library package",
+                            importer.name,
+                            imported.name,
+                            call.name
+                        )
                         holds = false
                     }
                 }
@@ -801,7 +964,7 @@ check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * @param program The target's program; only the project's own packages are checked.
  * @return True if it holds; false if a problem was reported, at each use or declaration.
  */
-check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+check_raw_pointers :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &package in program.packages {
         if !is_own(program, package) || is_listed_in(RAW_POINTERS, package.name) {
@@ -810,15 +973,29 @@ check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
         for &function in package.functions {
             for &use in function.used_types {
                 if is_raw_pointer(use.type) {
-                    compiler.report(.Error, #package_name, "E0009", use.location, "rawptr in %, which isn't in RAW_POINTERS (src/checks)", package.name)
+                    compiler.report(
+                        .Error,
+                        #package_name,
+                        "E0009",
+                        use.location,
+                        "rawptr in %, which isn't in RAW_POINTERS (src/checks)",
+                        package.name
+                    )
                     holds = false
                 }
             }
         }
         for &declared in package.types {
             if declares_raw_pointer(type_info_of(declared.type)) {
-                compiler.report(.Error, #package_name, "E0009", declared.location, "% holds a rawptr, and %'s not in RAW_POINTERS (src/checks)",
-                    declared.name, package.name)
+                compiler.report(
+                    .Error,
+                    #package_name,
+                    "E0009",
+                    declared.location,
+                    "% holds a rawptr, and %'s not in RAW_POINTERS (src/checks)",
+                    declared.name,
+                    package.name
+                )
                 holds = false
             }
         }
@@ -832,7 +1009,7 @@ check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * @param checked A type a function uses; its aliases are followed.
  * @return True if it is.
  */
-is_raw_pointer :: fn(checked: type) -> bool {
+is_raw_pointer :: fn(checked : type) -> bool {
     info :: unaliased(type_info_of(checked))
     return info.variant == .POINTER && (cast[ptr[compiler.TypeInfoPointer]](info).base_type is_none)
 }
@@ -843,7 +1020,7 @@ is_raw_pointer :: fn(checked: type) -> bool {
  * @param info The declared type's descriptor; any other kind than a struct or a union spells none.
  * @return True if one does.
  */
-declares_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
+declares_raw_pointer :: fn(info : ptr[compiler.TypeInfo]) -> bool {
     if info.variant == .STRUCT {
         for &member in cast[ptr[compiler.TypeInfoStruct]](info).members {
             if spells_raw_pointer(member.member_type) {
@@ -871,7 +1048,7 @@ declares_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
  * @param info The member's type's descriptor.
  * @return True if it spells a rawptr.
  */
-spells_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
+spells_raw_pointer :: fn(info : ptr[compiler.TypeInfo]) -> bool {
     if info.variant == .POINTER {
         target :: cast[ptr[compiler.TypeInfoPointer]](info).base_type or_return true
         return spells_raw_pointer(target)
@@ -912,7 +1089,16 @@ spells_raw_pointer :: fn(info: ptr[compiler.TypeInfo]) -> bool {
  * The folders whose packages are hardware packages, written with /: a path that has one in it, anywhere, is in it, so
  * "/src/pci" holds "/src/pci_whatever" too.
  */
-HARDWARE_FOLDERS :: string.["/src/arch/", "/src/drivers/", "/src/iommu/", "/src/virtio", "/src/pci", "/src/gpt", "/src/fat", "/src/slopfs"]
+HARDWARE_FOLDERS :: string.[
+    "/src/arch/",
+    "/src/drivers/",
+    "/src/iommu/",
+    "/src/virtio",
+    "/src/pci",
+    "/src/gpt",
+    "/src/fat",
+    "/src/slopfs"
+]
 
 /**
  * Check that hardware structs have their layouts checked (decisions/0029, 0100): a #packed struct in a hardware
@@ -925,7 +1111,7 @@ HARDWARE_FOLDERS :: string.["/src/arch/", "/src/drivers/", "/src/iommu/", "/src/
  *     have their #packed structs checked.
  * @return True if it holds; false if a problem was reported, at each struct.
  */
-check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
+check_hardware_layouts :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &package in program.packages {
         hardware := false
@@ -953,8 +1139,15 @@ check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
                 asserted = asserted || asserts_size(each, declared.name)
             }
             if !asserted {
-                compiler.report(.Error, #package_name, "E0010", declared.location, "% is #packed, so it's hardware's: assert its size (#assert size_of(%) == ...)",
-                    declared.name, declared.name)
+                compiler.report(
+                    .Error,
+                    #package_name,
+                    "E0010",
+                    declared.location,
+                    "% is #packed, so it's hardware's: assert its size (#assert size_of(%) == ...)",
+                    declared.name,
+                    declared.name
+                )
                 holds = false
             }
         }
@@ -969,7 +1162,7 @@ check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
  * @param name The struct's name, matched whole within size_of's parentheses.
  * @return True if some line has both.
  */
-asserts_size :: fn(text: string, name: string) -> bool {
+asserts_size :: fn(text : string, name : string) -> bool {
     at := find(text, "#assert", 0)
     loop {
         if at == NOT_FOUND {
@@ -995,7 +1188,7 @@ asserts_size :: fn(text: string, name: string) -> bool {
  * @param program The target's program; one without a kernel package holds.
  * @return True if it holds; false if a problem was reported, at each call.
  */
-check_kernel_locks :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_kernel_locks :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
         return true
     }
@@ -1006,9 +1199,16 @@ check_kernel_locks :: fn(target: ptr[compiler.BuildOptions], program: ptr[compil
             continue
         }
         for &call in function.calls {
-            if (call.name == "lock" || call.name == "unlock") && (ends_with(call.package_path, "/concurrency")
-                || ends_with(call.package_path, "\\concurrency")) {
-                compiler.report(.Error, #package_name, "E0012", call.location, "% takes a spin lock unranked: use lock_at and unlock_at (locks.hsc)", function.name)
+            if (call.name == "lock" || call.name == "unlock")
+                && (ends_with(call.package_path, "/concurrency") || ends_with(call.package_path, "\\concurrency")) {
+                compiler.report(
+                    .Error,
+                    #package_name,
+                    "E0012",
+                    call.location,
+                    "% takes a spin lock unranked: use lock_at and unlock_at (locks.hsc)",
+                    function.name
+                )
                 holds = false
             }
         }
@@ -1027,7 +1227,7 @@ LOCK_WRAPPERS :: string.["lock_at", "lock_after", "unlock_at"]
  * @param program The target's program; only the project's own packages are checked.
  * @return True if it holds; false if a problem was reported, at each discard.
  */
-check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.ProgramInfo]) -> bool {
+check_kernel_discards :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
     if !is_kernel(target) {
         return true
     }
@@ -1039,8 +1239,15 @@ check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
         for &function in package.functions {
             for &discard in function.discards {
                 if is_result(discard.type) && !is_listed_function(DISCARDED_RESULTS, package.name, function.name) {
-                    compiler.report(.Error, #package_name, "E0011", discard.location, "%.% discards a Result: handle its error, or list it in DISCARDED_RESULTS (src/checks)",
-                        package.name, function.name)
+                    compiler.report(
+                        .Error,
+                        #package_name,
+                        "E0011",
+                        discard.location,
+                        "%.% discards a Result: handle its error, or list it in DISCARDED_RESULTS (src/checks)",
+                        package.name,
+                        function.name
+                    )
                     holds = false
                 }
             }
@@ -1055,7 +1262,7 @@ check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
  * @param checked The type of a value a function discards; its aliases are followed.
  * @return True for a union whose name starts with Result.
  */
-is_result :: fn(checked: type) -> bool {
+is_result :: fn(checked : type) -> bool {
     info :: unaliased(type_info_of(checked))
     return info.variant == .UNION && starts_with(cast[ptr[compiler.TypeInfoUnion]](info).name, "Result")
 }
@@ -1075,10 +1282,31 @@ is_result :: fn(checked: type) -> bool {
  * not its data.
  */
 RAW_POINTERS :: string.[
-    "arch_aarch64", "arch_x86_64", "container_service", "elf_loader", "events_service", "fat", "fat_server", "fat_test",
-    "bootloader", "frames", "gpt", "gpt_test", "handle_entries_test", "image_builder", "iommu_vtd", "kernel",
-    "partition_server", "pci", "shootdowns_test", "slopfs", "slopfs_test", "slopos_boot", "test_kit", "volume_server",
-    "x86_64_test",
+    "arch_aarch64",
+    "arch_x86_64",
+    "container_service",
+    "elf_loader",
+    "events_service",
+    "fat",
+    "fat_server",
+    "fat_test",
+    "bootloader",
+    "frames",
+    "gpt",
+    "gpt_test",
+    "handle_entries_test",
+    "image_builder",
+    "iommu_vtd",
+    "kernel",
+    "partition_server",
+    "pci",
+    "shootdowns_test",
+    "slopfs",
+    "slopfs_test",
+    "slopos_boot",
+    "test_kit",
+    "volume_server",
+    "x86_64_test"
 ]
 
 /** Functions of the kernel's, as package.function, that may discard a Result: losing its error is right there. */
@@ -1086,7 +1314,7 @@ DISCARDED_RESULTS :: string.[
     // A block another one's tables already cover is mapped already
     "arch_aarch64.init_kernel_page_table",
     // Cleaning up after a failure, whose own error is the one given
-    "kernel.sys_channel_create",
+    "kernel.sys_channel_create"
 ]
 
 /**
@@ -1095,7 +1323,7 @@ DISCARDED_RESULTS :: string.[
  */
 INTERRUPT_ALLOCATIONS :: string.[
     // A woken thread's wait, armed again as it's resumed, which without memory waits without its deadline
-    "kernel.grow_heap",
+    "kernel.grow_heap"
 ]
 
 /**
@@ -1105,7 +1333,7 @@ INTERRUPT_ALLOCATIONS :: string.[
  * @param name The name, compared whole.
  * @return True if it's listed.
  */
-is_listed_in :: fn(names: string[], name: string) -> bool {
+is_listed_in :: fn(names : string[], name : string) -> bool {
     for listed in names {
         if listed == name {
             return true
@@ -1122,10 +1350,13 @@ is_listed_in :: fn(names: string[], name: string) -> bool {
  * @param function The function's name as its FunctionInfo has it, without its package; compared exactly.
  * @return True if one of names is exactly package, a dot, and function.
  */
-is_listed_function :: fn(names: string[], package: string, function: string) -> bool {
+is_listed_function :: fn(names : string[], package : string, function : string) -> bool {
     for listed in names {
-        if listed.count == package.count + 1 + function.count && package.count < listed.count && starts_with(listed, package)
-            && listed[package.count] == '.' && ends_with(listed, function) {
+        if listed.count == package.count + 1 + function.count
+            && package.count < listed.count
+            && starts_with(listed, package)
+            && listed[package.count] == '.'
+            && ends_with(listed, function) {
             return true
         }
     }
@@ -1141,7 +1372,7 @@ is_listed_function :: fn(names: string[], package: string, function: string) -> 
  * @param part The part, matched byte for byte.
  * @return True if it's anywhere in text; an empty part is in any text.
  */
-contains :: fn(text: string, part: string) -> bool {
+contains :: fn(text : string, part : string) -> bool {
     return find(text, part, 0) != NOT_FOUND
 }
 
@@ -1158,7 +1389,7 @@ NEWLINE :: "\n"
  * @param from Where to start looking, a byte index.
  * @return Where the first match starts, a byte index; NOT_FOUND if there's none, or part is longer than text.
  */
-find :: fn(text: string, part: string, from: usize) -> usize {
+find :: fn(text : string, part : string, from : usize) -> usize {
     if part.count > text.count {
         return NOT_FOUND
     }
@@ -1187,7 +1418,7 @@ find :: fn(text: string, part: string, from: usize) -> usize {
  * @param to Where to stop: a match has to start before it, and its ) be before it.
  * @return True if there's one.
  */
-has_size_of :: fn(text: string, name: string, from: usize, to: usize) -> bool {
+has_size_of :: fn(text : string, name : string, from : usize, to : usize) -> bool {
     at := find(text, "size_of(", from)
     loop {
         if at == NOT_FOUND || at >= to {
@@ -1208,7 +1439,7 @@ has_size_of :: fn(text: string, name: string, from: usize, to: usize) -> bool {
  * @param name The call's name, as compiler.FunctionCall has it.
  * @return What's before its first [, a view into name; all of name without one.
  */
-generic_name :: fn(name: string) -> string {
+generic_name :: fn(name : string) -> string {
     for character, index in name {
         if character == '[' {
             return string_of(cast[ptr[u8]](name.data), index)
@@ -1224,7 +1455,7 @@ generic_name :: fn(name: string) -> string {
  * @param folder The folder, written with /, as "/src/drivers/"; each / matches a \ in path too.
  * @return True if it's anywhere in path.
  */
-in_folder :: fn(path: string, folder: string) -> bool {
+in_folder :: fn(path : string, folder : string) -> bool {
     if folder.count > path.count {
         return false
     }
@@ -1253,7 +1484,7 @@ in_folder :: fn(path: string, folder: string) -> bool {
  * @param part What has to be there, matched byte for byte; an empty part always is.
  * @return True if text's bytes from at are part's; false if they differ or text ends first.
  */
-matches_at :: fn(text: string, at: usize, part: string) -> bool {
+matches_at :: fn(text : string, at : usize, part : string) -> bool {
     for character, index in part {
         if at + index >= text.count || text[at + index] != character {
             return false
@@ -1272,7 +1503,7 @@ matches_at :: fn(text: string, at: usize, part: string) -> bool {
  * @param path The package's path, as an import edge has it.
  * @return The package, which the program holds; null if it has none at path.
  */
-package_at :: fn(program: ptr[compiler.ProgramInfo], path: string) -> ptr[compiler.PackageInfo]? {
+package_at :: fn(program : ptr[compiler.ProgramInfo], path : string) -> ptr[compiler.PackageInfo]? {
     for &package in program.packages {
         if package.path == path {
             return package
@@ -1289,7 +1520,7 @@ package_at :: fn(program: ptr[compiler.ProgramInfo], path: string) -> ptr[compil
  * @param name The package's name, as its package line has it.
  * @return The first package of that name, which the program holds; null if it has none.
  */
-package_named :: fn(program: ptr[compiler.ProgramInfo], name: string) -> ptr[compiler.PackageInfo]? {
+package_named :: fn(program : ptr[compiler.ProgramInfo], name : string) -> ptr[compiler.PackageInfo]? {
     for &package in program.packages {
         if package.name == name {
             return package
@@ -1305,7 +1536,7 @@ package_named :: fn(program: ptr[compiler.ProgramInfo], name: string) -> ptr[com
  * @param suffix The suffix, matched byte for byte.
  * @return True if it does; an empty suffix always does.
  */
-ends_with :: fn(text: string, suffix: string) -> bool {
+ends_with :: fn(text : string, suffix : string) -> bool {
     if text.count < suffix.count {
         return false
     }
@@ -1326,7 +1557,7 @@ ends_with :: fn(text: string, suffix: string) -> bool {
  * @param prefix The prefix, matched byte for byte.
  * @return True if it does; an empty prefix always does.
  */
-starts_with :: fn(text: string, prefix: string) -> bool {
+starts_with :: fn(text : string, prefix : string) -> bool {
     if text.count < prefix.count {
         return false
     }

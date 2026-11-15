@@ -62,7 +62,7 @@ import uefi from "std:os/uefi"
      * @return The next table's physical address, 4096-aligned; null if no page can be had, or the entry maps a large
      *     page, which isn't split.
      */
-    next_table :: fn(table: u64, index: u64) -> u64? {
+    next_table :: fn(table : u64, index : u64) -> u64? {
         entry :: cast[ptr[mut u64]](cast[rawptr](table + index * 8))
         if entry^ & PRESENT != 0 {
             if entry^ & LARGE != 0 {
@@ -88,7 +88,7 @@ import uefi from "std:os/uefi"
      * @return True if the whole range was mapped; false if a table couldn't be had, or the range runs into a large page
      *     already mapped, leaving what was mapped before it.
      */
-    map :: fn(tables: ptr[PageTables], virtual: u64, physical: u64, size: u64) -> bool {
+    map :: fn(tables : ptr[PageTables], virtual : u64, physical : u64, size : u64) -> bool {
         done := cast[u64](0)
         loop {
             if done >= size {
@@ -182,7 +182,7 @@ import uefi from "std:os/uefi"
      * @return The next table's physical address, 4096-aligned; null if no page can be had, or the entry is a block,
      *     which isn't split.
      */
-    next_table :: fn(table: u64, index: u64) -> u64? {
+    next_table :: fn(table : u64, index : u64) -> u64? {
         entry :: cast[ptr[mut u64]](cast[rawptr](table + index * 8))
         if entry^ & VALID != 0 {
             if entry^ & TABLE == 0 {
@@ -209,7 +209,7 @@ import uefi from "std:os/uefi"
      * @return True if the whole range was mapped; false if a table couldn't be had, or the range runs into a block
      *     already mapped, leaving what was mapped before it.
      */
-    map :: fn(tables: ptr[PageTables], virtual: u64, physical: u64, size: u64) -> bool {
+    map :: fn(tables : ptr[PageTables], virtual : u64, physical : u64, size : u64) -> bool {
         root :: if virtual >= HIGHER_HALF { tables.root } else { tables.low_root }
         done := cast[u64](0)
         loop {
@@ -248,6 +248,15 @@ import uefi from "std:os/uefi"
     tcr_value :: fn() -> u64 {
         range := aarch64.read_system_register(.ID_AA64MMFR0_EL1) & 0xf
         range = if range > 5 { cast[u64](5) } else { range }
-        return 16 | (1 << 8) | (1 << 10) | (3 << 12) | (16 << 16) | (1 << 24) | (1 << 26) | (3 << 28) | (2 << 30) | (range << 32)
+        return 16
+            | (1 << 8)
+            | (1 << 10)
+            | (3 << 12)
+            | (16 << 16)
+            | (1 << 24)
+            | (1 << 26)
+            | (3 << 28)
+            | (2 << 30)
+            | (range << 32)
     }
 }

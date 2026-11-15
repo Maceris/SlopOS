@@ -47,7 +47,7 @@ MAX_OWNER_DEPTH :: 4096
  * @param thread The thread; its control lock is taken, so the caller holds none of rank ThreadControl or above.
  * @param bit What holds it, HELD_SUSPEND or HELD_STOP; holding it again for the same bit changes nothing.
  */
-hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
+hold_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], bit : u32) {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
     thread.held |= bit
@@ -90,7 +90,7 @@ hold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
  *     One dying stays parked.
  * @param bit What no longer holds it, HELD_SUSPEND or HELD_STOP; one that didn't hold it changes nothing.
  */
-unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) {
+unhold_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread], bit : u32) {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
     thread.held &= ~bit
@@ -108,7 +108,7 @@ unhold_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], bit: u32) 
  * @param saved Whether it's this CPU's current thread, whose vector state is still in the CPU and is saved.
  * @return True if it's parked, when the caller takes it off the CPU; false if nothing holds it.
  */
-park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
+park_if_held :: fn(thread : ptr[mut Thread], saved : bool) -> bool {
     if intrinsics.atomic_load_u32_acquire(&thread.held) == 0 {
         return false
     }
@@ -132,7 +132,7 @@ park_if_held :: fn(thread: ptr[mut Thread], saved: bool) -> bool {
  * @param thread The thread; its control lock is taken for the read.
  * @return True if it's parked; it stays so until whatever holds it lets go.
  */
-is_parked :: fn(thread: ptr[mut Thread]) -> bool {
+is_parked :: fn(thread : ptr[mut Thread]) -> bool {
     lock_at(&thread.control, .ThreadControl)
     defer unlock_at(&thread.control, .ThreadControl)
     return thread.parked
@@ -157,8 +157,17 @@ is_parked :: fn(thread: ptr[mut Thread]) -> bool {
  *     is another binding's; TooManyBindings if both slots have bindings their ports still keep; BudgetExceeded or
  *     OutOfMemory if the binding couldn't be made.
  */
-watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], rank: LockRank,
-    signals: slop_os.Signals, key: u64, mode: slop_os.BindMode) -> slop_os.PortError? {
+watch_bind :: fn(
+    kernel : ptr[mut Kernel],
+    port : ptr[mut Port],
+    object : u64,
+    watchers : ptr[mut EndBinding[2]],
+    lock : ptr[mut concurrency.SpinLock],
+    rank : LockRank,
+    signals : slop_os.Signals,
+    key : u64,
+    mode : slop_os.BindMode
+) -> slop_os.PortError? {
     lock_at(lock, rank)
     defer unlock_at(lock, rank)
     if is_dying(object) {
@@ -183,7 +192,8 @@ watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watc
             free_slot := cast[ptr[mut EndBinding]](0)
             for i in 0..<2 {
                 slot :: &watchers^[i]
-                if cast[u64](free_slot) == 0 && (slot.binding == 0 || cast[ptr[Binding]](slot.binding).generation != slot.generation) {
+                if cast[u64](free_slot) == 0
+                    && (slot.binding == 0 || cast[ptr[Binding]](slot.binding).generation != slot.generation) {
                     free_slot = slot
                 }
             }
@@ -215,8 +225,14 @@ watch_bind :: fn(kernel: ptr[mut Kernel], port: ptr[mut Port], object: u64, watc
  *     armed, isn't queued.
  * @param detail What the packet carries besides, like a DMA fault's address.
  */
-raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], lock: ptr[mut concurrency.SpinLock], rank: LockRank, signals: u32,
-    detail: u64) {
+raise_watchers :: fn(
+    kernel : ptr[mut Kernel],
+    watchers : ptr[mut EndBinding[2]],
+    lock : ptr[mut concurrency.SpinLock],
+    rank : LockRank,
+    signals : u32,
+    detail : u64
+) {
     lock_at(lock, rank)
     defer unlock_at(lock, rank)
     for i in 0..<2 {
@@ -243,7 +259,7 @@ raise_watchers :: fn(kernel: ptr[mut Kernel], watchers: ptr[mut EndBinding[2]], 
  * @param process The Process, as its address.
  * @return True if the process owns the object, or owns what owns it, and so on; false for the process itself.
  */
-in_subtree :: fn(object: u64, process: u64) -> bool {
+in_subtree :: fn(object : u64, process : u64) -> bool {
     owner := cast[ptr[ObjectHeader]](object).owner
     for depth in 0..<MAX_OWNER_DEPTH {
         if owner == 0 {
@@ -263,7 +279,7 @@ in_subtree :: fn(object: u64, process: u64) -> bool {
  * @param kernel The kernel, whose list of threads (first_thread) changes under threads_lock.
  * @param thread The thread, which isn't on the list yet.
  */
-link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+link_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     lock_at(&kernel.threads_lock, .Threads)
     thread.all_previous = 0
     thread.all_next = kernel.first_thread
@@ -281,7 +297,7 @@ link_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @param kernel The kernel, whose list of threads (first_thread) changes under threads_lock.
  * @param thread The thread, being destroyed; one not on the list is left alone.
  */
-unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
+unlink_thread :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
     if !thread.on_list {
@@ -309,7 +325,7 @@ unlink_thread :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread]) {
  * @return The thread, or null if none has the ID, or it's dying, or it isn't in the subtree. It may be destroyed
  *     at any time after, but its memory isn't freed before this CPU's next quiescent point.
  */
-thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Thread]? {
+thread_in :: fn(kernel : ptr[mut Kernel], process : u64, id : u64) -> ptr[mut Thread]? {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
     with {
@@ -337,7 +353,7 @@ thread_in :: fn(kernel: ptr[mut Kernel], process: u64, id: u64) -> ptr[mut Threa
  * @param capacity How many IDs to write, at most; more than 64 is taken as 64.
  * @return How many live threads the subtree has, which may be more than capacity.
  */
-threads_of :: fn(kernel: ptr[mut Kernel], process: u64, ids: ptr[mut u64[64]], capacity: u32) -> u32 {
+threads_of :: fn(kernel : ptr[mut Kernel], process : u64, ids : ptr[mut u64[64]], capacity : u32) -> u32 {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
     count := cast[u32](0)
@@ -373,8 +389,14 @@ threads_of :: fn(kernel: ptr[mut Kernel], process: u64, ids: ptr[mut u64[64]], c
  * @return True if all of them were copied; false if either range isn't user memory mapped, readable or writable as
  *     it needs to be, in which case what's before the failed part may have been copied.
  */
-copy_between :: fn(kernel: ptr[mut Kernel], space: ptr[mut AddressSpace], address: u64, other: ptr[mut AddressSpace], buffer: u64,
-    size: u64) -> bool {
+copy_between :: fn(
+    kernel : ptr[mut Kernel],
+    space : ptr[mut AddressSpace],
+    address : u64,
+    other : ptr[mut AddressSpace],
+    buffer : u64,
+    size : u64
+) -> bool {
     bounce : u8[256]
     done := cast[u64](0)
     loop {
@@ -403,7 +425,12 @@ MAX_USER_REGISTERS :: 64
  * @param buffer The user address in space they go to: arch.user_register_count u64s.
  * @return True if written; false if the buffer isn't writable user memory.
  */
-read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> bool {
+read_registers :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    space : ptr[mut AddressSpace],
+    buffer : u64
+) -> bool {
     values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()
     runtime.assert(count <= MAX_USER_REGISTERS, "MAX_USER_REGISTERS covers every architecture's")
@@ -424,7 +451,12 @@ read_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: pt
  * @return Null once set; BadBuffer if the buffer isn't readable user memory; BadRegisters if a value is one user
  *     mode can't have.
  */
-write_registers :: fn(kernel: ptr[mut Kernel], thread: ptr[mut Thread], space: ptr[mut AddressSpace], buffer: u64) -> slop_os.ControlError? {
+write_registers :: fn(
+    kernel : ptr[mut Kernel],
+    thread : ptr[mut Thread],
+    space : ptr[mut AddressSpace],
+    buffer : u64
+) -> slop_os.ControlError? {
     values : u64[MAX_USER_REGISTERS]
     count :: arch.user_register_count()
     runtime.assert(count <= MAX_USER_REGISTERS, "MAX_USER_REGISTERS covers every architecture's")
