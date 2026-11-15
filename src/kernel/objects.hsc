@@ -221,7 +221,7 @@ kind_of :: fn(field: compiler.StructMember) -> slop_os.ObjectKind {
             return cast[slop_os.ObjectKind](cast[u8](kinds.values[i]))
         }
     }
-    compiler.report_error(#caller_location, "no ObjectKind is named %", name)
+    compiler.report_error(#source_location, "no ObjectKind is named %", name)
     return .Process
 }
 
