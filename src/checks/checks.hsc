@@ -1,7 +1,10 @@
 /**
  * SlopOS's house rules (decisions/0007, 0029, 0100), run by the build package on every target once it's
  * checked: check_program, registered with compiler.add_check. Each rule reports every problem it
- * finds with compiler.report_error, at the most specific place, and returns false if it found any.
+ * finds as an error with its own code, at the most specific place, and returns false if it found any:
+ * checks:E0001 tiers, E0002 the arch interface, E0003 the IOMMU interface, E0004 protocols, E0005 the
+ * kernel's floats, E0006 syscall results, E0007 interrupt allocation, E0008 programs' imports, E0009 raw
+ * pointers, E0010 hardware layouts, E0011 the kernel's discarded results and E0012 the kernel's locks.
  *
  * A target's values have the target's types, not this package's, so they're compared by name
  * (reflection.enum_member_name), never cast (decisions/0029).
@@ -67,7 +70,7 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
     for &importer in program.packages {
         importer_tier :: tier_of(target, program, importer)
         if importer_tier == NO_TIER {
-            compiler.report_error(importer.location, "% is in std but declares no PACKAGE_TIER", importer.name)
+            compiler.report(.Error, #package_name, "E0001", importer.location, "% is in std but declares no PACKAGE_TIER", importer.name)
             holds = false
             continue
         }
@@ -76,7 +79,7 @@ check_tiers :: fn(target: ptr[compiler.BuildOptions], program: ptr[compiler.Prog
             imported_tier :: tier_of(target, program, imported)
             // A missing tier is reported on that package's own turn
             if imported_tier > importer_tier {
-                compiler.report_error(edge.location, "% (tier %) imports % (tier %)", importer.name,
+                compiler.report(.Error, #package_name, "E0001", edge.location, "% (tier %) imports % (tier %)", importer.name,
                     tier_name(importer_tier), edge.alias, tier_name(imported_tier))
                 holds = false
             }
@@ -187,7 +190,7 @@ check_arch_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &candidate in program.packages {
         if imported_as(program, candidate.path, "arch", false) {
-            holds = implements(candidate, interface) && holds
+            holds = implements(candidate, interface, "E0002") && holds
         }
     }
     return holds
@@ -206,7 +209,7 @@ check_iommu_interface :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
     holds := true
     for &candidate in program.packages {
         if candidate.path != interface.path && imported_as(program, candidate.path, "iommu_", true) {
-            holds = implements(candidate, interface) && holds
+            holds = implements(candidate, interface, "E0003") && holds
         }
     }
     return holds
@@ -229,11 +232,11 @@ check_protocols :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
             continue
         }
         if compiler.find_constant(candidate, "PROTOCOL") is_none {
-            compiler.report_error(candidate.location, "% is a protocol, so it declares PROTOCOL, a slop_os.Protocol (decisions/0040)", candidate.name)
+            compiler.report(.Error, #package_name, "E0004", candidate.location, "% is a protocol, so it declares PROTOCOL, a slop_os.Protocol (decisions/0040)", candidate.name)
             holds = false
         }
         if compiler.find_function(candidate, "is_idempotent") is_none {
-            compiler.report_error(candidate.location, "% is a protocol, so it declares is_idempotent(request) (decisions/0040)", candidate.name)
+            compiler.report(.Error, #package_name, "E0004", candidate.location, "% is a protocol, so it declares is_idempotent(request) (decisions/0040)", candidate.name)
             holds = false
         }
     }
@@ -266,20 +269,21 @@ imported_as :: fn(program: ptr[compiler.ProgramInfo], path: string, alias: strin
  *
  * @param implementation The implementing package, whose NOT_YET_IMPLEMENTED lists what it doesn't do yet.
  * @param interface The interface package: its functions without bodies, and its empty structs.
+ * @param code The rule's code its problems are reported with, check_arch_interface's or check_iommu_interface's.
  * @return True if it implements it; false if a problem was reported, each where it's best fixed.
  */
-implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compiler.PackageInfo]) -> bool {
+implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compiler.PackageInfo], code: string) -> bool {
     holds := true
     gaps :: compiler.find_constant(implementation, "NOT_YET_IMPLEMENTED") or_else compiler.ConstantInfo.{}
     for name in listed_names(gaps.value) {
         function :: compiler.find_function(implementation, name) or_else compiler.FunctionInfo.{}
         implemented :: declares_type(implementation, name) || (function.name != "" && !is_stub(function.location.file_path))
         if implemented {
-            compiler.report_error(gaps.location, "%.% is there now, so take it off NOT_YET_IMPLEMENTED", implementation.name, name)
+            compiler.report(.Error, #package_name, code, gaps.location, "%.% is there now, so take it off NOT_YET_IMPLEMENTED", implementation.name, name)
             holds = false
         }
         else if !declares_type(interface, name) && (compiler.find_function(interface, name) is_none) {
-            compiler.report_error(gaps.location, "% lists %, which % doesn't declare", implementation.name, name, interface.name)
+            compiler.report(.Error, #package_name, code, gaps.location, "% lists %, which % doesn't declare", implementation.name, name, interface.name)
             holds = false
         }
     }
@@ -288,7 +292,7 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
             continue
         }
         if is_architecture_type(declared.type) && !declares_type(implementation, declared.name) {
-            compiler.report_error(declared.location, "% doesn't declare %, which % leaves to each implementation",
+            compiler.report(.Error, #package_name, code, declared.location, "% doesn't declare %, which % leaves to each implementation",
                 implementation.name, declared.name, interface.name)
             holds = false
         }
@@ -302,24 +306,24 @@ implements :: fn(implementation: ptr[compiler.PackageInfo], interface: ptr[compi
         }
         found := compiler.find_function(implementation, required.name) or_else compiler.FunctionInfo.{}
         if found.name != "" && is_stub(found.location.file_path) {
-            compiler.report_error(found.location, "%.% is a stub, so list it in NOT_YET_IMPLEMENTED", implementation.name,
+            compiler.report(.Error, #package_name, code, found.location, "%.% is a stub, so list it in NOT_YET_IMPLEMENTED", implementation.name,
                 required.name)
             holds = false
             continue
         }
         if found.name == "" {
-            compiler.report_error(required.location, "% doesn't implement %", implementation.name, required.name)
+            compiler.report(.Error, #package_name, code, required.location, "% doesn't implement %", implementation.name, required.name)
             holds = false
             continue
         }
         if !found.has_body {
-            compiler.report_error(found.location, "%.% is a declaration, not an implementation", implementation.name,
+            compiler.report(.Error, #package_name, code, found.location, "%.% is a declaration, not an implementation", implementation.name,
                 required.name)
             holds = false
             continue
         }
         if !signatures_match(found, required) {
-            compiler.report_error(found.location, "%.% doesn't match the signature % declares",
+            compiler.report(.Error, #package_name, code, found.location, "%.% doesn't match the signature % declares",
                 implementation.name, required.name, interface.name)
             holds = false
         }
@@ -533,20 +537,20 @@ check_kernel_floats :: fn(target: ptr[compiler.BuildOptions], program: ptr[compi
         for &function in package.functions {
             for &parameter in function.parameters {
                 if is_floating(parameter.type) {
-                    compiler.report_error(function.location, "%.% takes floating point (%), which the kernel has none of",
+                    compiler.report(.Error, #package_name, "E0005", function.location, "%.% takes floating point (%), which the kernel has none of",
                         package.name, function.name, parameter.name)
                     holds = false
                 }
             }
             for &result in function.return_values {
                 if is_floating(result.type) {
-                    compiler.report_error(function.location, "%.% gives floating point, which the kernel has none of", package.name, function.name)
+                    compiler.report(.Error, #package_name, "E0005", function.location, "%.% gives floating point, which the kernel has none of", package.name, function.name)
                     holds = false
                 }
             }
             for &use in function.used_types {
                 if is_floating(use.type) {
-                    compiler.report_error(use.location, "floating point, which the kernel has none of")
+                    compiler.report(.Error, #package_name, "E0005", use.location, "floating point, which the kernel has none of")
                     holds = false
                 }
             }
@@ -611,7 +615,7 @@ check_syscall_results :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
             seen : uintptr[..]
             defer runtime.array_free(&seen)
             if has_pointer(type_info_of(result.type), &seen) {
-                compiler.report_error(function.location, "%'s result has a pointer in it, which would give user space a kernel address",
+                compiler.report(.Error, #package_name, "E0006", function.location, "%'s result has a pointer in it, which would give user space a kernel address",
                     function.name)
                 holds = false
             }
@@ -711,7 +715,7 @@ allocates :: fn(program: ptr[compiler.ProgramInfo], function: compiler.FunctionI
         called_name :: generic_name(call.name)
         for name in ALLOCATORS {
             if called_name == name {
-                compiler.report_error(call.location, "% allocates, and an interrupt handler reaches it", function.name)
+                compiler.report(.Error, #package_name, "E0007", call.location, "% allocates, and an interrupt handler reaches it", function.name)
                 found = true
             }
         }
@@ -778,7 +782,7 @@ check_program_imports :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
             for &function in importer.functions {
                 for &call in function.calls {
                     if call.package_path == imported.path {
-                        compiler.report_error(call.location, "% calls %.%, but programs don't share code: move it to a library package",
+                        compiler.report(.Error, #package_name, "E0008", call.location, "% calls %.%, but programs don't share code: move it to a library package",
                             importer.name, imported.name, call.name)
                         holds = false
                     }
@@ -806,14 +810,14 @@ check_raw_pointers :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
         for &function in package.functions {
             for &use in function.used_types {
                 if is_raw_pointer(use.type) {
-                    compiler.report_error(use.location, "rawptr in %, which isn't in RAW_POINTERS (src/checks)", package.name)
+                    compiler.report(.Error, #package_name, "E0009", use.location, "rawptr in %, which isn't in RAW_POINTERS (src/checks)", package.name)
                     holds = false
                 }
             }
         }
         for &declared in package.types {
             if declares_raw_pointer(type_info_of(declared.type)) {
-                compiler.report_error(declared.location, "% holds a rawptr, and %'s not in RAW_POINTERS (src/checks)",
+                compiler.report(.Error, #package_name, "E0009", declared.location, "% holds a rawptr, and %'s not in RAW_POINTERS (src/checks)",
                     declared.name, package.name)
                 holds = false
             }
@@ -949,7 +953,7 @@ check_hardware_layouts :: fn(program: ptr[compiler.ProgramInfo]) -> bool {
                 asserted = asserted || asserts_size(each, declared.name)
             }
             if !asserted {
-                compiler.report_error(declared.location, "% is #packed, so it's hardware's: assert its size (#assert size_of(%) == ...)",
+                compiler.report(.Error, #package_name, "E0010", declared.location, "% is #packed, so it's hardware's: assert its size (#assert size_of(%) == ...)",
                     declared.name, declared.name)
                 holds = false
             }
@@ -1004,7 +1008,7 @@ check_kernel_locks :: fn(target: ptr[compiler.BuildOptions], program: ptr[compil
         for &call in function.calls {
             if (call.name == "lock" || call.name == "unlock") && (ends_with(call.package_path, "/concurrency")
                 || ends_with(call.package_path, "\\concurrency")) {
-                compiler.report_error(call.location, "% takes a spin lock unranked: use lock_at and unlock_at (locks.hsc)", function.name)
+                compiler.report(.Error, #package_name, "E0012", call.location, "% takes a spin lock unranked: use lock_at and unlock_at (locks.hsc)", function.name)
                 holds = false
             }
         }
@@ -1035,7 +1039,7 @@ check_kernel_discards :: fn(target: ptr[compiler.BuildOptions], program: ptr[com
         for &function in package.functions {
             for &discard in function.discards {
                 if is_result(discard.type) && !is_listed_function(DISCARDED_RESULTS, package.name, function.name) {
-                    compiler.report_error(discard.location, "%.% discards a Result: handle its error, or list it in DISCARDED_RESULTS (src/checks)",
+                    compiler.report(.Error, #package_name, "E0011", discard.location, "%.% discards a Result: handle its error, or list it in DISCARDED_RESULTS (src/checks)",
                         package.name, function.name)
                     holds = false
                 }
