@@ -958,7 +958,7 @@ launch_launcher :: fn(sessions : ptr[mut Manager], number : u32) -> bool {
             "launcher",
             program,
             LAUNCHER_BUDGET,
-            gui_programs.shape,
+            type_of(gui_programs.shape),
             grants,
             prepared.options
         ),
@@ -1153,7 +1153,7 @@ start_sftp :: fn(
             "sftp_server",
             program,
             SFTP_BUDGET,
-            sftp_server.main,
+            type_of(sftp_server.main),
             SftpGrants.{home = home, stream = stream},
             prepared.options
         ),
@@ -1347,7 +1347,7 @@ launch_first :: fn(
             "echo",
             copy,
             ECHO_BUDGET,
-            echo.main,
+            type_of(echo.main),
             EchoGrants.{
                 log = duplicate_log(sessions.log),
                 session_terminal = given_terminal,
@@ -1437,7 +1437,7 @@ launch_shell :: fn(
             "shell",
             program,
             SHELL_BUDGET,
-            shell.main,
+            type_of(shell.main),
             grants,
             prepared.options
         ),
@@ -1800,7 +1800,7 @@ launch_powerbox :: fn(
             "powerbox",
             program,
             POWERBOX_BUDGET,
-            powerbox_service.main,
+            type_of(powerbox_service.main),
             grants,
             prepared.options
         ),

@@ -193,7 +193,7 @@ start_shell :: fn(
     grants := ShellGrants.{log = log, session_terminal = os.Channel[terminal.Terminal].{end = pair.b}}
     grants.manager = process_manager.connect(manager.end, manager_port, startup.budget)
     grants.programs = programs.connect(finder.end, finder_port, startup.budget)
-    launched :: os.launch(manager, manager_port, "shell", found.executable, SHELL_BUDGET, shell.main, grants)
+    launched :: os.launch(manager, manager_port, "shell", found.executable, SHELL_BUDGET, type_of(shell.main), grants)
     _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
     return launched is_ok
 }

@@ -592,7 +592,7 @@ main :: fn(
         service.name,
         cast[slop_os.Memory](module),
         service.budget,
-        supervisor.main,
+        type_of(supervisor.main),
         grants,
         supervisor_options
     )
@@ -1068,7 +1068,7 @@ run_test :: fn(
         name,
         cast[slop_os.Memory](module),
         TEST_BUDGET,
-        test_syscalls.main,
+        type_of(test_syscalls.main),
         grants,
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = 0}, libraries = libraries}
     )
@@ -1157,7 +1157,7 @@ start_platform :: fn(root : ptr[mut Root]) {
         service.name,
         cast[slop_os.Memory](module),
         service.budget,
-        platform.main,
+        type_of(platform.main),
         grants,
         options
     )
@@ -1737,7 +1737,7 @@ start_scheduler :: fn(root : ptr[mut Root], cpu_budget : slop_os.CpuBudget) {
         service.name,
         cast[slop_os.Memory](module),
         service.budget,
-        scheduler.main,
+        type_of(scheduler.main),
         grants,
         options
     )

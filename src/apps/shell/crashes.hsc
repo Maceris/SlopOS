@@ -466,7 +466,7 @@ ask_symbols :: fn(
         "symbols",
         found.executable,
         budget,
-        symbols.main,
+        type_of(symbols.main),
         grants
     ) {
         case Ok(made) => made

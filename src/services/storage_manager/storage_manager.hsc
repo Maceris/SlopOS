@@ -536,7 +536,7 @@ start_partition_server :: fn(state : ptr[mut Manager], index : usize) -> bool {
         "partition_server",
         state.partition_server_module,
         PARTITION_SERVER_BUDGET,
-        partition_server.main,
+        type_of(partition_server.main),
         grants,
         watched(state, PARTITION_SERVER_KEY + cast[u64](index))
     ) {
@@ -1104,7 +1104,7 @@ files_of :: fn(state : ptr[mut Manager], index : usize) -> os.Channel[dir.Dir]? 
             "fat_server",
             state.fat_server_module,
             FAT_SERVER_BUDGET,
-            fat_server.main,
+            type_of(fat_server.main),
             grants,
             watched(state, FAT_SERVER_KEY + cast[u64](index))
         ) {
@@ -1172,7 +1172,7 @@ container_of :: fn(state : ptr[mut Manager], index : usize) -> Disk? {
         "container_service",
         state.container_service_module,
         CONTAINER_SERVICE_BUDGET,
-        container_service.main,
+        type_of(container_service.main),
         grants,
         watched(state, CONTAINER_KEY + cast[u64](index))
     ) {
@@ -1345,7 +1345,7 @@ volume_of :: fn(
         "volume_server",
         state.volume_server_module,
         budget,
-        volume_server.main,
+        type_of(volume_server.main),
         volume_grants,
         watched(state, VOLUME_KEY + cast[u64](slot))
     ) {

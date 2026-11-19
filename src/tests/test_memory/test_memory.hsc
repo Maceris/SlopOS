@@ -522,7 +522,7 @@ a_write_where_only_reading_is_mapped_ends_the_process #test :: fn(t : ptr[mut te
             "test_memory B",
             program,
             4 << 20,
-            main,
+            type_of(main),
             WriterGrants.{log = cast[slop_os.DebugLog](log_copy), peer = pair.b}
         ),
         "B is launched"

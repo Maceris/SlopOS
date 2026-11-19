@@ -115,7 +115,7 @@ records_and_bytes_stream_between_programs #test :: fn(t : ptr[mut testing.T]) ->
         "test_streams copy",
         executable,
         COPY_BUDGET,
-        main,
+        type_of(main),
         CopyGrants.{log = cast[slop_os.DebugLog](copy_log), output = items.sink, bytes = chunks.sink},
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}
     )

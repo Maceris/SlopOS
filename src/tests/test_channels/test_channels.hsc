@@ -246,7 +246,7 @@ handles_and_messages_pass_between_processes #test :: fn(t : ptr[mut testing.T]) 
         "test_channels B",
         program,
         4 << 20,
-        main,
+        type_of(main),
         BGrants.{log = cast[slop_os.DebugLog](log_copy), peer = first.b}
     )
     b :: testing.require_ok(t, launch, "the process manager launches B with its end of c0")?

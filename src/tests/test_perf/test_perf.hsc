@@ -313,7 +313,7 @@ process_create_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcom
             "test_perf copy",
             executable,
             COPY_BUDGET,
-            takes_nothing,
+            type_of(takes_nothing),
             NoGrants.{},
             os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = ENDED_KEY + i}}
         )

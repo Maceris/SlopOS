@@ -224,7 +224,7 @@ start :: fn(launcher : ptr[mut Launcher], listed : Listed) {
         name,
         found.executable,
         PROGRAM_BUDGET,
-        gui_programs.shape,
+        type_of(gui_programs.shape),
         grants
     ) {
         case Ok(_) => runtime.log_info("started %", name)

@@ -342,7 +342,7 @@ launch_copy :: fn(
         "test_affinity copy",
         program,
         COPY_BUDGET,
-        main,
+        type_of(main),
         CopyGrants.{log = log_copy, test_device = page, peer = pair.b},
         os.LaunchOptions.{cpu_budget = binding}
     )

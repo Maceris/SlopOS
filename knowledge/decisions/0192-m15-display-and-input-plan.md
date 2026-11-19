@@ -328,3 +328,15 @@ The boot tests pass again, all 291, with the GUI login's back among them.
   each open object also takes.
 - **The compiler's changes**: the formatter moved test_debug.hsc's lines, so the debugger tests' line numbers moved;
   the AArch64 debug files outgrew 64 MiB, so a disk with them has 96 MiB more for them.
+- **Building faster** (`--time-phases`, x86-64 programs, 24 logical processors): 55 s became 34 s.
+  - `os.launch` took the program's entry as a function, `acpi_service.main`, though it only uses its type, so the
+    supervisor and the root task each had every service's whole program generated, for LLVM to spend 30 s
+    simplifying away: 61 MB of LLVM IR for a 340 KB root task. It takes `type_of(acpi_service.main)` now, which the
+    compiler makes a compile-time type, so nothing in it is reached, by a build or a check. The supervisor's work fell
+    from 70 s to 18 s, the root task's from 73 s to 14 s; the boot suite from 22.8 to 13.8 minutes.
+  - The build adds the longest targets first (the bootloader, then the services), as they're started in that order.
+  - What's left is ~400 s of processor time across 94 targets: LLVM's optimizing (~240 s, mostly simplifying each
+    whole program, std and all) and checking (~75 s, std checked again for each target). More jobs don't help; it's
+    processor-bound. A couple of seconds needs a build that reuses unchanged targets' outputs.
+  - `hemera --check src/build` takes 16 s, almost all of it each target checking std again.
+  - `-O0` crashes LLVM's instruction selection (an `insertvalue` in SelectionDAG), probably on a large constant.

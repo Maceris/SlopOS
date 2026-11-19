@@ -361,14 +361,14 @@ TESTS = [
     # Ctrl+Alt+Delete as a terminal sends it: the terminal service's own screen, which Enter leaves, the program's lines
     # drawn again, and what's typed after it the program's
     ("brings up the secure attention key's screen, and goes back to the program", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=5", "--console-input=\e[3;7~\p\r\pafter attention",
+        "--command-line=test_exit test_services test_settle=5", "--console-input=\\e[3;7~\\p\r\\pafter attention",
         "--expect-line=[user] terminal: secure attention", "--expect-line=[user] terminal: secure attention ended",
         "--expect-console-line=  Secure attention", "--expect-console-line=echo: after attention",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The secure attention key's screen lists the console's programs, each pinged on its lifecycle channel; E ends the
     # one chosen, echo, which stops when its runtime tells it it's asked to, and isn't started again
     ("ends a program from the secure attention key's screen, which asks it to stop", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=6", "--console-input=\e[3;7~\pe\p\e",
+        "--command-line=test_exit test_services test_settle=6", "--console-input=\\e[3;7~\\pe\\p\\e",
         "--expect-line=[user] sessions: ending echo on the trusted path's request", "--expect-line=[user] echo: stopping, as asked",
         "--expect-line=[user] sessions: echo ended", "--expect-console-line=  Programs on the console:",
         "--expect-line=[user] terminal: secure attention ended", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
@@ -381,7 +381,7 @@ TESTS = [
     # accepts it, and what's typed after reaches the program; Ctrl+Alt+Delete on it is the secure attention key
     ("accepts a new keyboard once the code on the console is typed on it", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_new_keyboards test_settle=5", "--keyboard-input=before the code",
-        "--keyboard-input=\code", "--keyboard-input=after the code",
+        "--keyboard-input=\\code", "--keyboard-input=after the code",
         "--expect-line=[user] input: keyboard 0 is new: its code is on the console", "--expect-line=[user] input: keyboard 0 accepted",
         "--expect-console-line=echo: after the code", "--refuse-console-line=echo: before the code",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),

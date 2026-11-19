@@ -80,7 +80,7 @@ a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn
         "test_exits without grants",
         executable,
         COPY_BUDGET,
-        takes_nothing,
+        type_of(takes_nothing),
         NoGrants.{},
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}
     )
@@ -106,7 +106,7 @@ a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn
         "test_exits refused",
         executable,
         COPY_BUDGET,
-        takes_nothing,
+        type_of(takes_nothing),
         NoGrants.{},
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}
     ) is_error

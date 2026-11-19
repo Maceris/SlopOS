@@ -49,12 +49,16 @@ build :: fn() {
         add_kernel()
     }
     if targets == "all" || targets == "programs" {
-        add_libraries("../libraries")
-        add_programs("../apps")
-        add_programs("../services")
-        add_programs("../drivers")
-        add_programs("../tests")
+        /*
+         * The longest first, as targets are started in the order they're added: the bootloader, then the services,
+         * then the many small tests, which fill in around them
+         */
         add_uefi_programs("../uefi")
+        add_programs("../services")
+        add_programs("../apps")
+        add_programs("../drivers")
+        add_libraries("../libraries")
+        add_programs("../tests")
     }
     if targets == "all" || targets == "tests" {
         add_tests("..")

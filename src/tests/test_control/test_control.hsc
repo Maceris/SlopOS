@@ -351,7 +351,7 @@ launch_copy :: fn(
         name,
         program,
         4 << 20,
-        main,
+        type_of(main),
         CopyGrants.{log = log_copy, peer = pair.b},
         options
     )

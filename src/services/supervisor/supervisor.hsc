@@ -2249,7 +2249,7 @@ start_update :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        update_service.main,
+        type_of(update_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -2731,45 +2731,45 @@ start_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, device : pla
         speaks = .Serial
         pair :: listener_for[serial.Serial](supervisor, &device) or_return void
         listener = pair.b
-        launched = launch_serving[serial.Serial](supervisor, service, device, pair.a, virtio_console.main)
+        launched = launch_serving[serial.Serial](supervisor, service, device, pair.a, type_of(virtio_console.main))
     }
     else if service.name == "virtio_blk" {
         name = "virtio_blk"
         speaks = .Block
         pair :: listener_for[block.Block](supervisor, &device) or_return void
         listener = pair.b
-        launched = launch_serving[block.Block](supervisor, service, device, pair.a, virtio_blk.main)
+        launched = launch_serving[block.Block](supervisor, service, device, pair.a, type_of(virtio_blk.main))
     }
     else if service.name == "virtio_input" {
         name = "virtio_input"
         speaks = .Input
         pair :: listener_for[input.Input](supervisor, &device) or_return void
         listener = pair.b
-        launched = launch_serving[input.Input](supervisor, service, device, pair.a, virtio_input.main)
+        launched = launch_serving[input.Input](supervisor, service, device, pair.a, type_of(virtio_input.main))
     }
     else if service.name == "virtio_gpu" {
         name = "virtio_gpu"
         speaks = .Display
         pair :: listener_for[display.Display](supervisor, &device) or_return void
         listener = pair.b
-        launched = launch_serving[display.Display](supervisor, service, device, pair.a, virtio_gpu.main)
+        launched = launch_serving[display.Display](supervisor, service, device, pair.a, type_of(virtio_gpu.main))
     }
     else if service.name == "virtio_net" {
         name = "virtio_net"
         speaks = .Net
         pair :: listener_for[net.Net](supervisor, &device) or_return void
         listener = pair.b
-        launched = launch_serving[net.Net](supervisor, service, device, pair.a, virtio_net.main)
+        launched = launch_serving[net.Net](supervisor, service, device, pair.a, type_of(virtio_net.main))
     }
     else if service.name == "i6300esb" {
         name = "i6300esb"
         pair :: listener_for[watchdog.Watchdog](supervisor, &device) or_return void
         listener = pair.b
-        launched = launch_serving[watchdog.Watchdog](supervisor, service, device, pair.a, i6300esb.main)
+        launched = launch_serving[watchdog.Watchdog](supervisor, service, device, pair.a, type_of(i6300esb.main))
     }
     else if service.name == "edu_dma" {
         name = "edu_dma"
-        launched = launch_device_only(supervisor, service, device, edu_dma.main)
+        launched = launch_device_only(supervisor, service, device, type_of(edu_dma.main))
     }
     else {
         close_device(&device)
@@ -2869,28 +2869,17 @@ listener_for :: fn[P](supervisor : ptr[mut Supervisor], device : ptr[platform.Pc
  * @param service The driver's service, whose name, module and budget it's launched with.
  * @param device The device, whose handles move to the driver.
  * @param end The listener's end for the driver, which moves to it.
- * @param entry The driver's main, which its process runs with the grants made from device and end.
+ * @param F The driver's main's type, type_of(its main), whose parameters os.launch checks the grants made from device
+ *     and end against; only the type is taken, so the driver's code isn't the supervisor's too.
  * @return Its process, which the caller keeps; NO_HANDLE if the launch failed, which is logged, noted missing and told
  *     to the root task.
  */
-launch_serving :: fn[P](
+launch_serving :: fn[P, F](
     supervisor : ptr[mut Supervisor],
     service : Service,
     device : platform.PciDevice,
     end : slop_os.Channel,
-    entry : (fn(
-        log : slop_os.DebugLog?,
-        device : slop_os.Device,
-        config : slop_os.Memory,
-        bar0 : slop_os.Memory?,
-        bar1 : slop_os.Memory?,
-        bar2 : slop_os.Memory?,
-        bar3 : slop_os.Memory?,
-        bar4 : slop_os.Memory?,
-        bar5 : slop_os.Memory?,
-        domain : slop_os.DmaDomain,
-        clients : os.Listener[P]
-    ) -> int)
+    F : type
 ) -> slop_os.Process {
     grants := ServingGrants[P].{
         log = duplicate_log(supervisor),
@@ -2912,7 +2901,7 @@ launch_serving :: fn[P](
         service.name,
         executable,
         service.budget,
-        entry,
+        F,
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -2931,26 +2920,16 @@ launch_serving :: fn[P](
  *     kept in launched_budget, and a failed one's watch on its port is ended and it's noted missing.
  * @param service The driver's service, whose name, module and budget it's launched with.
  * @param device The device, whose handles move to the driver.
- * @param entry The driver's main, which its process runs with the grants made from device.
+ * @param F The driver's main's type, type_of(its main), whose parameters os.launch checks the grants made from device
+ *     against; only the type is taken, so the driver's code isn't the supervisor's too.
  * @return Its process, which the caller keeps; NO_HANDLE if the launch failed, which is logged, noted missing and told
  *     to the root task.
  */
-launch_device_only :: fn(
+launch_device_only :: fn[F](
     supervisor : ptr[mut Supervisor],
     service : Service,
     device : platform.PciDevice,
-    entry : (fn(
-        log : slop_os.DebugLog?,
-        device : slop_os.Device,
-        config : slop_os.Memory,
-        bar0 : slop_os.Memory?,
-        bar1 : slop_os.Memory?,
-        bar2 : slop_os.Memory?,
-        bar3 : slop_os.Memory?,
-        bar4 : slop_os.Memory?,
-        bar5 : slop_os.Memory?,
-        domain : slop_os.DmaDomain
-    ) -> int)
+    F : type
 ) -> slop_os.Process {
     grants := DeviceGrants.{
         log = duplicate_log(supervisor),
@@ -2970,7 +2949,7 @@ launch_device_only :: fn(
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        entry,
+        F,
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -3109,7 +3088,7 @@ launch_virtio_rng :: fn(
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        virtio_rng.main,
+        type_of(virtio_rng.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -3316,7 +3295,7 @@ start_events :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        events_service.main,
+        type_of(events_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -3406,7 +3385,7 @@ start_store :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        bundle_store_service.main,
+        type_of(bundle_store_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -3480,7 +3459,7 @@ start_config :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        config_service.main,
+        type_of(config_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -4785,7 +4764,7 @@ start_clock :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        clock_service.main,
+        type_of(clock_service.main),
         grants,
         options
     ) {
@@ -4847,7 +4826,7 @@ start_acpi :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        acpi_service.main,
+        type_of(acpi_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -4892,7 +4871,7 @@ start_power_button :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, service.name),
         service.budget,
-        power_button.main,
+        type_of(power_button.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5400,7 +5379,7 @@ start_input :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, "input"),
         service.budget,
-        input_service.main,
+        type_of(input_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5454,7 +5433,7 @@ start_network :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, "network"),
         service.budget,
-        network_service.main,
+        type_of(network_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5519,7 +5498,7 @@ start_compositor :: fn(supervisor : ptr[mut Supervisor]) {
         service.name,
         module_of(supervisor, "compositor"),
         service.budget,
-        compositor.main,
+        type_of(compositor.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5562,7 +5541,7 @@ start_greeter :: fn(supervisor : ptr[mut Supervisor]) {
         service.name,
         module_of(supervisor, "greeter"),
         service.budget,
-        greeter.main,
+        type_of(greeter.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5594,7 +5573,7 @@ start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
         module_of(supervisor, name),
         service.budget,
         // Its entry's type, which test_gui's shares
-        test_compositor.main,
+        type_of(test_compositor.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5639,7 +5618,7 @@ start_test_display :: fn(supervisor : ptr[mut Supervisor]) {
         service.name,
         module_of(supervisor, "test_display"),
         service.budget,
-        test_display.main,
+        type_of(test_display.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5681,7 +5660,7 @@ start_test_network :: fn(supervisor : ptr[mut Supervisor]) {
         service.name,
         module_of(supervisor, "test_network"),
         service.budget,
-        test_network.main,
+        type_of(test_network.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5728,7 +5707,7 @@ start_ssh :: fn(supervisor : ptr[mut Supervisor]) {
         service.name,
         module_of(supervisor, "ssh"),
         service.budget,
-        ssh_service.main,
+        type_of(ssh_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5787,7 +5766,7 @@ start_terminal :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, "terminal"),
         service.budget,
-        terminal_service.main,
+        type_of(terminal_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5830,7 +5809,7 @@ start_hello :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, "hello"),
         service.budget,
-        hello.main,
+        type_of(hello.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -5921,7 +5900,7 @@ start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
         service.name,
         module_of(supervisor, "storage_manager"),
         service.budget,
-        storage_manager.main,
+        type_of(storage_manager.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -6065,7 +6044,7 @@ start_accounts :: fn(supervisor : ptr[mut Supervisor], storage_slot : usize, aga
         service.name,
         module_of(supervisor, "accounts"),
         service.budget,
-        account_service.main,
+        type_of(account_service.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -6144,7 +6123,7 @@ start_sessions :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         service.name,
         module_of(supervisor, "sessions"),
         service.budget,
-        session_manager.main,
+        type_of(session_manager.main),
         grants,
         options_for(supervisor, service.name)
     ) {
@@ -6232,7 +6211,7 @@ start_disk_check :: fn(supervisor : ptr[mut Supervisor], storage_slot : usize) {
         service.name,
         module_of(supervisor, "disk_check"),
         service.budget,
-        disk_check.main,
+        type_of(disk_check.main),
         grants,
         options_for(supervisor, service.name)
     ) {

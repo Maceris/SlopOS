@@ -146,7 +146,7 @@ values_given_in_a_launch_reach_the_program #test :: fn(t : ptr[mut testing.T]) -
         "test_values copy",
         executable,
         COPY_BUDGET,
-        main,
+        type_of(main),
         grants,
         os.LaunchOptions.{watch = os.LaunchWatch.{port = port, key = WATCH_KEY}}
     )
