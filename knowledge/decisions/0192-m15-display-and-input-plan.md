@@ -335,8 +335,19 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     compiler makes a compile-time type, so nothing in it is reached, by a build or a check. The supervisor's work fell
     from 70 s to 18 s, the root task's from 73 s to 14 s; the boot suite from 22.8 to 13.8 minutes.
   - The build adds the longest targets first (the bootloader, then the services), as they're started in that order.
-  - What's left is ~400 s of processor time across 94 targets: LLVM's optimizing (~240 s, mostly simplifying each
-    whole program, std and all) and checking (~75 s, std checked again for each target). More jobs don't help; it's
-    processor-bound. A couple of seconds needs a build that reuses unchanged targets' outputs.
-  - `hemera --check src/build` takes 16 s, almost all of it each target checking std again.
+  - What's left of a build from nothing is ~400 s of processor time across 94 targets: LLVM's optimizing (~240 s,
+    mostly simplifying each whole program, std and all) and checking (resolving and checking ~150 s, parsing ~45 s,
+    compile-time code ~25 s, summed over threads; std checked again for each target). More jobs don't help.
+  - So the compiler has a build cache (Hemera's docs/compilation.md, The Build Cache), chosen with the project's
+    owner over sharing checked std between targets. A program generated as before takes its outputs from the cache
+    rather than being optimized and linked: a build after nothing changed went from 34 s to 11 s, into any folder. A
+    build package's target whose files, and the files its compile-time code read through std, are as they were isn't
+    checked at all: what its checks wrote (manifests, docs, system.records) is written again and its outputs copied.
+    A build of the programs after nothing changed takes about 1 s; after an edit to hello, 5 s, as the four targets
+    that import it are checked again (two of them, the root task and the supervisor, take ~3 s each to check). The
+    outputs match a build without the cache byte for byte.
+  - `hemera --check src/build` takes 17 s cold and 6 s after, most of that the build package's own check, which
+    loads every test folder's package to find the tests.
+  - The boot tests build into a new folder each run, whose path is in the build's settings, so their targets are
+    checked each time, but their programs come from the cache.
   - `-O0` crashes LLVM's instruction selection (an `insertvalue` in SelectionDAG), probably on a large constant.
