@@ -125,6 +125,25 @@ Request :: union {
      * with Located, or Refused(NotAllowed) from any other connection.
      */
     Locate(slop_os.Relative[u8]),
+    /**
+     * Ask what a program's entry is, by its name's bytes, 1 to MAX_NAME of them: its manifest's schema hash, which is
+     * also the manifest's hash in the store, read from its bundle's record without giving out its executable or
+     * manifest, as a launcher asks of every program it lists (decisions/0192). Answered with EntryIs, or Missing, as
+     * for Find.
+     */
+    EntryOf(slop_os.Relative[u8]),
+    /**
+     * Ask for a program's manifest alone, by its name's bytes, 1 to MAX_NAME of them, without its executable, which
+     * holds an object of the bundle store open while it's held, as a shell looking through every program's types does.
+     * Answered with Manifest, or Missing, as for Find.
+     */
+    ManifestOf(slop_os.Relative[u8]),
+}
+
+/** A program's entry's schema hash, as EntryOf answers it. */
+EntryHash :: struct {
+    /** BLAKE3-256 of the entry type's schema, as std/schema's hash gives it. */
+    bytes : u8[32],
 }
 
 /** Where Locate finds a program. */
@@ -149,11 +168,12 @@ Attaching :: struct {
     elevated : bool,
 }
 
-/** A program's documentation, as the bundle store keeps it. */
+/** A program's documentation, or its manifest, as the bundle store keeps it. */
 ProgramDocumentation :: struct {
     /**
-     * Its record, a copy whose owning handle moves to the shell, which destroys it by closing it: the schema hash of
-     * the bundle package's Documentation, then the value. The object is whole pages.
+     * Its record, a copy whose owning handle moves to the shell, which destroys it by closing it: for documentation,
+     * the schema hash of the bundle package's Documentation, then the value; for a manifest, the manifest's schema,
+     * as Program's manifest is. The object is whole pages.
      */
     record : slop_os.Memory,
     /** How many bytes from record's start are the record's. */
@@ -278,6 +298,10 @@ Response :: union {
     NeedsParameter(slop_os.Relative[u8]),
     /** The answer to Powerbox: the program's connection to the session's powerbox, which moves to the shell. */
     PowerboxGiven(os.Channel[powerbox.Powerbox]),
+    /** The answer to EntryOf: the program's entry's schema hash. */
+    EntryIs(EntryHash),
+    /** The answer to ManifestOf: a copy of the program's manifest, whose handle moves to the shell, and its size. */
+    Manifest(ProgramDocumentation),
 }
 
 /**

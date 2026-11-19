@@ -120,6 +120,8 @@ SupervisorGrants :: struct {
     test_display_module : slop_os.Memory?,
     /** test_compositor's client's module. */
     test_compositor_module : slop_os.Memory?,
+    /** test_gui's client's module. */
+    test_gui_module : slop_os.Memory?,
     /** The edu DMA test device's driver's module. */
     edu_dma_module : slop_os.Memory?,
     /** The storage manager's module. */
@@ -552,6 +554,7 @@ main :: fn(
         test_network_module = module_copy(root, "test_network", program_rights),
         test_display_module = module_copy(root, "test_display", program_rights),
         test_compositor_module = module_copy(root, "test_compositor", program_rights),
+        test_gui_module = module_copy(root, "test_gui", program_rights),
         edu_dma_module = module_copy(root, "edu_dma", program_rights),
         storage_manager_module = module_copy(root, "storage_manager", program_rights),
         partition_server_module = module_copy(root, "partition_server", program_rights),

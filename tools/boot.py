@@ -1136,7 +1136,7 @@ class GuiLoginTest(CompositorTest):
             time.sleep(2)
             self.press("tab")
             self.press("ret")
-            if not self.step("[user] terminal_window: started the shell", "starting the terminal"):
+            if not self.step("[user] compositor: window 'Terminal' shown", "starting the terminal"):
                 return
             time.sleep(2)
             self.problem = None
@@ -1147,6 +1147,48 @@ class GuiLoginTest(CompositorTest):
     def keyboard_line(self, line: str) -> None:
         """A line typed, shift held where it's needed, and Enter."""
         self.type_line(line)
+
+
+class GuiTypingTest(GuiLoginTest):
+    """
+    A std/ui window typed into (decisions/0192, 15g): once test_gui shows its form, a name and a password, it's filled as
+    the GUI's login is, twice: Tab, the name, Tab, the password and Enter, each submission waited for; then the power
+    button ends the run. A window that stops taking input, or takes keys out of order, shows as a submission never seen.
+    """
+
+    SHOWN = "[user] test_gui: showing its window"
+    FORMS = [("admin", "correct horse battery staple"), ("bob", "hunter2")]
+
+    def __init__(self, serial: Path, screenshot: Path):
+        super().__init__(serial, screenshot, "", "")
+
+    def drive(self) -> None:
+        try:
+            if not self.wait_for(self.SHOWN, time.monotonic() + 600):
+                self.problem = "test_gui never showed its window"
+                return
+            if not self.connect():
+                self.problem = "the machine protocol couldn't be reached"
+                return
+            time.sleep(1)
+            for index, (name, password) in enumerate(self.FORMS):
+                # To the name: Tab from nothing focused, then Shift+Tab back from the password a submission left focused
+                if index > 0:
+                    self.key("shift", True)
+                self.press("tab")
+                if index > 0:
+                    self.key("shift", False)
+                for character in name:
+                    qcode, _ = qcode_of(character)
+                    self.press(qcode)
+                self.press("tab")
+                self.type_line(password)
+                if not self.step(f"[user] test_gui: submitted {name}, {len(password)} bytes of password", "filling the form"):
+                    return
+            self.problem = None
+            self.command("system_powerdown")
+        except OSError as error:
+            self.problem = f"the machine protocol failed: {error}"
 
 
 def windows_drawn(screenshot: Path) -> str | None:
@@ -1605,8 +1647,9 @@ BOOT_ESP_SECTORS = 131072
 # 64 MiB: every program twice, as modules and in the bundle store, generation 1's objects and a staged generation's,
 # with room to grow (31 MiB of 32 was full on 2026-11-11, and a staged generation didn't fit)
 BOOT_SYSTEM_SECTORS = 131072
-# With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185)
-DEBUG_FILES_SECTORS = 131072
+# With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185):
+# 96 MiB, as 64 MiB grew too small for AArch64's once the GUI programs came (2026-11-19)
+DEBUG_FILES_SECTORS = 196608
 
 
 # The encrypted volume the image builder makes beside the system volume, and its passphrase, which the disk check
@@ -1824,6 +1867,9 @@ def main() -> int:
                         help="a virtio NIC on QEMU's user-mode network, and echo peers on this machine for test_network: "
                         "{tcp_echo} and {udp_echo} in the command line are their ports, and port 7 on the machine is "
                         "connected to and checked once it listens (decisions/0188)")
+    parser.add_argument("--gui-typing", action="store_true",
+                        help="a virtio GPU, tablet and keyboard for test_gui: once it shows its window, lines typed into its "
+                        "field, each submission waited for, with --expect (decisions/0192, 15g)")
     parser.add_argument("--gui-login", nargs=2, metavar=("NAME", "PASSWORD"),
                         help="a virtio GPU, tablet and keyboard for the greeter: once it shows its window and first-boot setup "
                         "has made the account, log in as NAME with PASSWORD, and wait for the launcher, with --expect "
@@ -1985,8 +2031,9 @@ def main() -> int:
             extra += keyboard.qemu_arguments()
         screenshot = folder / "screen.ppm"
         display_test = None
-        if arguments.gui_login:
-            display_test = GuiLoginTest(serial, folder / "display.ppm", arguments.gui_login[0], arguments.gui_login[1])
+        if arguments.gui_login or arguments.gui_typing:
+            display_test = GuiTypingTest(serial, folder / "display.ppm") if arguments.gui_typing \
+                else GuiLoginTest(serial, folder / "display.ppm", arguments.gui_login[0], arguments.gui_login[1])
             extra += display_test.qemu_arguments()
             display_test.thread.start()
         elif arguments.display or arguments.compositor:

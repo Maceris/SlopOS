@@ -62,6 +62,7 @@ import test_affinity from "../tests/test_affinity"
 import test_budgets from "../tests/test_budgets"
 import test_channels from "../tests/test_channels"
 import test_compositor from "../tests/test_compositor"
+import test_gui from "../tests/test_gui"
 import test_control from "../tests/test_control"
 import test_cpu_budgets from "../tests/test_cpu_budgets"
 import test_devices from "../tests/test_devices"
@@ -274,7 +275,7 @@ SERVICES :: Service.[
         module = "supervisor.elf",
         starter = .RootTask,
         by_manager = true,
-        budget = 352 * MIB,
+        budget = 368 * MIB,
         entry = type_of(supervisor.main),
     },
     /*
@@ -356,7 +357,7 @@ SERVICES :: Service.[
         module = "session_manager.elf",
         starter = .Supervisor,
         by_manager = true,
-        budget = 48 * MIB,
+        budget = 64 * MIB,
         entry = type_of(session_manager.main),
         cpu = SESSIONS_CPU,
         cpu_splits = true,
@@ -423,6 +424,16 @@ SERVICES :: Service.[
         by_manager = true,
         budget = 4 * MIB,
         entry = type_of(test_compositor.main),
+        not_restarted = true,
+    },
+    // A std/ui window's test client (decisions/0192, 15g), started only with test_gui on the kernel's command line
+    Service.{
+        name = "test_gui",
+        module = "test_gui.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 8 * MIB,
+        entry = type_of(test_gui.main),
         not_restarted = true,
     },
     // The display's test client (decisions/0192, 15b), started only with test_display on the kernel's command line

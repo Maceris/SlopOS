@@ -218,17 +218,40 @@ program_documentation :: fn(shell : ptr[mut Shell], name : string) -> bundle.Doc
 }
 
 /**
- * Find a program's manifest, asking the session manager for the program, and read it; its executable isn't kept.
+ * Get a program's manifest alone, asking the session manager (ManifestOf), and read it; nothing of the store's is held
+ * for it, so the shell can look through every program's.
  *
  * @param shell The shell, whose programs connection is asked.
  * @param name The program's name.
- * @return The manifest, the caller's to free; null if there's no such program, or its manifest doesn't read.
+ * @return The manifest, the caller's to free; null if there's no such program or connection, the answer didn't come,
+ *     or its manifest doesn't read.
  */
 program_manifest :: fn(shell : ptr[mut Shell], name : string) -> schema.Schema? {
-    found :: find_program(shell, name) or_return null
-    _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
-    manifest :: read_manifest(found)
-    _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
+    connection :: shell.programs or_return null
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return null
+    }
+    out := os.Outgoing.{}
+    // Begun before the name's appended, as begin starts the message afresh
+    request :: os.begin[programs.Request](&out)
+    request^ = .ManifestOf(os.append(&out, string_bytes(name)))
+    if programs.send_request(connection.end, shell.programs_port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    if !received(programs.receive_response(connection.end, shell.programs_port, &into, true)) {
+        return null
+    }
+    given :: match os.message_of[programs.Response](&into)^ {
+        case Manifest(given) => given
+        case _ => return null
+    }
+    manifest :: read_manifest(programs.Program.{
+        executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
+        manifest = given.record,
+        manifest_size = given.size,
+    })
+    _ = slop_os.handle_close(cast[slop_os.Handle](given.record))
     return manifest
 }
 

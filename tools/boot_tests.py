@@ -177,13 +177,13 @@ BOOT_DISK_BASE = [
     "2",
 ]
 # The line of test_debug.hsc whose write crashes it, which a crash report with lines names
-TEST_DEBUG_CRASH_LINE = 85
+TEST_DEBUG_CRASH_LINE = 92
 # The line of test_debug.hsc the debugger breaks at, where its values are all made and kept in memory
-TEST_DEBUG_BREAK_LINE = 61
+TEST_DEBUG_BREAK_LINE = 68
 # BOOT_DISK_BASE with the programs' debug files in the store (decisions/0185), on a disk boot.py makes bigger for them
-WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 403456 blocks")
-                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 403456 blocks")
-                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 262144 blocks") for argument in BOOT_DISK_BASE]
+WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 468992 blocks")
+                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 468992 blocks")
+                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 327680 blocks") for argument in BOOT_DISK_BASE]
 
 # What the disk check says, and writes, which the tests of booting a disk itself check
 DISK_CHECK_LINES = [
@@ -224,7 +224,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 95 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 96 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -304,6 +304,14 @@ TESTS = [
         "--expect-line=[user] compositor: moved 'B' to 490, 418",
         "--expect-line=[user] compositor: pasted into 'B'",
         "--expect-line=[user] test_compositor: B pasted from A",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # A std/ui window through gui_kit (decisions/0192, 15g): test_gui's field typed into on the virtio keyboard, through
+    # the seat lent to the compositor, line after line, each submitted with Enter
+    ("types into a std/ui window, line after line", 7, [WITH_PROGRAMS, "--gui-typing", "--timeout=300",
+        "--command-line=test_exit test_services test_settle=180 test_gui",
+        "--expect-line=[user] test_gui: showing its window",
+        "--expect-line=[user] test_gui: submitted admin, 28 bytes of password",
+        "--expect-line=[user] test_gui: submitted bob, 7 bytes of password",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
     ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",
@@ -444,6 +452,27 @@ TESTS = [
         "--expect-line=[user] clock: serving",
         "--expect-line=[user] clock: set to 2030-01-02 03:04:05 UTC, and the real-time clock reads it back",
         "--expect-line=[user] hello: the wall clock says it's 2030-01-02", "--expect-line=[info] root task ended with code 0"]),
+    # The GUI's login (decisions/0192, 15f): first-boot setup on the console makes admin; the greeter, in the compositor's
+    # trusted layer, takes the name and password typed on the virtio keyboard, the seat lent to the compositor at the
+    # console's login screen; the GUI session's launcher lists the bundle store's GUI programs, and starts the terminal,
+    # which starts the shell on a terminal it serves. Argon2id twice under emulation: a long settle, cut short by the
+    # power button once it's done
+    ("logs in on the GUI to a session whose launcher starts a terminal", 7,
+     with_before_qemu([argument.replace("test_services", "test_services gui test_settle=400").replace("--timeout=120", "--timeout=600")
+                       for argument in BOOT_DISK_BASE], ["--gui-login", "admin", "correct horse battery staple",
+        "--console-input=\\wadmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--expect-line=[user] terminal: first-boot setup ended",
+        "--expect-line=[user] compositor: serving 1280 by 800",
+        "--expect-line=[user] greeter: showing the login window",
+        "--expect-line=[user] greeter: logging in as admin",
+        "--expect-line=[user] greeter: started a GUI session for admin",
+        "--expect-line=[user] sessions: a session for admin, in en-US",
+        "--expect-line=[user] compositor: window 'Programs' shown",
+        "--expect-line=[user] launcher: lists 1 programs",
+        "--expect-line=[user] launcher: started terminal_window",
+        "--expect-line=[user] process manager: started shell",
+        "--expect-line=[user] compositor: window 'Terminal' shown"])),
     # First-boot setup on the trusted path (decisions/0148): a name that can't be an account's and a common password
     # refused, the administrator made, and the recovery code shown once, until Enter. Then the login screen (0150): F2
     # changes the layout, a wrong password is refused, and the right one makes the session, whose echo has the home

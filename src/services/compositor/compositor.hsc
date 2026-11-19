@@ -1186,39 +1186,58 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
     if state.count == 0 || state.held == 0 {
         return void
     }
-    count := if state.count < cast[usize](state.held) { state.count } else { cast[usize](state.held) }
-    if count > surface.MAX_EVENTS {
-        count = surface.MAX_EVENTS
+    most := if state.count < cast[usize](state.held) { state.count } else { cast[usize](state.held) }
+    if most > surface.MAX_EVENTS {
+        most = surface.MAX_EVENTS
     }
-    // The text of those given, which are first, up to where the next's starts; fewer given while it's past MAX_TEXT
+    count := most
     text_end := state.text_count
-    loop {
-        text_end = if count < state.count && count < state.events.count {
-            cast[usize](state.events[count].text_start)
+    sent := false
+    // Halved while they're too big for the client's ring, as one made with the default ring is
+    for attempt in cast[usize](0)..<8 {
+        count = most
+        // The text of those given, which are first, up to where the next's starts; fewer given while it's past MAX_TEXT
+        loop {
+            text_end = if count < state.count && count < state.events.count {
+                cast[usize](state.events[count].text_start)
+            }
+            else {
+                state.text_count
+            }
+            if count <= 1 || text_end <= surface.MAX_TEXT {
+                break
+            }
+            count -= 1
         }
-        else {
-            state.text_count
+        if count > state.events.count || text_end > state.text.count || text_end > surface.MAX_TEXT {
+            // One event with more text than an Input holds: dropped
+            state.count = 0
+            state.text_count = 0
+            return void
         }
-        if count <= 1 || text_end <= surface.MAX_TEXT {
-            break
+        out := os.Outgoing.{}
+        response :: os.begin[surface.Response](&out)
+        response^ = .Input(
+            surface.Events.{
+                events = os.append(&out, state.events[0..<count]),
+                text = os.append(&out, state.text[0..<text_end]),
+            }
+        )
+        match surface.send_response(compositor.clients.ends[client], compositor.port, &out) {
+            case Some(error) => {
+                if error != .TooBig || most <= 1 {
+                    // Tried again at the next deliver
+                    return void
+                }
+                most /= 2
+            }
+            case None => {
+                sent = true
+                break
+            }
         }
-        count -= 1
     }
-    if count > state.events.count || text_end > state.text.count || text_end > surface.MAX_TEXT {
-        // One event with more text than an Input holds: dropped
-        state.count = 0
-        state.text_count = 0
-        return void
-    }
-    out := os.Outgoing.{}
-    response :: os.begin[surface.Response](&out)
-    response^ = .Input(
-        surface.Events.{
-            events = os.append(&out, state.events[0..<count]),
-            text = os.append(&out, state.text[0..<text_end]),
-        }
-    )
-    if surface.send_response(compositor.clients.ends[client], compositor.port, &out) != null {
+    if !sent {
         return void
     }
     state.held = 0

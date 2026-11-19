@@ -730,6 +730,8 @@ Modules :: struct {
     test_display : slop_os.Memory?,
     /** test_compositor's client's module. */
     test_compositor : slop_os.Memory?,
+    /** test_gui's client's module. */
+    test_gui : slop_os.Memory?,
     /** The edu DMA test device's driver's module. */
     edu_dma : slop_os.Memory?,
     /** The storage manager's module. */
@@ -1210,6 +1212,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param test_network_module test_network's client's program.
  * @param test_display_module test_display's client's program.
  * @param test_compositor_module test_compositor's client's program.
+ * @param test_gui_module test_gui's client's program.
  * @param edu_dma_module The edu DMA test device's driver's program.
  * @param storage_manager_module The storage manager's program; without it, or any of the four server modules below,
  *     there's no storage manager, and so no system volume.
@@ -1257,6 +1260,7 @@ main :: fn(
     test_network_module : slop_os.Memory?,
     test_display_module : slop_os.Memory?,
     test_compositor_module : slop_os.Memory?,
+    test_gui_module : slop_os.Memory?,
     edu_dma_module : slop_os.Memory?,
     storage_manager_module : slop_os.Memory?,
     partition_server_module : slop_os.Memory?,
@@ -1363,6 +1367,7 @@ main :: fn(
         test_network = test_network_module,
         test_display = test_display_module,
         test_compositor = test_compositor_module,
+        test_gui = test_gui_module,
         edu_dma = edu_dma_module,
         storage_manager = storage_manager_module,
         partition_server = partition_server_module,
@@ -1418,6 +1423,8 @@ main :: fn(
     // The compositor (decisions/0192, 15c), with gui; its test client with test_compositor
     gui := false
     test_compositor_client := false
+    // The std/ui window's test client (decisions/0192, 15g)
+    test_gui_client := false
     supervisor.started_at = slop_os.clock_monotonic() or_else 0
     supervisor.command_line = command_line
     match command_line {
@@ -1427,7 +1434,8 @@ main :: fn(
             test_network_client = service_kit.has_word(text, "test_network")
             test_display_client = service_kit.has_word(text, "test_display")
             test_compositor_client = service_kit.has_word(text, "test_compositor")
-            gui = service_kit.has_word(text, "gui") || test_compositor_client
+            test_gui_client = service_kit.has_word(text, "test_gui")
+            gui = service_kit.has_word(text, "gui") || test_compositor_client || test_gui_client
             test_dma_fault = service_kit.has_word(text, "test_dma_fault")
             test_clock = service_kit.has_word(text, "test_clock")
             test_events = service_kit.has_word(text, "test_events")
@@ -1535,7 +1543,10 @@ main :: fn(
             start_test_display(&supervisor)
         }
         if test_compositor_client {
-            start_test_compositor(&supervisor)
+            start_test_client(&supervisor, "test_compositor")
+        }
+        else if test_gui_client {
+            start_test_client(&supervisor, "test_gui")
         }
         else if gui {
             start_greeter(&supervisor)
@@ -4951,6 +4962,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "compositor" {
         modules.compositor
     }
+    else if name == "test_gui" {
+        modules.test_gui
+    }
     else if name == "test_compositor" {
         modules.test_compositor
     }
@@ -5478,7 +5492,7 @@ start_compositor :: fn(supervisor : ptr[mut Supervisor]) {
         return void
     }
     service :: service_named(supervisor, "compositor") or_return void
-    pair :: os.channel_for[surface.Surface](supervisor.block.budget, 0) or_return void
+    pair :: os.channel_for[surface.Surface](supervisor.block.budget, surface.RING_BYTES) or_return void
     seat_connector :: if supervisor.input != NOWHERE {
         connector_to(supervisor, supervisor.input)
     }
@@ -5492,7 +5506,7 @@ start_compositor :: fn(supervisor : ptr[mut Supervisor]) {
         clients = os.Listener[surface.Surface].{end = pair.a},
     }
     // The trusted layer's listener, its other end kept for the greeter
-    match os.channel_for[surface.Surface](supervisor.block.budget, 0) {
+    match os.channel_for[surface.Surface](supervisor.block.budget, surface.RING_BYTES) {
         case Ok(trusted) => {
             grants.trusted = os.Listener[surface.Surface].{end = trusted.a}
             supervisor.trusted_surface = trusted.b
@@ -5558,16 +5572,17 @@ start_greeter :: fn(supervisor : ptr[mut Supervisor]) {
 }
 
 /**
- * Start the compositor's test client (decisions/0192, 15c), with a connector to the compositor; only with
- * test_compositor on the command line, and a compositor.
+ * Start one of the compositor's test clients (decisions/0192), with a connector to the compositor: test_compositor
+ * (15c) or test_gui (15g), whose entries are alike; only with its word on the command line, and a compositor.
  *
  * @param supervisor The supervisor.
+ * @param name The client's service name, test_compositor or test_gui.
  */
-start_test_compositor :: fn(supervisor : ptr[mut Supervisor]) {
+start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
     if supervisor.compositor == NOWHERE {
         return void
     }
-    service :: service_named(supervisor, "test_compositor") or_return void
+    service :: service_named(supervisor, name) or_return void
     grants :: TestCompositorGrants.{
         log = duplicate_log(supervisor),
         compositor = connector_to(supervisor, supervisor.compositor),
@@ -5576,13 +5591,16 @@ start_test_compositor :: fn(supervisor : ptr[mut Supervisor]) {
         supervisor.manager,
         supervisor.manager_port,
         service.name,
-        module_of(supervisor, "test_compositor"),
+        module_of(supervisor, name),
         service.budget,
+        // Its entry's type, which test_gui's shares
         test_compositor.main,
         grants,
         options_for(supervisor, service.name)
     ) {
-        case Ok(launched) => _ = place(supervisor, "test_compositor", kept(supervisor, launched), NOWHERE)
+        // Placed under its name as a constant: place keeps it
+        case Ok(launched) => _ = place(supervisor, if name == "test_gui" { "test_gui" } else { "test_compositor" },
+            kept(supervisor, launched), NOWHERE)
         case Error(error) => failed(supervisor, service.name, error)
     }
 }

@@ -640,30 +640,50 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
         return void
     }
     end :: connected.ends[reader]
-    count := if service.count < cast[usize](held) { service.count } else { cast[usize](held) }
-    if count > seat.MAX_EVENTS {
-        count = seat.MAX_EVENTS
+    most := if service.count < cast[usize](held) { service.count } else { cast[usize](held) }
+    if most > seat.MAX_EVENTS {
+        most = seat.MAX_EVENTS
     }
+    count := most
     text_end := text_before(service, count)
-    loop {
-        if text_end <= seat.MAX_TEXT || count <= 1 {
-            break
-        }
-        count -= 1
+    sent := false
+    // Halved while they're too big for the client's ring: one made with the default ring takes fewer than MAX_EVENTS
+    for attempt in cast[usize](0)..<8 {
+        count = most
         text_end = text_before(service, count)
-    }
-    if count > service.events.count || text_end > service.text.count || text_end > service.text_count {
-        return void
-    }
-    out := os.Outgoing.{}
-    response :: os.begin[seat.Response](&out)
-    response^ = .Input(
-        seat.Events.{
-            events = os.append(&out, service.events[0..<count]),
-            text = os.append(&out, service.text[0..<text_end]),
+        loop {
+            if text_end <= seat.MAX_TEXT || count <= 1 {
+                break
+            }
+            count -= 1
+            text_end = text_before(service, count)
         }
-    )
-    if seat.send_response(end, service.port, &out) != null {
+        if count > service.events.count || text_end > service.text.count || text_end > service.text_count {
+            return void
+        }
+        out := os.Outgoing.{}
+        response :: os.begin[seat.Response](&out)
+        response^ = .Input(
+            seat.Events.{
+                events = os.append(&out, service.events[0..<count]),
+                text = os.append(&out, service.text[0..<text_end]),
+            }
+        )
+        match seat.send_response(end, service.port, &out) {
+            case Some(error) => {
+                if error != .TooBig || most <= 1 {
+                    // Tried again at the next deliver
+                    return void
+                }
+                most /= 2
+            }
+            case None => {
+                sent = true
+                break
+            }
+        }
+    }
+    if !sent {
         return void
     }
     if borrowing {

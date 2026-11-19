@@ -34,6 +34,20 @@ Buffer :: struct {
     stale : canvas.Rect,
 }
 
+/** A key or text typed, waiting for a frame. */
+Queued :: struct {
+    /** Whether it's a key std/ui reads; text typed otherwise. */
+    is_key : bool,
+    /** For a key, which. */
+    key : ui.Key,
+    /** For a key, whether Shift was held. */
+    shift : bool,
+    /** For text, where its bytes start in the window's typed. */
+    text_start : u32,
+    /** For text, how many bytes. */
+    text_bytes : u32,
+}
+
 /** A window and what's drawn in it. */
 Window :: struct {
     /** Its connection to the compositor. */
@@ -54,7 +68,12 @@ Window :: struct {
     ui : ui.Ui,
     /** The input gathered since the last frame. */
     input : ui.Input,
-    /** The text typed since the last frame. */
+    /**
+     * The keys and typed text waiting for a frame, in the order they came; a frame takes them up to a key that follows
+     * text, as std/ui applies a frame's keys before its text.
+     */
+    queued : Queued[..],
+    /** The queued text's bytes, which each Queued's text_start indexes. */
     typed : u8[..],
     /** The text pasted since the last frame. */
     pasted : u8[..],
@@ -362,11 +381,12 @@ take_key :: fn(window : ptr[mut Window], event : surface.Event, text : u8[]) {
     shift :: event.modifiers & terminal.SHIFT != 0
     for known in (if control { CONTROL_KEYS[0..<CONTROL_KEYS.count] } else { KEYS[0..<KEYS.count] }) {
         if known.usage == event.code {
-            ui.press_key(&window.input, known.key, shift)
+            runtime.array_add(&window.queued, Queued.{is_key = true, key = known.key, shift = shift})
             return void
         }
     }
-    if !control {
+    if !control && text.count > 0 {
+        runtime.array_add(&window.queued, Queued.{text_start = cast[u32](window.typed.count), text_bytes = cast[u32](text.count)})
         for byte in text {
             runtime.array_add(&window.typed, byte)
         }
@@ -376,22 +396,55 @@ take_key :: fn(window : ptr[mut Window], event : surface.Event, text : u8[]) {
 /**
  * Begin a frame with what was gathered since the last.
  *
+ * The keys and text queued are taken in order, keys then text, up to a key that follows text: std/ui applies a frame's
+ * keys before its text, so text typed before a Tab goes in the field it was typed in. What's left waits for the next
+ * frame, which is then due.
+ *
  * @param window The window.
  * @return Its UI, for the frame's widgets; finish ends the frame.
  */
 begin :: fn(window : ptr[mut Window]) -> ptr[mut ui.Ui] {
     input := window.input
-    input.text = window.typed[0..<window.typed.count]
+    input.key_count = 0
+    text : u8[..]
+    defer runtime.array_free(&text)
+    typed :: window.typed[0..<window.typed.count]
+    taken := cast[usize](0)
+    for each in window.queued {
+        if each.is_key {
+            if text.count > 0 || input.key_count >= ui.MAX_KEYS {
+                break
+            }
+            ui.press_key(&input, each.key, each.shift)
+        }
+        else {
+            start :: cast[usize](each.text_start)
+            end :: start + cast[usize](each.text_bytes)
+            if start <= end && end <= typed.count {
+                for byte in typed[start..<end] {
+                    runtime.array_add(&text, byte)
+                }
+            }
+        }
+        taken += 1
+    }
+    input.text = text[0..<text.count]
     input.pasted = window.pasted[0..<window.pasted.count]
     ui.begin(&window.ui, input, cast[f32](window.width), cast[f32](window.height))
-    // What happened is the frame's now: transitions and keys taken, the pointer and button kept
+    // What happened is the frame's now: transitions and what was taken; the pointer and button kept
     window.input.pressed = false
     window.input.released = false
     window.input.wheel = 0
-    window.input.key_count = 0
-    runtime.array_reset(&window.typed)
+    for i in cast[usize](0)..<taken {
+        if window.queued.count > 0 {
+            runtime.array_remove(&window.queued, 0)
+        }
+    }
+    if window.queued.count == 0 {
+        runtime.array_reset(&window.typed)
+    }
     runtime.array_reset(&window.pasted)
-    window.due = false
+    window.due = window.queued.count > 0
     return &window.ui
 }
 

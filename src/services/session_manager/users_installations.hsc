@@ -601,6 +601,8 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
             response :: os.begin[programs.Response](&out)
             match os.message_of[programs.Request](into)^ {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
+                case EntryOf(name) => response^ = entry_of(sessions, os.items(into, name))
+                case ManifestOf(name) => response^ = manifest_of(sessions, os.items(into, name))
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))

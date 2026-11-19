@@ -134,11 +134,7 @@ view_file :: fn(shell : ptr[mut Shell], tree : ptr[Node]) -> Result[Value, EvalE
  */
 typed_value :: fn(shell : ptr[mut Shell], hash : u8[32], bytes : u8[]) -> Value? {
     for name in program_names(shell) {
-        found :: find_program(shell, name) or_continue
-        _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
-        read := read_manifest(found)
-        _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
-        manifest := read or_continue
+        manifest := program_manifest(shell, name) or_continue
         defer schema.free(&manifest)
         for i in 0..<manifest.types.count {
             if same_hash(schema.hash_rooted(&manifest, i), hash) {

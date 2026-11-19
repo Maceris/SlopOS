@@ -910,8 +910,8 @@ start_gui :: fn(
     return started(sessions, number, user)
 }
 
-/** What the launcher's given: a GUI program's grants (src/gui_programs). */
-LAUNCHER_BUDGET : u64 : 16 * 1024 * 1024
+/** The launcher's memory: its own, and that of each program it starts, split off it, a terminal window's 24 MiB. */
+LAUNCHER_BUDGET : u64 : 32 * 1024 * 1024
 
 /**
  * Start the launcher, from the bundle store, as a GUI session's first program: a connection dialed through the
@@ -1513,6 +1513,8 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
             response :: os.begin[programs.Response](&out)
             match os.message_of[programs.Request](into)^ {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
+                case EntryOf(name) => response^ = entry_of(sessions, os.items(into, name))
+                case ManifestOf(name) => response^ = manifest_of(sessions, os.items(into, name))
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
@@ -1529,7 +1531,10 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     &out
                 )
             }
-            _ = programs.send_response(made.programs_end, sessions.port, &out)
+            match programs.send_response(made.programs_end, sessions.port, &out) {
+                case Some(error) => runtime.log_info("an answer on session %'s programs connection wasn't sent: %", number, error)
+                case None => {}
+            }
         }
     }
 }
@@ -1571,6 +1576,58 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
             _ = slop_os.handle_close(cast[slop_os.Handle](manifest.memory))
             return .Missing
         }
+    }
+}
+
+/**
+ * Tell what a program's entry is, for EntryOf: its manifest's hash in the store, the entry type's schema hash, read
+ * from its bundle's record; nothing of the program's given out.
+ *
+ * @param sessions The session manager, whose bundle store has the program's bundle.
+ * @param name The program's name, 1 to programs.MAX_NAME bytes.
+ * @return EntryIs with the hash; Missing for a name empty or too long, no program by it, or a bundle without both an
+ *     executable and a manifest.
+ */
+entry_of :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Response {
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return .Missing
+    }
+    found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
+    record :: stored_object(sessions, found) or_return .Missing
+    referred : bundle.Hash[..]
+    defer runtime.array_free(&referred)
+    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
+    let_go_of_object(record)
+    if !read || referred.count < 2 {
+        return .Missing
+    }
+    return .EntryIs(programs.EntryHash.{bytes = referred[1 % referred.count].bytes})
+}
+
+/**
+ * Read a program's manifest alone, for ManifestOf: a copy, so nothing of the store's stays open for it.
+ *
+ * @param sessions The session manager, whose bundle store has the program's bundle and manifest.
+ * @param name The program's name, 1 to programs.MAX_NAME bytes.
+ * @return Manifest with the copy, whose handle moves to the shell, and its size; Missing for a name empty or too long,
+ *     no program by it, a bundle without both an executable and a manifest, or a manifest the store didn't give.
+ */
+manifest_of :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Response {
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return .Missing
+    }
+    found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
+    record :: stored_object(sessions, found) or_return .Missing
+    referred : bundle.Hash[..]
+    defer runtime.array_free(&referred)
+    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
+    let_go_of_object(record)
+    if !read || referred.count < 2 {
+        return .Missing
+    }
+    match store_request(sessions, .Read(referred[1])) {
+        case Got(object) => return .Manifest(programs.ProgramDocumentation.{record = object.memory, size = object.size})
+        case _ => return .Missing
     }
 }
 

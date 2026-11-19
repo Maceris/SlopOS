@@ -108,6 +108,8 @@ and atlas are the owner's own.
   - Finish 15e's and 15f's open items (below, *As Built so far*).
   - Profile the boot tests and M15's code (the compositor, the canvas, std/ui, the GPU driver) and optimize what the
     profiles show.
+  - Profile and optimize the compiler on SlopOS: its checks (`hemera --check`, the editor's) and its builds. A full
+    build of SlopOS's programs takes about 67 s; the aim is a couple of seconds.
 - **15h, a security review and the full suites**, with the input-to-photon latency test (`display.md` *Also
   proposed*).
 
@@ -302,13 +304,27 @@ Built, compiled for both architectures, and tested as far as the compositor's bo
   - The supervisor's budget went from 320 to 352 MiB, its connectors from 16 to 32. The compositor's budget is
     12 MiB, virtio_gpu's 20 MiB, the greeter's 6 MiB.
 
-**Not yet working, for the next session:** the GUI login boot test (`GuiLoginTest` in `tools/boot.py`; its entry is out
-of `boot_tests.py` until it passes).
-- Keys reach the greeter's window through the compositor, but after a few frames the greeter gets no more events, so
-  the login is never submitted. The same form passes in std/ui's hosted test (`fills_a_form_by_keyboard`).
-- Suspected: the greeter's held Read is lost between gui_kit and the compositor, or the compositor blocks sending to
-  it. Next step: instrument the compositor's serve and deliver for the trusted client.
-
 **Still to build:** the typed-data viewer; forms from manifests; the powerbox's prompts in the trusted layer; the console
-yielding the firmware framebuffer while the seat's lent (all 15g's, with the GUI login test); and 15h's review and
-full suites.
+yielding the firmware framebuffer while the seat's lent (all 15g's); and 15h's review and full suites.
+
+## As Built so far: 15g (in progress)
+The boot tests pass again, all 291, with the GUI login's back among them.
+- **The GUI login**: a GUI session's launcher now starts the terminal window, whose shell runs. What it took:
+  - Surface connections have 8 KiB rings (`surface.RING_BYTES`), as one Input of 32 events didn't fit in 1 KiB.
+  - The compositor and the input service halve what they send when it's TooBig, rather than retrying it forever.
+  - gui_kit queues keys and typed text in the order they came, and hands std/ui a frame's keys, then its text, so
+    text typed before a Tab lands in the field it was typed in.
+  - The launcher asks the session manager what each program's entry is (`EntryOf`, from its bundle's record) instead
+    of being given every program's executable and manifest to hash.
+  - Budgets: the supervisor's 368 MiB, the session manager's 64 MiB, the launcher's 32 MiB; a program it starts
+    gets 24 MiB, and the terminal window's shell 16 MiB.
+  - A program the launcher starts is given a duplicate of its log, so its lines reach the serial log.
+  - The greeter logs whom it logs in and each refusal, and exits with a code of its own for each way it ends.
+- **A typing test** (`src/tests/test_gui`, `--gui-typing`): a std/ui window filled in twice, by Tab and by Shift+Tab.
+- **The shell gets manifests alone** (`ManifestOf`), for viewing a typed file, help and completion. It used to be
+  given each program's executable too, and each one given holds one of the bundle store's 64 objects open until it's
+  closed. The running programs' executables hold most of them, so looking through every program ran out past the
+  38th once M15's services came. The store's limit should rise, with the volume server's 64 connections, which
+  each open object also takes.
+- **The compiler's changes**: the formatter moved test_debug.hsc's lines, so the debugger tests' line numbers moved;
+  the AArch64 debug files outgrew 64 MiB, so a disk with them has 96 MiB more for them.

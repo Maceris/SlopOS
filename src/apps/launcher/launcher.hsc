@@ -8,7 +8,6 @@
 package launcher
 
 import runtime from "base:runtime"
-import crypto from "std:crypto"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
@@ -24,8 +23,8 @@ import surface from "../../protocols/surface"
 MAX_LISTED :: 32
 /** The most bytes of a program's name. */
 NAME_BYTES :: 32
-/** The memory a program it starts is given. */
-PROGRAM_BUDGET : u64 : 48 * 1024 * 1024
+/** The memory a program it starts is given, split off its own: enough for a terminal window and its shell. */
+PROGRAM_BUDGET : u64 : 24 * 1024 * 1024
 /** Each row of its list, in pixels. */
 ROW : f32 : 36
 
@@ -39,6 +38,8 @@ Listed :: struct {
 
 /** The launcher's state, on the heap. */
 Launcher :: struct {
+    /** Its debug log, a copy of which each program it starts is given; NO_HANDLE without one. */
+    log : slop_os.DebugLog,
     /** Its window. */
     window : ptr[mut gui_kit.Window],
     /** Its connection to the process manager. */
@@ -58,7 +59,7 @@ Launcher :: struct {
 /**
  * List the GUI programs and start what's clicked, until the window's closed.
  *
- * @param log Its debug log; its lines go through base's logger instead.
+ * @param log Its debug log, a copy of which each program it starts is given; its own lines go through base's logger.
  * @param surface Its connection to the compositor.
  * @param home The session's home; not used.
  * @param manager Its process manager connection, which programs are launched through.
@@ -75,6 +76,7 @@ main :: fn(
 ) -> int {
     startup :: slop_os.startup_block()
     launcher :: runtime.new(Launcher)
+    launcher.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     launcher.manager = manager or_return 2
     launcher.manager_port = os.port_for(startup.budget, launcher.manager.end) or_return 2
     launcher.programs = programs or_return 2
@@ -128,15 +130,18 @@ list_programs :: fn(launcher : ptr[mut Launcher]) {
             }
             case _ => return void
         }
-        found :: find(launcher, name_of(&name))
-            or_else programs.Program.{
-                executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
-                manifest = cast[slop_os.Memory](slop_os.NO_HANDLE),
-            }
+        // Its entry asked, not its executable: listing gets nothing of a program from the store but its record
+        asking := os.Outgoing.{}
+        entry :: os.begin[programs.Request](&asking)
+        entry^ = .EntryOf(os.append(&asking, name_of(&name)))
+        answered := os.Incoming.{}
+        entry_answer :: ask(launcher, &asking, &answered) or_else programs.Response.Unsupported
+        hash :: match entry_answer {
+            case EntryIs(given) => given.bytes
+            case _ => expected_not(expected)
+        }
         // Itself not among them: it's running
-        gui :: manifest_hash(found.manifest, found.manifest_size) == expected && !is_named(&name, "launcher")
-        _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
-        _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
+        gui :: hash == expected && !is_named(&name, "launcher")
         if gui && launcher.listed_count < launcher.listed.count {
             launcher.listed[launcher.listed_count] = name
             launcher.listed_count += 1
@@ -157,29 +162,11 @@ find :: fn(launcher : ptr[mut Launcher], name : u8[]) -> programs.Program? {
     }
 }
 
-/** A manifest's schema hash: BLAKE3 of its bytes; all zeros when it can't be read. */
-manifest_hash :: fn(manifest : slop_os.Memory, size : u64) -> u8[32] {
-    hashed : u8[32]
-    if size == 0 || size > 1 << 20 {
-        return hashed
-    }
-    mapped :: (size + 4095) / 4096 * 4096
-    address :: runtime.reserve_addresses(cast[usize](mapped)) or_return hashed
-    if slop_os.memory_map(
-        manifest,
-        slop_os.startup_block().space,
-        address,
-        0,
-        mapped,
-        slop_os.PROTECTION_READ
-    ) is_error {
-        return hashed
-    }
-    hasher := crypto.blake3_start()
-    crypto.blake3_update(&hasher, view_of(cast[ptr[u8]](address), cast[usize](size)))
-    crypto.blake3_finish(&hasher, hashed[0..<32])
-    _ = slop_os.memory_unmap(slop_os.startup_block().space, address)
-    return hashed
+/** A hash that isn't the one expected, for a program whose entry couldn't be told. */
+expected_not :: fn(expected : u8[32]) -> u8[32] {
+    made := expected
+    made[0] = ~made[0]
+    return made
 }
 
 /** A frame: the programs, a button each; the one clicked started. */
@@ -215,7 +202,18 @@ start :: fn(launcher : ptr[mut Launcher], listed : Listed) {
     defer slop_os.handle_close(cast[slop_os.Handle](found.executable))
     _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
     budget :: slop_os.startup_block().budget
+    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
+    log_copy := cast[slop_os.DebugLog?](null)
+    if launcher.log != cast[slop_os.DebugLog](slop_os.NO_HANDLE) {
+        match slop_os.handle_duplicate(cast[slop_os.Handle](launcher.log), log_rights) {
+            case Ok(copy) => log_copy = cast[slop_os.DebugLog](copy)
+            case Error(_) => {}
+        }
+    }
     grants := gui_programs.GuiGrants.{
+        log = log_copy,
         surface = surface.connect(launcher.window.end, launcher.window.port, budget),
         manager = process_manager.connect(launcher.manager.end, launcher.manager_port, budget),
         programs = programs.connect(launcher.programs.end, launcher.programs_port, budget),

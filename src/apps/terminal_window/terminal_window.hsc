@@ -42,8 +42,8 @@ QUEUED :: 64
 QUEUED_TEXT :: 1024
 /** The most bytes of the reader's line. */
 LINE_BYTES :: 1024
-/** The memory the shell is given. */
-SHELL_BUDGET : u64 : 32 * 1024 * 1024
+/** The memory the shell is given, split off the window's own: as much as a console session's shell has. */
+SHELL_BUDGET : u64 : 16 * 1024 * 1024
 /** Tab stops, every this many columns. */
 TAB_STOP :: 8
 
@@ -185,7 +185,7 @@ start_shell :: fn(
         case _ => return false
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
-    pair :: os.channel_for[terminal.Terminal](startup.budget, 0) or_return false
+    pair :: os.channel_for[terminal.Terminal](startup.budget, terminal.RING_BYTES) or_return false
     if !service_kit.add_client(&term.clients, term.window.port, pair.a) {
         return false
     }

@@ -44,6 +44,12 @@ SCALE_ONE : u32 : 120
 MAX_EVENTS :: 32
 /** The most bytes of text one Events has, for all its events. */
 MAX_TEXT :: 256
+/**
+ * The bytes of each ring of a surface channel: 8 KiB, so an Input of MAX_EVENTS events and MAX_TEXT bytes of text fits,
+ * which a channel's default ring of 1 KiB doesn't. connect makes its channels with it, as the compositor's listeners
+ * are made.
+ */
+RING_BYTES : u32 : 8192
 
 /** One plane of a buffer: where it starts in the buffer's memory, and how far apart its rows are. */
 Plane :: struct {
@@ -370,7 +376,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
  * @return The caller's end of the new connection; null if it couldn't be made or sent, both its ends then closed.
  */
 connect :: fn(end : slop_os.Channel, port : slop_os.Port, budget : slop_os.MemoryBudget) -> os.Channel[Surface]? {
-    pair :: os.channel_for[Surface](budget, 0) or_return null
+    pair :: os.channel_for[Surface](budget, RING_BYTES) or_return null
     out := os.Outgoing.{}
     request :: os.begin[Request](&out)
     request^ = .Connect(os.Channel[Surface].{end = pair.a})
