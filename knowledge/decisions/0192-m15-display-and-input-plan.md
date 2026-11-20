@@ -351,8 +351,10 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     A build of the programs after nothing changed takes about 1 s; after an edit to hello, 5 s, as the four targets
     that import it are checked again (two of them, the root task and the supervisor, take ~3 s each to check). The
     outputs match a build without the cache byte for byte.
-  - `hemera --check src/build` takes 17 s cold and 6 s after, most of that the build package's own check, which
-    loads every test folder's package to find the tests.
+  - `hemera --check src/build` took 17 s cold and 6 s after, 5.3 s of it the build package's compile-time code
+    loading each of the 24 test folders' packages (`compiler.load_package`, a check of each as a program of its own)
+    only to see whether it has a main of its own. Hemera's new `compiler.declares` parses a package's files without
+    checking them for a name; with it the check after takes 0.8 s.
   - The boot tests build into a new folder each run, whose path is in the build's settings, so their targets are
     checked each time, but their programs come from the cache.
   - `-O0` crashes LLVM's instruction selection (an `insertvalue` in SelectionDAG), probably on a large constant.

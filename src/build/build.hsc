@@ -503,8 +503,8 @@ add_tests :: fn(folder : string) {
         test.name = text_buffer.as_string(&test_name)
         test.root = subfolder
         test.output_path = text_buffer.as_string(&output)
-        info :: compiler.load_package(subfolder) or_else compiler.PackageInfo.{}
-        test.test = compiler.find_function(&info, "main") is_none
+        // Parsed, not checked, for its own main: the target's own check is what checks it
+        test.test = !compiler.declares(subfolder, "main")
         if compiler.target_setting("model_checked", default = "off") == "on" {
             test.target_options.model_checked = true
             test.target_options.stack_check_failure = .Morestack
