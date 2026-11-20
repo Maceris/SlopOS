@@ -142,6 +142,10 @@ main :: fn(
                 gui_kit.log_to(viewer.log, "viewer: showing its window")
             }
         }
+        // Escape closes it in a frame, which may have sent nothing that brings an answer to wait for
+        if viewer.window.closing {
+            return 0
+        }
         gui_kit.wait(viewer.window)
     }
 }

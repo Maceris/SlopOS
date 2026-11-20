@@ -1377,7 +1377,7 @@ TESTS = [
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
-        "--console-input-after=line: a kept line",
+        "--console-input-after=line: \"a kept line\"",
         "--expect-line=[user] powerbox: kept kept.txt for test_kept_grant",
         "--expect-line=[user] powerbox: reopened kept for test_kept_grant",
         "--expect-console-line=grant 1 revoked", "--expect-console-line=no kept grants",

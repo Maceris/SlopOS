@@ -1443,6 +1443,8 @@ class ConsoleLink:
         # of it; or, with \\w in it, from the banner, each \\w waiting for the next of them
         self.typed_after = typed_after or []
         self.waits = 0
+        # The lines of typed_after waited for that never showed in their 60 seconds, each failing the run
+        self.unshown: list[str] = []
         # Where in what's shown the last wait ended: the next looks only at what's shown after it, so a line waited for
         # again waits for its next showing, not one from before
         self.waited_to = 0
@@ -1550,6 +1552,8 @@ class ConsoleLink:
                 self.waited_to = len(shown)
                 return
             time.sleep(0.05)
+        # Typed on regardless, but the run fails: what it waited for never came, so what's typed after may land wrong
+        self.unshown.append(line)
 
     def type_keys(self) -> None:
         """
@@ -2308,6 +2312,9 @@ def main() -> int:
             if not any(part in line for line in shown):
                 print(f"boot.py: the virtio console showed no line with {part!r}", file=sys.stderr)
                 missing_shown.append(part)
+        for line in console.unshown if console is not None else []:
+            print(f"boot.py: the virtio console never showed {line!r}, which typing waited 60 s for", file=sys.stderr)
+            missing_shown.append(line)
         if screen_wrong is not None:
             print(f"boot.py: the framebuffer: {screen_wrong}", file=sys.stderr)
             missing_shown.append(screen_wrong)

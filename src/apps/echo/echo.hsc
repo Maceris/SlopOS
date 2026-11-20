@@ -22,6 +22,7 @@ import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import terminal as protocol from "std:os/slop_os/terminal"
+import strings from "std:strings"
 import terminal from "std:terminal"
 import text_buffer from "std:text_buffer"
 import time from "std:time"
@@ -352,8 +353,9 @@ list_chosen :: fn(echo : ptr[mut Echo]) {
             defer slop_os.handle_close(cast[slop_os.Handle](port))
             storage : u8[256]
             line := text_buffer.make(storage)
-            names_storage : u8[200]
-            names := text_buffer.make(names_storage)
+            // Its entries' names, copied and sorted, so what it says doesn't hang on the order the server lists them in
+            listed_names : string[..]
+            defer free_names(&listed_names)
             count := cast[u64](0)
             cursor := cast[u64](0)
             loop {
@@ -370,11 +372,8 @@ list_chosen :: fn(echo : ptr[mut Echo]) {
                 match os.message_of[read_only_dir.Response](&listed)^ {
                     case Listed(entry) => {
                         name :: os.items(&listed, entry.name)
-                        if count > 0 {
-                            text_buffer.append(&names, ", ")
-                        }
                         if name.count > 0 {
-                            text_buffer.append(&names, string_of(&name[0], name.count))
+                            runtime.array_add(&listed_names, strings.clone(string_of(&name[0], name.count)) or_else "")
                         }
                         count += 1
                         cursor = entry.next
@@ -386,12 +385,61 @@ list_chosen :: fn(echo : ptr[mut Echo]) {
             text_buffer.append_unsigned(&line, count)
             text_buffer.append(&line, if count == 1 { " entry" } else { " entries" })
             text_buffer.append(&line, if count > 0 { ": " } else { "." })
-            text_buffer.append(&line, text_buffer.as_string(&names))
+            sort_names(listed_names[0..<listed_names.count])
+            for name, i in listed_names {
+                if i > 0 {
+                    text_buffer.append(&line, ", ")
+                }
+                text_buffer.append(&line, name)
+            }
             say(echo, text_buffer.as_string(&line))
             runtime.log_info("listed a directory the powerbox gave")
         }
         case _ => refused(echo)
     }
+}
+
+/** Sort names by their bytes, in place: an insertion sort, as a directory echo lists is short. */
+sort_names :: fn(names : mut string[]) {
+    for i in cast[usize](1)..<names.count {
+        j := i
+        loop {
+            if j == 0 || j >= names.count {
+                break
+            }
+            before :: j - 1
+            moved :: names[j]
+            if !bytes_before(moved, names[before]) {
+                break
+            }
+            names[j] = names[before]
+            names[before] = moved
+            j = before
+        }
+    }
+}
+
+/** Whether a name comes before another, byte by byte, a shorter one before a longer it starts. */
+bytes_before :: fn(a : string, b : string) -> bool {
+    a_bytes :: string_bytes(a)
+    b_bytes :: string_bytes(b)
+    for byte, i in a_bytes {
+        if i >= b_bytes.count {
+            return false
+        }
+        if byte != b_bytes[i] {
+            return byte < b_bytes[i]
+        }
+    }
+    return a_bytes.count < b_bytes.count
+}
+
+/** Free names copied onto the heap, and the array of them. */
+free_names :: fn(names : ptr[mut string[..]]) {
+    for name in names^ {
+        strings.free_string(name)
+    }
+    runtime.array_free(names)
 }
 
 /**
