@@ -32,6 +32,8 @@ SQUARE : f32 : 200
 MARK : f32 : 20
 /** The most input devices it reads. */
 MAX_INPUTS :: 4
+/** How soon a Read that couldn't be sent is tried again: 10 ms, in nanoseconds. */
+READ_RETRY : u64 : 10_000_000
 /** No channel: an input's place once it's gone. */
 NO_INPUT : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
@@ -63,6 +65,8 @@ Client :: struct {
     inputs_port : slop_os.Port,
     /** Each input device's absolute axes, by index among inputs. */
     axes : input.Axes[service_kit.MAX_CLIENTS],
+    /** Each input device's Read that couldn't be sent, as while its ring was full: tried again soon, by index. */
+    unread : bool[service_kit.MAX_CLIENTS],
     /** Where the pointer is, in pixels. */
     x : i32,
     /** Where the pointer is, in pixels. */
@@ -155,8 +159,17 @@ main :: fn(
         if service_kit.stopping() {
             return 0
         }
+        // A Read that couldn't be sent is tried again, and while one's left unsent the wait is short
+        unsent := false
+        for i in cast[usize](0)..<client.inputs.count {
+            if i < client.unread.count && client.unread[i] && i < client.inputs.ends.count {
+                read_more(client, i)
+                unsent = unsent || client.unread[i]
+            }
+        }
+        deadline :: if unsent { (slop_os.clock_monotonic() or_else 0) + READ_RETRY } else { slop_os.NO_DEADLINE }
         packets : slop_os.Packet[8]
-        _ = slop_os.port_wait(client.inputs_port, packets, slop_os.NO_DEADLINE)
+        _ = slop_os.port_wait(client.inputs_port, packets, deadline)
     }
 }
 
@@ -346,15 +359,29 @@ connect_input :: fn(client : ptr[mut Client], given : os.Channel[connector.Conne
     if added < client.axes.count {
         client.axes[added] = axes
     }
-    read_more(client, channel.end)
+    read_more(client, added)
 }
 
-/** Hold a Read on an input device. */
-read_more :: fn(client : ptr[mut Client], end : slop_os.Channel) {
+/**
+ * Hold a Read on an input device; one that can't be sent, as while its ring's full, is marked in unread, for the main
+ * loop to try again.
+ *
+ * @param client The client, whose unread marks the device's Read sent or not.
+ * @param index The device's index among inputs; a freed place, or one past them, is left.
+ */
+read_more :: fn(client : ptr[mut Client], index : usize) {
+    if index >= client.inputs.ends.count || index >= client.unread.count {
+        return void
+    }
+    end :: client.inputs.ends[index]
+    if end == NO_INPUT {
+        client.unread[index] = false
+        return void
+    }
     out := os.Outgoing.{}
     request :: os.begin[input.Request](&out)
     request^ = .Read(input.MAX_EVENTS)
-    _ = input.send_request(end, client.inputs_port, &out)
+    client.unread[index] = input.send_request(end, client.inputs_port, &out) is_some
 }
 
 /**
@@ -401,7 +428,7 @@ take_input :: fn(client : ptr[mut Client], index : usize, into : ptr[mut os.Inco
                         click(client)
                     }
                 }
-                read_more(client, end)
+                read_more(client, index)
             }
             case _ => {}
         }
