@@ -48,11 +48,9 @@ EntryProblem :: union {
  * @return The plan, its program the caller's; Unreadable, or Needs with the first parameter that can't be given.
  */
 entry_plan :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash) -> Result[EntryPlan, EntryProblem] {
-    record :: stored_object(sessions, bundle_hash) or_return .Error(.Unreadable)
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, bundle_hash, &referred)
     if !read || referred.count < 2 {
         return .Error(.Unreadable)
     }

@@ -403,8 +403,11 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     events dropped, is logged.
   - The launcher kept no hold of the programs it started, so their budgets never came back and a second terminal
     window couldn't start; it holds each one's process and budget until it ends.
-  - Still flaky, rarely, under load: the viewer, given the typed file's path, sometimes doesn't show it within 180 s,
-    stuck in finding its type among the programs' manifests, which takes ~9 s alone.
+  - The viewer took ~9 s to find a typed file's type among the programs' manifests, and sometimes, under load, past
+    180 s. Hashing the types took a couple of milliseconds a program; asking took 200 ms, as the session manager read
+    the store's root, then the program's bundle, for each List and ManifestOf. It keeps the root's entries for as long
+    as the root's the same, and each bundle's references (a bundle never changes, its hash naming its bytes): 40 to
+    90 ms a program, the whole ~4 s, and the GUI login passed three times running among the others.
 - **Left open, for the project's owner**:
   - Programs the launcher starts, and the terminal window's shell, aren't the session's programs: no events ring,
     lifecycle channel, session CPU budget or locale. The session manager starting them (a `StartGui` and a

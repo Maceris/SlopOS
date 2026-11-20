@@ -443,7 +443,34 @@ Manager :: struct {
     pressed : Pressed[MAX_PRESSED],
     /** How many of programs have been used: those after it never have. */
     count : usize,
+    /** The bundle store's boot root's names and bundles, read once for each root (root_listing). */
+    root : RootListing,
+    /** Bundles' references, by bundle: a bundle never changes, its hash naming its bytes (refers_of). */
+    refers : KnownRefers[..],
 }
+
+/** The boot root's entries, kept while the store's root is the same, so a List or a Find doesn't read it again. */
+RootListing :: struct {
+    /** Whether it's been read. */
+    read : bool,
+    /** The root's hash it was read from; a root with another hash is read again. */
+    hash : bundle.Hash,
+    /** Each entry's name, on the heap, freed when another root's read. */
+    names : string[..],
+    /** Each entry's bundle, at its name's index. */
+    bundles : bundle.Hash[..],
+}
+
+/** What a bundle refers to: its program, its manifest, its documentation and the rest (bundle.bundle_refers). */
+KnownRefers :: struct {
+    /** The bundle's hash. */
+    bundle : bundle.Hash,
+    /** What it refers to, in its order, on the heap. */
+    refers : bundle.Hash[..],
+}
+
+/** The most bundles whose references are kept; past them, they're all forgotten, and kept again as they're read. */
+MAX_KNOWN_REFERS :: 256
 
 /**
  * Make sessions for those the trusted path logs in, and run each session's programs.
@@ -1567,11 +1594,9 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, found, &referred)
     if !read || referred.count < 2 {
         return .Missing
     }
@@ -1606,11 +1631,9 @@ entry_of :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Response {
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, found, &referred)
     if !read || referred.count < 2 {
         return .Missing
     }
@@ -1630,11 +1653,9 @@ manifest_of :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Response
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, found, &referred)
     if !read || referred.count < 2 {
         return .Missing
     }
@@ -1647,27 +1668,15 @@ manifest_of :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Response
 /**
  * Name the bundle store's boot root's program at an index, for a shell's List.
  *
- * @param sessions The session manager, whose bundle store is asked for its root, which is read into the heap and freed.
+ * @param sessions The session manager, whose boot root's entries are read once for each root (root_listing).
  * @param index The program's index among the root's entries, from 0, in the root's order.
- * @param out The response being made, which the name's bytes are appended to, copied before the root's freed.
+ * @param out The response being made, which the name's bytes are appended to.
  * @return Named with the name; End past the root's last entry, for a name empty or longer than programs.MAX_NAME,
  *     without a store, or if the root couldn't be read.
  */
 program_at :: fn(sessions : ptr[mut Manager], index : u32, out : ptr[mut os.Outgoing]) -> programs.Response {
-    root :: match store_request(sessions, .Root) {
-        case Rooted(hash) => hash
-        case _ => return .End
-    }
-    root_object :: stored_object(sessions, root) or_return .End
-    defer let_go_of_object(root_object)
-    names : string[..]
-    defer runtime.array_free(&names)
-    bundles : bundle.Hash[..]
-    defer runtime.array_free(&bundles)
-    if !(bundle.root_entries(root_object.bytes, &names, &bundles) or_else false) {
-        return .End
-    }
-    for name, i in names {
+    listing :: root_listing(sessions) or_return .End
+    for name, i in listing.names {
         if i == cast[usize](index) && name.count > 0 && name.count <= programs.MAX_NAME {
             return .Named(os.append(out, string_bytes(name)))
         }
@@ -1690,11 +1699,9 @@ program_documentation :: fn(sessions : ptr[mut Manager], name : u8[]) -> program
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, found, &referred)
     if !read || referred.count < 3 {
         return .Missing
     }
@@ -1723,11 +1730,9 @@ program_debug_file :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.R
         return .Missing
     }
     found :: bundle_named(sessions, string_of(&name[0], name.count)) or_return .Missing
-    record :: stored_object(sessions, found) or_return .Missing
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, found, &referred)
     if !read || referred.count < 4 {
         return .Missing
     }
@@ -2661,15 +2666,39 @@ installation_bundle :: fn(sessions : ptr[mut Manager], entry : system_records.In
 /**
  * Find the bundle the bundle store's boot root names by a name.
  *
- * @param sessions The session manager, whose bundle store is asked for its root, which is read into the heap and freed.
+ * @param sessions The session manager, whose boot root's entries are read once for each root (root_listing).
  * @param name The name, like "shell" or an installation's program's.
  * @return The bundle's hash; null without the store, if the root couldn't be read, or if it doesn't name it.
  */
 bundle_named :: fn(sessions : ptr[mut Manager], name : string) -> bundle.Hash? {
+    listing :: root_listing(sessions) or_return null
+    for entry_name, i in listing.names {
+        if entry_name == name && i < listing.bundles.count {
+            return listing.bundles[i]
+        }
+    }
+    return null
+}
+
+/**
+ * The bundle store's boot root's entries: read from the store and kept, and read again only when the root's hash
+ * isn't the one they were read from, as after an update sets another root.
+ *
+ * @param sessions The session manager, whose bundle store is asked for its root's hash each time, waiting for the
+ *     answer, and whose root keeps the entries.
+ * @return The entries, kept in sessions.root, good until the next call; null without a store, or if the root
+ *     couldn't be read, when nothing's kept.
+ */
+root_listing :: fn(sessions : ptr[mut Manager]) -> ptr[RootListing]? {
     root :: match store_request(sessions, .Root) {
         case Rooted(hash) => hash
         case _ => return null
     }
+    kept :: &sessions.root
+    if kept.read && bundle.same(kept.hash, root) {
+        return kept
+    }
+    forget_root(kept)
     root_object :: stored_object(sessions, root) or_return null
     defer let_go_of_object(root_object)
     names : string[..]
@@ -2679,12 +2708,65 @@ bundle_named :: fn(sessions : ptr[mut Manager], name : string) -> bundle.Hash? {
     if !(bundle.root_entries(root_object.bytes, &names, &bundles) or_else false) {
         return null
     }
-    for entry_name, i in names {
-        if entry_name == name && i < bundles.count {
-            return bundles[i]
+    // The names are views of the root's bytes, freed after: copied
+    for name, i in names {
+        copied :: strings.clone(name) or_else ""
+        runtime.array_add(&kept.names, copied)
+        runtime.array_add(&kept.bundles, if i < bundles.count { bundles[i] } else { bundle.Hash.{} })
+    }
+    kept.hash = root
+    kept.read = true
+    return kept
+}
+
+/** Forget a root's entries kept: their names freed, and it not read. */
+forget_root :: fn(kept : ptr[mut RootListing]) {
+    for name in kept.names {
+        strings.free_string(name)
+    }
+    runtime.array_free(&kept.names)
+    runtime.array_free(&kept.bundles)
+    kept.read = false
+}
+
+/**
+ * What a bundle refers to, in its order (bundle.bundle_refers): its program, its manifest, its documentation and the
+ * rest. Read from the store the first time and kept after, as a bundle's hash names its bytes, which never change.
+ *
+ * @param sessions The session manager, whose bundle store gives the bundle, and whose refers keeps what it refers to,
+ *     forgotten whole past MAX_KNOWN_REFERS bundles.
+ * @param bundle_hash The bundle's hash.
+ * @param into Where what it refers to is added, a copy the caller frees.
+ * @return Whether it was read; false if the store didn't give the bundle, or it isn't one.
+ */
+refers_of :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash, into : ptr[mut bundle.Hash[..]]) -> bool {
+    for each in sessions.refers {
+        if bundle.same(each.bundle, bundle_hash) {
+            for referred in each.refers {
+                runtime.array_add(into, referred)
+            }
+            return true
         }
     }
-    return null
+    record :: stored_object(sessions, bundle_hash) or_return false
+    made := KnownRefers.{bundle = bundle_hash}
+    read :: bundle.bundle_refers(record.bytes, &made.refers) or_else false
+    let_go_of_object(record)
+    if !read {
+        runtime.array_free(&made.refers)
+        return false
+    }
+    for referred in made.refers {
+        runtime.array_add(into, referred)
+    }
+    if sessions.refers.count >= MAX_KNOWN_REFERS {
+        for &each in sessions.refers {
+            runtime.array_free(&each.refers)
+        }
+        runtime.array_reset(&sessions.refers)
+    }
+    runtime.array_add(&sessions.refers, made)
+    return true
 }
 
 /**
@@ -2700,11 +2782,9 @@ bundle_named :: fn(sessions : ptr[mut Manager], name : string) -> bundle.Hash? {
  *     fewer than two objects, or a program the store doesn't give.
  */
 program_of :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash, expected : bundle.Hash) -> slop_os.Memory? {
-    record :: stored_object(sessions, bundle_hash) or_return null
     referred : bundle.Hash[..]
     defer runtime.array_free(&referred)
-    read :: bundle.bundle_refers(record.bytes, &referred) or_else false
-    let_go_of_object(record)
+    read :: refers_of(sessions, bundle_hash, &referred)
     if !read || referred.count < 2 {
         return null
     }
