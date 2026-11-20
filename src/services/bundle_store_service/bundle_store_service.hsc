@@ -5,7 +5,9 @@
  *
  * Get gives an object as paged memory (decisions/0094), one memory object per object however many ask: the store is
  * its pager, reading each page as it's wanted through a read-only connection to the object's file, into a page of its
- * own memory the file server reads into, which it supplies from. Put takes an object's bytes in memory given, kept
+ * own memory the file server reads into, which it supplies from. Read gives a copy of a small object, and keeps those
+ * up to MAX_KEPT_OBJECT bytes, MAX_KEPT_BYTES of them, so one asked for again isn't read from its file; it keeps the
+ * boot root's hash, too, once read or set. Put takes an object's bytes in memory given, kept
  * only if they have the hash given. Collect marks the boot root, every pin, and what each refers to (a root's bundles,
  * a bundle's program, manifest, libraries and resources), and removes every other object, but those it has open.
  *
@@ -54,6 +56,21 @@ LOW_WATER_SIXTEENTHS : u64 : 12
 PAGE : u64 : 4096
 /** The slot a search found none in. */
 NOWHERE : usize : 0xffffffffffffffff
+/**
+ * The most bytes of objects Read keeps, so a manifest or a bundle's record asked for again isn't read from its file
+ * again: 512 KiB. Past them, all it keeps is forgotten, and kept again as it's read.
+ */
+MAX_KEPT_BYTES : u64 : 512 * 1024
+/** The largest object Read keeps, in bytes: 64 KiB; a larger one's read from its file each time. */
+MAX_KEPT_OBJECT : u64 : 64 * 1024
+
+/** An object Read keeps: its bytes, on the heap, the same as its file's, as an object's hash names its bytes. */
+Kept :: struct {
+    /** The object's hash. */
+    hash : bundle.Hash,
+    /** Its bytes, the store's. */
+    bytes : u8[],
+}
 
 /** An object given out: its paged memory, which it supplies, its pages read from its file through files (FileOpen). */
 Open :: struct {
@@ -137,6 +154,16 @@ Store :: struct {
     cache_base : u64,
     /** The cache limit in bytes, as CacheLimit last set it; 0 for three quarters of its budget's limit. */
     cache_limit : u64,
+    /**
+     * The boot root's hash as last read from root or set by SetRoot, so Root, asked by each program's launch and each
+     * lookup, doesn't read the file each time; null until it's read, and again once the directory's replaced. Only
+     * the store writes root.
+     */
+    root : bundle.Hash?,
+    /** The objects Read keeps, at most MAX_KEPT_BYTES of them; forgotten under pressure, and by a collection. */
+    kept : Kept[..],
+    /** How many bytes kept holds. */
+    kept_bytes : u64,
 }
 
 /** A page of an open object: one wanted that's waiting to be read, or one supplied. */
@@ -175,6 +202,7 @@ main :: fn(
     service.block = slop_os.startup_block()
     service.limit = MAX_OBJECTS
     service.file_limit = MAX_FILES
+    service.root = null
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(service.block, memory) or_else ""
@@ -314,15 +342,19 @@ serve :: fn(service : ptr[mut Store], index : usize, into : ptr[mut os.Incoming]
                 }
             }
             case SetRoot(hash) => {
-                response^ = if has_object(service, hash) && write_hash(service, "", "root", hash) {
-                    .Done
+                if has_object(service, hash) && write_hash(service, "", "root", hash) {
+                    service.root = hash
+                    response^ = .Done
                 }
                 else {
-                    .Refused
+                    response^ = .Refused
                 }
             }
             case Root => {
-                match read_hash(service, "root") {
+                if service.root is_none {
+                    service.root = read_hash(service, "root")
+                }
+                match service.root {
                     case Some(hash) => response^ = .Rooted(hash)
                     case None => response^ = .Missing
                 }
@@ -349,16 +381,23 @@ serve :: fn(service : ptr[mut Store], index : usize, into : ptr[mut os.Incoming]
 }
 
 /**
- * Give a copy of a small object, for Read: its file's bytes read through the store's directory and written to new
- * memory, charged to the store's budget until its owning handle moves to the client. Nothing stays open.
+ * Give a copy of a small object, for Read: its bytes, kept from an earlier Read or read from its file through the
+ * store's directory, written to new memory, charged to the store's budget until its owning handle moves to the client.
+ * Nothing stays open.
  *
- * @param service The store's state, whose directory and budget are used; its open objects aren't touched.
+ * @param service The store's state, whose directory and budget are used; its open objects aren't touched. An object
+ *     read from its file, up to MAX_KEPT_OBJECT bytes, is added to its kept.
  * @param hash The object's hash, naming the file objects/<hex>, which isn't checked against its bytes, as Get doesn't.
  * @return The copy: its memory, whole pages with zeros past the object, its owning handle the caller's to give away,
  *     and the object's size in bytes. Null if there's no such object, it's empty or past bundle_store.MAX_READ bytes,
  *     or there wasn't the memory for it.
  */
 read_copy :: fn(service : ptr[mut Store], hash : bundle.Hash) -> bundle_store.Object? {
+    for each in service.kept {
+        if bundle.same(each.hash, hash) {
+            return copy_of(service, each.bytes)
+        }
+    }
     hex_storage : u8[64]
     path_storage : u8[80]
     read :: match os.read_entire_file_in(
@@ -368,18 +407,50 @@ read_copy :: fn(service : ptr[mut Store], hash : bundle.Hash) -> bundle_store.Ob
         case Ok(contents) => contents
         case Error(error) => return null
     }
-    defer runtime.free_array(bit_cast[u8[]](read))
     bytes :: bit_cast[u8[]](read)
     size :: cast[u64](bytes.count)
     if size == 0 || size > bundle_store.MAX_READ {
+        runtime.free_array(bytes)
         return null
     }
-    memory :: slop_os.memory_create(service.block.budget, (size + 4095) & ~cast[u64](4095)) or_return null
+    copy :: copy_of(service, bytes)
+    if size > MAX_KEPT_OBJECT {
+        runtime.free_array(bytes)
+        return copy
+    }
+    if service.kept_bytes + size > MAX_KEPT_BYTES {
+        forget_kept(service)
+    }
+    runtime.array_add(&service.kept, Kept.{hash = hash, bytes = bytes})
+    service.kept_bytes += size
+    return copy
+}
+
+/**
+ * Write an object's bytes to new memory, for Read.
+ *
+ * @param service The store's state, whose budget pays for the memory.
+ * @param bytes The object's bytes, 1 to bundle_store.MAX_READ of them; only read.
+ * @return The memory, whole pages with zeros past the bytes, its owning handle the caller's, and the bytes' count; null
+ *     if there wasn't the memory for it.
+ */
+copy_of :: fn(service : ptr[mut Store], bytes : u8[]) -> bundle_store.Object? {
+    size :: cast[u64](bytes.count)
+    memory :: slop_os.memory_create(service.block.budget, (size + PAGE - 1) & ~(PAGE - 1)) or_return null
     if slop_os.memory_write(memory, 0, bytes) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](memory))
         return null
     }
     return bundle_store.Object.{memory = memory, size = size}
+}
+
+/** Forget the objects Read keeps: their bytes freed, so the next Read of each reads its file. */
+forget_kept :: fn(service : ptr[mut Store]) {
+    for each in service.kept {
+        runtime.free_array(each.bytes)
+    }
+    runtime.array_free(&service.kept)
+    service.kept_bytes = 0
 }
 
 /**
@@ -719,6 +790,7 @@ use_directory :: fn(service : ptr[mut Store], end : slop_os.Channel) -> bool {
     service.raw = end
     service.raw_port = port
     service.directory = directory
+    service.root = null
     // Its files were on the server before, and are opened through the new directory as they're next read
     for i in cast[usize](0)..<MAX_FILES {
         close_file(&service.files[i])
@@ -859,13 +931,15 @@ set_cache_limit :: fn(service : ptr[mut Store], limit : u64) {
 }
 
 /**
- * Give pages back until its budget's use is at its low water, LOW_WATER_SIXTEENTHS of the way from what isn't pages
- * to the threshold, as pressure on it asks; nothing if it's below already, or the budget's info can't be read.
+ * Forget what Read keeps, and give pages back until its budget's use is at its low water, LOW_WATER_SIXTEENTHS of the
+ * way from what isn't pages to the threshold, as pressure on it asks; no pages if it's below already, or the budget's
+ * info can't be read.
  *
- * @param service The store's state: its budget's info, cache_limit and cache_base set the low water, and pages are
- *     evicted from resident, counted in evicted.
+ * @param service The store's state: its kept objects are forgotten; its budget's info, cache_limit and cache_base set
+ *     the low water, and pages are evicted from resident, counted in evicted.
  */
 relieve :: fn(service : ptr[mut Store]) {
+    forget_kept(service)
     info :: slop_os.memory_budget_info(service.block.budget) or_return void
     threshold :: if service.cache_limit == 0 { info.limit / 4 * 3 } else { service.cache_base + service.cache_limit }
     base :: if service.cache_limit == 0 { cast[u64](0) } else { service.cache_base }
@@ -1101,10 +1175,11 @@ marked_from :: fn(service : ptr[Store], path : string) -> Result[bundle.Hash?, o
  * among them.
  *
  * @param service The store's state: the boot root, pins/ and objects are read, and objects/ files removed, through its
- *     directory; its objects' used slots are kept.
+ *     directory; its objects' used slots are kept, and what Read keeps is forgotten, so a removed object isn't read.
  * @return How many files were removed from objects/; 0 when the collection stopped.
  */
 collect :: fn(service : ptr[mut Store]) -> u64 {
+    forget_kept(service)
     marked : bundle.Hash[..]
     defer runtime.array_free(&marked)
     // Anything not marked through is collected, so a root or a pin that can't be read through stops the collection

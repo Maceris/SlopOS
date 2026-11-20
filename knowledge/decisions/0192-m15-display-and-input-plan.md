@@ -408,6 +408,11 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     the store's root, then the program's bundle, for each List and ManifestOf. It keeps the root's entries for as long
     as the root's the same, and each bundle's references (a bundle never changes, its hash naming its bytes): 40 to
     90 ms a program, the whole ~4 s, and the GUI login passed three times running among the others.
+  - Timed a program at a time, that was the bundle store: List took 20 to 35 ms and ManifestOf 45, of which parsing
+    and hashing the manifest took under 2. The store read its root file for every Root, which every List, launch and
+    lookup asks, and an object's file for every Read. It keeps the root's hash now (only it writes the file), and the
+    objects Read gives up to 64 KiB, 512 KiB of them, forgotten under pressure and by a collection: List 0.3 ms,
+    ManifestOf 18 (each manifest's first read), and viewing the typed file ~1.7 s.
 - **GUI programs are the session's programs** (chosen with the project's owner over handing the launcher the
   session's locale, CPU budget and rings to pass on): the launcher starts nothing itself. It asks the session manager
   on the session's own programs connection (`programs`' new `Start`: a name, a home connection, and what to open), and
