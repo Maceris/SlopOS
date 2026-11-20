@@ -413,6 +413,16 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     lookup asks, and an object's file for every Read. It keeps the root's hash now (only it writes the file), and the
     objects Read gives up to 64 KiB, 512 KiB of them, forgotten under pressure and by a collection: List 0.3 ms,
     ManifestOf 18 (each manifest's first read), and viewing the typed file ~1.7 s.
+  - Timed a frame at a time in the GUI login test: laying out took 1 to 4 ms, presenting under 1, and pixels the
+    rest. The compositor drew 75 ms a frame on average, 263 for the whole screen, and a client painted 50 to 150 ms:
+    std/canvas filled every rectangle, backgrounds among them, by rasterizing it as a path and blending each pixel,
+    and the compositor copied a window a byte at a time. std/canvas now fills a rectangle along the image's axes from
+    its coverage, writing runs an opaque paint covers whole at once, and the compositor copies a row at once
+    (std/memory's new copy, with no rawptr): 2 to 4 ms drawn, 5 to 12 painted.
+  - Then waiting for a buffer was most of a frame, often the whole 200 ms: a frame that changed nothing (a pointer's
+    motion, a Presented) still waited for the other buffer to paint what it had missed. gui_kit skips a frame without
+    damage; the other buffer catches up at the next frame that changes something. The GUI login test went from ~50 s
+    to ~39 s.
 - **GUI programs are the session's programs** (chosen with the project's owner over handing the launcher the
   session's locale, CPU budget and rings to pass on): the launcher starts nothing itself. It asks the session manager
   on the session's own programs connection (`programs`' new `Start`: a name, a home connection, and what to open), and

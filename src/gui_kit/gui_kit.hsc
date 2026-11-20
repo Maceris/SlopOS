@@ -506,7 +506,8 @@ begin :: fn(window : ptr[mut Window]) -> ptr[mut ui.Ui] {
  * Finish a frame: laid out, painted into a buffer the compositor isn't reading over what it missed, and submitted with
  * its damage; text it copied offered to be pasted.
  *
- * Painting waits a little for a buffer to be released, if both are busy, then paints the one given longest ago.
+ * Painting waits a little for a buffer to be released, if both are busy, then paints the one given longest ago. A
+ * frame that changes nothing isn't painted or submitted, and doesn't wait.
  *
  * @param window The window.
  * @return The frame's events, until the next begin.
@@ -523,8 +524,17 @@ finish :: fn(window : ptr[mut Window]) -> ui.Event[] {
         buffer.stale = grown(buffer.stale, frame.damage)
     }
     /*
+     * Nothing changed: what's on the screen, the buffer submitted last, is the frame already. What the other missed
+     * waits for the next frame that changes something, so a frame of a pointer's motion or a Presented doesn't wait
+     * for a buffer to paint nothing new
+     */
+    if canvas.is_empty(frame.damage) {
+        return ui.events_of(&window.ui)
+    }
+    /*
      * A buffer the compositor's done with; waited for a little, then the one given it longest ago drawn into anyway: at
-     * worst what's on the screen shows part of a frame a moment, never a window that stops
+     * worst what's on the screen shows part of a frame a moment, never a window that stops. The buffers are looked at
+     * after each wait, the last one's too
      */
     free := cast[usize](2)
     deadline :: (slop_os.clock_monotonic() or_else 0) + WAIT_FOR_BUFFER
@@ -534,7 +544,7 @@ finish :: fn(window : ptr[mut Window]) -> ui.Event[] {
                 free = i
             }
         }
-        if free < 2 || !take(window) || (slop_os.clock_monotonic() or_else 0) >= deadline {
+        if free < 2 || (slop_os.clock_monotonic() or_else 0) >= deadline || !take(window) {
             break
         }
         wait(window, deadline)

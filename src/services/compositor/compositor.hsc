@@ -20,6 +20,7 @@ package compositor
 import runtime from "base:runtime"
 import canvas from "std:canvas"
 import fonts from "std:fonts"
+import memory from "std:memory"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
@@ -1473,18 +1474,25 @@ blit :: fn(target : canvas.Image, from : ptr[ClientBuffer], rect : canvas.Rect, 
         if read.count < 4 * width || written.count < 4 * width {
             continue
         }
+        // Both are 4 * width bytes, checked above
         if !blending {
-            for i in cast[usize](0)..<written.count {
-                if i < read.count {
-                    written[i] = read[i]
-                }
-            }
+            _ = memory.copy(written, read)
             continue
         }
         for pixel in cast[usize](0)..<width {
             over :: span_of(read, 4 * pixel, 4)
             under :: span(written, 4 * pixel, 4)
             if over.count == 4 && under.count == 4 {
+                // Opaque pixels copied, and clear ones left, as blending them would
+                if over[3] == 255 {
+                    under[0] = over[0]
+                    under[1] = over[1]
+                    under[2] = over[2]
+                    continue
+                }
+                if over[3] == 0 && over[0] == 0 && over[1] == 0 && over[2] == 0 {
+                    continue
+                }
                 keep :: 255 - cast[u32](over[3])
                 for channel in cast[usize](0)..<3 {
                     under[channel] = cast[u8](cast[u32](over[channel]) + (cast[u32](under[channel]) * keep + 127) / 255)
