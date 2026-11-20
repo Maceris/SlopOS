@@ -43,6 +43,7 @@ import disk_check from "../services/disk_check"
 import entropy from "../services/entropy"
 import events_service from "../services/events_service"
 import fat_server from "../services/fat_server"
+import framebuffer_display from "../services/framebuffer_display"
 import greeter from "../services/greeter"
 import input_service from "../services/input_service"
 import network_service from "../services/network_service"
@@ -62,12 +63,12 @@ import test_affinity from "../tests/test_affinity"
 import test_budgets from "../tests/test_budgets"
 import test_channels from "../tests/test_channels"
 import test_compositor from "../tests/test_compositor"
-import test_gui from "../tests/test_gui"
 import test_control from "../tests/test_control"
 import test_cpu_budgets from "../tests/test_cpu_budgets"
 import test_devices from "../tests/test_devices"
 import test_display from "../tests/test_display"
 import test_exits from "../tests/test_exits"
+import test_gui from "../tests/test_gui"
 import test_io_ports from "../tests/test_io_ports"
 import test_libraries from "../tests/test_libraries"
 import test_memory from "../tests/test_memory"
@@ -401,6 +402,19 @@ SERVICES :: Service.[
         by_manager = true,
         budget = 12 * MIB,
         entry = type_of(compositor.main),
+        cpu = INTERACTIVE_CPU,
+    },
+    /*
+     * The framebuffer display (decisions/0192, 15g), the compositor's display on a machine with only the firmware's
+     * framebuffer, started with gui when there's no other display: its two scanout buffers in its budget
+     */
+    Service.{
+        name = "framebuffer_display",
+        module = "framebuffer_display.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 20 * MIB,
+        entry = type_of(framebuffer_display.main),
         cpu = INTERACTIVE_CPU,
     },
     // The GUI's login (decisions/0192, 15f), in the compositor's trusted layer, started with gui

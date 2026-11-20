@@ -164,7 +164,9 @@ main :: fn(
     match command {
         case Some(line) => {
             runtime.log_info("running a command")
-            return if run_line(shell, line) { 0 } else { 1 }
+            ran :: run_line(shell, line)
+            runtime.log_info(if ran { "the command ran" } else { "the command failed" })
+            return if ran { 0 } else { 1 }
         }
         case None => {}
     }

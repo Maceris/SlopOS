@@ -903,7 +903,7 @@ start_gui :: fn(
     if number >= sessions.sessions.count {
         return .Refused
     }
-    if !launch_launcher(sessions, cast[u32](number)) {
+    if !launch_launcher(sessions, cast[u32](number), home) {
         close_session(sessions, cast[u32](number))
         return .Refused
     }
@@ -915,11 +915,20 @@ LAUNCHER_BUDGET : u64 : 32 * 1024 * 1024
 
 /**
  * Start the launcher, from the bundle store, as a GUI session's first program: a connection dialed through the
- * session's connector to the compositor, its own to the process manager, and its programs connection.
+ * session's connector to the compositor, its own to the process manager, its programs connection, and the session's
+ * home, which it gives each program it starts a connection of its own to.
  *
+ * @param home The root of the user's home volume, which moves to the launcher; closed if it isn't launched.
  * @return Whether it started; not without the launcher in the bundle store, a compositor to dial, or room.
  */
-launch_launcher :: fn(sessions : ptr[mut Manager], number : u32) -> bool {
+launch_launcher :: fn(sessions : ptr[mut Manager], number : u32, home : os.Channel[dir.Dir]) -> bool {
+    // Closed unless it's given; once it's in the grants, the launch takes it
+    given := false
+    defer {
+        if !given {
+            _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+        }
+    }
     if cast[usize](number) >= sessions.sessions.count {
         return false
     }
@@ -947,6 +956,8 @@ launch_launcher :: fn(sessions : ptr[mut Manager], number : u32) -> bool {
         slop_os.startup_block().budget
     )
     grants.programs = programs_connection(sessions, number)
+    grants.home = home
+    given = true
     return placed(
         sessions,
         number,
@@ -1532,7 +1543,9 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 )
             }
             match programs.send_response(made.programs_end, sessions.port, &out) {
-                case Some(error) => runtime.log_info("an answer on session %'s programs connection wasn't sent: %", number, error)
+                case Some(
+                    error
+                ) => runtime.log_info("an answer on session %'s programs connection wasn't sent: %", number, error)
                 case None => {}
             }
         }

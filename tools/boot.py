@@ -1036,17 +1036,44 @@ class CompositorTest(DisplayTest):
         self.command("input-send-event", {"events": [
             {"type": "abs", "data": {"axis": "x", "value": self.tablet_value(x, 1280)}},
             {"type": "abs", "data": {"axis": "y", "value": self.tablet_value(y, 800)}}]})
-        time.sleep(0.2)
 
     def button(self, down: bool) -> None:
         self.command("input-send-event", {"events": [{"type": "btn", "data": {"down": down, "button": "left"}}]})
-        time.sleep(0.2)
+
+    # How long one step may take, under emulation and among other tests, before the test gives up on it
+    STEP_SECONDS = 180
+
+    def __init__(self, serial: Path, screenshot: Path):
+        super().__init__(serial, screenshot)
+        self.started = time.monotonic()
+        self.last = self.started
+
+    def lines(self) -> list[str]:
+        return self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+
+    def mark(self) -> int:
+        """Where the serial log is now: a wait given it looks only at what's written after."""
+        return len(self.lines())
+
+    def after(self, since: int, wanted: str, what: str) -> bool:
+        """
+        Wait for a line starting with wanted among those written after since, up to STEP_SECONDS; print how long the
+        step took. False, with problem set, if it never came.
+        """
+        deadline = time.monotonic() + self.STEP_SECONDS
+        while time.monotonic() < deadline:
+            if any(line.startswith(wanted) for line in self.lines()[since:]):
+                now = time.monotonic()
+                print(f"boot.py: {what}: {now - self.last:.1f} s ({now - self.started:.1f} s in)", flush=True)
+                self.last = now
+                return True
+            time.sleep(0.2)
+        self.problem = f"{what}: no line {wanted!r} within {self.STEP_SECONDS} s"
+        return False
 
     def step(self, wanted: str, what: str) -> bool:
-        if self.wait_for(wanted, time.monotonic() + 60):
-            return True
-        self.problem = f"{what}: no line {wanted!r}"
-        return False
+        """Wait for a line starting with wanted anywhere in the log, as after does from its start."""
+        return self.after(0, wanted, what)
 
     def drive(self) -> None:
         try:
@@ -1056,39 +1083,49 @@ class CompositorTest(DisplayTest):
             if not self.connect():
                 self.problem = "the machine protocol couldn't be reached"
                 return
-            time.sleep(0.5)
-            # B, on top and focused, typed into
+            # B, on top and focused once it's shown, typed into
+            if not self.step("[user] compositor: focused 'B'", "B focused"):
+                return
+            since = self.mark()
             self.key("b", True)
             self.key("b", False)
-            if not self.step("[user] test_compositor: B typed b", "typing into B"):
+            if not self.after(since, "[user] test_compositor: B typed b", "typing into B"):
                 return
             # A, below, clicked where B doesn't cover it: raised and focused
+            since = self.mark()
             self.point(70, 200)
             self.button(True)
             self.button(False)
-            if not self.step("[user] test_compositor: A pressed at 10, 112", "clicking A"):
+            if not self.after(since, "[user] test_compositor: A pressed at 10, 112", "clicking A"):
                 return
             # B's band, right of A, dragged down and right
+            since = self.mark()
             self.point(365, 104)
             self.button(True)
             for x, y in ((465, 204), (565, 304), (765, 404)):
                 self.point(x, y)
             self.button(False)
-            if not self.step("[user] compositor: moved 'B' to 490, 418", "dragging B"):
+            if not self.after(since, "[user] compositor: moved 'B' to 490, 418", "dragging B"):
                 return
             # Pasted into B, focused again, on the compositor's gesture
+            since = self.mark()
             for key in ("ctrl", "shift", "v"):
                 self.key(key, True)
             for key in ("v", "shift", "ctrl"):
                 self.key(key, False)
-            if not self.step("[user] test_compositor: B pasted from A", "pasting into B"):
+            if not self.after(since, "[user] test_compositor: B pasted from A", "pasting into B"):
                 return
-            time.sleep(1)
-            reply = self.ask("screendump", {"filename": str(self.screenshot), "device": "gpu"})
-            if "error" in reply:
-                self.problem = f"the screen couldn't be taken: {reply['error'].get('desc')}"
-                return
-            self.problem = windows_drawn(self.screenshot)
+            # The screen, taken until it shows the windows as they were left, as the last frame may not be shown yet
+            deadline = time.monotonic() + 30
+            while True:
+                reply = self.ask("screendump", {"filename": str(self.screenshot), "device": "gpu"})
+                if "error" in reply:
+                    self.problem = f"the screen couldn't be taken: {reply['error'].get('desc')}"
+                    return
+                self.problem = windows_drawn(self.screenshot)
+                if self.problem is None or time.monotonic() > deadline:
+                    break
+                time.sleep(0.5)
             self.command("system_powerdown")
         except OSError as error:
             self.problem = f"the machine protocol failed: {error}"
@@ -1098,8 +1135,15 @@ class GuiLoginTest(CompositorTest):
     """
     The GUI's login (decisions/0192, 15f), driven through QEMU's machine protocol once the greeter shows its window and
     the console's first-boot setup has made the account: Tab to the name, the name, Tab to the password, the password
-    and Enter; then the launcher's window is waited for, its one program, the terminal, started with Tab and Enter, and
-    the power button ends the run.
+    and Enter; then the launcher's window is waited for. A command, test_shell_calls, is found by typing its name in the
+    launcher's find field, and its form (15g) filled in and run, in a terminal window closed by a key once it's done;
+    another, test_file_tree, makes a typed file with a check box, which the viewer shows by its path before Escape
+    closes it; test_kept_grant's powerbox asks for a new file, chosen in the greeter's prompt in the trusted layer;
+    then the terminal is found the same way and started, and the power button ends the run.
+
+    Nothing waits a fixed time: before keys are sent, the line that says they'll land where they're meant is waited for,
+    the compositor focusing the window or the program saying it's drawn what takes them; and each wait looks only at
+    the lines written after what it waits on was done (mark). How long each step took is printed.
     """
 
     SHOWN = "[user] greeter: showing the login window"
@@ -1115,30 +1159,112 @@ class GuiLoginTest(CompositorTest):
         self.key(qcode, True)
         self.key(qcode, False)
 
+    def log_in(self) -> bool:
+        """Log in at the greeter, once its window's focused and the account's made; then wait for the launcher's."""
+        if not self.wait_for(self.SHOWN, time.monotonic() + 600) or not self.wait_for(self.SET_UP, time.monotonic() + 600):
+            self.problem = "the greeter never showed its window, or the account was never made"
+            return False
+        if not self.after(0, "[user] compositor: focused 'Log in'", "the greeter's window focused"):
+            return False
+        if not self.connect():
+            self.problem = "the machine protocol couldn't be reached"
+            return False
+        since = self.mark()
+        self.press("tab")
+        self.type_text(self.name)
+        self.press("tab")
+        self.keyboard_line(self.password)
+        return self.after(since, self.LISTED, "logging in") \
+            and self.after(since, "[user] compositor: focused 'Programs'", "the launcher's window focused")
+
+    def find(self, name: str, wanted: str, what: str) -> bool:
+        """In the launcher, focused: Tab to its find field, the name and Enter; then wait for wanted."""
+        since = self.mark()
+        self.press("tab")
+        self.type_line(name)
+        return self.after(since, wanted, what)
+
+    def run_form_and_close(self, since: int, what: str) -> bool:
+        """Wait for a form's command to end in its terminal window, close the window with a key, and wait for the
+        launcher to be focused again."""
+        if not self.after(since, "[user] terminal_window: the shell ended", what):
+            return False
+        since = self.mark()
+        self.press("spc")
+        return self.after(since, "[user] terminal_window: closed, its command done", f"{what}: its window closed") \
+            and self.after(since, "[user] compositor: focused 'Programs'", f"{what}: the launcher focused again")
+
     def drive(self) -> None:
         try:
-            if not self.wait_for(self.SHOWN, time.monotonic() + 600) or not self.wait_for(self.SET_UP, time.monotonic() + 600):
-                self.problem = "the greeter never showed its window, or the account was never made"
+            if not self.log_in():
                 return
-            if not self.connect():
-                self.problem = "the machine protocol couldn't be reached"
+            # A command's form (15g): found by name, filled in, and run by Enter in its last field
+            if not self.find("test_shell_calls", "[user] launcher: a form for test_shell_calls", "showing a form"):
                 return
-            time.sleep(1)
+            since = self.mark()
+            # count, label, loud (left unchecked), then speed, which Enter runs
             self.press("tab")
-            for character in self.name:
-                qcode, _ = qcode_of(character)
-                self.press(qcode)
+            self.type_text("3")
             self.press("tab")
-            self.keyboard_line(self.password)
-            if not self.step(self.LISTED, "logging in"):
+            self.type_text("from a form")
+            self.press("tab")
+            self.press("tab")
+            self.type_line("Fast")
+            # The shell runs what the form made, and ends: a program the launcher starts logs only through its log grant
+            if not self.run_form_and_close(since, "running the form's command"):
                 return
-            # Its one program, the terminal: Tab to its button, and Enter
-            time.sleep(2)
+            # Another form, of check boxes: test_file_tree --reading, which makes reading/made.value, a typed file
+            if not self.find("test_file_tree", "[user] launcher: a form for test_file_tree", "showing a form of check boxes"):
+                return
+            since = self.mark()
+            # reading checked with Enter; past scripts to Run, and Enter
             self.press("tab")
             self.press("ret")
-            if not self.step("[user] compositor: window 'Terminal' shown", "starting the terminal"):
+            self.press("tab")
+            self.press("tab")
+            self.press("ret")
+            if not self.after(since, "[user] launcher: runs test_file_tree --reading", "running the form of check boxes") \
+                    or not self.run_form_and_close(since, "making the typed file"):
                 return
-            time.sleep(2)
+            # The viewer: the typed file's path typed in its path field, and Enter; Escape back, and Escape closes it
+            if not self.find("viewer", "[user] viewer: showing its window", "starting the viewer") \
+                    or not self.after(0, "[user] compositor: focused 'Viewer'", "the viewer's window focused"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.type_line("reading/made.value")
+            if not self.after(since, "[user] viewer: showing reading/made.value, a ", "viewing the typed file"):
+                return
+            since = self.mark()
+            self.press("esc")
+            if not self.after(since, "[user] viewer: back to the folder", "back to the folder"):
+                return
+            since = self.mark()
+            self.press("esc")
+            if not self.after(since, "[user] viewer: closed by Escape", "closing the viewer") \
+                    or not self.after(since, "[user] compositor: focused 'Programs'", "the launcher focused again"):
+                return
+            # A prompt in the trusted layer: test_kept_grant's form run, its powerbox asks for a new file, kept.txt
+            # suggested, which Tab to the name and Enter choose
+            if not self.find("test_kept_grant", "[user] launcher: a form for test_kept_grant", "showing the prompt's form"):
+                return
+            since = self.mark()
+            # Past reopen to Run, and Enter
+            self.press("tab")
+            self.press("tab")
+            self.press("ret")
+            if not self.after(since, "[user] greeter: asked by test_kept_grant for a file to write", "asking for a file") \
+                    or not self.after(since, "[user] compositor: focused 'Asked'", "the prompt's window focused"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.press("ret")
+            if not self.after(since, "[user] greeter: chose kept.txt for test_kept_grant", "choosing the file") \
+                    or not self.run_form_and_close(since, "writing the file chosen"):
+                return
+            # The terminal: found by name, and Enter, its shell reading lines
+            if not self.find("terminal", "[user] terminal_window: started the shell", "starting the terminal"):
+                return
             self.problem = None
             self.command("system_powerdown")
         except OSError as error:
@@ -1147,6 +1273,49 @@ class GuiLoginTest(CompositorTest):
     def keyboard_line(self, line: str) -> None:
         """A line typed, shift held where it's needed, and Enter."""
         self.type_line(line)
+
+    def type_text(self, text: str) -> None:
+        """Text typed, shift held where it's needed, without Enter."""
+        for character in text:
+            qcode, shifted = qcode_of(character)
+            if shifted:
+                self.key("shift", True)
+            self.press(qcode)
+            if shifted:
+                self.key("shift", False)
+
+
+class FramebufferGuiTest(GuiLoginTest):
+    """
+    The GUI on the firmware's framebuffer (decisions/0192, 15g): no virtio GPU, so the compositor's display is the
+    framebuffer display, lent the framebuffer by the terminal service with the seat. The greeter's window is waited for
+    and logged into as GuiLoginTest does; once the launcher's window is focused, the secure attention key,
+    Ctrl+Alt+Delete, takes the seat and the framebuffer back, which the terminal service says, and the power button
+    ends the run.
+    """
+
+    def qemu_arguments(self) -> list[str]:
+        # A tablet and keyboard, but no GPU: QEMU's standard VGA is the firmware's framebuffer
+        return ["-device", "virtio-tablet-pci,disable-legacy=on,iommu_platform=on,id=tablet",
+                "-device", "virtio-keyboard-pci,disable-legacy=on,iommu_platform=on,id=keyboard",
+                "-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+
+    def drive(self) -> None:
+        try:
+            if not self.log_in():
+                return
+            # Only a taking back after the key counts: first-boot setup may have taken it back once already
+            since = self.mark()
+            for qcode in ("ctrl", "alt", "delete"):
+                self.key(qcode, True)
+            for qcode in ("delete", "alt", "ctrl"):
+                self.key(qcode, False)
+            if not self.after(since, "[user] terminal: took the framebuffer back", "the secure attention key"):
+                return
+            self.problem = None
+            self.command("system_powerdown")
+        except OSError as error:
+            self.problem = f"the machine protocol failed: {error}"
 
 
 class GuiTypingTest(GuiLoginTest):
@@ -1870,6 +2039,9 @@ def main() -> int:
     parser.add_argument("--gui-typing", action="store_true",
                         help="a virtio GPU, tablet and keyboard for test_gui: once it shows its window, lines typed into its "
                         "field, each submission waited for, with --expect (decisions/0192, 15g)")
+    parser.add_argument("--framebuffer-gui", nargs=2, metavar=("NAME", "PASSWORD"),
+                        help="a tablet and keyboard but no GPU, so the GUI's on the firmware's framebuffer: log in as NAME with "
+                        "PASSWORD as --gui-login does, then press the secure attention key, with --expect (decisions/0192, 15g)")
     parser.add_argument("--gui-login", nargs=2, metavar=("NAME", "PASSWORD"),
                         help="a virtio GPU, tablet and keyboard for the greeter: once it shows its window and first-boot setup "
                         "has made the account, log in as NAME with PASSWORD, and wait for the launcher, with --expect "
@@ -2031,9 +2203,14 @@ def main() -> int:
             extra += keyboard.qemu_arguments()
         screenshot = folder / "screen.ppm"
         display_test = None
-        if arguments.gui_login or arguments.gui_typing:
-            display_test = GuiTypingTest(serial, folder / "display.ppm") if arguments.gui_typing \
-                else GuiLoginTest(serial, folder / "display.ppm", arguments.gui_login[0], arguments.gui_login[1])
+        if arguments.gui_login or arguments.gui_typing or arguments.framebuffer_gui:
+            if arguments.gui_typing:
+                display_test = GuiTypingTest(serial, folder / "display.ppm")
+            elif arguments.framebuffer_gui:
+                display_test = FramebufferGuiTest(serial, folder / "display.ppm", arguments.framebuffer_gui[0],
+                                                  arguments.framebuffer_gui[1])
+            else:
+                display_test = GuiLoginTest(serial, folder / "display.ppm", arguments.gui_login[0], arguments.gui_login[1])
             extra += display_test.qemu_arguments()
             display_test.thread.start()
         elif arguments.display or arguments.compositor:

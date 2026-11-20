@@ -14,11 +14,17 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
 import ui from "std:ui"
+import log_line from "../log_line"
 import connector from "../protocols/connector"
 import surface from "../protocols/surface"
 
 /** How long a frame waits for the compositor to release a buffer, in nanoseconds: 200 milliseconds. */
 WAIT_FOR_BUFFER : u64 : 200_000_000
+/**
+ * How long wait waits, in nanoseconds, while a Read for the window's events couldn't be sent, before it's tried again:
+ * 10 ms.
+ */
+READ_RETRY : u64 : 10_000_000
 
 /** The typefaces windows are drawn with, Noto Sans and Noto Sans Mono (SIL Open Font License, assets/fonts/OFL.txt). */
 SANS :: #file_data("../../assets/fonts/NotoSans-Regular.ttf")
@@ -90,6 +96,11 @@ Window :: struct {
     closing : bool,
     /** Whether it has the keyboard's focus. */
     focused : bool,
+    /**
+     * Whether a Read is held at the compositor, for its events: false once one's answered, or when sending one failed,
+     * as when its ring was full, so it's sent again (read_more) rather than the window hearing nothing more.
+     */
+    reading : bool,
     /** The buffer given to the compositor longest ago, drawn into when neither's been released. */
     oldest : usize,
 }
@@ -170,6 +181,7 @@ ask :: fn(window : ptr[mut Window], out : ptr[mut os.Outgoing]) -> surface.Respo
         match response {
             // An answer to the held Read comes first: taken now, and another held
             case Input(given) => {
+                window.reading = false
                 take_input(window, &into, given)
                 read_more(window)
             }
@@ -222,12 +234,15 @@ add_buffer :: fn(window : ptr[mut Window], index : u32) -> bool {
     }
 }
 
-/** Hold a Read for the window's events. */
+/** Hold a Read for the window's events, unless one's held already; reading says whether it went. */
 read_more :: fn(window : ptr[mut Window]) {
+    if window.reading {
+        return void
+    }
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
     request^ = .Read(surface.MAX_EVENTS)
-    _ = surface.send_request(window.end, window.port, &out)
+    window.reading = surface.send_request(window.end, window.port, &out) is_none
 }
 
 /**
@@ -241,11 +256,16 @@ take :: fn(window : ptr[mut Window]) -> bool {
     loop {
         match surface.receive_response(window.end, window.port, &into, false) {
             case Received => {}
-            case Empty => return true
+            case Empty => {
+                // A Read that couldn't be sent before, tried again
+                read_more(window)
+                return true
+            }
             case _ => return false
         }
         match os.message_of[surface.Response](&into)^ {
             case Input(given) => {
+                window.reading = false
                 take_input(window, &into, given)
                 read_more(window)
             }
@@ -254,10 +274,31 @@ take :: fn(window : ptr[mut Window]) -> bool {
     }
 }
 
-/** Wait until the compositor sends something, or a deadline in the monotonic clock's nanoseconds passes. */
+/**
+ * Wait until the compositor sends something, or a deadline in the monotonic clock's nanoseconds passes; not at all
+ * while a frame's due, as when input's left queued for the next (begin) or what was done in a frame changed what's
+ * shown, so it's drawn without waiting for more. A program that leaves due set without drawing, as for a window it
+ * keeps hidden, clears it before it waits.
+ */
 wait :: fn(window : ptr[mut Window], deadline : u64 = slop_os.NO_DEADLINE) {
+    /*
+     * What came while the port was waited on for something else is taken first: a request sent while the ring was
+     * full waits on this port and drops its packets, a message's wake among them, which no packet would bring again.
+     * Finding the end empty arms it, so the next message wakes the port.
+     */
+    _ = take(window)
+    if window.due || window.queued.count > 0 {
+        return void
+    }
+    // Without a Read held nothing would come: one's sent again, and while it can't be, it's tried again soon
+    read_more(window)
+    until := deadline
+    if !window.reading {
+        soon :: (slop_os.clock_monotonic() or_else 0) + READ_RETRY
+        until = if soon < deadline { soon } else { deadline }
+    }
     packets : slop_os.Packet[4]
-    _ = slop_os.port_wait(window.port, packets, deadline)
+    _ = slop_os.port_wait(window.port, packets, until)
 }
 
 /** HID usages of the keys std/ui reads, and what each is. */
@@ -386,7 +427,10 @@ take_key :: fn(window : ptr[mut Window], event : surface.Event, text : u8[]) {
         }
     }
     if !control && text.count > 0 {
-        runtime.array_add(&window.queued, Queued.{text_start = cast[u32](window.typed.count), text_bytes = cast[u32](text.count)})
+        runtime.array_add(
+            &window.queued,
+            Queued.{text_start = cast[u32](window.typed.count), text_bytes = cast[u32](text.count)}
+        )
         for byte in text {
             runtime.array_add(&window.typed, byte)
         }
@@ -397,8 +441,9 @@ take_key :: fn(window : ptr[mut Window], event : surface.Event, text : u8[]) {
  * Begin a frame with what was gathered since the last.
  *
  * The keys and text queued are taken in order, keys then text, up to a key that follows text: std/ui applies a frame's
- * keys before its text, so text typed before a Tab goes in the field it was typed in. What's left waits for the next
- * frame, which is then due.
+ * keys before its text, so text typed before a Tab goes in the field it was typed in; and up to and including a Tab or
+ * Enter, as std/ui moves focus for all of a frame's Tabs before it acts on Enter. What's left waits for the next frame,
+ * which is then due.
  *
  * @param window The window.
  * @return Its UI, for the frame's widgets; finish ends the frame.
@@ -416,6 +461,15 @@ begin :: fn(window : ptr[mut Window]) -> ptr[mut ui.Ui] {
                 break
             }
             ui.press_key(&input, each.key, each.shift)
+            /*
+             * A Tab or Enter ends the frame's keys: std/ui moves focus for every Tab first, then acts on Enter wherever
+             * focus ended, so Tab, Enter, Tab in one frame would lose the first Enter. What comes after waits for the
+             * next frame, which is due.
+             */
+            if each.key == .Tab || each.key == .Enter {
+                taken += 1
+                break
+            }
         }
         else {
             start :: cast[usize](each.text_start)
@@ -555,4 +609,91 @@ hide :: fn(window : ptr[mut Window]) {
 take_keys :: fn(window : ptr[mut Window]) {
     runtime.array_reset(&window.raw_keys)
     runtime.array_reset(&window.raw_text)
+}
+
+/**
+ * Write a line in the kernel's log through a GUI program's log grant, as the first services' lines are (log_line). A
+ * program the launcher starts has no events ring, so base's logger's lines go nowhere; these reach the serial log.
+ *
+ * @param log The program's log grant, which it keeps; null writes nothing.
+ * @param format The line, its program's name first ("viewer: ..."), each % replaced by the next of values.
+ * @param values The values for format's placeholders, in order.
+ */
+log_to :: fn(log : slop_os.DebugLog?, format : string, values : any...) {
+    match log {
+        case Some(given) => log_line.write(given, format, values)
+        case None => {}
+    }
+}
+
+/** The most bytes of the text label_of and button_of join; past them, it's cut. */
+JOINED_BYTES :: 512
+
+/**
+ * A label of several pieces of text, one after the other, joined on the stack, as std/ui copies a label's text into
+ * its frame: nothing's left on the heap, however many frames are drawn.
+ *
+ * @param u The UI.
+ * @param parts The pieces, in order; what's past JOINED_BYTES is cut.
+ * @param style The label's style.
+ * @return The label's ID.
+ */
+label_of :: fn(u : ptr[mut ui.Ui], parts : string[], style : ui.TextStyle = ui.TextStyle.{}) -> ui.ID {
+    storage : u8[JOINED_BYTES]
+    count :: join_into(&storage, parts)
+    return ui.label(u, if count > 0 { string_of(&storage[0], count) } else { "" }, style)
+}
+
+/**
+ * A button of several pieces of text, joined as label_of joins them.
+ *
+ * @param u The UI.
+ * @param parts The pieces, in order; what's past JOINED_BYTES is cut.
+ * @param key Mixed into its ID, to tell apart buttons of one text under one parent.
+ * @return Whether it was clicked this frame (std/ui's button).
+ */
+button_of :: fn(u : ptr[mut ui.Ui], parts : string[], key : u64 = 0) -> bool {
+    storage : u8[JOINED_BYTES]
+    count :: join_into(&storage, parts)
+    return ui.button(u, if count > 0 { string_of(&storage[0], count) } else { "" }, key = key)
+}
+
+/** Join text into storage, cut at its end, but never inside a character; how many bytes it holds. */
+join_into :: fn(storage : ptr[mut u8[JOINED_BYTES]], parts : string[]) -> usize {
+    count := cast[usize](0)
+    cut := false
+    for part in parts {
+        for byte in string_bytes(part) {
+            if count < storage.count {
+                storage[count] = byte
+                count += 1
+            }
+            else {
+                cut = true
+            }
+        }
+    }
+    if !cut {
+        return count
+    }
+    // Back to the start of the last character, and past it only if it's whole
+    start := count
+    loop {
+        if start == 0 || count - start >= 4 {
+            break
+        }
+        start -= 1
+        if start < storage.count && storage[start] & 0xc0 != 0x80 {
+            break
+        }
+    }
+    if start >= storage.count {
+        return count
+    }
+    lead :: storage[start]
+    length :: if lead < 0x80 {
+        cast[usize](1)
+    }
+    else if lead >= 0xf0 { cast[usize](4) } else if lead >= 0xe0 { cast[usize](3) } else { cast[usize](2) }
+    return if start + length <= count { count } else { start }
 }

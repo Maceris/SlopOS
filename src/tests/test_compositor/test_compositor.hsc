@@ -37,6 +37,8 @@ Client :: struct {
     port : slop_os.Port,
     /** Its window's number. */
     window : u32,
+    /** Whether a Read is held at the compositor; false once one's answered, or when one couldn't be sent. */
+    reading : bool,
     /** Whether its first frame's been shown. */
     shown : bool,
     /** Whether it's copied, which A does when it's first focused. */
@@ -210,12 +212,15 @@ ask :: fn(client : ptr[mut Client], out : ptr[mut os.Outgoing]) -> surface.Respo
     return os.message_of[surface.Response](&into)^
 }
 
-/** Hold a Read. */
+/** Hold a Read, unless one's held; reading says whether it went, so one that couldn't be sent is sent again. */
 read_more :: fn(client : ptr[mut Client]) {
+    if client.reading {
+        return void
+    }
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
     request^ = .Read(surface.MAX_EVENTS)
-    _ = surface.send_request(client.end, client.port, &out)
+    client.reading = surface.send_request(client.end, client.port, &out) is_none
 }
 
 /** Take the events a client's been given, logging each, and hold another Read. */
@@ -224,10 +229,15 @@ take :: fn(client : ptr[mut Client]) {
     loop {
         match surface.receive_response(client.end, client.port, &into, false) {
             case Received => {}
-            case _ => return void
+            case _ => {
+                // A Read that couldn't be sent, as when the ring was full, sent again
+                read_more(client)
+                return void
+            }
         }
         match os.message_of[surface.Response](&into)^ {
             case Input(given) => {
+                client.reading = false
                 text :: os.items(&into, given.text)
                 for event in os.items(&into, given.events) {
                     start :: cast[usize](event.text_start)

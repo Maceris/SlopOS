@@ -454,9 +454,12 @@ TESTS = [
         "--expect-line=[user] hello: the wall clock says it's 2030-01-02", "--expect-line=[info] root task ended with code 0"]),
     # The GUI's login (decisions/0192, 15f): first-boot setup on the console makes admin; the greeter, in the compositor's
     # trusted layer, takes the name and password typed on the virtio keyboard, the seat lent to the compositor at the
-    # console's login screen; the GUI session's launcher lists the bundle store's GUI programs, and starts the terminal,
-    # which starts the shell on a terminal it serves. Argon2id twice under emulation: a long settle, cut short by the
-    # power button once it's done
+    # console's login screen; the GUI session's launcher lists the bundle store's GUI programs and commands. A
+    # command's form (15g), found by name, is filled in and run in a terminal window, whose shell runs its command line
+    # and which a key closes once it's done; a second, of check boxes, makes a typed file, which the viewer, found by
+    # name, shows by its path, before Escape closes it; a third's powerbox asks for a file, chosen in the prompt the
+    # greeter draws in the trusted layer; then the terminal's found and started, which starts the shell on a terminal
+    # it serves. Argon2id twice under emulation: a long settle, cut short by the power button once it's done
     ("logs in on the GUI to a session whose launcher starts a terminal", 7,
      with_before_qemu([argument.replace("test_services", "test_services gui test_settle=400").replace("--timeout=120", "--timeout=600")
                        for argument in BOOT_DISK_BASE], ["--gui-login", "admin", "correct horse battery staple",
@@ -469,10 +472,35 @@ TESTS = [
         "--expect-line=[user] greeter: started a GUI session for admin",
         "--expect-line=[user] sessions: a session for admin, in en-US",
         "--expect-line=[user] compositor: window 'Programs' shown",
-        "--expect-line=[user] launcher: lists 1 programs",
+        "--expect-line-start=[user] launcher: lists 2 programs and ",
+        "--expect-line=[user] launcher: a form for test_shell_calls",
+        "--expect-line=[user] launcher: runs test_shell_calls --count 3 --label \"from a form\" --speed Fast",
+        "--expect-line=[user] terminal_window: the shell ended",
+        "--expect-line=[user] terminal_window: closed, its command done",
+        "--expect-line=[user] launcher: runs test_file_tree --reading",
+        "--expect-line=[user] launcher: started viewer",
+        "--expect-line-start=[user] viewer: showing reading/made.value, a ",
+        "--expect-line=[user] viewer: closed by Escape",
+        "--expect-line=[user] greeter: asked by test_kept_grant for a file to write",
+        "--expect-line=[user] greeter: chose kept.txt for test_kept_grant",
         "--expect-line=[user] launcher: started terminal_window",
+        "--expect-line=[user] terminal_window: started the shell",
         "--expect-line=[user] process manager: started shell",
         "--expect-line=[user] compositor: window 'Terminal' shown"])),
+    # The GUI on the firmware's framebuffer (decisions/0192, 15g): no virtio GPU, so the supervisor starts the
+    # framebuffer display for the compositor, and the terminal service lends it the framebuffer with the seat; the
+    # greeter's drawn there and logged into, and the secure attention key gives the framebuffer back to the console
+    ("draws the GUI on the firmware's framebuffer, and gives it back to the console", 7,
+     with_before_qemu([argument.replace("test_services", "test_services gui test_settle=400").replace("--timeout=120", "--timeout=600")
+                       for argument in BOOT_DISK_BASE], ["--framebuffer-gui", "admin", "correct horse battery staple",
+        "--console-input=\\wadmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--expect-line-start=[user] framebuffer_display: serving ",
+        "--expect-line=[user] terminal: lent the framebuffer to the GUI",
+        "--expect-line=[user] framebuffer_display: drawing on the framebuffer",
+        "--expect-line=[user] greeter: started a GUI session for admin",
+        "--expect-line=[user] terminal: took the framebuffer back",
+        "--expect-line=[user] framebuffer_display: gave the framebuffer back"])),
     # First-boot setup on the trusted path (decisions/0148): a name that can't be an account's and a common password
     # refused, the administrator made, and the recovery code shown once, until Enter. Then the login screen (0150): F2
     # changes the layout, a wrong password is refused, and the right one makes the session, whose echo has the home
@@ -1681,7 +1709,9 @@ MORESTACK_TESTS = [
 AARCH64_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI",
                     "skips a tampered return in the kernel without signed returns or a shadow stack",
                     "skips a branch to no landing pad in the kernel without landing pads",
-                    "skips a write to the kernel's shadow stack without one"}
+                    "skips a write to the kernel's shadow stack without one",
+                    # virt has no framebuffer without ramfb, which this test doesn't add
+                    "draws the GUI on the firmware's framebuffer, and gives it back to the console"}
 AARCH64_NAMES = {
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
 }
@@ -1942,6 +1972,10 @@ def run_jobs(jobs: list) -> int:
         with PRINTING:
             if passed:
                 print(f"passed: {name} ({TIMINGS[name]:.1f} s)", flush=True)
+                # Its steps' timings, for a driver that prints them ("boot.py: what: N s (M s in)")
+                for line in output.splitlines():
+                    if line.startswith("boot.py: ") and line.endswith(" s in)"):
+                        print(f"    {line[len('boot.py: '):]}", flush=True)
             elif JOBS == 1:
                 print(f"FAILED: {name} ({TIMINGS[name]:.1f} s)")
                 sys.stdout.write(output)

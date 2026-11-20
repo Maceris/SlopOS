@@ -93,6 +93,7 @@ import net from "../../protocols/net"
 import platform from "../../protocols/platform"
 import power as power_protocol from "../../protocols/power"
 import scheduler as scheduler_protocol from "../../protocols/scheduler"
+import screen from "../../protocols/screen"
 import seat from "../../protocols/seat"
 import serial from "../../protocols/serial"
 import session from "../../protocols/session"
@@ -115,6 +116,7 @@ import compositor from "../compositor"
 import config_service from "../config_service"
 import disk_check from "../disk_check"
 import events_service from "../events_service"
+import framebuffer_display from "../framebuffer_display"
 import greeter from "../greeter"
 import input_service from "../input_service"
 import network_service from "../network_service"
@@ -493,8 +495,26 @@ TerminalGrants :: struct {
      * The SSH service's public directory, read only, for its host key's fingerprint (decisions/0191); null without one.
      */
     ssh_public : os.Channel[read_only_dir.ReadOnlyDir]?,
+    /**
+     * Its connection to the framebuffer display, which it lends the framebuffer to while the seat's lent
+     * (decisions/0192,
+     * 15g); null without one, as when the GUI has a display of its own.
+     */
+    framebuffer_display : os.Channel[screen.Screen]?,
     /** The listener for its clients; the supervisor keeps its other end, and dials it for connectors to it. */
     clients : os.Listener[terminal.Terminal],
+}
+
+/** What the framebuffer display is given (framebuffer_display.main); its handles move to it at its launch. */
+FramebufferDisplayGrants :: struct {
+    /** A copy of the supervisor's debug log. */
+    log : slop_os.DebugLog?,
+    /** The framebuffer's layout page, read for the screen's size. */
+    layout : slop_os.Memory,
+    /** The listener for its client, the compositor; the supervisor keeps its other end. */
+    clients : os.Listener[display.Display],
+    /** Its end of the terminal service's connection, which lends it the framebuffer. */
+    lenders : os.Listener[screen.Screen],
 }
 
 /** What the account service is given (account_service.main); its handles move to the service at its launch. */
@@ -722,6 +742,8 @@ Modules :: struct {
     virtio_gpu : slop_os.Memory?,
     /** The compositor's module. */
     compositor : slop_os.Memory?,
+    /** The framebuffer display's module. */
+    framebuffer_display : slop_os.Memory?,
     /** The network service's module. */
     network : slop_os.Memory?,
     /** test_network's client's module. */
@@ -1025,6 +1047,11 @@ Supervisor :: struct {
     compositor : usize,
     /** The other end of the compositor's trusted listener, for the greeter; NONE once it's given, or without one. */
     trusted_surface : slop_os.Channel,
+    /**
+     * The terminal service's end of its connection to the framebuffer display, given at its first start; NONE once
+     * it's given, or without a framebuffer display.
+     */
+    screen_end : slop_os.Channel,
     /** The terminal service, by index in started; NOWHERE until it's started. */
     terminal : usize,
     /** The input service, by index in started; NOWHERE until it's started. */
@@ -1208,6 +1235,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param virtio_net_module The virtio network driver's program.
  * @param virtio_gpu_module The virtio GPU driver's program.
  * @param compositor_module The compositor's program.
+ * @param framebuffer_display_module The framebuffer display's program.
  * @param network_module The network service's program.
  * @param test_network_module test_network's client's program.
  * @param test_display_module test_display's client's program.
@@ -1256,6 +1284,7 @@ main :: fn(
     virtio_net_module : slop_os.Memory?,
     virtio_gpu_module : slop_os.Memory?,
     compositor_module : slop_os.Memory?,
+    framebuffer_display_module : slop_os.Memory?,
     network_module : slop_os.Memory?,
     test_network_module : slop_os.Memory?,
     test_display_module : slop_os.Memory?,
@@ -1319,6 +1348,7 @@ main :: fn(
         first_display = NOWHERE,
         compositor = NOWHERE,
         trusted_surface = NONE,
+        screen_end = NONE,
         terminal = NOWHERE,
         input = NOWHERE,
         network = NOWHERE,
@@ -1363,6 +1393,7 @@ main :: fn(
         virtio_net = virtio_net_module,
         virtio_gpu = virtio_gpu_module,
         compositor = compositor_module,
+        framebuffer_display = framebuffer_display_module,
         network = network_module,
         test_network = test_network_module,
         test_display = test_display_module,
@@ -4941,6 +4972,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "compositor" {
         modules.compositor
     }
+    else if name == "framebuffer_display" {
+        modules.framebuffer_display
+    }
     else if name == "test_gui" {
         modules.test_gui
     }
@@ -5461,11 +5495,14 @@ start_network :: fn(supervisor : ptr[mut Supervisor], again : usize) {
 /**
  * Start the compositor (decisions/0192, 15c), with connectors to the first display's driver and the input service, and
  * a listener for its clients, whose other end the supervisor keeps; only with gui or test_compositor on the command
- * line, and a display.
+ * line, and a display: without a display's driver, the framebuffer display (15g), if there's a framebuffer.
  *
  * @param supervisor The supervisor, whose compositor is set to it once it's launched.
  */
 start_compositor :: fn(supervisor : ptr[mut Supervisor]) {
+    if supervisor.first_display == NOWHERE {
+        start_framebuffer_display(supervisor)
+    }
     if supervisor.first_display == NOWHERE {
         log_line.write(supervisor.log, "supervisor: no display for the compositor")
         return void
@@ -5511,6 +5548,65 @@ start_compositor :: fn(supervisor : ptr[mut Supervisor]) {
             }
         }
         case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/**
+ * Start the framebuffer display (decisions/0192, 15g), the compositor's display on a machine with no display's driver
+ * but the firmware's framebuffer: given the framebuffer's layout, a listener for the compositor, whose other end the
+ * supervisor keeps as the first display's, and a connection the terminal service lends it the framebuffer on, whose
+ * other end is kept for the terminal service's first start.
+ *
+ * @param supervisor The supervisor, whose first_display is set to it once it's launched, and screen_end to the
+ *     terminal service's end.
+ */
+start_framebuffer_display :: fn(supervisor : ptr[mut Supervisor]) {
+    service :: service_named(supervisor, "framebuffer_display") or_return void
+    // Only its layout: the pixels are the terminal service's, lent
+    claimed :: request_framebuffer(supervisor) or_return void
+    _ = slop_os.handle_close(cast[slop_os.Handle](claimed.pixels))
+    budget :: supervisor.block.budget
+    clients :: os.channel_for[display.Display](budget, 0) or_else slop_os.ChannelPair.{a = NONE, b = NONE}
+    lending :: os.channel_for[screen.Screen](budget, 0) or_else slop_os.ChannelPair.{a = NONE, b = NONE}
+    if clients.a == NONE || lending.a == NONE {
+        for each in slop_os.Channel.[clients.a, clients.b, lending.a, lending.b] {
+            if each != NONE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](each))
+            }
+        }
+        _ = slop_os.handle_close(cast[slop_os.Handle](claimed.layout))
+        return void
+    }
+    grants := FramebufferDisplayGrants.{
+        log = duplicate_log(supervisor),
+        layout = claimed.layout,
+        clients = os.Listener[display.Display].{end = clients.a},
+        lenders = os.Listener[screen.Screen].{end = lending.a},
+    }
+    match os.launch(
+        supervisor.manager,
+        supervisor.manager_port,
+        service.name,
+        module_of(supervisor, "framebuffer_display"),
+        service.budget,
+        type_of(framebuffer_display.main),
+        grants,
+        options_for(supervisor, service.name)
+    ) {
+        case Ok(launched) => {
+            slot :: place(supervisor, "framebuffer_display", kept(supervisor, launched), NOWHERE)
+            if slot < supervisor.started.count {
+                supervisor.started[slot].listener = clients.b
+                supervisor.started[slot].speaks = .Display
+                supervisor.first_display = slot
+            }
+            supervisor.screen_end = lending.b
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](clients.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](lending.b))
+        }
     }
 }
 
@@ -5578,8 +5674,14 @@ start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
         options_for(supervisor, service.name)
     ) {
         // Placed under its name as a constant: place keeps it
-        case Ok(launched) => _ = place(supervisor, if name == "test_gui" { "test_gui" } else { "test_compositor" },
-            kept(supervisor, launched), NOWHERE)
+        case Ok(
+            launched
+        ) => _ = place(
+            supervisor,
+            if name == "test_gui" { "test_gui" } else { "test_compositor" },
+            kept(supervisor, launched),
+            NOWHERE
+        )
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -5751,6 +5853,11 @@ start_terminal :: fn(supervisor : ptr[mut Supervisor], again : usize) {
             }
         }
         case None => {}
+    }
+    // Its connection to the framebuffer display, the first time: a terminal service started again has none
+    if supervisor.screen_end != NONE {
+        grants.framebuffer_display = os.Channel[screen.Screen].{end = supervisor.screen_end}
+        supervisor.screen_end = NONE
     }
     // The framebuffer, claimed again each time, since what it held died with the last terminal service
     match request_framebuffer(supervisor) {

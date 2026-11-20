@@ -4,8 +4,8 @@
  * service checks them and opens their home; the session manager then makes a GUI session, its first program the
  * launcher. The login window's hidden while the session runs, and shown again once its first program ends.
  *
- * A GUI session's powerbox asks the user through the greeter's prompt connection; until its prompts are drawn in the
- * trusted layer, each is refused, which its program is told as the user's refusal.
+ * A GUI session's powerbox asks the user through the greeter's prompt connection, and its prompts are drawn in a
+ * window of the trusted layer too (prompts.hsc).
  */
 package greeter
 
@@ -50,8 +50,14 @@ Greeter :: struct {
     message_count : usize,
     /** The session it started, while it runs; null when the login window's shown. */
     session : u32?,
-    /** The prompt connection of the session it started, whose asks it refuses; NO_HANDLE without one. */
+    /** The prompt connection of the session it started, whose asks it shows; NO_HANDLE without one. */
     prompts : slop_os.Channel,
+    /** The port prompts is bound to, made when it's first read; NO_HANDLE before. */
+    prompts_port : slop_os.Port,
+    /** What the session's powerbox is waiting on the user for, while something's asked. */
+    asking : Asking,
+    /** The window prompts are shown in, in the trusted layer; null until the first's shown. */
+    prompt_window : ptr[mut gui_kit.Window]?,
 }
 
 /**
@@ -73,6 +79,7 @@ main :: fn(
     startup :: slop_os.startup_block()
     greeter :: runtime.new(Greeter)
     greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
+    greeter.prompts_port = cast[slop_os.Port](slop_os.NO_HANDLE)
     accounts_dialer :: accounts_service or_return 2
     dial_port :: os.port_for(startup.budget, accounts_dialer.end) or_return 3
     greeter.accounts_end = (connector.dial[accounts.Accounts](accounts_dialer.end, dial_port) or_return 3).end
@@ -85,14 +92,29 @@ main :: fn(
         if !gui_kit.take(greeter.window) {
             return 2
         }
-        refuse_prompts(greeter)
+        take_prompts(greeter)
+        match greeter.prompt_window {
+            case Some(window) => {
+                if !gui_kit.take(window) {
+                    runtime.log_info("the prompt window's gone")
+                }
+                if greeter.asking.active && window.due {
+                    prompt_frame(greeter)
+                }
+            }
+            case None => {}
+        }
         if greeter.session is_some {
+            // Its login window's hidden while the session runs: drawn whole when it's shown again, not before
+            greeter.window.due = false
             wait_for_session(greeter)
         }
         else if greeter.window.due {
             frame(greeter)
         }
-        gui_kit.wait(greeter.window, (slop_os.clock_monotonic() or_else 0) + 250_000_000)
+        // Prompts and the prompt window's input looked for at least every 50 ms while something's asked
+        wait :: if greeter.asking.active { cast[u64](50_000_000) } else { cast[u64](250_000_000) }
+        gui_kit.wait(greeter.window, (slop_os.clock_monotonic() or_else 0) + wait)
     }
 }
 
@@ -241,35 +263,22 @@ wait_for_session :: fn(greeter : ptr[mut Greeter]) {
     match os.message_of[session.Response](&into)^ {
         case Exited(_) => {
             greeter.session = null
+            // What it asked, refused: its powerbox has gone with it
+            if greeter.asking.active {
+                answer(greeter, null, false)
+            }
             if greeter.prompts != cast[slop_os.Channel](slop_os.NO_HANDLE) {
                 _ = slop_os.handle_close(cast[slop_os.Handle](greeter.prompts))
                 greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
+            }
+            if cast[slop_os.Handle](greeter.prompts_port) != slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](greeter.prompts_port))
+                greeter.prompts_port = cast[slop_os.Port](slop_os.NO_HANDLE)
             }
             runtime.array_reset(&greeter.name)
             runtime.log_info("the GUI session ended")
             greeter.window.due = true
         }
         case _ => {}
-    }
-}
-
-/** Refuse what the session's powerbox asks: its prompts aren't drawn in the trusted layer yet. */
-refuse_prompts :: fn(greeter : ptr[mut Greeter]) {
-    if greeter.prompts == cast[slop_os.Channel](slop_os.NO_HANDLE) {
-        return void
-    }
-    port :: os.port_for(slop_os.startup_block().budget, greeter.prompts) or_return void
-    defer slop_os.handle_close(cast[slop_os.Handle](port))
-    into := os.Incoming.{}
-    loop {
-        match prompt.receive_request(greeter.prompts, port, &into, false) {
-            case Received => {}
-            case _ => return void
-        }
-        out := os.Outgoing.{}
-        response :: os.begin[prompt.Response](&out)
-        response^ = .Refused
-        _ = prompt.send_response(greeter.prompts, port, &out)
-        runtime.log_info("refused a prompt: the GUI's prompts aren't drawn yet")
     }
 }

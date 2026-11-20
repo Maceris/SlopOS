@@ -112,6 +112,8 @@ SupervisorGrants :: struct {
     virtio_gpu_module : slop_os.Memory?,
     /** The compositor's module. */
     compositor_module : slop_os.Memory?,
+    /** The framebuffer display's module. */
+    framebuffer_display_module : slop_os.Memory?,
     /** The network service's module. */
     network_module : slop_os.Memory?,
     /** test_network's client's module. */
@@ -550,6 +552,7 @@ main :: fn(
         virtio_net_module = module_copy(root, "virtio_net", program_rights),
         virtio_gpu_module = module_copy(root, "virtio_gpu", program_rights),
         compositor_module = module_copy(root, "compositor", program_rights),
+        framebuffer_display_module = module_copy(root, "framebuffer_display", program_rights),
         network_module = module_copy(root, "network", program_rights),
         test_network_module = module_copy(root, "test_network", program_rights),
         test_display_module = module_copy(root, "test_display", program_rights),

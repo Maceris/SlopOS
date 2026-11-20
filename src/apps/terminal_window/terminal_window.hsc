@@ -4,7 +4,9 @@
  * program that reads input. Programs the shell starts are given connections to it (Connect), as the console's are.
  *
  * Colours and attributes are kept in the cells but drawn plain; the line the reader edits is drawn where the cursor is.
- * It says what it does in its debug log: "started the shell", and "the shell ended" when it has, which closes it.
+ * It says what it does in its debug log: "started the shell", and "the shell ended" when it has, which closes it. Asked
+ * to open a command line (a form's, from the launcher), its shell runs that alone, and the window stays, showing what
+ * it wrote, until it's closed.
  */
 package terminal_window
 
@@ -44,6 +46,8 @@ QUEUED_TEXT :: 1024
 LINE_BYTES :: 1024
 /** The memory the shell is given, split off the window's own: as much as a console session's shell has. */
 SHELL_BUDGET : u64 : 16 * 1024 * 1024
+/** What's shown once a command line it was asked to run has ended: ASCII, so its bytes are its columns. */
+ENDED_LINE :: "[done: press a key to close]"
 /** Tab stops, every this many columns. */
 TAB_STOP :: 8
 
@@ -53,7 +57,7 @@ ShellGrants :: struct {
     log : slop_os.DebugLog?,
     /** Its terminal: the window's. */
     session_terminal : os.Channel[terminal.Terminal],
-    /** The session's home; null as the window has none to give. */
+    /** The session's home, the window's, which moves to the shell; null without one. */
     home : os.Channel[dir.Dir]?,
     /** Its own connection to the process manager. */
     manager : os.Channel[process_manager.ProcessManager]?,
@@ -67,7 +71,7 @@ ShellGrants :: struct {
     cpu_budget : slop_os.CpuBudget?,
     /** No network. */
     network : os.Channel[network.Network]?,
-    /** No command: it reads lines. */
+    /** The command line it runs alone, the window's open; null to read lines. */
     command : string?,
 }
 
@@ -99,49 +103,77 @@ Term :: struct {
     cursor_shown : bool,
     /** Whether what's shown changed since the last frame. */
     changed : bool,
+    /** Its log grant, which its lines are written to (gui_kit.log_to); null without one. */
+    log : slop_os.DebugLog?,
+    /** Whether its shell runs one command line, so the window stays once it's ended. */
+    one_command : bool,
+    /** Whether the shell's ended, said once, while the window stays. */
+    ended : bool,
 }
 
 /**
  * Start the shell on a terminal of its own, show what it writes, and give it the keys, until it ends or the window's
  * closed.
  *
- * @param log A copy of its starter's debug log, given to the shell too.
+ * @param log A copy of its starter's debug log, which its own lines go to; the shell's given a copy of it.
  * @param surface Its connection to the compositor.
- * @param home The session's home; not given on, as the window can't copy it.
+ * @param home The session's home, which moves to the shell; without it, the shell has none.
  * @param manager Its connection to the process manager, which the shell's launched through.
  * @param programs Its programs connection, which finds the shell.
- * @return 0 once the shell's ended or the window's closed; 2 without a compositor, process manager or programs, or when
- *     the window or the shell can't start.
+ * @param open A command line for the shell to run alone, rather than reading lines; null to read them.
+ * @return 0 once the shell's ended (or, for a command line, once the window's closed after) or the window's closed; 2
+ *     without a compositor, process manager or programs, or when the window or the shell can't start.
  */
 main :: fn(
     log : slop_os.DebugLog?,
     surface : os.Channel[surface.Surface]?,
     home : os.Channel[dir.Dir]?,
     manager : os.Channel[process_manager.ProcessManager]?,
-    programs : os.Channel[programs.Programs]?
+    programs : os.Channel[programs.Programs]?,
+    open : string?
 ) -> int {
     term :: runtime.new(Term)
     term.cursor_shown = true
+    term.log = log
+    term.one_command = open is_some
     columns :: cast[f32](screen.COLUMNS) * COLUMN_WIDTH + 16
     rows :: cast[f32](screen.PROGRAM_ROWS) * ROW_HEIGHT + 12
     term.window = gui_kit.open_on(surface or_return 2, "Terminal", cast[u32](columns), cast[u32](rows)) or_return 2
-    if !start_shell(term, log, manager or_return 2, programs or_return 2) {
+    if !start_shell(term, log, home, manager or_return 2, programs or_return 2, open) {
         return 2
     }
-    runtime.log_info("started the shell")
+    gui_kit.log_to(term.log, "terminal_window: started the shell")
     into := os.Incoming.{}
     loop {
         if !gui_kit.take(term.window) || term.window.closing {
             return 0
         }
-        take_keys(term)
+        if term.ended {
+            // A key pressed once its command's done closes it
+            if term.window.raw_keys.count > 0 {
+                gui_kit.log_to(term.log, "terminal_window: closed, its command done")
+                return 0
+            }
+            gui_kit.take_keys(term.window)
+        }
+        else {
+            take_keys(term)
+        }
         for i in cast[usize](0)..<term.clients.count {
             serve(term, i, &into)
         }
         deliver(term)
-        if term.clients.count > 0 && every_client_gone(term) {
-            runtime.log_info("the shell ended")
-            return 0
+        if !term.ended && term.clients.count > 0 && every_client_gone(term) {
+            gui_kit.log_to(term.log, "terminal_window: the shell ended")
+            if !term.one_command {
+                return 0
+            }
+            // What the command wrote stays to be read, until a key's pressed or the window's closed
+            term.ended = true
+            term.cursor_shown = false
+            screen.line_break(&term.screen)
+            screen.put(&term.screen, string_bytes(ENDED_LINE), ENDED_LINE.count, terminal.Style.{})
+            term.changed = true
         }
         if term.changed || term.window.due {
             frame(term)
@@ -160,12 +192,14 @@ every_client_gone :: fn(term : ptr[Term]) -> bool {
     return true
 }
 
-/** Find the shell and launch it, on a terminal channel the window serves. */
+/** Find the shell and launch it, on a terminal channel the window serves, with the home and the command line given. */
 start_shell :: fn(
     term : ptr[mut Term],
     log : slop_os.DebugLog?,
+    home : os.Channel[dir.Dir]?,
     manager : os.Channel[process_manager.ProcessManager],
-    finder : os.Channel[programs.Programs]
+    finder : os.Channel[programs.Programs],
+    command : string?
 ) -> bool {
     startup :: slop_os.startup_block()
     finder_port :: os.port_for(startup.budget, finder.end) or_return false
@@ -190,7 +224,26 @@ start_shell :: fn(
         return false
     }
     manager_port :: os.port_for(startup.budget, manager.end) or_return false
-    grants := ShellGrants.{log = log, session_terminal = os.Channel[terminal.Terminal].{end = pair.b}}
+    // A copy of the log, so the window's own lines still reach it once the shell has one
+    log_copy := cast[slop_os.DebugLog?](null)
+    match log {
+        case Some(given) => {
+            rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+                | cast[u32](slop_os.RIGHT_DUPLICATE)
+                | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](given), rights) {
+                case Ok(copy) => log_copy = cast[slop_os.DebugLog](copy)
+                case Error(_) => {}
+            }
+        }
+        case None => {}
+    }
+    grants := ShellGrants.{
+        log = log_copy,
+        session_terminal = os.Channel[terminal.Terminal].{end = pair.b},
+        home = home,
+        command = command,
+    }
     grants.manager = process_manager.connect(manager.end, manager_port, startup.budget)
     grants.programs = programs.connect(finder.end, finder_port, startup.budget)
     launched :: os.launch(manager, manager_port, "shell", found.executable, SHELL_BUDGET, type_of(shell.main), grants)

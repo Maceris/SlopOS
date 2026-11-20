@@ -736,6 +736,7 @@ submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surf
         }
     }
     first :: window.buffer == 0
+    hidden :: submission.buffer == 0 && window.buffer != 0
     if window.buffer != submission.buffer {
         // The one it replaces is released once a frame without it is shown
         if window.replaced != 0 {
@@ -761,11 +762,39 @@ submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surf
         )
     }
     add_damage(compositor, damaged)
-    if first {
+    if hidden {
+        // Off the screen until it's shown again; its keys go to the topmost window still shown
+        add_damage(compositor, frame_of(window))
+        runtime.log_info("window '%' hidden", title_of(window))
+        if compositor.focus == index {
+            compositor.focus = NO_WINDOW
+            focus_top_shown(compositor)
+        }
+    }
+    else if first && submission.buffer != 0 {
         runtime.log_info("window '%' shown", title_of(window))
         focus_window(compositor, index)
     }
     return null
+}
+
+/** Focus the topmost window that's shown, if there's one: a window hidden or gone had focus. */
+focus_top_shown :: fn(compositor : ptr[mut Compositor]) {
+    at := compositor.order_count
+    loop {
+        if at == 0 {
+            break
+        }
+        at -= 1
+        if at >= compositor.order.count {
+            continue
+        }
+        candidate :: compositor.order[at]
+        if candidate < MAX_WINDOWS && compositor.windows[candidate].used && compositor.windows[candidate].buffer != 0 {
+            focus_window(compositor, candidate)
+            return void
+        }
+    }
 }
 
 /** A window's title as text. */
@@ -812,9 +841,7 @@ destroy :: fn(compositor : ptr[mut Compositor], index : usize) {
     compositor.dragging = if compositor.dragging == index { NO_WINDOW } else { compositor.dragging }
     if compositor.focus == index {
         compositor.focus = NO_WINDOW
-        if compositor.order_count > 0 && compositor.order_count - 1 < compositor.order.count {
-            focus_window(compositor, compositor.order[compositor.order_count - 1])
-        }
+        focus_top_shown(compositor)
     }
 }
 
@@ -1156,6 +1183,7 @@ queue :: fn(compositor : ptr[mut Compositor], client : usize, made : surface.Eve
     bytes :: string_bytes(text)
     if state.count >= state.events.count || bytes.count > state.text.count - state.text_count {
         // A client that doesn't read loses what's oldest, and its text
+        runtime.log_warn("client % isn't reading: % events dropped", client, state.count)
         state.count = 0
         state.text_count = 0
     }
@@ -1211,6 +1239,11 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
         }
         if count > state.events.count || text_end > state.text.count || text_end > surface.MAX_TEXT {
             // One event with more text than an Input holds: dropped
+            runtime.log_warn(
+                "client %: an event's text is past what an Input holds: % events dropped",
+                client,
+                state.count
+            )
             state.count = 0
             state.text_count = 0
             return void

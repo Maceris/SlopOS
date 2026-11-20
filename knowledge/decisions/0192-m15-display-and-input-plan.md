@@ -305,7 +305,7 @@ Built, compiled for both architectures, and tested as far as the compositor's bo
     12 MiB, virtio_gpu's 20 MiB, the greeter's 6 MiB.
 
 **Still to build:** the typed-data viewer; forms from manifests; the powerbox's prompts in the trusted layer; the console
-yielding the firmware framebuffer while the seat's lent (all 15g's); and 15h's review and full suites.
+yielding the firmware framebuffer while the seat's lent (all 15g's, built there); and 15h's review and full suites.
 
 ## As Built so far: 15g (in progress)
 The boot tests pass again, all 291, with the GUI login's back among them.
@@ -318,14 +318,18 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     of being given every program's executable and manifest to hash.
   - Budgets: the supervisor's 368 MiB, the session manager's 64 MiB, the launcher's 32 MiB; a program it starts
     gets 24 MiB, and the terminal window's shell 16 MiB.
-  - A program the launcher starts is given a duplicate of its log, so its lines reach the serial log.
+  - A program the launcher starts is given a duplicate of its log. Base's logger doesn't use it (it writes only to an
+    events ring, which such a program hasn't), so the terminal window and the viewer write their lines to it with
+    log_line, as the first services do (`gui_kit.log_to`); see *Left open* below.
   - The greeter logs whom it logs in and each refusal, and exits with a code of its own for each way it ends.
 - **A typing test** (`src/tests/test_gui`, `--gui-typing`): a std/ui window filled in twice, by Tab and by Shift+Tab.
 - **The shell gets manifests alone** (`ManifestOf`), for viewing a typed file, help and completion. It used to be
   given each program's executable too, and each one given holds one of the bundle store's 64 objects open until it's
   closed. The running programs' executables hold most of them, so looking through every program ran out past the
-  38th once M15's services came. The store's limit should rise, with the volume server's 64 connections, which
-  each open object also takes.
+  38th once M15's services came. So, chosen with the project's owner, the store keeps at most 16 objects' files open
+  (`MAX_FILES`), opened as their pages are read and the one read from longest ago closed for another: an object open,
+  or held, costs no connection to the volume server. Its objects went from 64 to 256, and the volume server's
+  connections from 64 to 256 on their own terms. `store_files=N` keeps fewer, which the store's boot test sets to 2.
 - **The compiler's changes**: the formatter moved test_debug.hsc's lines, so the debugger tests' line numbers moved;
   the AArch64 debug files outgrew 64 MiB, so a disk with them has 96 MiB more for them.
 - **Building faster** (`--time-phases`, x86-64 programs, 24 logical processors): 55 s became 34 s.
@@ -351,3 +355,59 @@ The boot tests pass again, all 291, with the GUI login's back among them.
   - The boot tests build into a new folder each run, whose path is in the build's settings, so their targets are
     checked each time, but their programs come from the cache.
   - `-O0` crashes LLVM's instruction selection (an `insertvalue` in SelectionDAG), probably on a large constant.
+- **Outputs out of the sources**: the build package's outputs go in the repository's `build/` folder by default, which
+  git ignores, and `hemera --check src/build` writes nothing (the compiler's `compiler.checking()`, and it makes an
+  output's folder as it builds into it).
+- **Forms from manifests** (`src/forms`): a program's parameters as a form, a field each for those the shell takes
+  from an argument, by the shell's own rules (`shell_language`'s `parameters.hsc`, moved there from the shell): a
+  check box for a bool, a text field for the rest, read as the shell reads a bare word or a quoted string, a list's
+  as typed. Those the shell gives without asking aren't asked for. What's filled in becomes a command line.
+  - The launcher lists the commands as well as the GUI programs, with a find field over both. A command clicked shows
+    its form; Run, or Enter in a field, starts a terminal window (`GuiGrants.open`, the GUI entry's new parameter)
+    whose shell runs that line alone, and which a key closes once it's done.
+  - The launcher gives each program it starts the session's home (it's given the session's now), and holds each one's
+    process and budget until it ends, as its ended port says, so what each was split comes back.
+  - The terminal window gives its shell the home, and a copy of its log rather than its own.
+- **The typed-data viewer** (`src/apps/viewer`): the session's home listed, folders first, and a file shown as the
+  shell's view shows it: a typed file's value by its type's schema, found among the programs' manifests and written
+  as the shell writes values; text as text; other bytes in hexadecimal. Only the lines on screen are made each frame.
+  A path typed and Enter shows that file; Escape goes back, and from the listing closes it.
+- **The powerbox's prompts in the trusted layer** (the greeter's `prompts.hsc`): what a GUI session's powerbox asks is
+  drawn in a window of the trusted layer, made from the greeter's connection so it's trusted too. A file or a folder
+  is chosen over the home given, read only; for a file to write, a new file's name comes first, the program's
+  suggestion to start, and Enter makes it. Debugging and the network are allowed or refused. What needs the
+  administrator's password, or the account service, is refused, and logged as the console's.
+- **The console yields the framebuffer** (decided earlier): with `gui` and no display's driver, the supervisor starts
+  the framebuffer display (`src/services/framebuffer_display`), the display protocol over the firmware's
+  framebuffer, with two scanout buffers of its own and no cursor plane. The terminal service lends it the framebuffer
+  with the seat (the `screen` protocol) and takes it back on the secure attention key, drawing the console whole
+  again. A frame presented while it isn't lent is kept, and drawn whole when it's lent again. A terminal service
+  started again isn't given a connection to it; the display stops drawing when the first one goes.
+- **Boot tests**: the GUI login's now also runs two forms, views the typed file the second made, and chooses a file in a
+  prompt in the trusted layer, before the terminal; a new one draws the GUI on the framebuffer and gives it back.
+- **Tests that wait on what happens, not for a time** (chosen with the project's owner): the GUI drivers in
+  `tools/boot.py` send keys once the line that says they'll land is seen, the compositor focusing the window or the
+  program saying it's drawn what takes them, each wait looking only at what came after what it waits on, and print
+  how long each step took (shown under a test that passes). The GUI login went from a 400 s settle to about 60 s:
+  the old runs that took that long were stalled steps, hidden by the fixed pauses. Taking the pauses out found:
+  - std/ui moves focus for all of a frame's Tabs before it acts on Enter, so gui_kit ends a frame's keys at a Tab or
+    an Enter, and the rest wait for the next frame.
+  - gui_kit's wait waited while a frame was due, so a program woken only by input (the viewer, the launcher once no
+    program it started runs) drew nothing more, and what was typed after waited unseen.
+  - A send that waits while its ring's full drops the port's packets, the end's own Readable among them, so a message
+    that came meanwhile woke nothing again: gui_kit's wait reads once before it waits (Hemera's std says so now).
+  - A Read for events that couldn't be sent, its ring full, left a window that heard nothing more: gui_kit, and
+    test_compositor, keep whether one's held and send it again.
+  - The compositor left the keyboard with a window hidden (the greeter's prompt, once answered) or gave it to a
+    hidden one when another went; it goes to the topmost window shown now. A client that doesn't read, and so has its
+    events dropped, is logged.
+  - The launcher kept no hold of the programs it started, so their budgets never came back and a second terminal
+    window couldn't start; it holds each one's process and budget until it ends.
+  - Still flaky, rarely, under load: the viewer, given the typed file's path, sometimes doesn't show it within 180 s,
+    stuck in finding its type among the programs' manifests, which takes ~9 s alone.
+- **Left open, for the project's owner**:
+  - Programs the launcher starts, and the terminal window's shell, aren't the session's programs: no events ring,
+    lifecycle channel, session CPU budget or locale. The session manager starting them (a `StartGui` and a
+    `StartShell` on the programs connection) would fix it, but its `launch_shell` replaces the session's one programs
+    connection, the launcher's, and a finding connection that may start shells gives scripts more than they have.
+  - The GUI's elevation (accounts, shutdown, traces, keys) is still only the console's.

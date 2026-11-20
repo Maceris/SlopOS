@@ -55,6 +55,7 @@ import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
 import power as power_protocol from "../../protocols/power"
 import prompt from "../../protocols/prompt"
+import screen as screen_protocol from "../../protocols/screen"
 import seat from "../../protocols/seat"
 import serial from "../../protocols/serial"
 import session from "../../protocols/session"
@@ -241,6 +242,19 @@ Service :: struct {
     canvas : glyph_screen.Canvas,
     /** Whether there's a framebuffer to draw on; without one only the serial line shows the console. */
     has_canvas : bool,
+    /** The framebuffer's pixels, kept to lend a duplicate of to the framebuffer display; null without one. */
+    pixels : slop_os.Memory?,
+    /** The framebuffer's layout page, kept to lend with them; null without one. */
+    pixels_layout : slop_os.Memory?,
+    /**
+     * Its connection to the framebuffer display (decisions/0192, 15g), which it lends the framebuffer to while the
+     * seat's lent; NONE without one.
+     */
+    lent_to : slop_os.Channel,
+    /** The port lent_to is bound to, its answers waited on; NO_HANDLE without one. */
+    lent_port : slop_os.Port,
+    /** Whether the framebuffer's lent, so the console isn't drawn on it. */
+    screen_lent : bool,
     /** Whether the secure attention key's screen is up, which every key goes to. */
     attention : bool,
     /** A new keyboard's code, shown on the status line until it's typed on it; 0 for none. */
@@ -415,6 +429,9 @@ View :: struct {
  *     sharing. Without one, a boot with no accounts, the session with no user is made at once.
  * @param power A connection to the supervisor, which P on the secure attention key's screen asks to shut the system
  *     down on (decisions/0180). Without one, the screen offers no P.
+ * @param framebuffer_display A connection to the framebuffer display, the compositor's display on a machine with
+ *     only this framebuffer (decisions/0192, 15g): it's lent the framebuffer while the seat's lent, and the console
+ *     drawn again when it's taken back on the secure attention key. Without one, the console keeps the framebuffer.
  * @param clients The terminal protocol's listener, which programs connect through; their Connects bring more clients.
  * @return 2 if its port couldn't be made, or 3 if the listener couldn't be added as a client; it doesn't return
  *     otherwise.
@@ -430,6 +447,7 @@ main :: fn(
     accounts_service : os.Channel[connector.Connector]?,
     power : os.Channel[power_protocol.Power]?,
     ssh_public : os.Channel[read_only_dir.ReadOnlyDir]?,
+    framebuffer_display : os.Channel[screen_protocol.Screen]?,
     clients : os.Listener[terminal.Terminal]
 ) -> int {
     startup :: slop_os.startup_block()
@@ -463,6 +481,17 @@ main :: fn(
         case Some(made) => {
             service.canvas = made
             service.has_canvas = true
+            service.pixels = framebuffer
+            service.pixels_layout = framebuffer_layout
+        }
+        case None => {}
+    }
+    service.lent_to = NONE
+    service.lent_port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    match framebuffer_display {
+        case Some(given) => {
+            service.lent_to = given.end
+            service.lent_port = os.port_for(startup.budget, given.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
         }
         case None => {}
     }
@@ -563,7 +592,7 @@ canvas_on :: fn(framebuffer : slop_os.Memory?, layout_page : slop_os.Memory?) ->
  *     use's screen model, whose changed rows are marked drawn; without a canvas nothing happens.
  */
 draw_framebuffer :: fn(service : ptr[mut Service]) {
-    if service.has_canvas {
+    if service.has_canvas && !service.screen_lent {
         glyph_screen.draw(&service.canvas, &view(service).screen, !service.attention)
     }
 }
@@ -653,6 +682,7 @@ lend_seat :: fn(service : ptr[mut Service]) {
     request :: os.begin[seat.Request](&out)
     request^ = .Lend(true)
     _ = seat.send_request(service.seat_end, service.port, &out)
+    lend_screen(service)
 }
 
 /**
@@ -1312,6 +1342,7 @@ enter_attention :: fn(service : ptr[mut Service]) {
     service.attention = true
     service.panic_seen = true
     runtime.log_info("secure attention")
+    take_back_screen(service)
     update_status(service)
     // What's waiting for the user first: the powerbox's request
     if view(service).asking {
@@ -2073,6 +2104,8 @@ take_seat_event :: fn(service : ptr[mut Service], event : seat.Event, text : u8[
     kind :: seat.kind_of(event) or_return void
     match kind {
         case .SecureAttention => {
+            // The seat's back with the console, whatever it shows, and so's the screen
+            take_back_screen(service)
             if service.setup == .Off {
                 // Keys typed before it are for what was shown, not the trusted path
                 service.typed_count = 0
@@ -2535,6 +2568,8 @@ take_accounts :: fn(service : ptr[mut Service], into : ptr[mut os.Incoming]) {
  */
 enter_setup :: fn(service : ptr[mut Service]) {
     runtime.log_info("first-boot setup: no accounts yet")
+    // Setup's the console's alone, on the screen too
+    take_back_screen(service)
     service.setup = .Name
     update_status(service)
     draw_setup(service, true)
@@ -2775,6 +2810,10 @@ setup_step :: fn(service : ptr[mut Service], step : SetupStep) {
     if step == .AdminName {
         wipe(service.admin_password[0..<service.admin_password.count])
         service.admin_password_count = 0
+    }
+    // A screen of the trusted path's own, the console's alone, on the screen too
+    if step != .LoginName && step != .LoginPassword {
+        take_back_screen(service)
     }
     service.setup = step
     draw_setup(service, true)
@@ -3756,4 +3795,81 @@ end_view :: fn(service : ptr[mut Service]) {
     view(service).logged_in = false
     view(service).first_client = null
     view(service).in_use = false
+}
+
+/**
+ * Lend the framebuffer to the framebuffer display, as the seat's lent to the compositor (decisions/0192, 15g), if
+ * there's one and it isn't lent already: duplicates of its pixels and layout given, the answer waited for. While it's
+ * lent, the console isn't drawn on it.
+ *
+ * @param service The service; without a framebuffer or a framebuffer display, nothing's sent.
+ */
+lend_screen :: fn(service : ptr[mut Service]) {
+    if service.screen_lent || service.lent_to == NONE || cast[slop_os.Handle](service.lent_port) == slop_os.NO_HANDLE {
+        return void
+    }
+    pixels :: service.pixels or_return void
+    layout :: service.pixels_layout or_return void
+    pixel_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
+    layout_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    lent_pixels :: slop_os.handle_duplicate(cast[slop_os.Handle](pixels), pixel_rights) or_return void
+    lent_layout :: slop_os.handle_duplicate(cast[slop_os.Handle](layout), layout_rights) or_else slop_os.NO_HANDLE
+    if lent_layout == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(lent_pixels)
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[screen_protocol.Request](&out)
+    request^ = .Lend(
+        screen_protocol.Lent.{pixels = cast[slop_os.Memory](lent_pixels), layout = cast[slop_os.Memory](lent_layout)}
+    )
+    match ask_screen(service, &out) {
+        case Done => {
+            service.screen_lent = true
+            runtime.log_info("lent the framebuffer to the GUI")
+        }
+        case _ => runtime.log_info("the framebuffer display didn't take the framebuffer")
+    }
+}
+
+/**
+ * Take the framebuffer back from the framebuffer display, if it's lent, as the secure attention key takes the seat
+ * back: the answer waited for, so nothing more's drawn by it, then the console drawn again whole.
+ *
+ * @param service The service; nothing's sent when the framebuffer isn't lent.
+ */
+take_back_screen :: fn(service : ptr[mut Service]) {
+    if !service.screen_lent {
+        return void
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[screen_protocol.Request](&out)
+    request^ = .TakeBack
+    _ = ask_screen(service, &out)
+    service.screen_lent = false
+    runtime.log_info("took the framebuffer back")
+    if service.has_canvas {
+        glyph_screen.clear(&service.canvas)
+        shown :: &view(service).screen
+        shown.status_drawn = false
+        screen.mark_all(screen.shown(shown))
+    }
+}
+
+/**
+ * Send a request to the framebuffer display and wait for its answer.
+ *
+ * @return The answer; Unsupported if it couldn't be sent or the connection failed, as when the display has gone.
+ */
+ask_screen :: fn(service : ptr[mut Service], out : ptr[mut os.Outgoing]) -> screen_protocol.Response {
+    if screen_protocol.send_request(service.lent_to, service.lent_port, out) is_some {
+        return .Unsupported
+    }
+    into := os.Incoming.{}
+    match screen_protocol.receive_response(service.lent_to, service.lent_port, &into, true) {
+        case Received => return os.message_of[screen_protocol.Response](&into)^
+        case _ => return .Unsupported
+    }
 }

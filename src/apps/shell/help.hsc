@@ -246,11 +246,13 @@ program_manifest :: fn(shell : ptr[mut Shell], name : string) -> schema.Schema? 
         case Manifest(given) => given
         case _ => return null
     }
-    manifest :: read_manifest(programs.Program.{
-        executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
-        manifest = given.record,
-        manifest_size = given.size,
-    })
+    manifest :: read_manifest(
+        programs.Program.{
+            executable = cast[slop_os.Memory](slop_os.NO_HANDLE),
+            manifest = given.record,
+            manifest_size = given.size,
+        }
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](given.record))
     return manifest
 }

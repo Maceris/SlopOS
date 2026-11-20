@@ -24,6 +24,12 @@ GuiGrants :: struct {
     manager : os.Channel[process_manager.ProcessManager]?,
     /** A programs connection to its session, which finds programs in the bundle store; null if one couldn't be made. */
     programs : os.Channel[programs.Programs]?,
+    /**
+     * What it's asked to open: for the terminal window, a command line its shell runs in place of reading lines, as
+     * a form the launcher made from a manifest gives; for the viewer, a file's path beneath home. Null for nothing,
+     * as when it's started from the launcher's list.
+     */
+    open : string?,
 }
 
 /**
@@ -34,6 +40,7 @@ GuiGrants :: struct {
  * @param home The session's home.
  * @param manager Its connection to the process manager.
  * @param programs Its programs connection.
+ * @param open What it's asked to open (GuiGrants' open).
  * @return Never run; 0.
  */
 shape :: fn(
@@ -41,7 +48,8 @@ shape :: fn(
     surface : os.Channel[surface.Surface]?,
     home : os.Channel[dir.Dir]?,
     manager : os.Channel[process_manager.ProcessManager]?,
-    programs : os.Channel[programs.Programs]?
+    programs : os.Channel[programs.Programs]?,
+    open : string?
 ) -> int {
     return 0
 }

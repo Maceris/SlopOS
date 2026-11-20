@@ -1,9 +1,11 @@
 /**
- * The launcher (decisions/0192, 15e): a GUI session's first program. It lists the bundle store's GUI programs, those
- * whose manifest is a GUI program's entry (src/gui_programs), by name, itself left out, and starts the one clicked,
- * giving it a
- * connection to the compositor of its own, its own connection to the process manager, and a programs connection that
- * only finds programs. It says what it lists and starts in its debug log: "lists <n> programs", "started <name>".
+ * The launcher (decisions/0192, 15e and 15g): a GUI session's first program. It lists the bundle store's programs,
+ * itself left out: the GUI programs, those whose manifest is a GUI program's entry (src/gui_programs), which it starts
+ * when clicked, and the rest as commands, each of which, clicked, shows a form made from its manifest (src/forms). A
+ * form run starts a terminal window whose shell runs the command line it makes. Each program it starts is given a
+ * connection to the compositor of its own, its own connection to the process manager, a programs connection that only
+ * finds programs, and a connection of its own to the session's home. It says what it lists and starts in its debug log:
+ * "lists <n> programs and <m> commands", "started <name>", and "a form for <name>" once the form's first drawn.
  */
 package launcher
 
@@ -14,19 +16,20 @@ import dir from "std:os/slop_os/dir"
 import process_manager from "std:os/slop_os/process_manager"
 import schema from "std:schema"
 import ui from "std:ui"
+import forms from "../../forms"
 import gui_kit from "../../gui_kit"
 import gui_programs from "../../gui_programs"
 import programs from "../../protocols/programs"
 import surface from "../../protocols/surface"
 
-/** The most programs it lists. */
-MAX_LISTED :: 32
+/** The most programs and commands it lists, together. */
+MAX_LISTED :: 128
 /** The most bytes of a program's name. */
 NAME_BYTES :: 32
 /** The memory a program it starts is given, split off its own: enough for a terminal window and its shell. */
 PROGRAM_BUDGET : u64 : 24 * 1024 * 1024
-/** Each row of its list, in pixels. */
-ROW : f32 : 36
+/** The most bytes of a manifest it reads for a form: 256 KiB. */
+MAX_MANIFEST : u64 : 256 * 1024
 
 /** A program it lists. */
 Listed :: struct {
@@ -34,6 +37,16 @@ Listed :: struct {
     name : u8[NAME_BYTES],
     /** How many bytes of name it has. */
     name_count : usize,
+    /** Whether it's a GUI program, started when clicked; a command shows its form. */
+    gui : bool,
+}
+
+/** A program it started, held until it ends: its process, and its budget, split off the launcher's. */
+Started :: struct {
+    /** Its process, the launcher's handle. */
+    process : slop_os.Process,
+    /** Its budget, the launcher's handle: closed once it's ended, what it was split comes back. */
+    budget : slop_os.MemoryBudget,
 }
 
 /** The launcher's state, on the heap. */
@@ -50,20 +63,39 @@ Launcher :: struct {
     programs : os.Channel[programs.Programs],
     /** The port its programs connection's bound to. */
     programs_port : slop_os.Port,
-    /** What it lists, the first listed_count. */
+    /** The session's home, which each program it starts is given a connection of its own to; null without one. */
+    home : os.Channel[dir.Dir]?,
+    /** The port home's bound to; NO_HANDLE without one. */
+    home_port : slop_os.Port,
+    /** What it lists, the first listed_count: GUI programs and commands, in the store's order. */
     listed : Listed[MAX_LISTED],
     /** How many it lists. */
     listed_count : usize,
+    /** The form shown in place of the list, while showing is set. */
+    form : forms.Form,
+    /** Whether form is shown, in place of the list. */
+    showing : bool,
+    /** Whether the form's been said to be shown in its debug log, once its first frame's drawn. */
+    announced : bool,
+    /** What's typed in the find field: the list shows only the programs whose names have it. */
+    find : u8[..],
+    /** The programs it started that haven't ended, as far as it last looked. */
+    started : Started[..],
+    /**
+     * A port each of started's processes wakes once when it ends, under its handle; NO_HANDLE if it couldn't be made.
+     */
+    ended_port : slop_os.Port,
 }
 
 /**
- * List the GUI programs and start what's clicked, until the window's closed.
+ * List the programs and start what's clicked, or show a command's form and run it, until the window's closed.
  *
  * @param log Its debug log, a copy of which each program it starts is given; its own lines go through base's logger.
  * @param surface Its connection to the compositor.
- * @param home The session's home; not used.
+ * @param home The session's home, kept for each program it starts; without it, they're given none.
  * @param manager Its process manager connection, which programs are launched through.
  * @param programs Its programs connection, which finds them.
+ * @param open Not used: it's asked to open nothing.
  * @return 0 once its window's closed; 2 without a compositor, the process manager or a programs connection, or when its
  *     window can't be made.
  */
@@ -72,7 +104,8 @@ main :: fn(
     surface : os.Channel[surface.Surface]?,
     home : os.Channel[dir.Dir]?,
     manager : os.Channel[process_manager.ProcessManager]?,
-    programs : os.Channel[programs.Programs]?
+    programs : os.Channel[programs.Programs]?,
+    open : string?
 ) -> int {
     startup :: slop_os.startup_block()
     launcher :: runtime.new(Launcher)
@@ -81,9 +114,23 @@ main :: fn(
     launcher.manager_port = os.port_for(startup.budget, launcher.manager.end) or_return 2
     launcher.programs = programs or_return 2
     launcher.programs_port = os.port_for(startup.budget, launcher.programs.end) or_return 2
-    launcher.window = gui_kit.open_on(surface or_return 2, "Programs", 360, 480) or_return 2
+    launcher.home_port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    launcher.ended_port = slop_os.port_create(startup.budget) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    match home {
+        case Some(given) => {
+            match os.port_for(startup.budget, given.end) {
+                case Some(port) => {
+                    launcher.home = given
+                    launcher.home_port = port
+                }
+                case None => {}
+            }
+        }
+        case None => {}
+    }
+    launcher.window = gui_kit.open_on(surface or_return 2, "Programs", 360, 560) or_return 2
     list_programs(launcher)
-    runtime.log_info("lists % programs", launcher.listed_count)
+    runtime.log_info("lists % programs and % commands", count_of(launcher, true), count_of(launcher, false))
     loop {
         if !gui_kit.take(launcher.window) {
             return 2
@@ -94,7 +141,48 @@ main :: fn(
         if launcher.window.due {
             frame(launcher)
         }
-        gui_kit.wait(launcher.window)
+        reap(launcher)
+        // Looked at again within a second while a program it started runs, to let go of it once it's ended
+        deadline :: if launcher.started.count > 0 {
+            (slop_os.clock_monotonic() or_else 0) + 1_000_000_000
+        }
+        else {
+            slop_os.NO_DEADLINE
+        }
+        gui_kit.wait(launcher.window, deadline)
+    }
+}
+
+/**
+ * Let go of the programs it started that have ended, as its ended port says: their budgets, closed, give what they
+ * were split back to the launcher's.
+ *
+ * @param launcher The launcher, whose started loses those that ended.
+ */
+reap :: fn(launcher : ptr[mut Launcher]) {
+    if cast[slop_os.Handle](launcher.ended_port) == slop_os.NO_HANDLE {
+        return void
+    }
+    // What's ended since it last looked, without waiting: each packet's key is a process's handle
+    loop {
+        packets : slop_os.Packet[8]
+        taken :: slop_os.port_wait(launcher.ended_port, packets, 0) or_else 0
+        if taken == 0 {
+            break
+        }
+        for packet, n in packets {
+            if n >= cast[usize](taken) {
+                break
+            }
+            for each, i in launcher.started {
+                if cast[u64](cast[slop_os.Handle](each.process)) == packet.key {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](each.process))
+                    _ = slop_os.handle_close(cast[slop_os.Handle](each.budget))
+                    runtime.array_remove(&launcher.started, i)
+                    break
+                }
+            }
+        }
     }
 }
 
@@ -109,7 +197,7 @@ ask :: fn(launcher : ptr[mut Launcher], out : ptr[mut os.Outgoing], into : ptr[m
     }
 }
 
-/** List the bundle store's programs whose manifest is a GUI program's entry. */
+/** List the bundle store's programs, GUI programs and commands, itself left out. */
 list_programs :: fn(launcher : ptr[mut Launcher]) {
     expected :: schema.hash(type_info_of(type_of(gui_programs.shape)))
     into := os.Incoming.{}
@@ -130,23 +218,36 @@ list_programs :: fn(launcher : ptr[mut Launcher]) {
             }
             case _ => return void
         }
+        // Itself not among them: it's running
+        if name.name_count == 0 || is_named(&name, "launcher") {
+            continue
+        }
         // Its entry asked, not its executable: listing gets nothing of a program from the store but its record
         asking := os.Outgoing.{}
         entry :: os.begin[programs.Request](&asking)
         entry^ = .EntryOf(os.append(&asking, name_of(&name)))
         answered := os.Incoming.{}
         entry_answer :: ask(launcher, &asking, &answered) or_else programs.Response.Unsupported
-        hash :: match entry_answer {
-            case EntryIs(given) => given.bytes
-            case _ => expected_not(expected)
+        match entry_answer {
+            case EntryIs(given) => name.gui = given.bytes == expected
+            case _ => continue
         }
-        // Itself not among them: it's running
-        gui :: hash == expected && !is_named(&name, "launcher")
-        if gui && launcher.listed_count < launcher.listed.count {
+        if launcher.listed_count < launcher.listed.count {
             launcher.listed[launcher.listed_count] = name
             launcher.listed_count += 1
         }
     }
+}
+
+/** How many it lists that are GUI programs, or that are commands. */
+count_of :: fn(launcher : ptr[Launcher], gui : bool) -> usize {
+    count := cast[usize](0)
+    for each, i in launcher.listed {
+        if i < launcher.listed_count && each.gui == gui {
+            count += 1
+        }
+    }
+    return count
 }
 
 /** Find a program by name: its executable and manifest, the caller's to close. */
@@ -162,43 +263,189 @@ find :: fn(launcher : ptr[mut Launcher], name : u8[]) -> programs.Program? {
     }
 }
 
-/** A hash that isn't the one expected, for a program whose entry couldn't be told. */
-expected_not :: fn(expected : u8[32]) -> u8[32] {
-    made := expected
-    made[0] = ~made[0]
-    return made
+/**
+ * Read a program's manifest, asked for alone (ManifestOf), so nothing of the store's is held for it.
+ *
+ * @return The manifest, the caller's to free (schema.free); null if there's no such program, the answer didn't come,
+ *     it's past MAX_MANIFEST bytes, or it doesn't read.
+ */
+manifest_of :: fn(launcher : ptr[mut Launcher], name : u8[]) -> schema.Schema? {
+    out := os.Outgoing.{}
+    // Begun before the name's appended, as begin starts the message afresh
+    request :: os.begin[programs.Request](&out)
+    request^ = .ManifestOf(os.append(&out, name))
+    into := os.Incoming.{}
+    answer :: ask(launcher, &out, &into) or_else programs.Response.Unsupported
+    given :: match answer {
+        case Manifest(given) => given
+        case _ => return null
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](given.record))
+    if given.size == 0 || given.size > MAX_MANIFEST {
+        return null
+    }
+    bytes, made :: runtime.new_array(u8, cast[usize](given.size))
+    if made != null {
+        return null
+    }
+    defer runtime.free_array(bytes)
+    if slop_os.memory_read(given.record, 0, bytes) is_error {
+        return null
+    }
+    return schema.parse(bytes)
 }
 
-/** A frame: the programs, a button each; the one clicked started. */
+/**
+ * A frame: the list of programs and commands, or a command's form, and what was clicked or submitted in it acted on.
+ * Enter in the find field picks the first program it shows; Enter in a form's field runs the form, as Run does.
+ */
 frame :: fn(launcher : ptr[mut Launcher]) {
     u :: gui_kit.begin(launcher.window)
     _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 12, padding_y = 12, gap = 8})
-    _ = ui.label(u, "Programs", ui.TextStyle.{size = 18})
     clicked := launcher.listed.count
-    for &each, i in launcher.listed {
-        if i < launcher.listed_count && each.name_count <= each.name.count && each.name_count > 0 {
-            if ui.button(u, string_of_bytes(name_of(each)), key = cast[u64](i)) {
-                clicked = i
-            }
-        }
+    run := false
+    back := false
+    if launcher.showing {
+        form :: &launcher.form
+        _ = ui.label(u, string_of_bytes(forms.program_of(form)), ui.TextStyle.{size = 18})
+        _ = ui.scroll_area(u, "form", ui.Box.{width = ui.grow(), height = ui.grow(), gap = 10})
+        run = forms.show_form(u, form)
+        ui.close(u)
+        back = ui.button(u, "Back")
     }
-    if launcher.listed_count == 0 {
-        _ = ui.label(u, "No programs to start.")
+    else {
+        clicked = list_frame(launcher, u)
     }
     ui.close(u)
-    _ = gui_kit.finish(launcher.window)
+    submitted := false
+    for event in gui_kit.finish(launcher.window) {
+        submitted = submitted || event.kind == .Submitted
+    }
+    // Said once its first frame's drawn, so what's typed after is the form's
+    if launcher.showing && !launcher.announced {
+        launcher.announced = true
+        runtime.log_info("a form for %", string_of_bytes(forms.program_of(&launcher.form)))
+    }
+    if launcher.showing {
+        if (run || submitted) && !launcher.form.unfit {
+            line :: forms.command_line(&launcher.form)
+            runtime.log_info("runs %", line)
+            start(launcher, string_bytes("terminal_window"), line)
+            back = true
+        }
+        if back {
+            forms.free_form(&launcher.form)
+            launcher.showing = false
+            launcher.window.due = true
+        }
+        return void
+    }
+    if submitted && clicked >= launcher.listed.count {
+        clicked = first_shown(launcher)
+    }
     if clicked < launcher.listed_count && clicked < launcher.listed.count {
-        start(launcher, launcher.listed[clicked])
+        choose(launcher, clicked)
     }
 }
 
-/** Start a program it lists, with its grants. */
-start :: fn(launcher : ptr[mut Launcher], listed : Listed) {
-    if listed.name_count == 0 || listed.name_count > listed.name.count {
+/**
+ * The list: the find field, then the GUI programs and the commands whose names have what's typed in it, a button each.
+ *
+ * @return The index in launcher.listed of the one clicked; launcher.listed.count for none.
+ */
+list_frame :: fn(launcher : ptr[mut Launcher], u : ptr[mut ui.Ui]) -> usize {
+    clicked := launcher.listed.count
+    _ = ui.text_field(u, "Find", &launcher.find)
+    _ = ui.scroll_area(u, "list", ui.Box.{width = ui.grow(), height = ui.grow(), gap = 8})
+    for gui in bool.[true, false] {
+        _ = ui.label(u, if gui { "Programs" } else { "Commands" }, ui.TextStyle.{size = 18})
+        shown := 0
+        for &each, i in launcher.listed {
+            if i < launcher.listed_count && each.gui == gui && is_shown(launcher, each) {
+                shown += 1
+                if ui.button(u, string_of_bytes(name_of(each)), key = cast[u64](i)) {
+                    clicked = i
+                }
+            }
+        }
+        if shown == 0 {
+            _ = ui.label(u, if gui { "No programs to start." } else { "No commands." })
+        }
+    }
+    ui.close(u)
+    return clicked
+}
+
+/** The first program the list shows, a GUI program before a command; launcher.listed.count for none. */
+first_shown :: fn(launcher : ptr[Launcher]) -> usize {
+    for gui in bool.[true, false] {
+        for &each, i in launcher.listed {
+            if i < launcher.listed_count && each.gui == gui && is_shown(launcher, each) {
+                return i
+            }
+        }
+    }
+    return launcher.listed.count
+}
+
+/** Whether a program's shown: its name has what's typed in the find field, or nothing is. */
+is_shown :: fn(launcher : ptr[Launcher], listed : ptr[Listed]) -> bool {
+    wanted :: ui.contents(&launcher.find)
+    name :: name_of(listed)
+    if wanted.count == 0 {
+        return true
+    }
+    if wanted.count > name.count {
+        return false
+    }
+    for start in cast[usize](0)..<(name.count - wanted.count + 1) {
+        same := true
+        for byte, i in wanted {
+            if start + i >= name.count || name[start + i] != byte {
+                same = false
+                break
+            }
+        }
+        if same {
+            return true
+        }
+    }
+    return false
+}
+
+/** Act on a program chosen from the list: a GUI program started, a command's form shown. */
+choose :: fn(launcher : ptr[mut Launcher], index : usize) {
+    if index >= launcher.listed_count || index >= launcher.listed.count {
         return void
     }
-    name :: string_of_bytes(name_of(&listed))
-    found :: find(launcher, name_of(&listed)) or_return void
+    chosen :: launcher.listed[index]
+    // The list's shown whole again after, whatever was chosen, and nothing's focused: Tab goes to the find field
+    runtime.array_reset(&launcher.find)
+    ui.set_focus(&launcher.window.ui, 0)
+    if chosen.gui {
+        start(launcher, name_of(&chosen), null)
+        return void
+    }
+    manifest := manifest_of(launcher, name_of(&chosen)) or_return void
+    defer schema.free(&manifest)
+    launcher.form = forms.form_of(&manifest, name_of(&chosen)) or_return void
+    launcher.showing = true
+    launcher.announced = false
+    launcher.window.due = true
+}
+
+/**
+ * Start a program, with its grants: a GUI program's, given what to open.
+ *
+ * @param name_bytes The program's name.
+ * @param open What it's to open (GuiGrants' open), only read; null for nothing.
+ */
+start :: fn(launcher : ptr[mut Launcher], name_bytes : u8[], open : string?) {
+    if name_bytes.count == 0 {
+        return void
+    }
+    name :: string_of_bytes(name_bytes)
+    found :: find(launcher, name_bytes) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](found.executable))
     _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
     budget :: slop_os.startup_block().budget
@@ -217,6 +464,11 @@ start :: fn(launcher : ptr[mut Launcher], listed : Listed) {
         surface = surface.connect(launcher.window.end, launcher.window.port, budget),
         manager = process_manager.connect(launcher.manager.end, launcher.manager_port, budget),
         programs = programs.connect(launcher.programs.end, launcher.programs_port, budget),
+        open = open,
+    }
+    match launcher.home {
+        case Some(home) => grants.home = dir.connect(home.end, launcher.home_port, budget)
+        case None => {}
     }
     match os.launch(
         launcher.manager,
@@ -227,8 +479,16 @@ start :: fn(launcher : ptr[mut Launcher], listed : Listed) {
         type_of(gui_programs.shape),
         grants
     ) {
-        case Ok(_) => runtime.log_info("started %", name)
-        case Error(_) => runtime.log_info("% didn't start", name)
+        case Ok(launched) => {
+            // Held while it runs, and let go of once it's ended, so its budget comes back (reap)
+            runtime.array_add(&launcher.started, Started.{process = launched.process, budget = launched.budget})
+            if cast[slop_os.Handle](launcher.ended_port) != slop_os.NO_HANDLE {
+                handle :: cast[slop_os.Handle](launched.process)
+                _ = slop_os.port_bind(launcher.ended_port, handle, slop_os.SIGNAL_TERMINATED, cast[u64](handle), .Once)
+            }
+            runtime.log_info("started %", name)
+        }
+        case Error(error) => runtime.log_info("% didn't start: %", name, error)
     }
 }
 
