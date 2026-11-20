@@ -26,16 +26,19 @@ as `--setting=name=value,name=value`:
 | Setting | Values |
 |---|---|
 | `targets` | `all` (the default), `kernel`, `programs`, `tests`, or `tools` |
-| `kernel_output` | The kernel's ELF; `kernel.elf` by default. A relative path is relative to `src/build` |
-| `programs_output` | The folder for SlopOS's programs, each `<name>.elf`; the current folder by default |
-| `tests_output` | The folder for test programs; the current folder by default |
-| `tools_output` | The folder for the hosted tools in `src/tools`, like the image builder; the current folder by default |
+| `kernel_output` | The kernel's ELF; `build/kernel.elf` at the repository's root by default. A relative path is relative to `src/build` |
+| `programs_output` | The folder for SlopOS's programs, each `<name>.elf` with its manifest and docs; `build/programs` by default |
+| `tests_output` | The folder for test programs; `build/tests` by default |
+| `tools_output` | The folder for the hosted tools in `src/tools`, like the image builder; `build/tools` by default |
 | `arch` | `x86_64` (the default) or `aarch64`, for the kernel and the programs |
 | `stack_check` | What the kernel's prologue checks do without room: `trap` (the default), or `morestack` |
 
 ```
 hemera --setting=targets=kernel,kernel_output=D:/build/kernel.elf src/build
 ```
+
+Nothing's written among the sources: the compiler makes the output folders as it builds, and `hemera --check src/build`
+writes nothing at all. `build/` is ignored by git.
 
 If a build fails, the boot tests keep everything the compiler wrote in `build/failed_kernel_build.log`.
 

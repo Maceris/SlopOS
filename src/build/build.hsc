@@ -7,13 +7,15 @@
  *
  * Settings (--setting=name=value):
  * - targets: all (the default), kernel, programs, tests, or tools.
- * - kernel_output: the kernel's ELF, kernel.elf by default.
- * - programs_output: the folder programs go in, each <name>.elf, the current folder by default, each with its manifest
+ * Every output goes in the repository's build/ folder by default, out of the sources; a relative path given is relative
+ * to this folder, src/build. Checking (hemera --check) writes nothing.
+ * - kernel_output: the kernel's ELF, build/kernel.elf by default.
+ * - programs_output: the folder programs go in, each <name>.elf, build/programs by default, each with its manifest
  *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), and <name>.docs, its documentation
  *   (decisions/0174), which the store builder puts in its bundle (decisions/0094); and beside the root task,
  *   system.records, the system configuration as data (decisions/0110).
- * - tests_output: the folder test programs go in, the current folder by default.
- * - tools_output: the folder tools go in, the current folder by default.
+ * - tests_output: the folder test programs go in, build/tests by default.
+ * - tools_output: the folder tools go in, build/tools by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
  * - arch: the kernel's and the programs' architecture, x86_64 (the default) or aarch64 (roadmap A).
@@ -36,6 +38,19 @@ import schema from "std:schema"
 import text_buffer from "std:text_buffer"
 import bundle from "../bundle"
 import checks from "../checks"
+
+/*
+ * Where outputs go without a setting: build/ at the repository's root, out of the sources. Relative to this folder, as
+ * a target's output is; the compiler makes the folders as it builds into them.
+ */
+/** The kernel's ELF, without kernel_output. */
+DEFAULT_KERNEL :: "../../build/kernel.elf"
+/** The programs' folder, without programs_output. */
+DEFAULT_PROGRAMS :: "../../build/programs"
+/** The hosted tests' folder, without tests_output. */
+DEFAULT_TESTS :: "../../build/tests"
+/** The hosted tools' folder, without tools_output. */
+DEFAULT_TOOLS :: "../../build/tools"
 
 /**
  * Add every target the targets setting asks for, and the checks every target's program goes through: the house
@@ -106,7 +121,7 @@ write_system_records :: fn(target : ptr[compiler.BuildOptions], program : ptr[co
         path := text_buffer.make(path_storage)
         text_buffer.append(&path, folder)
         text_buffer.append(&path, "system.records")
-        if os.write_entire_file(text_buffer.as_string(&path), bytes) != null {
+        if !compiler.checking() && os.write_entire_file(text_buffer.as_string(&path), bytes) != null {
             compiler.report_error(package.location, "couldn't write %", text_buffer.as_string(&path))
             return false
         }
@@ -146,7 +161,7 @@ write_manifest :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler
     text_buffer.append(&path, string_of(cast[ptr[u8]](target.output_path.data), target.output_path.count - 4))
     text_buffer.append(&path, ".manifest")
     written :: if bytes.count > 0 { string_of(cast[ptr[u8]](bytes.data), bytes.count) } else { "" }
-    if os.write_entire_file(text_buffer.as_string(&path), written) != null {
+    if !compiler.checking() && os.write_entire_file(text_buffer.as_string(&path), written) != null {
         compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
         return false
     }
@@ -232,7 +247,7 @@ write_documentation :: fn(
     text_buffer.append(&path, string_of(cast[ptr[u8]](target.output_path.data), target.output_path.count - 4))
     text_buffer.append(&path, ".docs")
     written :: if record.count > 0 { string_of(cast[ptr[u8]](record.data), record.count) } else { "" }
-    if os.write_entire_file(text_buffer.as_string(&path), written) != null {
+    if !compiler.checking() && os.write_entire_file(text_buffer.as_string(&path), written) != null {
         compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
         return false
     }
@@ -253,7 +268,7 @@ add_kernel :: fn() {
     kernel.name = "kernel"
     kernel.root = "../boot/slopos"
     kernel.entry = "kernel_entry"
-    kernel.output_path = compiler.target_setting("kernel_output", default = "kernel.elf")
+    kernel.output_path = compiler.target_setting("kernel_output", default = DEFAULT_KERNEL)
     kernel.target_options.os = .None
     kernel.target_options.startup_code = false
     kernel.target_options.red_zone = false
@@ -290,7 +305,7 @@ add_programs :: fn(folder : string) {
         name :: last_part(subfolder)
         output_storage : u8[512]
         output := text_buffer.make(output_storage)
-        text_buffer.append(&output, compiler.target_setting("programs_output", default = "."))
+        text_buffer.append(&output, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
         text_buffer.append(&output, "/")
         text_buffer.append(&output, name)
         text_buffer.append(&output, ".elf")
@@ -330,7 +345,7 @@ add_programs :: fn(folder : string) {
         if name == "hello" {
             next_storage : u8[512]
             next := text_buffer.make(next_storage)
-            text_buffer.append(&next, compiler.target_setting("programs_output", default = "."))
+            text_buffer.append(&next, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
             text_buffer.append(&next, "/hello_next.elf")
             second := program
             second.name = "hello_next"
@@ -369,7 +384,7 @@ add_libraries :: fn(folder : string) {
         name :: last_part(subfolder)
         output_storage : u8[512]
         output := text_buffer.make(output_storage)
-        text_buffer.append(&output, compiler.target_setting("programs_output", default = "."))
+        text_buffer.append(&output, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
         text_buffer.append(&output, "/")
         text_buffer.append(&output, name)
         text_buffer.append(&output, ".library")
@@ -392,7 +407,7 @@ add_libraries :: fn(folder : string) {
         if name == "service_kit" {
             plus_storage : u8[512]
             plus := text_buffer.make(plus_storage)
-            text_buffer.append(&plus, compiler.target_setting("programs_output", default = "."))
+            text_buffer.append(&plus, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
             text_buffer.append(&plus, "/service_kit_plus.library")
             second := library
             second.name = "service_kit_plus"
@@ -417,7 +432,7 @@ add_uefi_programs :: fn(folder : string) {
         name :: last_part(subfolder)
         output_storage : u8[512]
         output := text_buffer.make(output_storage)
-        text_buffer.append(&output, compiler.target_setting("programs_output", default = "."))
+        text_buffer.append(&output, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
         text_buffer.append(&output, "/")
         text_buffer.append(&output, name)
         text_buffer.append(&output, ".efi")
@@ -447,7 +462,7 @@ add_tools :: fn(folder : string) {
         name :: last_part(subfolder)
         output_storage : u8[512]
         output := text_buffer.make(output_storage)
-        text_buffer.append(&output, compiler.target_setting("tools_output", default = "."))
+        text_buffer.append(&output, compiler.target_setting("tools_output", default = DEFAULT_TOOLS))
         text_buffer.append(&output, "/")
         text_buffer.append(&output, name)
         tool := compiler.command_line_options()
@@ -481,7 +496,7 @@ add_tests :: fn(folder : string) {
         text_buffer.append(&test_name, "_test")
         output_storage : u8[512]
         output := text_buffer.make(output_storage)
-        text_buffer.append(&output, compiler.target_setting("tests_output", default = "."))
+        text_buffer.append(&output, compiler.target_setting("tests_output", default = DEFAULT_TESTS))
         text_buffer.append(&output, "/")
         text_buffer.append(&output, text_buffer.as_string(&test_name))
         test := compiler.command_line_options()

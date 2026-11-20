@@ -207,7 +207,8 @@ build package (`decisions/0028`): the kernel (`src/boot/slopos`, linked with its
 with the freestanding flags) and every test program, each checked by the house rules in
 `src/checks` (`decisions/0029`). `--setting=targets=kernel` (or `programs`, `tests`, `tools`) builds one kind, and
 `kernel_output` and `tests_output` say where they go, as in
-`--setting=targets=kernel,kernel_output=build/kernel.elf`. An architecture lists what it doesn't
+`--setting=targets=kernel,kernel_output=build/kernel.elf`, relative to `src/build`. Without them every output
+goes in the repository's `build/` folder (ignored), never among the sources, and `hemera --check src/build` writes nothing. An architecture lists what it doesn't
 implement of `arch_interface` yet in `NOT_YET_IMPLEMENTED`: take a name off when you implement
 it, or the check fails. `python tools/boot.py --expect 0` builds the kernel that way, boots it
 in QEMU from an ISO through SlopOS's bootloader with `test_exit` on its command line, and checks the code it stopped

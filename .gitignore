@@ -1,0 +1,2 @@
+# Build outputs: the build package puts them here by default (src/build/build.hsc)
+/build/
