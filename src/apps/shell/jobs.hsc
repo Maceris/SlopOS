@@ -112,7 +112,16 @@ read_job_output :: fn(shell : ptr[mut Shell], first_key : u64) {
  * @param key The key the program's end is watched under.
  */
 read_progress :: fn(shell : ptr[mut Shell], key : u64) {
-    call :: call_watched(shell, key) or_return void
+    take_progress(call_watched(shell, key) or_return void)
+}
+
+/**
+ * Read what a started program's lifecycle channel says, without waiting, keeping its newest Progress.
+ *
+ * @param call The program's call, started, its lifecycle channel still open; its progress and reporting are set by
+ *     a Progress read.
+ */
+take_progress :: fn(call : ptr[mut Call]) {
     loop {
         reply :: lifecycle.read(call.lifecycle) or_break
         if reply.answer == .Progress {
@@ -187,6 +196,15 @@ attend :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
         kill_running(shell, running)
     }
     poll_faults(shell, running)
+    /*
+     * Read here too, not only when the shell's port says it's there: a wait on another port, for a program's output
+     * (wait_readable), would leave it unread until the program's end
+     */
+    for call in running.calls {
+        if call.started {
+            take_progress(call)
+        }
+    }
     show_progress(shell, running)
 }
 
@@ -226,19 +244,32 @@ kill_running :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
 
 /**
  * Show the progress of programs running in the foreground in the input line: each that's said any, by name and
- * percent; nothing's shown if none has.
+ * percent; nothing's shown if none has, nor if it's what was shown last.
  *
  * @param shell The shell, whose terminal shows it.
- * @param running The programs, whose calls' progress is shown.
+ * @param running The programs, whose calls' progress is shown; its progress_shown is what's shown.
  */
-show_progress :: fn(shell : ptr[mut Shell], running : ptr[Running]) {
+show_progress :: fn(shell : ptr[mut Shell], running : ptr[mut Running]) {
     storage : u8[256]
     out := text_buffer.make(storage)
     progress_text(&out, running)
-    if out.count > 0 {
-        shown :: text_buffer.as_string(&out)
-        _ = terminal.show_input(&shell.console, string_bytes(shown), shown.count)
+    if out.count == 0 {
+        return void
     }
+    shown :: text_buffer.as_string(&out)
+    // FNV-1a, with 0 kept for nothing shown
+    hash : u64 = 0xcbf29ce484222325
+    for byte in string_bytes(shown) {
+        hash = (hash ~ cast[u64](byte)) * 0x100000001b3
+    }
+    if hash == 0 {
+        hash = 1
+    }
+    if hash == running.progress_shown {
+        return void
+    }
+    running.progress_shown = hash
+    _ = terminal.show_input(&shell.console, string_bytes(shown), shown.count)
 }
 
 /**

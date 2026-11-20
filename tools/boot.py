@@ -1444,10 +1444,16 @@ class ConsoleLink:
         self.typed_after = typed_after or []
         self.waits = 0
         # The lines of typed_after waited for that never showed in their 60 seconds, each failing the run
-        self.unshown: list[str] = []
+        self.unshown: list[tuple[str, str]] = []
+        # What a wait's looking for while it waits, None between them
+        self.waiting: str | None = None
+        # Where in shown the keys that shut the system down were typed, once they are
+        self.shut_down_from: int | None = None
         # Where in what's shown the last wait ended: the next looks only at what's shown after it, so a line waited for
         # again waits for its next showing, not one from before
         self.waited_to = 0
+        # How many of the serial output's lines \\l's waits have looked through
+        self.serial_seen = 0
         self.keyed = keyed
         self.keyboard = keyboard
         # Once the console shows this line, the screen's taken through the machine protocol into screenshot
@@ -1489,7 +1495,8 @@ class ConsoleLink:
                         target = self.type_waiting if "\\w" in self.typed[0] else self.type_after
                         threading.Thread(target=target, args=(connection,), daemon=True).start()
                     elif banners < len(self.typed):
-                        type_into(connection, self.typed[banners])
+                        # On a thread of its own, as its waits read what this one receives
+                        threading.Thread(target=self.type_console, args=(connection, self.typed[banners]), daemon=True).start()
                         if banners == 0:
                             self.typed_first.set()
                     if banners == 0 and not self.typed:
@@ -1504,7 +1511,7 @@ class ConsoleLink:
         """The first line, typed once the console shows typed_after."""
         self.wait_for_after()
         try:
-            type_into(connection, self.typed[0])
+            self.type_console(connection, self.typed[0])
         except OSError:
             pass
         self.typed_first.set()
@@ -1512,7 +1519,7 @@ class ConsoleLink:
     def type_waiting(self, connection: socket.socket) -> None:
         """The first line, typed now, waiting where it has \\w until the console shows typed_after."""
         try:
-            type_into(connection, self.typed[0], self.wait_for_after)
+            self.type_console(connection, self.typed[0])
         except OSError:
             pass
         self.typed_first.set()
@@ -1521,7 +1528,7 @@ class ConsoleLink:
         """
         Once the first line's typed, every line of done_when is shown, and every line of serial_done_when is in the serial
         output, the secure attention key and done_key, P, which shuts the system down (decisions/0180), or R, which
-        restarts it (decisions/0182): a second apart, as the terminal service takes the key apart from what follows it.
+        restarts it (decisions/0182), once its screen's up, as the terminal service drops keys typed before it.
         """
         self.typed_first.wait()
         while True:
@@ -1531,13 +1538,106 @@ class ConsoleLink:
             if all(line in shown for line in self.done_when) and all(line in written for line in self.serial_done_when):
                 break
             time.sleep(0.2)
+        self.shut_down_from = len(self.shown)
         try:
-            time.sleep(1)
-            connection.sendall(b"\x1b[3;7~")
-            time.sleep(1)
-            connection.sendall(self.done_key)
+            self.type_console(connection, SECURE_ATTENTION + self.done_key.decode())
         except OSError:
             pass
+
+    def type_console(self, connection: socket.socket, line: str) -> None:
+        """
+        A line typed, then a line break, even after a wait that ends it: escapes in it as Python writes them (\\e for
+        ESC), and these waits, in the order they come, each looking at what's shown after where the last ended:
+
+        * \\w, for the next of typed_after's lines;
+        * \\>, for the shell's, or its debugger's, next prompt with nothing typed at it, so it's done with the last line;
+        * \\u{text}, for a line with text in it;
+        * \\s{text}, for the status line to have text in it, as it is now (it's drawn only when it changes), and \\S{text}
+          for it not to, as once the secure attention key's screen is left;
+        * \\l{text}, for a line of the serial output, after the last one such a wait found, to have text in it, for what
+          the console doesn't show;
+        * and after the secure attention key, \\e[3;7~, for the status line to say its screen's up, as keys typed before
+          it're dropped and those after it go to its screen.
+
+        A wait that runs out, in 60 seconds, fails the run (unshown), and typing goes on.
+        """
+        parts = re.split(r"(\\w|\\>|\\[usSl]\{[^}]*\}|\\e\[3;7~)", line)
+        for i, part in enumerate(parts):
+            if part == "\\w":
+                self.wait_for_after()
+            elif part == "\\>":
+                self.wait_until("the shell's prompt", lambda new: prompt_end(new))
+            elif part.startswith("\\u{"):
+                text = part[3:-1]
+                self.wait_until(text, lambda new: line_end(new, lambda each: text in each))
+            elif part.startswith("\\s{"):
+                text = part[3:-1]
+                self.wait_until(f"the status line's {text}", lambda new: 0 if text in self.status() else None, moves=False)
+            elif part.startswith("\\S{"):
+                text = part[3:-1]
+                self.wait_until(f"the status line without {text}", lambda new: 0 if text not in self.status() else None,
+                                moves=False)
+            elif part.startswith("\\l{"):
+                text = part[3:-1]
+                self.wait_until(f"a serial line with {text}", lambda new: 0 if self.serial_has(text) else None, moves=False)
+            elif part == "\\e[3;7~":
+                # Its screen's status drawn after the key's sent: one from an earlier screen won't do
+                self.waited_to = len(self.shown)
+                connection.sendall(SECURE_ATTENTION.encode())
+                self.wait_until("the secure attention key's screen", lambda new: next(
+                    (drawn.end() for drawn in STATUS_LINE.finditer(new)
+                     if any(screen in drawn.group() for screen in ATTENTION_SCREENS)), None))
+            elif part or i == len(parts) - 1:
+                data = part.replace("\\e", "\\x1b").encode("latin-1", "backslashreplace").decode("unicode_escape")
+                connection.sendall((data + ("\n" if i == len(parts) - 1 else "")).encode())
+
+    def wait_until(self, what: str, met, moves: bool = True) -> None:
+        """
+        Until met, given what's shown after where the last wait ended, finds what it's looking for: polled, up to 60
+        seconds. It gives where in what it was given that ends, or None while it isn't there; once it's found, and
+        moves, the next wait looks only after it, so what came with it, like a prompt after a line, is still looked at.
+        One that runs out fails the run (unshown), as does one still waiting when the run ends (waiting).
+        """
+        self.waiting = what
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            start = self.waited_to
+            end = met(self.shown[start:])
+            if end is not None:
+                if moves:
+                    self.waited_to = start + end
+                self.waiting = None
+                return
+            time.sleep(0.05)
+        self.waiting = None
+        self.unshown.append((what, self.after_wait()))
+
+    def after_wait(self) -> str:
+        """
+        What was shown after where the last wait ended, its start and its end if it's long: to tell why the one after
+        wasn't found.
+        """
+        after = self.shown[self.waited_to:]
+        return after if len(after) <= 2000 else after[:600] + " … " + after[-1400:]
+
+    def serial_has(self, text: str) -> bool:
+        """
+        Whether a line of the serial output written so far, after the one the last of these found, has text in it; the
+        next looks after the one this finds.
+        """
+        if self.serial_done is None or not self.serial_done.exists():
+            return False
+        lines = self.serial_done.read_text(errors="replace").splitlines()
+        for i in range(self.serial_seen, len(lines)):
+            if text in lines[i]:
+                self.serial_seen = i + 1
+                return True
+        return False
+
+    def status(self) -> str:
+        """The status line as it was last drawn, its text alone; empty before it's drawn."""
+        drawn = STATUS_LINE.findall(self.shown)
+        return CSI.sub("", drawn[-1][2:-2]) if drawn else ""
 
     def wait_for_after(self) -> None:
         """Until the console shows the next line to wait for, after where the last wait ended."""
@@ -1545,15 +1645,8 @@ class ConsoleLink:
             return
         line = self.typed_after[self.waits]
         self.waits += 1
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            shown = self.shown
-            if line in [each.rstrip("\r") for each in plain_text(shown[self.waited_to:]).split("\n")]:
-                self.waited_to = len(shown)
-                return
-            time.sleep(0.05)
-        # Typed on regardless, but the run fails: what it waited for never came, so what's typed after may land wrong
-        self.unshown.append(line)
+        # Typed on regardless if it runs out, but the run fails: what's typed after may land wrong
+        self.wait_until(line, lambda new: line_end(new, lambda each: each == line))
 
     def type_keys(self) -> None:
         """
@@ -1646,22 +1739,60 @@ def plain_text(shown: str) -> str:
     return CSI.sub("", CURSOR_MOVE.sub("\n", OSC.sub("", STATUS_LINE.sub("", shown))))
 
 
-def type_into(connection: socket.socket, line: str, wait=None) -> None:
+# What plain_text takes out or turns into a line break, in one pass
+SEQUENCES = re.compile("\x1b7.*?\x1b8|\x1b\\].*?(?:\x1b\\\\|\x07)|\x1b\\[[0-9;?<>=]*[ -/]*[@-~]", re.DOTALL)
+
+
+def plain_with_places(shown: str) -> tuple[str, list[int]]:
+    """shown as plain_text has it, and where in shown each of its characters came from (a cursor move's, its start)."""
+    text: list[str] = []
+    places: list[int] = []
+    at = 0
+    for found in SEQUENCES.finditer(shown):
+        text.extend(shown[at:found.start()])
+        places.extend(range(at, found.start()))
+        if CURSOR_MOVE.fullmatch(found.group()):
+            text.append("\n")
+            places.append(found.start())
+        at = found.end()
+    text.extend(shown[at:])
+    places.extend(range(at, len(shown)))
+    return "".join(text), places
+
+
+def line_end(shown: str, wanted) -> int | None:
     """
-    line typed, then a line break: escapes in it as Python writes them (\\e for ESC), \\p a second's pause, so a key
-    the terminal service takes for itself arrives apart from what follows it, and \\w, with wait, waits for it.
+    Where in shown the first line wanted(line) is true of ends, as plain_text has the lines (a \\r at their end taken
+    off): just after its last character, so what ended it, a line break or a cursor move, is still to come; None if no
+    line is wanted.
     """
-    parts = re.split(r"(\\p|\\w)", line.replace("\\e", "\\x1b"))
-    for i, part in enumerate(parts):
-        if part == "\\p":
-            time.sleep(1)
-            continue
-        if part == "\\w":
-            if wait is not None:
-                wait()
-            continue
-        data = part.encode("latin-1", "backslashreplace").decode("unicode_escape")
-        connection.sendall((data + ("\n" if i == len(parts) - 1 else "")).encode())
+    text, places = plain_with_places(shown)
+    start = 0
+    for line in text.split("\n"):
+        content = line.rstrip("\r")
+        if wanted(content):
+            return places[start + len(content) - 1] + 1 if content else (places[start] if start < len(places) else len(shown))
+        start += len(line) + 1
+    return None
+
+
+def prompt_end(shown: str) -> int | None:
+    """Where in shown the first of the shell's prompts with nothing typed at it (PROMPT) ends; None if there's none."""
+    for found in PROMPT.finditer(shown):
+        # The cursor's put just after the prompt, as it isn't after text typed at one
+        if int(found.group(2)) == len(found.group(1)) + 1:
+            return found.end()
+    return None
+
+
+# The secure attention key, Ctrl+Alt+Delete, as a terminal sends it
+SECURE_ATTENTION = "\x1b[3;7~"
+# What the status line says once the key's brought up its screen: its own, or the administrator's to allow a request
+ATTENTION_SCREENS = ("│ secure attention", "│ asking the administrator")
+# The shell's prompt, or its debugger's, drawn with nothing typed at it: the shell's directory beneath its home (~/...)
+# if it isn't there, then the cursor put on the line's column just after it (2), which prompt_end checks; whatever
+# came before it, as after a program that used the whole screen it's drawn where that left the cursor
+PROMPT = re.compile("((?:~/[^\x1b\r\n>]*)?(?:> |\\(debug\\) ))\x1b\\[[0-9]+;([0-9]+)H")
 
 
 # A disk image's size, and its blocks', as virtio-blk counts them
@@ -2009,8 +2140,11 @@ def main() -> int:
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("--console-input", action="append", default=[],
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated. "
-                        "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete), \\p waits a second, and \\w waits for "
-                        "--console-input-after's line, the first line then typed from the banner")
+                        "Escapes are Python's (\\e is ESC, as \\e[3;7~ is Ctrl+Alt+Delete, which waits for its screen). Waits, "
+                        "each up to 60 seconds, failing the run if it runs out: \\w for --console-input-after's next line, the "
+                        "first line then typed from the banner; \\> for the shell's next prompt; \\u{text} for a line with "
+                        "text in it; \\s{text} and \\S{text} for the status line with text in it, or without; \\l{text} for a "
+                        "serial line with text in it (ConsoleLink.type_console)")
     parser.add_argument("--console-input-after", action="append", default=[],
                         help="type the first --console-input once the virtio console shows this line too, not only its banner; "
                         "may be repeated, each \\w in the line waiting for the next")
@@ -2312,9 +2446,19 @@ def main() -> int:
             if not any(part in line for line in shown):
                 print(f"boot.py: the virtio console showed no line with {part!r}", file=sys.stderr)
                 missing_shown.append(part)
-        for line in console.unshown if console is not None else []:
-            print(f"boot.py: the virtio console never showed {line!r}, which typing waited 60 s for", file=sys.stderr)
+        for line, after in console.unshown if console is not None else []:
+            print(f"boot.py: the virtio console never showed {line!r}, which typing waited 60 s for; after the last "
+                  f"wait it showed {after!r}", file=sys.stderr)
             missing_shown.append(line)
+        if console is not None and console.waiting is not None:
+            print(f"boot.py: typing was still waiting for {console.waiting!r} when the run ended; after the last wait "
+                  f"the virtio console showed {console.after_wait()!r}", file=sys.stderr)
+            missing_shown.append(console.waiting)
+        if console is not None and console.shut_down_from is not None \
+                and "[user] root task: shutting down" not in output and "[user] root task: restarting" not in output:
+            after = console.shown[console.shut_down_from:]
+            print(f"boot.py: the console was asked to shut down but didn't; after the keys it showed "
+                  f"{after if len(after) <= 2000 else after[:600] + ' … ' + after[-1400:]!r}", file=sys.stderr)
         if screen_wrong is not None:
             print(f"boot.py: the framebuffer: {screen_wrong}", file=sys.stderr)
             missing_shown.append(screen_wrong)

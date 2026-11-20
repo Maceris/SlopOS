@@ -346,7 +346,7 @@ TESTS = [
     # Hemera's std/terminal line editor (decisions/0164), in echo: "abd", Left, "c" and Enter is abcd; then Up recalls it,
     # Home and "z" make zabcd
     ("edits a line with the cursor, and recalls a line from history", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=5", "--console-input=abd\\e[Dc\\r\\p\\e[A\\e[Hz",
+        "--command-line=test_exit test_services test_settle=5", "--console-input=abd\\e[Dc\\r\\u{echo: abcd}\\e[A\\e[Hz",
         "--console-input-after=hello: heap and random numbers working",
         "--expect-console-line=echo: abcd", "--expect-console-line=echo: zabcd", "--expect-line=[user] echo: read zabcd",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
@@ -361,14 +361,14 @@ TESTS = [
     # Ctrl+Alt+Delete as a terminal sends it: the terminal service's own screen, which Enter leaves, the program's lines
     # drawn again, and what's typed after it the program's
     ("brings up the secure attention key's screen, and goes back to the program", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=5", "--console-input=\\e[3;7~\\p\r\\pafter attention",
+        "--command-line=test_exit test_services test_settle=5", "--console-input=\\e[3;7~\r\\S{secure attention}after attention",
         "--expect-line=[user] terminal: secure attention", "--expect-line=[user] terminal: secure attention ended",
         "--expect-console-line=  Secure attention", "--expect-console-line=echo: after attention",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The secure attention key's screen lists the console's programs, each pinged on its lifecycle channel; E ends the
     # one chosen, echo, which stops when its runtime tells it it's asked to, and isn't started again
     ("ends a program from the secure attention key's screen, which asks it to stop", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=6", "--console-input=\\e[3;7~\\pe\\p\\e",
+        "--command-line=test_exit test_services test_settle=6", "--console-input=\\e[3;7~e\\e",
         "--expect-line=[user] sessions: ending echo on the trusted path's request", "--expect-line=[user] echo: stopping, as asked",
         "--expect-line=[user] sessions: echo ended", "--expect-console-line=  Programs on the console:",
         "--expect-line=[user] terminal: secure attention ended", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
@@ -536,7 +536,7 @@ TESTS = [
     # first logged out (O), which leaves the second shown
     ("keeps several sessions, switches between them, locks the console, and logs one out", 7,
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=45") for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
-        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\wsecond line\\r\\w\\e[3;7~\\ps\\pthird line\\r\\w\\e[3;7~\\pl\\wcorrect horse battery staple\\r\\wfourth line\\r\\w\\e[3;7~\\po\\p\\pfifth line",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~n\\wadmin\\rcorrect horse battery staple\\r\\wsecond line\\r\\w\\e[3;7~s\\S{secure attention}third line\\r\\w\\e[3;7~l\\wcorrect horse battery staple\\r\\wfourth line\\r\\w\\e[3;7~o\\S{secure attention}fifth line",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=echo: first line", "--console-input-after=  Log in",
@@ -562,10 +562,10 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=90").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wsave hello from the powerbox\\r\\w\\p\\e[3;7~\\w\\r"
-        "\\wopen\\r\\w\\p\\e[3;7~\\wnotes\\r"
-        "\\wlist\\r\\w\\p\\e[3;7~\\w\\r"
-        "\\wopen\\r\\w\\p\\e[3;7~\\w\\e\\p",
+        "\\wsave hello from the powerbox\\r\\w\\s{ asks }\\e[3;7~\\w\\r"
+        "\\wopen\\r\\w\\s{ asks }\\e[3;7~\\wnotes\\r"
+        "\\wlist\\r\\w\\s{ asks }\\e[3;7~\\w\\r"
+        "\\wopen\\r\\w\\s{ asks }\\e[3;7~\\w\\e\\S{secure attention}",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
@@ -593,9 +593,9 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=90").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wsave kept line\\r\\w\\p\\e[3;7~\\w\\t\\r"
+        "\\wsave kept line\\r\\w\\s{ asks }\\e[3;7~\\w\\t\\r"
         "\\wreopen\\r"
-        "\\w\\p\\e[3;7~\\w\\pg\\w\\p\\e[3~\\w\\p\\e\\p\\e\\preopen",
+        "\\w\\e[3;7~\\wg\\w\\e[3~\\w\\e\\e\\S{secure attention}reopen",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Choose a file",
@@ -614,11 +614,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=150").replace("--timeout=120", "--timeout=240")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wadduser\\r\\w\\p\\e[3;7~"
+        "\\wadduser\\r\\w\\s{ asks }\\e[3;7~"
         "\\wadmin\\rnot the password\\rbob\\ranother good passphrase\\ranother good passphrase\\r"
         "\\wadmin\\rcorrect horse battery staple\\rbob\\ranother good passphrase\\ranother good passphrase\\r"
         "\\w\\r"
-        "\\w\\p\\e[3;7~\\po"
+        "\\w\\e[3;7~o"
         "\\wbob\\ranother good passphrase",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
@@ -659,7 +659,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_power test_settle=90").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wshut-down\\r\\w\\p\\e[3;7~"
+        "\\w\\>shut-down\\r\\w\\s{ asks }\\e[3;7~"
         "\\wadmin\\rnot the password\\r"
         "\\wadmin\\rcorrect horse battery staple\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
@@ -682,14 +682,14 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_settle=180").replace("--timeout=120", "--timeout=270")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wadduser\\r\\w\\p\\e[3;7~"
+        "\\wadduser\\r\\w\\s{ asks }\\e[3;7~"
         "\\wadmin\\rcorrect horse battery staple\\rbob\\ranother good passphrase\\ranother good passphrase\\r"
         "\\w\\r"
-        "\\w\\p\\e[3;7~\\ph"
-        "\\wteam\\rbob\\r\\p\\p\\e[3;7~\\pn"
+        "\\w\\e[3;7~h"
+        "\\wteam\\rbob\\r\\S{sharing a volume}\\e[3;7~n"
         "\\wbob\\ranother good passphrase\\r"
-        "\\w\\p\\e[3;7~\\ps\\p\\e[3;7~\\ph"
-        "\\wteam\\rbob\\e[3~\\p",
+        "\\w\\e[3;7~s\\S{secure attention}\\e[3;7~h"
+        "\\wteam\\rbob\\e[3~\\S{sharing a volume}",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=Asked the powerbox; Ctrl+Alt+Delete shows what it asks.", "--console-input-after=  Make an account",
@@ -711,8 +711,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wlet x = 4MiB + 512KiB\\r\\p$x\\r\\pprint \"size: $x\"\\r\\p[1, 2, 3][1] * 10\\r\\p{name: \"a\", n: 3}.n\\r\\p"
-        "nope --now\\r\\p1 + \\r\\p250ms * 4 == 1s\\r\\p9223372036854775807 + 1\\r\\plet file-name = \"notes\"; print \"$file-name.txt\"",
+        "\\w\\>let x = 4MiB + 512KiB\\r\\>$x\\r\\>print \"size: $x\"\\r\\>[1, 2, 3][1] * 10\\r\\>{name: \"a\", n: 3}.n\\r\\>"
+        "nope --now\\r\\>1 + \\r\\>250ms * 4 == 1s\\r\\>9223372036854775807 + 1\\r\\>let file-name = \"notes\"; print \"$file-name.txt\"",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -762,10 +762,10 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_shell_calls 3 hello --loud --speed Fast --wait 250ms\\r\\p\\p"
-        "test_shell_calls --label \"two words\" --count 7 --tags [\"a\", \"b\"] --place ~\\r\\p\\p"
-        "test_shell_calls 5 fail\\r\\p\\p"
-        "test_shell_calls 3\\r\\ptest_shell_calls x y\\r\\ptest_shell_calls 1 a --speed Medium\\r\\ptest_values",
+        "\\w\\>test_shell_calls 3 hello --loud --speed Fast --wait 250ms\\r\\>"
+        "test_shell_calls --label \"two words\" --count 7 --tags [\"a\", \"b\"] --place ~\\r\\>"
+        "test_shell_calls 5 fail\\r\\>"
+        "test_shell_calls 3\\r\\>test_shell_calls x y\\r\\>test_shell_calls 1 a --speed Medium\\r\\>test_values",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -783,7 +783,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_shell_calls 2 crash\\r\\p\\pcrashes\\r\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>test_shell_calls 2 crash\\r\\>crashes\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -799,8 +799,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wdebug test_shell_calls 2 debugged\\r\\p\\pbreak test_shell_calls.main\\r\\p\\pcontinue\\r\\p\\pstep\\r\\p\\pwhere\\r\\p\\p"
-        "delete 1\\r\\p\\pcontinue\\r\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>debug test_shell_calls 2 debugged\\r\\>break test_shell_calls.main\\r\\>continue\\r\\>step\\r\\>where\\r\\>"
+        "delete 1\\r\\>continue\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -819,9 +819,9 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        f"\\wdebug test_debug\\r\\p\\pbreak test_debug.hsc:{TEST_DEBUG_BREAK_LINE}\\r\\p\\pcontinue\\r\\p\\pwhere\\r\\p\\p"
-        "print point\\r\\p\\pprint maybe\\r\\p\\pprint shape\\r\\p\\pprint view\\r\\p\\pprint nothing\\r\\p\\p"
-        "delete 1\\r\\p\\pcontinue\\r\\p\\ptest_debug 1\\r\\p\\pcrashes\\r\\p\\ptest_shell_calls 3 after\\r",
+        f"\\w\\>debug test_debug\\r\\>break test_debug.hsc:{TEST_DEBUG_BREAK_LINE}\\r\\>continue\\r\\>where\\r\\>"
+        "print point\\r\\>print maybe\\r\\>print shape\\r\\>print view\\r\\>print nothing\\r\\>"
+        "delete 1\\r\\>continue\\r\\>test_debug 1\\r\\>crashes\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -844,8 +844,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wdebug test_debug 2\\r\\p\\pbreak test_debug.in_fiber\\r\\p\\pcontinue\\r\\p\\pthreads\\r\\p\\pfibers\\r\\p\\p"
-        "delete 1\\r\\p\\pcontinue\\r\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>debug test_debug 2\\r\\>break test_debug.in_fiber\\r\\>continue\\r\\>threads\\r\\>fibers\\r\\>"
+        "delete 1\\r\\>continue\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -864,8 +864,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wdebug attach counter\\r\\p\\p\\e[3;7~\\p\\p\\r\\p\\p\\pthreads\\r\\p\\pwhere\\r\\p\\pquit\\r\\p\\p"
-        "debug attach counter\\r\\p\\p\\e[3;7~\\p\\p\\e\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>debug attach counter\\r\\s{ asks }\\e[3;7~\\r\\>threads\\r\\>where\\r\\>quit\\r\\>"
+        "debug attach counter\\r\\s{ asks }\\e[3;7~\\e\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -883,8 +883,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtrace 1\\r\\w\\p\\e[3;7~"
-        "\\wadmin\\rcorrect horse battery staple\\r\\p\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>trace 1\\r\\w\\s{ asks }\\e[3;7~"
+        "\\wadmin\\rcorrect horse battery staple\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=Press Ctrl+Alt+Delete: an administrator's name and password allow it.",
@@ -902,8 +902,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", "--network-peers",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wconnect 10.0.2.2 {tcp_echo} hello\\r\\p\\p\\p\\e[3;7~\\w\\e\\p\\p\\p"
-        "connect 10.0.2.2 {tcp_echo} hello\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>connect 10.0.2.2 {tcp_echo} hello\\r\\s{ asks }\\e[3;7~\\w\\e\\>"
+        "connect 10.0.2.2 {tcp_echo} hello\\r\\s{ asks }\\e[3;7~\\w\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=  Reach the network", "--console-input-after=  Reach the network",
@@ -949,8 +949,8 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_crash test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wcrashes system\\r\\w\\p\\e[3;7~"
-        "\\wadmin\\rcorrect horse battery staple\\r\\p\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>crashes system\\r\\w\\s{ asks }\\e[3;7~"
+        "\\wadmin\\rcorrect horse battery staple\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=Press Ctrl+Alt+Delete: an administrator's name and password allow it.",
@@ -965,10 +965,10 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wrecord test_replay 20\\r\\p\\p\\preplay test_replay 20\\r\\p\\p\\preplay test_replay 21\\r\\p\\p\\p"
+        "\\w\\>record test_replay 20\\r\\>replay test_replay 20\\r\\>replay test_replay 21\\r\\>"
         # A channel end passed and used, recorded to a file and replayed from it (decisions/0185, 12g)
-        "record test_replay 5 1 to passed.recording\\r\\p\\p\\preplay from passed.recording\\r\\p\\p\\p"
-        "replay from nothing.recording\\r\\p\\ptest_shell_calls 3 after\\r",
+        "record test_replay 5 1 to passed.recording\\r\\>replay from passed.recording\\r\\>"
+        "replay from nothing.recording\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -985,7 +985,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wprofile test_profile 500\\r\\p\\p\\p\\pprofile test_profile 500 1\\r\\p\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>profile test_profile 500\\r\\>profile test_profile 500 1\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -1001,11 +1001,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wfn twice(n: int) { $n * 2 }\\r\\ptwice 21\\r\\ptwice --n 5\\r\\ptwice x\\r\\p"
-        "try { nope } catch e { print \"caught:\" $e.message }\\r\\p"
-        "fn strict() { nope }\\r\\pfn lenient() { nope? }\\r\\plenient or { print \"handled\" }\\r\\pstrict or { print \"handled\" }\\r\\p"
-        "fn pick(a, b) { return $b; print \"not here\" }\\r\\ppick 1 \"second\"\\r\\p"
-        "cd apps\\r\\pcd ../..\\r\\pcd nowhere\\r\\pcd ..\\r\\pcd ..",
+        "\\w\\>fn twice(n: int) { $n * 2 }\\r\\>twice 21\\r\\>twice --n 5\\r\\>twice x\\r\\>"
+        "try { nope } catch e { print \"caught:\" $e.message }\\r\\>"
+        "fn strict() { nope }\\r\\>fn lenient() { nope? }\\r\\>lenient or { print \"handled\" }\\r\\>strict or { print \"handled\" }\\r\\>"
+        "fn pick(a, b) { return $b; print \"not here\" }\\r\\>pick 1 \"second\"\\r\\>"
+        "cd apps\\r\\>cd ../..\\r\\>cd nowhere\\r\\>cd ..\\r\\>cd ..",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=42", "--expect-console-line=10", "--expect-console-line=error: --n: x isn't an integer",
@@ -1021,16 +1021,16 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_shell_calls 3 row\\r\\p\\p"
-        "test_shell_calls 4 r | where id > 2 | map name\\r\\p\\p"
-        "test_shell_calls 2 a | test_shell_calls 0 b\\r\\p\\p"
-        "[{id: 7, name: \"seven\", kind: \"Fast\"}] | test_shell_calls 0 x\\r\\p\\p"
-        "test_shell_calls 4 s | sort id --descending | take 1 | map name\\r\\p\\p"
-        "test_shell_calls 4 g | group kind | map kind\\r\\p\\p"
-        "[{count: 5}, {count: 5}] | group count | map it.key * 10 + it.count\\r\\p\\p"
-        "test_shell_calls 1 a | print\\r\\p\\p"
-        "[1, 2] | test_shell_calls 0 x\\r\\p\\p"
-        "where id > 1\\r\\p"
+        "\\w\\>test_shell_calls 3 row\\r\\>"
+        "test_shell_calls 4 r | where id > 2 | map name\\r\\>"
+        "test_shell_calls 2 a | test_shell_calls 0 b\\r\\>"
+        "[{id: 7, name: \"seven\", kind: \"Fast\"}] | test_shell_calls 0 x\\r\\>"
+        "test_shell_calls 4 s | sort id --descending | take 1 | map name\\r\\>"
+        "test_shell_calls 4 g | group kind | map kind\\r\\>"
+        "[{count: 5}, {count: 5}] | group count | map it.key * 10 + it.count\\r\\>"
+        "test_shell_calls 1 a | print\\r\\>"
+        "[1, 2] | test_shell_calls 0 x\\r\\>"
+        "where id > 1\\r\\>"
         "test_shell_calls 2 a | where name",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1051,10 +1051,10 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\whelp\\r\\phelp test_shell_calls\\r\\p\\p"
-        "test_shell_c\\t\\p3 tabbed\\r\\p\\p"
-        "test_shell_calls 2 named --spe\\t\\pFa\\t\\p\\r\\p\\p"
-        "test_\\t\\p\\p\\r",
+        "\\w\\>help\\r\\>help test_shell_calls\\r\\>"
+        "test_shell_c\\t3 tabbed\\r\\>"
+        "test_shell_calls 2 named --spe\\tFa\\t\\r\\>"
+        "test_\\t\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=print   Write its arguments on a line, separated by spaces.",
@@ -1074,7 +1074,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wprint \"remembered\"\\r\\pexit\\r\\wadmin\\rcorrect horse battery staple\\r\\w\\e[A\\p\\e[A\\p \"again\"\\r\\pexit now\\r",
+        "\\w\\>print \"remembered\"\\r\\>exit\\r\\wadmin\\rcorrect horse battery staple\\r\\w\\>\\e[A\\e[A \"again\"\\r\\>exit now\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell", "--console-input-after=  Log in",
         "--console-input-after=SlopOS shell",
@@ -1088,7 +1088,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=120").replace("--timeout=120", "--timeout=240")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_shell_calls 1 cj --sleep 20s &\\r\\p\\p\\pprocesses | map name\\r\\p\\pprocesses | map share\\r\\p\\pprocesses | map budget\\r\\p\\pprocesses\\r\\p\\p\\p\\p\\p\\p\\p\\p\\p\\p\\p\\p",
+        "\\w\\>test_shell_calls 1 cj --sleep 20s &\\r\\>processes | map name\\r\\>processes | map share\\r\\>processes | map budget\\r\\>processes\\r\\>",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=[1] started",
@@ -1097,11 +1097,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_shell_calls 2 bg --sleep 1s &\\r\\p\\p\\p\\pwait 1\\r\\p\\p"
-        "test_shell_calls 1 fg --sleep 20s\\r\\p\\p\\x03\\p\\p"
-        "test_shell_calls 1 ta --sleep 20s\\r\\p\\ptyped ahead\\p\\x03\\p\\p"
-        "test_shell_calls 1 st --sleep 20s --stubborn\\r\\p\\p\\x03\\p\\p\\p\\p"
-        "test_shell_calls 1 sj --sleep 20s &\\r\\p\\pjobs\\r\\pstop\\r\\p\\p\\p\\pjobs\\r",
+        "\\w\\>test_shell_calls 2 bg --sleep 1s &\\r\\u{[1] ended}wait 1\\r\\>"
+        "test_shell_calls 1 fg --sleep 20s\\r\\u{ 10%}\\x03\\>"
+        "test_shell_calls 1 ta --sleep 20s\\r\\u{ 10%}typed ahead\\x03\\>"
+        "test_shell_calls 1 st --sleep 20s --stubborn\\r\\u{ 10%}\\x03\\>"
+        "test_shell_calls 1 sj --sleep 20s &\\r\\>jobs\\r\\>stop\\r\\u{[2] stopped}\\>jobs\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=[1] started", "--expect-console-line=[1] ended, with 2 records: wait 1 for them",
@@ -1119,7 +1119,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services store_objects=16 store_files=2 test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\w" + "".join(f"help {name}\\r\\p" for name in [
+        "\\w\\>" + "".join(f"help {name}\\r\\>" for name in [
             "test_affinity", "test_budgets", "test_channels", "test_control", "test_cpu_budgets", "test_devices", "test_exits",
             "test_io_ports", "test_libraries", "test_memory", "test_msi_dma", "test_pager", "test_perf", "test_ports",
             "test_protocols", "test_streams", "test_syscalls", "test_threads", "test_values", "test_affinity"])
@@ -1137,9 +1137,9 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_shell_results 3 abc\\r\\p\\p"
-        "test_shell_results 1 x --asked Plain\\r\\p\\p"
-        "test_shell_results 1 x --asked Refused\\r\\p\\p"
+        "\\w\\>test_shell_results 3 abc\\r\\>"
+        "test_shell_results 1 x --asked Plain\\r\\>"
+        "test_shell_results 1 x --asked Refused\\r\\>"
         "try { test_shell_results 1 x --asked Plain } catch e { print \"caught\" $e.message }\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1153,17 +1153,17 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_file_tree\\r\\p\\p"
-        "list\\r\\p\\p"
-        "copy notes.txt notes2.txt\\r\\p\\p"
-        "move notes2.txt pictures\\r\\p\\p"
-        "list pictures\\r\\p\\p"
-        "remove pictures\\r\\p\\p"
-        "list\\r\\p\\p"
-        "recover\\r\\p\\p\\p"
-        "recover pictures\\r\\p\\p\\p"
-        "list pictures\\r\\p\\p"
-        "test_shell_calls 1 x --place photos\\r\\p\\p"
+        "\\w\\>test_file_tree\\r\\>"
+        "list\\r\\>"
+        "copy notes.txt notes2.txt\\r\\>"
+        "move notes2.txt pictures\\r\\>"
+        "list pictures\\r\\>"
+        "remove pictures\\r\\>"
+        "list\\r\\>"
+        "recover\\r\\>"
+        "recover pictures\\r\\>"
+        "list pictures\\r\\>"
+        "test_shell_calls 1 x --place photos\\r\\>"
         "remove nothing_here\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1182,15 +1182,15 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_file_tree --reading\\r\\p\\p"
-        "search TODO\\r\\p\\p"
-        "search LONG --names --ignore-case\\r\\p\\p"
-        "search \"(\"\\r\\p"
-        "view reading/todo.txt\\r\\p"
-        "view reading/bytes.bin\\r\\p"
-        "view reading/made.value\\r\\p\\p"
-        "view reading/long.txt | page\\r\\p\\p \\p\\pG\\p\\pk\\p\\px\\p\\pq\\p"
-        "view reading/todo.txt | page\\r\\p"
+        "\\w\\>test_file_tree --reading\\r\\>"
+        "search TODO\\r\\>"
+        "search LONG --names --ignore-case\\r\\>"
+        "search \"(\"\\r\\>"
+        "view reading/todo.txt\\r\\>"
+        "view reading/bytes.bin\\r\\>"
+        "view reading/made.value\\r\\>"
+        "view reading/long.txt | page\\r\\u{lines 1-22 of 60} \\u{lines 23-44 of 60}G\\u{lines 39-60 of 60}k\\u{lines 38-59 of 60}xq\\>"
+        "view reading/todo.txt | page\\r\\>"
         "view reading/CAFE\\u0301.txt\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1215,19 +1215,19 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\winstallations\\r\\p"
-        "install counter --as tally\\r\\p\\p"
-        "installations\\r\\p"
-        "processes | where name == \"tally\" | map state\\r\\p\\p"
-        "install list\\r\\p"
-        "install counter --as tally\\r\\p"
-        "end tally\\r\\p\\p\\p"
-        "processes\\r\\p\\p"
-        "uninstall tally\\r\\p\\p\\p"
-        "installations\\r\\p"
-        "cd apps\\r\\p"
-        "recover\\r\\p\\p\\p"
-        "grants\\r\\p"
+        "\\w\\>installations\\r\\>"
+        "install counter --as tally\\r\\>"
+        "installations\\r\\>"
+        "processes | where name == \"tally\" | map state\\r\\>"
+        "install list\\r\\>"
+        "install counter --as tally\\r\\>"
+        "end tally\\r\\>"
+        "processes\\r\\>"
+        "uninstall tally\\r\\>"
+        "installations\\r\\>"
+        "cd apps\\r\\>"
+        "recover\\r\\>"
+        "grants\\r\\>"
         "grants --revoke 7\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1248,11 +1248,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_file_tree\\r\\p\\p"
-        "edit notes.txt\\r\\p\\p"
-        "\\e[Bsecond line\\r\\pthird\\p\\x1a\\p"
-        "\\x06second\\r\\p\\x13\\p\\p"
-        "x\\p\\x11\\p\\x11\\p\\p"
+        "\\w\\>test_file_tree\\r\\>"
+        "edit notes.txt\\r\\u{^S saves}"
+        "\\e[Bsecond line\\rthird\\x1a"
+        "\\x06second\\r\\x13"
+        "x\\x11\\x11\\>"
         "view notes.txt\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1269,12 +1269,12 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wedit key.pub\\r\\p\\p"
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEcZuugWDi2tmrSEzD5Z5J/QRht6pS6sXCdzeUW6qJY2 vector@test\\p\\x13\\p\\x11\\p\\p"
-        "keys --add key.pub\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p"
-        "keys\\r\\p\\p\\p"
-        "keys --remove SHA256:bBEtczzyIjtfN3fYz88H8A1mtM1727e1zgfHXEs8XyI\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p"
-        "keys\\r\\p\\p\\ptest_shell_calls 3 after\\r",
+        "\\w\\>edit key.pub\\r\\u{^S saves}"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEcZuugWDi2tmrSEzD5Z5J/QRht6pS6sXCdzeUW6qJY2 vector@test\\x13\\x11\\>"
+        "keys --add key.pub\\r\\s{ asks }\\e[3;7~\\w\\r\\>"
+        "keys\\r\\>"
+        "keys --remove SHA256:bBEtczzyIjtfN3fYz88H8A1mtM1727e1zgfHXEs8XyI\\r\\s{ asks }\\e[3;7~\\w\\r\\>"
+        "keys\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=  Let a key log in as you", "--console-input-after=  Stop a key logging in as you",
@@ -1298,9 +1298,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services ssh ssh_checks test_settle=400").replace("--timeout=120", "--timeout=600")
                        for argument in BOOT_DISK_BASE], ["--network-peers",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wedit key.pub\\r\\p\\p"
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEcZuugWDi2tmrSEzD5Z5J/QRht6pS6sXCdzeUW6qJY2 vector@test\\p\\x13\\p\\x11\\p\\p"
-        "keys --add key.pub\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p",
+        "\\w\\>edit key.pub\\r\\u{^S saves}"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEcZuugWDi2tmrSEzD5Z5J/QRht6pS6sXCdzeUW6qJY2 vector@test\\x13\\x11\\>"
+        "keys --add key.pub\\r\\s{ asks }\\e[3;7~\\w\\r\\>"
+        # The host key's shown on the secure attention key's screen, its last line
+        "\\e[3;7~\\u{SSH host key: SHA256:}\\e\\S{secure attention}",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=  Let a key log in as you",
@@ -1322,10 +1324,10 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services ssh test_settle=400").replace("--timeout=120", "--timeout=600")
                        for argument in BOOT_DISK_BASE], ["--network-peers",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wssh_keygen\\r\\p\\p\\p"
-        "keys --add .ssh/id_ed25519.pub\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p"
-        "ssh admin@10.0.2.2 \"test_shell_calls 3 after\" --port {ssh}\\r\\p\\p\\p\\e[3;7~\\w\\r\\wyes\\r\\p\\p\\p\\p\\p"
-        "ssh admin@10.0.2.2 \"test_shell_calls 4 again\" --port {ssh}\\r\\p\\p\\p\\e[3;7~\\w\\r\\p\\p\\p\\p\\p\\p",
+        "\\w\\>ssh_keygen\\r\\>"
+        "keys --add .ssh/id_ed25519.pub\\r\\s{ asks }\\e[3;7~\\w\\r\\>"
+        "ssh admin@10.0.2.2 \"test_shell_calls 3 after\" --port {ssh}\\r\\s{ asks }\\e[3;7~\\w\\r\\wyes\\r\\>"
+        "ssh admin@10.0.2.2 \"test_shell_calls 4 again\" --port {ssh}\\r\\s{ asks }\\e[3;7~\\w\\r\\>",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=  Let a key log in as you", "--console-input-after=  Reach the network",
@@ -1343,11 +1345,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_file_tree --reading --scripts\\r\\p\\p"
-        "report.shell TODO --count 2\\r\\p\\p\\p"
-        "into.shell reading\\r\\p\\p\\p"
-        "escape.shell --here pictures\\r\\p\\p\\p"
-        "report.shell\\r\\p"
+        "\\w\\>test_file_tree --reading --scripts\\r\\>"
+        "report.shell TODO --count 2\\r\\>"
+        "into.shell reading\\r\\>"
+        "escape.shell --here pictures\\r\\>"
+        "report.shell\\r\\>"
         "help report.shell\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1368,11 +1370,11 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\wtest_kept_grant\\r\\w\\p\\e[3;7~\\w\\t\\r"
-        "\\w\\ptest_kept_grant --reopen\\r\\p\\p"
-        "grants\\r\\p"
-        "grants --revoke 1\\r\\p"
-        "grants\\r\\p"
+        "\\w\\>test_kept_grant\\r\\w\\s{ asks }\\e[3;7~\\w\\t\\r"
+        "\\w\\>test_kept_grant --reopen\\r\\>"
+        "grants\\r\\>"
+        "grants --revoke 1\\r\\>"
+        "grants\\r\\>"
         "test_kept_grant --reopen\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1402,7 +1404,7 @@ TESTS = [
     # the idle installation, the counter of the session not shown, to stop, and leaves the shown session's running
     ("stops the idle installations of sessions not shown under memory pressure", 7,
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_pressure test_settle=45") for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
-        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\p\\p\\p\\p\\p\\p\\p\\p\\e[3;7~\\ps",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~n\\wadmin\\rcorrect horse battery staple\\r\\l{idle installations stopped}\\e[3;7~s",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=echo: first line", "--console-input-after=  Log in",
@@ -1415,7 +1417,7 @@ TESTS = [
     # Each session on a CPU budget of its own, a quarter of the sessions' tenth of a CPU (decisions/0187)
     ("runs each session on a CPU budget of its own", 7,
      with_before_qemu([argument.replace("test_services", "test_services use_echo test_session_cpu test_settle=30") for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
-        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~\\pn\\wadmin\\rcorrect horse battery staple\\r\\p\\p",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r\\wfirst line\\r\\w\\e[3;7~n\\wadmin\\rcorrect horse battery staple\\r\\l{test_session_cpu: }",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=Your home directory has 1 entry.",
         "--console-input-after=echo: first line", "--console-input-after=  Log in",

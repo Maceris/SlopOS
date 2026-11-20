@@ -411,6 +411,8 @@ Running :: struct {
     keep_at_most : usize,
     /** How many records it wrote past keep_at_most, read and dropped. */
     dropped : u64,
+    /** The progress last shown in the input line, as its text's FNV-1a hash; 0 before any's shown. */
+    progress_shown : u64,
 }
 
 /**

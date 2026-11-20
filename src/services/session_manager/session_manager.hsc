@@ -391,6 +391,12 @@ Manager :: struct {
     log : slop_os.DebugLog,
     /** The port it waits on: clients, programs' ends, shells' programs connections and its budget's pressure. */
     port : slop_os.Port,
+    /**
+     * Whether a wait for a program's end (end_program, crash_installation) took packets from port that weren't acted
+     * on,
+     * a client's Readable among them, so every client's to be read again before the main loop waits on it.
+     */
+    took_packets : bool,
     /** Its connection to the process manager, dialed through the manager grant, which it launches through. */
     manager : os.Channel[process_manager.ProcessManager],
     /** Its connector to the compositor, dialed for each GUI session's launcher; NONE without a compositor. */
@@ -649,6 +655,14 @@ main :: fn(
         // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
         if service_kit.stopping() {
             return 0
+        }
+        /*
+         * A wait for a program's end took packets meanwhile, so a client's request may be there with nothing left on
+         * the port to say so: every client's read again first
+         */
+        if sessions.took_packets {
+            sessions.took_packets = false
+            continue
         }
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(sessions.port, packets, slop_os.NO_DEADLINE) or_else 0
@@ -2295,7 +2309,7 @@ list :: fn(
  * End a program: ask it to stop on its lifecycle channel, then kill it if it hasn't ended once STOP_GRACE is over.
  *
  * It waits on the session manager's port meanwhile, taking programs' ends as they come; other packets that come then
- * aren't acted on.
+ * aren't acted on, but say so (took_packets), so the main loop reads every client again before it waits.
  *
  * @param sessions The session manager, whose program is asked to stop and killed after STOP_GRACE; programs
  *     whose ends come on its port meanwhile are marked ended.
@@ -2321,6 +2335,10 @@ end_program :: fn(sessions : ptr[mut Manager], index : usize, why : string) -> s
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(sessions.port, packets, deadline) or_else 0
         ended_in(sessions, packets, cast[usize](taken))
+        // A client's request among them is read once the main loop reads every client again
+        if taken > 0 {
+            sessions.took_packets = true
+        }
     }
     if sessions.programs[index].running {
         runtime.log_info("% didn't stop in time, so it's killed", name_of(&sessions.programs[index]))
@@ -3360,6 +3378,9 @@ crash_installation :: fn(sessions : ptr[mut Manager], number : u32, name : strin
         packets : slop_os.Packet[8]
         taken :: slop_os.port_wait(sessions.port, packets, deadline) or_else 0
         ended_in(sessions, packets, cast[usize](taken))
+        if taken > 0 {
+            sessions.took_packets = true
+        }
     }
     return !sessions.programs[index].running
 }

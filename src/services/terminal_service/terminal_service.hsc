@@ -374,6 +374,17 @@ View :: struct {
     input_cursor : usize,
     /** Whether the line is drawn below the output now. */
     input_drawn : bool,
+    /**
+     * The client whose line, sent while another owned the input, is kept for when its Read makes it the owner, as the
+     * shell's prompt is when a program it gave the terminal to has ended but isn't seen gone yet; null for none.
+     */
+    kept_from : usize?,
+    /** That line, the first kept_count bytes, UTF-8. */
+    kept : u8[INPUT_LINE_BYTES],
+    /** How many bytes of kept are used. */
+    kept_count : usize,
+    /** Where in kept the cursor is, a byte offset, 0 to kept_count. */
+    kept_cursor : usize,
     /** The program row the line starts on, while it's drawn. */
     input_row : u16,
     /** While the line's drawn, the program row the output goes on from. */
@@ -740,6 +751,9 @@ serve :: fn(
                     }
                     case None => {}
                 }
+                if kept_by(service, index) {
+                    view(service).kept_from = null
+                }
                 session_left(service, index)
                 use_active(service)
                 if index < service.client_view.count {
@@ -811,34 +825,30 @@ serve :: fn(
                 if owned {
                     view(service).owner = index
                     view(service).held = if most == 0 { cast[u32](1) } else { most }
+                    // Its line sent before it owned the input, drawn now
+                    if kept_by(service, index) {
+                        view(service).kept_from = null
+                        count :: view(service).kept_count
+                        if count <= view(service).kept.count {
+                            set_input(service, view(service).kept[0..<count], view(service).kept_cursor)
+                        }
+                    }
                 }
             }
             case InputLine(line) => {
+                /*
+                 * A line shown before the first Read, as a prompt is, takes the input as a Read does: else the
+                 * prompt isn't drawn until a key's typed
+                 */
+                if view(service).owner == null {
+                    view(service).owner = index
+                }
+                bytes :: os.items(into, line.text)
                 if is_owner(service, index) {
-                    hide_input(service)
-                    bytes :: os.items(into, line.text)
-                    view(
-                        service
-                    ).input_count = if bytes.count < view(service).input.count {
-                        bytes.count
-                    }
-                    else {
-                        view(service).input.count
-                    }
-                    for byte, i in bytes {
-                        if i < view(service).input.count {
-                            view(service).input[i] = byte
-                        }
-                    }
-                    view(
-                        service
-                    ).input_cursor = if cast[usize](line.cursor) < view(service).input_count {
-                        cast[usize](line.cursor)
-                    }
-                    else {
-                        view(service).input_count
-                    }
-                    show_input(service)
+                    set_input(service, bytes, cast[usize](line.cursor))
+                }
+                else {
+                    keep_line(service, index, bytes, cast[usize](line.cursor))
                 }
             }
             case Connect(connection) => {
@@ -888,6 +898,61 @@ is_owner :: fn(service : ptr[mut Service], index : usize) -> bool {
         case Some(owner) => owner == index
         case None => false
     }
+}
+
+/**
+ * Tell whether a client's line is the one the view in use keeps for when it owns the input.
+ *
+ * @param service The service's state, whose view in use's kept_from is compared; only read.
+ * @param index The client, by its index among the service's clients; any index can be given.
+ * @return True if the kept line is its; false for any other, or when none's kept.
+ */
+kept_by :: fn(service : ptr[mut Service], index : usize) -> bool {
+    return match view(service).kept_from {
+        case Some(from) => from == index
+        case None => false
+    }
+}
+
+/**
+ * Replace the line being typed in the view in use with the owner's, and draw it.
+ *
+ * @param service The service's state: the view in use's line is taken away, replaced and drawn again.
+ * @param bytes The line, UTF-8; what's past INPUT_LINE_BYTES is cut off. Empty takes the line away.
+ * @param cursor Where the cursor is, a byte offset; past the line's end, it's put at the end.
+ */
+set_input :: fn(service : ptr[mut Service], bytes : u8[], cursor : usize) {
+    hide_input(service)
+    count :: if bytes.count < view(service).input.count { bytes.count } else { view(service).input.count }
+    view(service).input_count = count
+    for byte, i in bytes {
+        if i < view(service).input.count {
+            view(service).input[i] = byte
+        }
+    }
+    view(service).input_cursor = if cursor < count { cursor } else { count }
+    show_input(service)
+}
+
+/**
+ * Keep a line a client that doesn't own the input sent, for when its Read makes it the owner; it replaces any line
+ * kept before, of any client's.
+ *
+ * @param service The service's state: the view in use's kept line is set.
+ * @param index The client, by its index among the service's clients.
+ * @param bytes The line, UTF-8; what's past INPUT_LINE_BYTES is cut off.
+ * @param cursor Where the cursor is, a byte offset; past the line's end, it's put at the end.
+ */
+keep_line :: fn(service : ptr[mut Service], index : usize, bytes : u8[], cursor : usize) {
+    count :: if bytes.count < view(service).kept.count { bytes.count } else { view(service).kept.count }
+    view(service).kept_from = index
+    view(service).kept_count = count
+    for byte, i in bytes {
+        if i < view(service).kept.count {
+            view(service).kept[i] = byte
+        }
+    }
+    view(service).kept_cursor = if cursor < count { cursor } else { count }
 }
 
 /**
@@ -1906,6 +1971,8 @@ take_serial :: fn(service : ptr[mut Service], into : ptr[mut os.Incoming]) {
  */
 screen_keys :: fn(service : ptr[mut Service], first : usize) {
     decoded :: &service.decoded
+    // A key that closes a screen, as Enter allowing a request does, was the screen's all the same
+    trusted :: service.attention || service.setup != .Off
     for i in first..<decoded.count {
         if i >= decoded.events.count {
             break
@@ -1989,8 +2056,11 @@ screen_keys :: fn(service : ptr[mut Service], first : usize) {
             return void
         }
     }
-    // What came with the key, or while its screen or setup's was up, is the trusted path's, and isn't kept
-    if service.attention || service.setup != .Off || attention_in(decoded, first) {
+    /*
+     * What came with the key, or while its screen or setup's was up, even if a key of it closed the screen, is the
+     * trusted path's, and isn't kept
+     */
+    if trusted || service.attention || service.setup != .Off || attention_in(decoded, first) {
         drop_from(service, first)
     }
 }

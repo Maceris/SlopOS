@@ -425,6 +425,25 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     motion, a Presented) still waited for the other buffer to paint what it had missed. gui_kit skips a frame without
     damage; the other buffer catches up at the next frame that changes something. The GUI login test went from ~50 s
     to ~39 s.
+  - The console's typed input waits too: its one-second pauses (`\p`) are gone, and `tools/boot.py`'s waits look for
+    what the console shows after where the last one ended: the shell's next empty prompt (`\>`, its cursor just past
+    it), a line with some text (`\u{...}`), the status line's (`\s{...}`, `\S{...}`), a serial line (`\l{...}`), and
+    the secure attention key's own screen after the key. A wait still waiting, or run out, fails the run, saying
+    what came after the last. Taking the pauses out found:
+    - A program's input line sent before its first Read wasn't drawn, as only the input's owner's is and a Read made
+      the owner, so a session's first prompt showed only once a key was typed: the line takes the input as a Read
+      does now. A line sent while another still owned it, as the shell's prompt is once a program it gave the
+      terminal to has ended but isn't seen gone yet, is kept for when the sender's Read makes it the owner.
+    - Keys that came while the trusted path's screen was up reached the program if one of them closed it: the Enter
+      that allowed a request was the debugger's too. What comes while a screen's up is dropped, whichever key closes
+      it.
+    - The shell read what a program said of its progress only when its port woke it, which it doesn't wait on while
+      it reads the program's output, so a foreground program's progress showed only at its end. It reads it as it
+      attends to the programs now, every 50 ms, and draws the line only when it's changed.
+    - The session manager's wait for a program to end, as it ends a session's, takes packets from its port and acts
+      only on programs' ends, so a client's request that came meanwhile, the terminal service's List for the secure
+      attention key's screen among them, could go unread while the main loop waited with nothing to wake it: the
+      trusted path hung, until a test's settle ended the run. The main loop reads every client again first now.
 - **GUI programs are the session's programs** (chosen with the project's owner over handing the launcher the
   session's locale, CPU budget and rings to pass on): the launcher starts nothing itself. It asks the session manager
   on the session's own programs connection (`programs`' new `Start`: a name, a home connection, and what to open), and
