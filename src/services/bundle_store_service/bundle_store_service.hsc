@@ -34,7 +34,13 @@ import bundle_store from "../../protocols/bundle_store"
  * another closes the one given out longest ago that no one holds any more (decisions/0178), and answers Missing only if
  * every one is held.
  */
-MAX_OBJECTS :: 64
+MAX_OBJECTS :: 256
+/**
+ * The most objects' files open at once, each a connection to the system volume's server. A file's opened when its
+ * object's pages are read, and the one read from longest ago closed to make room, so an object that's open, or held,
+ * costs no connection, and the store never takes up more than this many of the server's.
+ */
+MAX_FILES :: 16
 /** The keys open objects' pager bindings are bound to the port with, PAGER_KEY plus the slot, after the clients'. */
 PAGER_KEY : u64 : 1000
 /** The key its budget's pressure is bound to the port with, between the clients' and the objects'. */
@@ -49,7 +55,7 @@ PAGE : u64 : 4096
 /** The slot a search found none in. */
 NOWHERE : usize : 0xffffffffffffffff
 
-/** An object given out: its paged memory, which it supplies, its file's connection, and the page that's read into. */
+/** An object given out: its paged memory, which it supplies, its pages read from its file through files (FileOpen). */
 Open :: struct {
     /** Whether the slot holds an open object; cleared when it's closed to make room (close_slot). */
     used : bool,
@@ -61,13 +67,26 @@ Open :: struct {
     memory : slop_os.Memory,
     /** The object's size in bytes, its file's; memory is that rounded up to whole pages, one page for an empty one. */
     size : u64,
-    /** A read-only connection to the object's file, opened again if it goes with the server it was on. */
+}
+
+/**
+ * An object's file, opened to read its pages from: the connection, and a page of the store's the file server reads
+ * into, which is kept when the file's closed, for the next file opened in its place.
+ */
+FileOpen :: struct {
+    /** Whether file and file_port are open, for the object in slot. */
+    used : bool,
+    /** The object's slot in Store's objects; meaningless while it isn't used. */
+    slot : usize,
+    /** When it was last read from, by the store's count of reads (Store's reads); the oldest is closed for another. */
+    read_at : u64,
+    /** A read-only connection to the object's file, closed if it fails, as when the server it was on has gone. */
     file : slop_os.Channel,
     /** A port bound to file, waited on for its answers; NO_HANDLE if it couldn't be made. */
     file_port : slop_os.Port,
-    /** A page of the store's own memory the file server reads into, supplied from. */
+    /** The page the file server reads into, the store's own memory, supplied from; made the first time it's needed. */
     buffer : slop_os.Memory,
-    /** Where buffer is mapped, readable and writable, in the store's address space; 0 if it isn't. */
+    /** Where buffer is mapped, readable and writable, in the store's address space; 0 until it's made. */
     buffer_at : u64,
 }
 
@@ -87,6 +106,16 @@ Store :: struct {
     directory : os.Directory,
     /** The objects given out, by slot. */
     objects : Open[MAX_OBJECTS],
+    /** The objects' files open, to read their pages from, in no order. */
+    files : FileOpen[MAX_FILES],
+    /** How many pages, and objects' sizes, it's read from files since it started, which marks each's read_at. */
+    reads : u64,
+    /**
+     * How many of files it uses, from the first: MAX_FILES, or fewer with store_files=N on the kernel's command line,
+     * so a
+     * test can have it open and close them far more often.
+     */
+    file_limit : usize,
     /** Pages wanted that couldn't be read, kept until there's a directory to read them through again. */
     unread : Unread[..],
     /** The pages supplied, in the order the clock's hand goes round them. */
@@ -126,7 +155,8 @@ Unread :: struct {
  * @param store The directory on the system volume the objects, the boot root and the pins are kept in.
  * @param clients The listener clients' connections arrive on; more arrive as Connects on those.
  * @param command_line The kernel's command line, read for store_objects=N: how many objects it keeps open, 1 to
- *     MAX_OBJECTS, for tests. Without it, or the word, MAX_OBJECTS.
+ *     MAX_OBJECTS, and store_files=N: how many of their files, 1 to MAX_FILES, both for tests. Without it, or a word,
+ *     MAX_OBJECTS or MAX_FILES.
  * @return 99 without the memory for its state, 1 if its port couldn't be made or bound to its budget's pressure, 2 if
  *     a port for store couldn't be made, 3 if a second connection to store couldn't be made, 4 if that couldn't be
  *     opened as a directory, and 5 if clients couldn't be added as a client. It doesn't return otherwise.
@@ -144,12 +174,17 @@ main :: fn(
     service :: service_made
     service.block = slop_os.startup_block()
     service.limit = MAX_OBJECTS
+    service.file_limit = MAX_FILES
     match command_line {
         case Some(memory) => {
             text :: service_kit.text_of(service.block, memory) or_else ""
             wanted :: service_kit.number_of(service_kit.word_after(text, "store_objects=") or_else "") or_else 0
             if wanted > 0 && wanted < cast[u64](MAX_OBJECTS) {
                 service.limit = cast[usize](wanted)
+            }
+            files_wanted :: service_kit.number_of(service_kit.word_after(text, "store_files=") or_else "") or_else 0
+            if files_wanted > 0 && files_wanted < cast[u64](MAX_FILES) {
+                service.file_limit = cast[usize](files_wanted)
             }
         }
         case None => {}
@@ -351,11 +386,12 @@ read_copy :: fn(service : ptr[mut Store], hash : bundle.Hash) -> bundle_store.Ob
  * Give an object as paged memory, read-only, which this store supplies: the same memory each time it's asked for,
  * once it's open.
  *
- * The first time, the object's file is opened read-only through the store's directory, and its memory made, paged by
- * the store; no page is read until it's wanted. It stays open while the store runs.
+ * The first time, the object's file is opened read-only through the store's directory, for its size, and its memory
+ * made, paged by the store; no page is read until it's wanted. It stays open until it's closed to make room for
+ * another (unheld_slot); its file stays open only while it's among the MAX_FILES read from last (file_for).
  *
  * @param service The store's state: a used slot of its objects that holds hash is handed out again; otherwise the
- *     object's file is opened through raw and set up in the first free slot, which stays used while the store runs.
+ *     object's set up in the first free slot, or one closed to make room.
  * @param hash The object's BLAKE3-256 hash, any: it names the file objects/<hex>, and isn't checked against the file's
  *     bytes, which Put checked before it kept them. A hash with no such file gives null.
  * @return The object: a new handle to its memory, to read and execute, which the caller owns and passes on, and its
@@ -381,71 +417,41 @@ get :: fn(service : ptr[mut Store], hash : bundle.Hash) -> bundle_store.Object? 
     if slot >= service.objects.count {
         return null
     }
-    hex_storage : u8[64]
-    path_storage : u8[80]
-    path :: path_in("objects/", bundle.hex(hash, &hex_storage), &path_storage)
-    out := os.Outgoing.{}
-    request :: os.begin[dir.Request](&out)
-    request^ = .OpenReadOnlyFile(os.append(&out, string_bytes(path)))
-    into := os.Incoming.{}
-    file :: match ask_dir(service, &out, &into) {
-        case OpenedReadOnlyFile(connection) => connection.end
-        case _ => return null
-    }
-    open := Open.{used = true, hash = hash, file = file}
-    open.file_port = os.port_for(service.block.budget, file) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
-    if !set_up(service, &open, slot) {
-        close_open(service, &open)
+    service.objects[slot] = Open.{used = true, hash = hash}
+    if !set_up(service, slot) {
+        close_file_of(service, slot)
+        service.objects[slot] = Open.{}
         return null
     }
-    service.objects[slot] = open
     return hand_out(service, slot)
 }
 
 /**
- * Set up an object being opened: ask its file for its size, make and map the page its file reads into and give the
- * file server that page, and make its paged memory, its wanted pages waking the port under PAGER_KEY plus slot.
+ * Set up an object being opened: ask its file for its size, and make its paged memory, its wanted pages waking the port
+ * under PAGER_KEY plus slot.
  *
- * @param service The store's state: its budget pays for the page and the paged memory, its address space maps the page,
- *     and its port gets the pager's binding.
- * @param open The object being opened, with its file and file_port; what's made is put in it, for close_open to let
- *     go of when it fails.
- * @param slot The slot it's going in, which the binding's key is made from.
- * @return Whether all of it was made; false if file_port is NO_HANDLE, the file didn't answer Info or UseBuffer, or
- *     memory, addresses or the binding couldn't be had.
+ * @param service The store's state: its file is opened in files (file_for), its budget pays for the paged memory, and
+ *     its port gets the pager's binding.
+ * @param slot The object's slot, used, with its hash; its size and memory are set. When it fails, nothing's bound, no
+ *     memory's made, and the caller closes the file (close_file_of).
+ * @return Whether all of it was made; false if the file couldn't be opened, didn't answer Info, or the memory or the
+ *     binding couldn't be had.
  */
-set_up :: fn(service : ptr[mut Store], open : ptr[mut Open], slot : usize) -> bool {
-    if cast[slop_os.Handle](open.file_port) == slop_os.NO_HANDLE {
+set_up :: fn(service : ptr[mut Store], slot : usize) -> bool {
+    index :: file_for(service, slot) or_return false
+    if slot >= service.objects.count || index >= service.files.count {
         return false
     }
     asking := os.Outgoing.{}
     info_request :: os.begin[read_only_file.Request](&asking)
     info_request^ = .Info
     into := os.Incoming.{}
-    match ask_file(open, &asking, &into) {
+    open :: &service.objects[slot]
+    match ask_file(&service.files[index], &asking, &into) {
         case Described(info) => open.size = info.size
         case _ => return false
     }
     block :: service.block
-    open.buffer = slop_os.memory_create(block.budget, PAGE) or_return false
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    open.buffer_at = runtime.reserve_addresses(cast[usize](PAGE)) or_else 0
-    if open.buffer_at == 0
-        || (slop_os.memory_map(open.buffer, block.space, open.buffer_at, 0, PAGE, read_write) is_error) {
-        open.buffer_at = 0
-        return false
-    }
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
-        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
-        | cast[u32](slop_os.RIGHT_TRANSFER))
-    given :: slop_os.handle_duplicate(cast[slop_os.Handle](open.buffer), rights) or_return false
-    buffering := os.Outgoing.{}
-    buffer_request :: os.begin[read_only_file.Request](&buffering)
-    buffer_request^ = .UseBuffer(cast[slop_os.Memory](given))
-    match ask_file(open, &buffering, &into) {
-        case Done => {}
-        case _ => return false
-    }
     key :: PAGER_KEY + cast[u64](slot)
     slop_os.port_bind_wake(service.port, key) or_return false
     pages :: if open.size == 0 { PAGE } else { (open.size + PAGE - 1) & ~(PAGE - 1) }
@@ -511,8 +517,8 @@ unheld_slot :: fn(service : ptr[mut Store]) -> usize? {
 }
 
 /**
- * Close an open object no one holds, to make room: its paged memory destroyed, its pager's binding and its file let go
- * of, and its pages forgotten, both those supplied and those waiting to be read.
+ * Close an open object no one holds, to make room: its paged memory destroyed, its pager's binding and its file, if
+ * it's open, let go of, and its pages forgotten, both those supplied and those waiting to be read.
  *
  * @param service The store's state: the slot's no longer used, and its pages are taken off resident and unread, so
  *     the next object in the slot isn't given them.
@@ -525,7 +531,7 @@ close_slot :: fn(service : ptr[mut Store], slot : usize) {
     open :: &service.objects[slot]
     _ = slop_os.handle_close(cast[slop_os.Handle](open.memory))
     _ = slop_os.port_unbind(service.port, PAGER_KEY + cast[u64](slot))
-    close_open(service, open)
+    close_file_of(service, slot)
     open^ = Open.{}
     service.closed += 1
     for list in u8.[0, 1] {
@@ -551,25 +557,139 @@ close_slot :: fn(service : ptr[mut Store], slot : usize) {
 }
 
 /**
- * Let go of what an object that couldn't be opened holds: unmap its page, and close the page, its file and the file's
- * port, those that were made.
+ * Close a file of files, if it's open: its connection and port. Its page is kept, for the next file opened in its
+ * place.
  *
- * @param service The store's state, only read: open's page is unmapped from its address space.
- * @param open The object, not yet in a slot; its fields aren't cleared.
+ * @param entry The file; it isn't used afterwards. One that isn't used is left alone.
  */
-close_open :: fn(service : ptr[Store], open : ptr[mut Open]) {
-    if open.buffer_at != 0 {
-        _ = slop_os.memory_unmap(service.block.space, open.buffer_at)
+close_file :: fn(entry : ptr[mut FileOpen]) {
+    if !entry.used {
+        return void
     }
-    for each in slop_os.Handle.[
-        cast[slop_os.Handle](open.buffer),
-        cast[slop_os.Handle](open.file),
-        cast[slop_os.Handle](open.file_port)
-    ] {
+    for each in slop_os.Handle.[cast[slop_os.Handle](entry.file), cast[slop_os.Handle](entry.file_port)] {
         if each != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(each)
         }
     }
+    entry.used = false
+    entry.file = cast[slop_os.Channel](slop_os.NO_HANDLE)
+    entry.file_port = cast[slop_os.Port](slop_os.NO_HANDLE)
+}
+
+/**
+ * Close an object's file, if it's open in files.
+ *
+ * @param service The store's state, whose files are searched.
+ * @param slot The object's slot in service.objects; one with no file open closes nothing.
+ */
+close_file_of :: fn(service : ptr[mut Store], slot : usize) {
+    for i in cast[usize](0)..<MAX_FILES {
+        if service.files[i].used && service.files[i].slot == slot {
+            close_file(&service.files[i])
+        }
+    }
+}
+
+/**
+ * Find an open object's file open in files, opening it through the store's directory if it isn't: in a free entry,
+ * or in place of the one read from longest ago, which is closed (MAX_FILES). Either way, it's marked read now.
+ *
+ * @param service The store's state: its reads counts the asking, and the entry's read_at is set from it; a file is
+ *     opened through raw, its budget paying for the port, and its entry's page made the first time.
+ * @param slot The object's slot, used, whose hash names its file objects/<hex>.
+ * @return The entry's index in service.files, its file open and given its page to read into; null if the directory
+ *     didn't open it, as while it's gone or when there's no such object, or a port, the page or its handle couldn't be
+ *     had, the entry left closed.
+ */
+file_for :: fn(service : ptr[mut Store], slot : usize) -> usize? {
+    if slot >= service.objects.count {
+        return null
+    }
+    service.reads += 1
+    chosen := NOWHERE
+    oldest := ~cast[u64](0)
+    for i in cast[usize](0)..<service.files.count {
+        if i >= service.file_limit {
+            break
+        }
+        entry :: &service.files[i]
+        if entry.used && entry.slot == slot {
+            entry.read_at = service.reads
+            return i
+        }
+        // A free entry's taken before any open one
+        at :: if entry.used { entry.read_at } else { cast[u64](0) }
+        if chosen == NOWHERE || at < oldest {
+            chosen = i
+            oldest = at
+        }
+    }
+    if chosen >= service.files.count {
+        return null
+    }
+    entry :: &service.files[chosen]
+    close_file(entry)
+    if entry.buffer_at == 0 && !make_page(service, entry) {
+        return null
+    }
+    hex_storage : u8[64]
+    path_storage : u8[80]
+    path :: path_in("objects/", bundle.hex(service.objects[slot].hash, &hex_storage), &path_storage)
+    out := os.Outgoing.{}
+    request :: os.begin[dir.Request](&out)
+    request^ = .OpenReadOnlyFile(os.append(&out, string_bytes(path)))
+    into := os.Incoming.{}
+    match ask_dir(service, &out, &into) {
+        case OpenedReadOnlyFile(connection) => entry.file = connection.end
+        case _ => return null
+    }
+    entry.used = true
+    entry.slot = slot
+    entry.read_at = service.reads
+    entry.file_port = os.port_for(service.block.budget, entry.file) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
+    given :: slop_os.handle_duplicate(cast[slop_os.Handle](entry.buffer), rights) or_else slop_os.NO_HANDLE
+    if cast[slop_os.Handle](entry.file_port) == slop_os.NO_HANDLE || given == slop_os.NO_HANDLE {
+        if given != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(given)
+        }
+        close_file(entry)
+        return null
+    }
+    buffering := os.Outgoing.{}
+    buffer_request :: os.begin[read_only_file.Request](&buffering)
+    buffer_request^ = .UseBuffer(cast[slop_os.Memory](given))
+    match ask_file(entry, &buffering, &into) {
+        case Done => {}
+        case _ => {
+            close_file(entry)
+            return null
+        }
+    }
+    return chosen
+}
+
+/**
+ * Make a file's page, which the file server reads into and pages are supplied from, and map it.
+ *
+ * @param service The store's state, only read: its budget pays for the page, and its address space maps it.
+ * @param entry The file whose buffer and buffer_at are set; buffer_at stays 0 if it fails, with nothing kept.
+ * @return Whether the page was made and mapped; false if the memory or the addresses couldn't be had.
+ */
+make_page :: fn(service : ptr[Store], entry : ptr[mut FileOpen]) -> bool {
+    block :: service.block
+    buffer :: slop_os.memory_create(block.budget, PAGE) or_return false
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    at :: runtime.reserve_addresses(cast[usize](PAGE)) or_else 0
+    if at == 0 || (slop_os.memory_map(buffer, block.space, at, 0, PAGE, read_write) is_error) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](buffer))
+        return false
+    }
+    entry.buffer = buffer
+    entry.buffer_at = at
+    return true
 }
 
 /**
@@ -599,6 +719,10 @@ use_directory :: fn(service : ptr[mut Store], end : slop_os.Channel) -> bool {
     service.raw = end
     service.raw_port = port
     service.directory = directory
+    // Its files were on the server before, and are opened through the new directory as they're next read
+    for i in cast[usize](0)..<MAX_FILES {
+        close_file(&service.files[i])
+    }
     runtime.log_info("using its directory again")
     // The pages that couldn't be read meanwhile, read now
     waiting : Unread[..]
@@ -617,46 +741,6 @@ use_directory :: fn(service : ptr[mut Store], end : slop_os.Channel) -> bool {
         }
     }
     return true
-}
-
-/**
- * Open an open object's file again, through the store's directory, after its connection went with the server it was
- * on, and give the file server its page to read into again.
- *
- * @param service The store's state, only read: the file is opened through raw, and its budget pays for the new port.
- * @param open The object, whose file and file_port are closed and replaced.
- * @return Whether it was opened and given its page; false if the directory didn't open it, as while it's gone, or a
- *     port or the page's handle couldn't be had.
- */
-reopen :: fn(service : ptr[mut Store], open : ptr[mut Open]) -> bool {
-    for each in slop_os.Handle.[cast[slop_os.Handle](open.file), cast[slop_os.Handle](open.file_port)] {
-        if each != slop_os.NO_HANDLE {
-            _ = slop_os.handle_close(each)
-        }
-    }
-    hex_storage : u8[64]
-    path_storage : u8[80]
-    path :: path_in("objects/", bundle.hex(open.hash, &hex_storage), &path_storage)
-    out := os.Outgoing.{}
-    request :: os.begin[dir.Request](&out)
-    request^ = .OpenReadOnlyFile(os.append(&out, string_bytes(path)))
-    into := os.Incoming.{}
-    match ask_dir(service, &out, &into) {
-        case OpenedReadOnlyFile(connection) => open.file = connection.end
-        case _ => return false
-    }
-    open.file_port = os.port_for(service.block.budget, open.file) or_return false
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
-        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
-        | cast[u32](slop_os.RIGHT_TRANSFER))
-    given :: slop_os.handle_duplicate(cast[slop_os.Handle](open.buffer), rights) or_return false
-    buffering := os.Outgoing.{}
-    buffer_request :: os.begin[read_only_file.Request](&buffering)
-    buffer_request^ = .UseBuffer(cast[slop_os.Memory](given))
-    return match ask_file(open, &buffering, &into) {
-        case Done => true
-        case _ => false
-    }
 }
 
 /**
@@ -686,14 +770,15 @@ supply_wanted :: fn(service : ptr[mut Store], slot : usize) {
 }
 
 /**
- * Read a page of an open object from its file and supply it, its file opened again if its connection went with the
- * server it was on.
+ * Read a page of an open object from its file and supply it, its file opened if it isn't (file_for), and opened again
+ * if its connection fails, as when it went with the server it was on.
  *
  * Past the object's end, the page is zeros. If the budget refuses the supply, a page is given back first and it's
  * supplied again. A page supplied is added to resident, for the clock; one the kernel still refuses isn't supplied,
  * and is asked for again by the next fault on it.
  *
- * @param service The store's state: the slot's file may be opened again, the page is added to resident once supplied,
+ * @param service The store's state: the slot's file may be opened, in place of another, the page is added to resident
+ *     once supplied,
  *     and a page is evicted first when its budget refuses the supply.
  * @param slot The object's slot in service.objects; one past MAX_OBJECTS, or one not used, supplies nothing and gives
  *     true.
@@ -711,36 +796,42 @@ supply_page :: fn(service : ptr[mut Store], slot : usize, offset : u64) -> bool 
     request^ = .Read(files.Transfer.{offset = offset, count = cast[u32](PAGE), buffer_offset = 0})
     into := os.Incoming.{}
     read : u64 = 0
-    transferred := false
-    match ask_file(open, &reading, &into) {
-        case Transferred(count) => {
-            read = cast[u64](count)
-            transferred = true
+    // Read from its file, opened if it isn't; one open that fails, as when its server's gone, is opened again once
+    entry := NOWHERE
+    tries := 0
+    loop {
+        if tries == 2 {
+            break
         }
-        case _ => {}
-    }
-    if !transferred && reopen(service, open) {
-        match ask_file(open, &reading, &into) {
+        tries += 1
+        index :: file_for(service, slot) or_break
+        if index >= service.files.count {
+            break
+        }
+        match ask_file(&service.files[index], &reading, &into) {
             case Transferred(count) => {
                 read = cast[u64](count)
-                transferred = true
+                entry = index
+                break
             }
-            case _ => {}
+            case _ => close_file(&service.files[index])
         }
     }
-    if !transferred {
+    if entry >= service.files.count {
         return false
     }
+    buffer :: service.files[entry].buffer
+    buffer_at :: service.files[entry].buffer_at
     // Past the object's end, zeros
     for i in read..<PAGE {
-        intrinsics.volatile_store_u8(cast[ptr[mut u8]](open.buffer_at + i), 0)
+        intrinsics.volatile_store_u8(cast[ptr[mut u8]](buffer_at + i), 0)
     }
-    supplied := slop_os.memory_supply(open.memory, offset, open.buffer, 0)
+    supplied := slop_os.memory_supply(open.memory, offset, buffer, 0)
     // Its budget full: pages given back first, then supplied again
     match supplied {
         case Error(error) => if error == .BudgetExceeded {
             evict(service, 1)
-            supplied = slop_os.memory_supply(open.memory, offset, open.buffer, 0)
+            supplied = slop_os.memory_supply(open.memory, offset, buffer, 0)
         }
         case Ok => {}
     }
@@ -1222,21 +1313,25 @@ ask_dir :: fn(service : ptr[Store], out : ptr[mut os.Outgoing], into : ptr[mut o
 }
 
 /**
- * Send a request on an open object's file's connection, and wait for the answer.
+ * Send a request on an object's file's connection, and wait for the answer.
  *
- * @param open The used slot whose file connection and port the request goes on; neither is changed, nor reopened if
- *     it's failed.
+ * @param entry The open file whose connection and port the request goes on; neither is changed, nor closed if it's
+ *     failed.
  * @param out The request; its handles are moved out when it's sent.
  * @param into Where the answer is read into.
  * @return The answer, a view into into; Unsupported if it couldn't be sent or the connection failed, as when the
  *     server it was on has gone.
  */
-ask_file :: fn(open : ptr[Open], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> read_only_file.Response {
-    if read_only_file.send_request(open.file, open.file_port, out) is_some {
+ask_file :: fn(
+    entry : ptr[FileOpen],
+    out : ptr[mut os.Outgoing],
+    into : ptr[mut os.Incoming]
+) -> read_only_file.Response {
+    if read_only_file.send_request(entry.file, entry.file_port, out) is_some {
         return .Unsupported
     }
     loop {
-        match read_only_file.receive_response(open.file, open.file_port, into, true) {
+        match read_only_file.receive_response(entry.file, entry.file_port, into, true) {
             case Received => break
             case Failed(error) => return .Unsupported
             case _ => return .Unsupported

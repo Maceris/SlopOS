@@ -1083,9 +1083,10 @@ TESTS = [
         "--expect-console-line=[2] started", "--expect-console-line=[2] stopped", "--expect-console-line=no jobs"])),
     # The bundle store's objects (decisions/0178): kept to 16 open, it's asked for more programs than that, one after
     # another, help taking each's executable and letting it go; it closes those no one holds to make room, and every
-    # one is still found
+    # one is still found. With only 2 of their files open at once, every program the system runs has its pages read
+    # through files opened and closed again in turn, as one held costs no connection to the volume server
     ("closes objects no one holds to make room for others in the bundle store", 7,
-     with_before_qemu([argument.replace("test_services", "test_services store_objects=16 test_settle=60").replace("--timeout=120", "--timeout=180")
+     with_before_qemu([argument.replace("test_services", "test_services store_objects=16 store_files=2 test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\w" + "".join(f"help {name}\\r\\p" for name in [

@@ -46,7 +46,7 @@ import volume as volume_protocol from "../../protocols/volume"
 import slopfs from "../../slopfs"
 
 /** The most connections at once, of every kind; one past them is closed at once, and an open answered NoSpace. */
-MAX_CONNECTIONS :: 64
+MAX_CONNECTIONS :: 256
 /** The rights the server keeps of a loan, for what's opened through its connection too. */
 LOAN_RIGHTS :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_CPU_BUDGET_BIND) | cast[u32](slop_os.RIGHT_DUPLICATE))
 /** The most bytes of a client's buffer, or a transaction's log, mapped here; a bigger one is refused. */
