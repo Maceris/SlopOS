@@ -2,6 +2,7 @@ package programs
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import dir from "std:os/slop_os/dir"
 import powerbox from "../powerbox"
 
 /*
@@ -18,6 +19,10 @@ import powerbox from "../powerbox"
  * Connect makes another connection to the same session that only finds programs (Find, List, Describe, and Connect
  * again), as a script's shell is given (decisions/0179, 11e6): a script runs programs, but doesn't see or change its
  * session's.
+ *
+ * In a GUI session, the launcher's is the session's own connection, and it asks the session manager to start the
+ * session's programs (Start, decisions/0192, 15g), so every program the user starts is one of the
+ * session's, as the console shell's first program is.
  */
 
 /**
@@ -138,7 +143,36 @@ Request :: union {
      * Answered with Manifest, or Missing, as for Find.
      */
     ManifestOf(slop_os.Relative[u8]),
+    /**
+     * The session's own connection's only, in a GUI session (decisions/0192, 15g): start a GUI program in the session,
+     * as one of its programs, with its log ring, lifecycle channel, locale and CPU budget, a connection of its own to
+     * the compositor, the home given and a finding connection. The terminal window is started with a shell, another of
+     * the session's programs, given the home, the window's terminal, a programs connection to the session that can't
+     * start programs, and open as a command line to run alone. Answered with Done once it's started; Missing for a
+     * name the boot root hasn't, a program that isn't a GUI program, or the launcher; Refused(NotAllowed) from a
+     * finding connection or in a session that isn't a GUI session; Refused(Failed) when it couldn't start.
+     */
+    Start(Starting),
 }
+
+/** A GUI program to start, as Start asks for it. */
+Starting :: struct {
+    /** The program's name, 1 to MAX_NAME bytes of UTF-8. */
+    name : slop_os.Relative[u8],
+    /**
+     * A connection to the session's home, which moves to the program, or the terminal window's shell; closed if it
+     * isn't started.
+     */
+    home : os.Channel[dir.Dir],
+    /**
+     * What it's to open (src/gui_programs' open), up to MAX_OPEN bytes of UTF-8: for the viewer, a file's path beneath
+     * home; for the terminal window, a command line its shell runs alone. Empty for nothing.
+     */
+    open : slop_os.Relative[u8],
+}
+
+/** The most bytes of Start's open. */
+MAX_OPEN :: 1024
 
 /** A program's entry's schema hash, as EntryOf answers it. */
 EntryHash :: struct {
@@ -316,6 +350,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Install(_) => false
         case Uninstall(_) => false
         case Powerbox(_) => false
+        case Start(_) => false
         case _ => true
     }
 }

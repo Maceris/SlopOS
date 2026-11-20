@@ -16,7 +16,9 @@
  * session's first, to stop, one at a time, until it's back under RELIEVED_PERCENT; a session's first program is never
  * asked. A session with a user has a powerbox (decisions/0156), started before echo with a connection to the session's
  * home and the trusted path's prompt connection; each program it starts after is given a connection of its own to it,
- * served under the program's name.
+ * served under the program's name. A GUI session's first program is the launcher (decisions/0192), which asks it on
+ * the session's programs connection to start the session's GUI programs, and terminal windows with their shells, as
+ * the session's programs too (programs' Start).
  */
 package session_manager
 
@@ -71,14 +73,20 @@ PROGRAMS_KEY : u64 : 800
 FINDER_KEY : u64 : 850
 /** The most installations remembered as stopped under memory pressure, to start again when their session's shown. */
 MAX_PRESSED :: 16
-/** The most finding connections, scripts' shells', open at once, across the sessions. */
-MAX_FINDERS :: 8
+/**
+ * The most finding connections open at once, across the sessions: scripts' shells', GUI programs' and GUI sessions'
+ * shells'.
+ */
+MAX_FINDERS :: 32
 /** The percentage of its budget's limit at which the session manager's under memory pressure. */
 PRESSURE_PERCENT : u64 : 80
 /** The percentage of its budget's limit it stops idle installations until it's under. */
 RELIEVED_PERCENT : u64 : 70
-/** The most programs of every session at once, first programs, powerboxes and installations together. */
-MAX_PROGRAMS :: 16
+/**
+ * The most programs of every session at once: first programs, powerboxes, installations, and GUI sessions' programs
+ * together.
+ */
+MAX_PROGRAMS :: 48
 /** The most sessions at once (decisions/0151). */
 MAX_SESSIONS :: 4
 /** echo's memory budget, in bytes. */
@@ -278,6 +286,8 @@ Session :: struct {
     /** Whether its first program has ended, and how: its exit code, or EXIT_KILLED. */
     first_ended : bool,
     exit_code : u64,
+    /** Whether it's a GUI session, whose launcher may start its programs (programs' Start, decisions/0192, 15g). */
+    gui : bool,
     /** The client waiting for its first program's end (Wait), its end the client's; NONE for none. */
     waiter : slop_os.Channel,
 }
@@ -308,6 +318,8 @@ Program :: struct {
     running : bool,
     /** Whether it's one of the system's installations, not the session's first program. */
     installation : bool,
+    /** Whether it's the session's first program, whose end Wait answers: its shell, echo, launcher or sftp_server. */
+    first : bool,
     /** Its faults' intercept and address space, the session manager's, closed once it's ended; null without them. */
     faults : os.LaunchedFaults?,
     /** Where its image is in its address space, for its crash reports. */
@@ -366,6 +378,11 @@ Finder :: struct {
     end : slop_os.Channel,
     /** Whether it's the session's powerbox's, the only connection Attach is taken on (decisions/0185). */
     powerbox : bool,
+    /**
+     * Whether it's a GUI session's shell's, which answers what the session's own connection does of its session
+     * (own_session_answer), but doesn't start programs.
+     */
+    shell : bool,
 }
 
 /** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
@@ -698,13 +715,11 @@ ended_in :: fn(sessions : ptr[mut Manager], packets : slop_os.Packet[], taken : 
  * Note a session's first program's end, and answer the client waiting for it (Wait), if there is one.
  *
  * @param sessions The session manager.
- * @param program The program that ended; one that's the session's powerbox or an installation isn't its first.
+ * @param program The program that ended; one that isn't its session's first is left.
  * @param code How it ended: its exit code, or EXIT_KILLED.
  */
 first_ended :: fn(sessions : ptr[mut Manager], program : ptr[Program], code : u64) {
-    if program.installation
-        || is_named(program, "powerbox")
-        || cast[usize](program.session) >= sessions.sessions.count {
+    if !program.first || cast[usize](program.session) >= sessions.sessions.count {
         return void
     }
     made :: &sessions.sessions[cast[usize](program.session)]
@@ -716,20 +731,6 @@ first_ended :: fn(sessions : ptr[mut Manager], program : ptr[Program], code : u6
         _ = session.send_response(made.waiter, sessions.port, &out)
         made.waiter = NONE
     }
-}
-
-/** Whether a program's name is the one given. */
-is_named :: fn(program : ptr[Program], name : string) -> bool {
-    given :: string_bytes(name)
-    if cast[usize](program.name_bytes) != given.count {
-        return false
-    }
-    for byte, i in given {
-        if i < program.name.count && program.name[i] != byte {
-            return false
-        }
-    }
-    return true
 }
 
 /**
@@ -930,78 +931,233 @@ start_gui :: fn(
     if number >= sessions.sessions.count {
         return .Refused
     }
-    if !launch_launcher(sessions, cast[u32](number), home) {
-        close_session(sessions, cast[u32](number))
-        return .Refused
+    sessions.sessions[number].gui = true
+    started_launcher :: launch_gui(sessions, cast[u32](number), "launcher", home, u8.[], null, LAUNCHER_BUDGET, true)
+    match started_launcher {
+        case Done => {}
+        case _ => {
+            runtime.log_info("the launcher didn't start")
+            close_session(sessions, cast[u32](number))
+            return .Refused
+        }
     }
     return started(sessions, number, user)
 }
 
-/** The launcher's memory: its own, and that of each program it starts, split off it, a terminal window's 24 MiB. */
-LAUNCHER_BUDGET : u64 : 32 * 1024 * 1024
+/** The launcher's memory, its own: the programs it starts are the session's (programs' Start). */
+LAUNCHER_BUDGET : u64 : 16 * 1024 * 1024
+/** A GUI program's memory, as the launcher starts it: its windows' state, its fonts and what it shows. */
+GUI_PROGRAM_BUDGET : u64 : 16 * 1024 * 1024
 
 /**
- * Start the launcher, from the bundle store, as a GUI session's first program: a connection dialed through the
- * session's connector to the compositor, its own to the process manager, its programs connection, and the session's
- * home, which it gives each program it starts a connection of its own to.
+ * Start a GUI program, from the bundle store, as one of a GUI session's programs (decisions/0192, 15g): with what
+ * prepare gives each, a connection dialed through the session manager's connector to the compositor, a copy of its
+ * debug log, a programs connection, and what's given.
  *
- * @param home The root of the user's home volume, which moves to the launcher; closed if it isn't launched.
- * @return Whether it started; not without the launcher in the bundle store, a compositor to dial, or room.
+ * @param sessions The session manager, which launches through its process manager connection and keeps the
+ *     program in its programs.
+ * @param number The session's number.
+ * @param name The program's name in the bundle store's boot root, whose manifest has to be a GUI program's entry.
+ * @param home A connection to the session's home, which moves to the program; closed if it isn't started. Null for
+ *     none.
+ * @param open What it's to open (GuiGrants' open), only read; empty for nothing.
+ * @param serving The terminal it serves (GuiGrants' terminal), which moves to it; closed if it isn't started. Null for
+ *     none.
+ * @param budget Its memory, split off the session manager's.
+ * @param first Whether it's the session's first program, the launcher, given the session's own programs connection,
+ *     which starts programs; the rest are given finding connections.
+ * @return Done once it's started; Missing without a GUI program of that name in the bundle store; Refused(Failed)
+ *     without a compositor, without room for another program, or if its connection or launch failed.
  */
-launch_launcher :: fn(sessions : ptr[mut Manager], number : u32, home : os.Channel[dir.Dir]) -> bool {
-    // Closed unless it's given; once it's in the grants, the launch takes it
+launch_gui :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    name : string,
+    home : os.Channel[dir.Dir]?,
+    open : u8[],
+    serving : os.Channel[terminal.Terminal]?,
+    budget : u64,
+    first : bool
+) -> programs.Response {
+    grants := gui_programs.GuiGrants.{home = home, terminal = serving}
+    // What it's given is closed unless the launch took it
     given := false
     defer {
         if !given {
-            _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+            close_gui_grants(grants)
         }
     }
     if cast[usize](number) >= sessions.sessions.count {
-        return false
+        return .Refused(.Failed)
     }
     expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(gui_programs.shape)))}
-    program := cast[slop_os.Memory](slop_os.NO_HANDLE)
-    match bundle_named(sessions, "launcher") {
-        case Some(
-            found
-        ) => program = program_of(sessions, found, expected) or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+    found :: bundle_named(sessions, name) or_return .Missing
+    program :: program_of(sessions, found, expected) or_return .Missing
+    // Its executable stays the session manager's once it's launched
+    defer slop_os.handle_close(cast[slop_os.Handle](program))
+    dialer :: sessions.compositor
+    if dialer == NONE {
+        return .Refused(.Failed)
+    }
+    port :: os.port_for(slop_os.startup_block().budget, dialer) or_return .Refused(.Failed)
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    grants.surface = connector.dial[surface.Surface](dialer, port) or_return .Refused(.Failed)
+    prepared :: prepare(sessions, number, name) or_return .Refused(.Failed)
+    grants.log = duplicate_log(sessions.log)
+    grants.programs = if first { programs_connection(sessions, number) } else { finding_connection(sessions, number) }
+    if open.count > 0 {
+        // A view of the caller's bytes: the launch copies values to the program's arguments
+        grants.open = string_of(&open[0], open.count)
+    }
+    launched :: os.launch(
+        sessions.manager,
+        sessions.manager_port,
+        name,
+        program,
+        budget,
+        type_of(gui_programs.shape),
+        grants,
+        prepared.options
+    )
+    given = launched is_ok
+    return if placed(sessions, number, name, prepared, launched, false, first = first) {
+        programs.Response.Done
+    }
+    else {
+        programs.Response.Refused(.Failed)
+    }
+}
+
+/** Close the handles of a GUI program's grants that its launch didn't take. */
+close_gui_grants :: fn(grants : gui_programs.GuiGrants) {
+    match grants.log {
+        case Some(log) => _ = slop_os.handle_close(cast[slop_os.Handle](log))
         case None => {}
     }
-    if cast[slop_os.Handle](program) == slop_os.NO_HANDLE {
-        runtime.log_info("no launcher in the bundle store")
-        return false
+    match grants.surface {
+        case Some(end) => _ = slop_os.handle_close(cast[slop_os.Handle](end.end))
+        case None => {}
     }
-    dialer :: sessions.compositor
-    port :: os.port_for(slop_os.startup_block().budget, dialer) or_return false
-    defer slop_os.handle_close(cast[slop_os.Handle](port))
-    window :: connector.dial[surface.Surface](dialer, port) or_return false
-    prepared :: prepare(sessions, number, "launcher") or_return false
-    grants := gui_programs.GuiGrants.{log = duplicate_log(sessions.log), surface = window}
-    grants.manager = process_manager.connect(
-        sessions.manager.end,
-        sessions.manager_port,
-        slop_os.startup_block().budget
-    )
-    grants.programs = programs_connection(sessions, number)
-    grants.home = home
-    given = true
-    return placed(
+    match grants.home {
+        case Some(end) => _ = slop_os.handle_close(cast[slop_os.Handle](end.end))
+        case None => {}
+    }
+    match grants.programs {
+        case Some(end) => _ = slop_os.handle_close(cast[slop_os.Handle](end.end))
+        case None => {}
+    }
+    match grants.terminal {
+        case Some(end) => _ = slop_os.handle_close(cast[slop_os.Handle](end.end))
+        case None => {}
+    }
+}
+
+/**
+ * Start a program the launcher asks for (programs' Start) in its GUI session: a GUI program, or, for the terminal
+ * window, a terminal window and its shell (start_terminal).
+ *
+ * @param sessions The session manager.
+ * @param number The session's number.
+ * @param starting What's asked, whose home moves here.
+ * @param into The request, which starting's bytes are read from.
+ * @return As launch_gui's; Refused(NotAllowed) in a session that isn't a GUI session, Missing for a name empty or past
+ *     MAX_NAME, or for the launcher, and Refused(Failed) for open past MAX_OPEN. The home's closed unless it's given.
+ */
+start_program :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    starting : programs.Starting,
+    into : ptr[os.Incoming]
+) -> programs.Response {
+    name :: os.items(into, starting.name)
+    open :: os.items(into, starting.open)
+    refused :: if !is_gui_session(sessions, number) {
+        programs.Response.Refused(.NotAllowed)
+    }
+    else if name.count == 0 || name.count > programs.MAX_NAME || same_bytes(name, string_bytes("launcher")) {
+        programs.Response.Missing
+    }
+    else if open.count > programs.MAX_OPEN { programs.Response.Refused(.Failed) } else { programs.Response.Done }
+    match refused {
+        case Done => {}
+        case _ => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](starting.home.end))
+            return refused
+        }
+    }
+    if same_bytes(name, string_bytes("terminal_window")) {
+        return start_terminal(sessions, number, starting.home, open)
+    }
+    return launch_gui(
         sessions,
         number,
-        "launcher",
-        prepared,
-        os.launch(
-            sessions.manager,
-            sessions.manager_port,
-            "launcher",
-            program,
-            LAUNCHER_BUDGET,
-            type_of(gui_programs.shape),
-            grants,
-            prepared.options
-        ),
+        if name.count > 0 { string_of(&name[0], name.count) } else { "" },
+        starting.home,
+        open,
+        null,
+        GUI_PROGRAM_BUDGET,
         false
     )
+}
+
+/**
+ * Start a terminal window and its shell in a GUI session (programs' Start of the terminal window), both the session's
+ * programs: the window serving a terminal channel's one end, the shell given the other, with a programs connection
+ * that doesn't start programs (shell_connection).
+ *
+ * @param sessions The session manager.
+ * @param number The session's number, a GUI session's.
+ * @param home A connection to the session's home, which moves to the shell; closed if it isn't started.
+ * @param command A command line for the shell to run alone, only read; empty for one that reads lines.
+ * @return Done once both have started; as launch_gui's when the window doesn't; Refused(Failed) when the shell
+ *     doesn't, the window then ending as its terminal's closed.
+ */
+start_terminal :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    home : os.Channel[dir.Dir],
+    command : u8[]
+) -> programs.Response {
+    pair :: match os.channel_for[terminal.Terminal](slop_os.startup_block().budget, terminal.RING_BYTES) {
+        case Ok(made) => made
+        case Error(_) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+            return .Refused(.Failed)
+        }
+    }
+    window :: launch_gui(
+        sessions,
+        number,
+        "terminal_window",
+        null,
+        // Its command line too, so it knows to stay once its shell's ended
+        command,
+        os.Channel[terminal.Terminal].{end = pair.a},
+        GUI_PROGRAM_BUDGET,
+        false
+    )
+    match window {
+        case Done => {}
+        case _ => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+            return window
+        }
+    }
+    if !launch_shell(sessions, number, os.Channel[terminal.Terminal].{end = pair.b}, home, command, false) {
+        // Both are still this one's when it didn't start; the window ends once its terminal's closed
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+        return .Refused(.Failed)
+    }
+    return .Done
+}
+
+/** Whether a session's a GUI session now, one whose launcher may start its programs. */
+is_gui_session :: fn(sessions : ptr[Manager], number : u32) -> bool {
+    return cast[usize](number) < sessions.sessions.count
+        && sessions.sessions[cast[usize](number)].in_use
+        && sessions.sessions[cast[usize](number)].gui
 }
 
 /** A session started: its installations started too, and the test of them noted; Started with its number. */
@@ -1195,7 +1351,8 @@ start_sftp :: fn(
             SftpGrants.{home = home, stream = stream},
             prepared.options
         ),
-        false
+        false,
+        first = true
     ) {
         close_session(sessions, cast[u32](number))
         return .Refused
@@ -1365,7 +1522,7 @@ launch_first :: fn(
     command : u8[]
 ) -> bool {
     // The terminal stays the caller's when the shell doesn't start, so echo can have it
-    if !sessions.use_echo && launch_shell(sessions, number, given_terminal, home, command) {
+    if !sessions.use_echo && launch_shell(sessions, number, given_terminal, home, command, true) {
         return true
     }
     module :: sessions.echo_module or_return false
@@ -1394,12 +1551,14 @@ launch_first :: fn(
             },
             prepared.options
         ),
-        false
+        false,
+        first = true
     )
 }
 
 /**
- * Start the shell, from the bundle store, as the session's first program in echo's place.
+ * Start the shell, from the bundle store: as the session's first program in echo's place, or, in a GUI session, in a
+ * terminal window (programs' Start).
  *
  * The bundle store's boot root's "shell" has to be a bundle whose manifest is shell.main's entry.
  *
@@ -1407,8 +1566,11 @@ launch_first :: fn(
  *     manager connection, and keeps the program in its programs.
  * @param number The session's number, below MAX_SESSIONS; the shell's placed under it, and its programs
  *     connection made for it.
- * @param given_terminal The session's terminal connection, given to the shell.
+ * @param given_terminal Its terminal connection, given to the shell: the session's, or a terminal window's.
  * @param home The session's home volume's root, given to the shell; null for none.
+ * @param command A command line for it to run alone, only read; empty for one that reads lines.
+ * @param first Whether it's the session's first program, given the session's own programs connection; a GUI
+ *     session's shell is given one that doesn't start programs (shell_connection).
  * @return Whether it started; not without a shell in the bundle store, without room for another program, or if the
  *     launch failed.
  */
@@ -1417,7 +1579,8 @@ launch_shell :: fn(
     number : u32,
     given_terminal : os.Channel[terminal.Terminal],
     home : os.Channel[dir.Dir]?,
-    command : u8[]
+    command : u8[],
+    first : bool
 ) -> bool {
     expected :: bundle.Hash.{bytes = schema.hash(type_info_of(type_of(shell.main)))}
     program := cast[slop_os.Memory](slop_os.NO_HANDLE)
@@ -1431,20 +1594,13 @@ launch_shell :: fn(
         runtime.log_info("no shell in the bundle store")
         return false
     }
+    // Its executable stays the session manager's once it's launched
+    defer slop_os.handle_close(cast[slop_os.Handle](program))
     prepared :: prepare(sessions, number, "shell") or_return false
     grants := ShellGrants.{log = duplicate_log(sessions.log), session_terminal = given_terminal, home = home}
     if command.count > 0 {
-        // Kept for as long as the session manager runs: the shell's grant is a view of it
-        copy, error :: runtime.new_array(u8, command.count)
-        if error != null {
-            return false
-        }
-        for byte, i in command {
-            if i < copy.count {
-                copy[i] = byte
-            }
-        }
-        grants.command = if copy.count > 0 { string_of(&copy[0], copy.count) } else { "" }
+        // A view of the caller's bytes: the launch copies values to the shell's arguments
+        grants.command = string_of(&command[0], command.count)
     }
     if cast[usize](number) < sessions.sessions.count {
         grants.cpu_budget = budget_copy(sessions.sessions[cast[usize](number)].cpu_budget, true)
@@ -1455,7 +1611,8 @@ launch_shell :: fn(
         sessions.manager_port,
         slop_os.startup_block().budget
     )
-    grants.programs = programs_connection(sessions, number)
+    // The session's own connection for its first shell; a GUI session's shells' can't start programs
+    grants.programs = if first { programs_connection(sessions, number) } else { shell_connection(sessions, number) }
     // The session's network: public addresses, any port, no listening (decisions/0188)
     grants.network = session_network(sessions, true)
     if cast[usize](number) < sessions.sessions.count && sessions.sessions[cast[usize](number)].apps != NONE {
@@ -1479,8 +1636,43 @@ launch_shell :: fn(
             grants,
             prepared.options
         ),
-        false
+        false,
+        first = first
     )
+}
+
+/**
+ * Make a programs connection for a GUI session's shell, one a terminal window shows (start_terminal): a finding
+ * connection that answers what the session's own does of the session (Finder's shell), but doesn't start programs.
+ *
+ * @param sessions The session manager, whose finders take its end.
+ * @param number The session's number.
+ * @return The shell's end, the caller's to give it; null if it couldn't be made, or there's no room among the finders.
+ */
+shell_connection :: fn(sessions : ptr[mut Manager], number : u32) -> os.Channel[programs.Programs]? {
+    pair :: os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) or_return null
+    if !add_finder(sessions, number, pair.a, shell = true) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
+    }
+    return os.Channel[programs.Programs].{end = pair.b}
+}
+
+/**
+ * Make a finding connection for a GUI program: Find, List, Describe and the rest that only find programs, as a
+ * script's shell's (programs.Request.Connect).
+ *
+ * @param sessions The session manager, whose finders take its end.
+ * @param number The session's number.
+ * @return The program's end, the caller's to give it; null if it couldn't be made, or there's no room.
+ */
+finding_connection :: fn(sessions : ptr[mut Manager], number : u32) -> os.Channel[programs.Programs]? {
+    pair :: os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) or_return null
+    if !add_finder(sessions, number, pair.a) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return null
+    }
+    return os.Channel[programs.Programs].{end = pair.b}
 }
 
 /**
@@ -1557,9 +1749,10 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
-                    add_finder(sessions, cast[u32](number), connection.end)
+                    _ = add_finder(sessions, cast[u32](number), connection.end)
                     continue
                 }
+                case Start(starting) => response^ = start_program(sessions, cast[u32](number), starting, into)
                 // Its own session's (users_installations.hsc)
                 case _ => response^ = own_session_answer(
                     sessions,
@@ -1802,7 +1995,7 @@ launch_powerbox :: fn(
     match os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) {
         case Ok(ends) => {
             grants.programs = os.Channel[programs.Programs].{end = ends.a}
-            add_finder(sessions, number, ends.b, true)
+            _ = add_finder(sessions, number, ends.b, true)
         }
         case Error(error) => {}
     }
@@ -1969,6 +2162,8 @@ prepare :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> Prepa
  * @param prepared What prepare made ready for it.
  * @param result The launch's result: its process and budget, kept by the program; or why it failed, logged.
  * @param installation Whether it's one of the system's installations, which memory pressure may stop.
+ * @param program_name The program an installation runs, when it isn't name; "" for name.
+ * @param first Whether it's the session's first program, whose end Wait answers.
  * @return Whether it started and was kept.
  */
 placed :: fn(
@@ -1978,7 +2173,8 @@ placed :: fn(
     prepared : Prepared,
     result : Result[os.Launched, os.LaunchError],
     installation : bool,
-    program_name : string = ""
+    program_name : string = "",
+    first : bool = false
 ) -> bool {
     match result {
         case Ok(launched) => {
@@ -1990,6 +2186,7 @@ placed :: fn(
                 ring = prepared.ring,
                 running = true,
                 installation = installation,
+                first = first,
                 faults = launched.faults,
                 image = launched.image,
             }

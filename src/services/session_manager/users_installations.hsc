@@ -533,8 +533,17 @@ text_from :: fn(bytes : u8[]) -> string {
  * @param sessions The session manager, whose finders take it.
  * @param number The session's number.
  * @param end The connection's end, which moves to the session manager; closed if there's no room, or it can't be bound.
+ * @param powerbox Whether it's the session's powerbox's, which Attach and Locate are taken on.
+ * @param shell Whether it's a GUI session's shell's, which answers what the session's own does of its session.
+ * @return Whether it was taken; end's closed if not.
  */
-add_finder :: fn(sessions : ptr[mut Manager], number : u32, end : slop_os.Channel, powerbox : bool = false) {
+add_finder :: fn(
+    sessions : ptr[mut Manager],
+    number : u32,
+    end : slop_os.Channel,
+    powerbox : bool = false,
+    shell : bool = false
+) -> bool {
     for &finder, i in sessions.finders {
         if finder.in_use {
             continue
@@ -549,10 +558,11 @@ add_finder :: fn(sessions : ptr[mut Manager], number : u32, end : slop_os.Channe
         ) is_error {
             break
         }
-        finder^ = Finder.{in_use = true, session = number, end = end, powerbox = powerbox}
-        return void
+        finder^ = Finder.{in_use = true, session = number, end = end, powerbox = powerbox, shell = shell}
+        return true
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](end))
+    return false
 }
 
 /**
@@ -607,8 +617,13 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
-                    add_finder(sessions, sessions.finders[i].session, connection.end)
+                    _ = add_finder(sessions, sessions.finders[i].session, connection.end)
                     continue
+                }
+                // Only the session's own connection starts programs; the home that came is closed
+                case Start(starting) => {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](starting.home.end))
+                    response^ = .Refused(.NotAllowed)
                 }
                 case Powerbox(
                     name
@@ -635,7 +650,19 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     attaching.elevated,
                     &out
                 )
-                case _ => response^ = .Unsupported
+                // A GUI session's shell's asks of its session as the console shell's own connection does
+                case _ => response^ = if sessions.finders[i].shell {
+                    own_session_answer(
+                        sessions,
+                        sessions.finders[i].session,
+                        os.message_of[programs.Request](into)^,
+                        into,
+                        &out
+                    )
+                }
+                else {
+                    programs.Response.Unsupported
+                }
             }
             _ = programs.send_response(end, sessions.port, &out)
         }

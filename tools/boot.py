@@ -1263,7 +1263,7 @@ class GuiLoginTest(CompositorTest):
                     or not self.run_form_and_close(since, "writing the file chosen"):
                 return
             # The terminal: found by name, and Enter, its shell reading lines
-            if not self.find("terminal", "[user] terminal_window: started the shell", "starting the terminal"):
+            if not self.find("terminal", "[user] terminal_window: serving its shell", "starting the terminal"):
                 return
             self.problem = None
             self.command("system_powerdown")

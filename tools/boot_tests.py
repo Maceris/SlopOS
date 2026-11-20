@@ -478,14 +478,16 @@ TESTS = [
         "--expect-line=[user] terminal_window: the shell ended",
         "--expect-line=[user] terminal_window: closed, its command done",
         "--expect-line=[user] launcher: runs test_file_tree --reading",
+        "--expect-line=[user] sessions: started viewer in the session",
         "--expect-line=[user] launcher: started viewer",
         "--expect-line-start=[user] viewer: showing reading/made.value, a ",
         "--expect-line=[user] viewer: closed by Escape",
         "--expect-line=[user] greeter: asked by test_kept_grant for a file to write",
         "--expect-line=[user] greeter: chose kept.txt for test_kept_grant",
+        "--expect-line=[user] sessions: started terminal_window in the session",
+        "--expect-line=[user] sessions: started shell in the session",
         "--expect-line=[user] launcher: started terminal_window",
-        "--expect-line=[user] terminal_window: started the shell",
-        "--expect-line=[user] process manager: started shell",
+        "--expect-line=[user] terminal_window: serving its shell",
         "--expect-line=[user] compositor: window 'Terminal' shown"])),
     # The GUI on the firmware's framebuffer (decisions/0192, 15g): no virtio GPU, so the supervisor starts the
     # framebuffer display for the compositor, and the terminal service lends it the framebuffer with the seat; the

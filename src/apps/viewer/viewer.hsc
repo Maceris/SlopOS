@@ -15,7 +15,7 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import process_manager from "std:os/slop_os/process_manager"
+import terminal from "std:os/slop_os/terminal"
 import schema from "std:schema"
 import strings from "std:strings"
 import text_buffer from "std:text_buffer"
@@ -80,19 +80,19 @@ Viewer :: struct {
  * @param log Its debug log, which its lines go to (gui_kit.log_to); without it, it says nothing.
  * @param surface Its connection to the compositor.
  * @param home The session's home, which it lists and reads; without it, it says there's nothing to show.
- * @param manager Not used: it starts nothing.
  * @param programs Its programs connection, whose programs' manifests have typed files' types; without it, a typed file
  *     can't be read, and says so.
  * @param open A file's path beneath home, shown first; null to start with home's listing.
+ * @param terminal Not used: it serves no terminal.
  * @return 0 once its window's closed; 2 without a compositor, or when its window can't be made.
  */
 main :: fn(
     log : slop_os.DebugLog?,
     surface : os.Channel[surface.Surface]?,
     home : os.Channel[dir.Dir]?,
-    manager : os.Channel[process_manager.ProcessManager]?,
     programs : os.Channel[programs.Programs]?,
-    open : string?
+    open : string?,
+    terminal : os.Channel[terminal.Terminal]?
 ) -> int {
     startup :: slop_os.startup_block()
     viewer :: runtime.new(Viewer)

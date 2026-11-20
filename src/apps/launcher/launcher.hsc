@@ -2,10 +2,10 @@
  * The launcher (decisions/0192, 15e and 15g): a GUI session's first program. It lists the bundle store's programs,
  * itself left out: the GUI programs, those whose manifest is a GUI program's entry (src/gui_programs), which it starts
  * when clicked, and the rest as commands, each of which, clicked, shows a form made from its manifest (src/forms). A
- * form run starts a terminal window whose shell runs the command line it makes. Each program it starts is given a
- * connection to the compositor of its own, its own connection to the process manager, a programs connection that only
- * finds programs, and a connection of its own to the session's home. It says what it lists and starts in its debug log:
- * "lists <n> programs and <m> commands", "started <name>", and "a form for <name>" once the form's first drawn.
+ * form run starts a terminal window whose shell runs the command line it makes. It starts nothing itself: it asks the
+ * session manager, on the session's own programs connection, to start each as one of the session's programs (Start),
+ * given a connection of its own to the session's home. It says what it lists and starts in its log: "lists <n>
+ * programs and <m> commands", "started <name>", and "a form for <name>" once the form's first drawn.
  */
 package launcher
 
@@ -13,7 +13,7 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
-import process_manager from "std:os/slop_os/process_manager"
+import terminal from "std:os/slop_os/terminal"
 import schema from "std:schema"
 import ui from "std:ui"
 import forms from "../../forms"
@@ -26,8 +26,6 @@ import surface from "../../protocols/surface"
 MAX_LISTED :: 128
 /** The most bytes of a program's name. */
 NAME_BYTES :: 32
-/** The memory a program it starts is given, split off its own: enough for a terminal window and its shell. */
-PROGRAM_BUDGET : u64 : 24 * 1024 * 1024
 /** The most bytes of a manifest it reads for a form: 256 KiB. */
 MAX_MANIFEST : u64 : 256 * 1024
 
@@ -41,25 +39,11 @@ Listed :: struct {
     gui : bool,
 }
 
-/** A program it started, held until it ends: its process, and its budget, split off the launcher's. */
-Started :: struct {
-    /** Its process, the launcher's handle. */
-    process : slop_os.Process,
-    /** Its budget, the launcher's handle: closed once it's ended, what it was split comes back. */
-    budget : slop_os.MemoryBudget,
-}
-
 /** The launcher's state, on the heap. */
 Launcher :: struct {
-    /** Its debug log, a copy of which each program it starts is given; NO_HANDLE without one. */
-    log : slop_os.DebugLog,
     /** Its window. */
     window : ptr[mut gui_kit.Window],
-    /** Its connection to the process manager. */
-    manager : os.Channel[process_manager.ProcessManager],
-    /** The port its manager connection's bound to. */
-    manager_port : slop_os.Port,
-    /** Its programs connection. */
+    /** Its session's own programs connection, which lists and starts programs. */
     programs : os.Channel[programs.Programs],
     /** The port its programs connection's bound to. */
     programs_port : slop_os.Port,
@@ -79,43 +63,34 @@ Launcher :: struct {
     announced : bool,
     /** What's typed in the find field: the list shows only the programs whose names have it. */
     find : u8[..],
-    /** The programs it started that haven't ended, as far as it last looked. */
-    started : Started[..],
-    /**
-     * A port each of started's processes wakes once when it ends, under its handle; NO_HANDLE if it couldn't be made.
-     */
-    ended_port : slop_os.Port,
 }
 
 /**
  * List the programs and start what's clicked, or show a command's form and run it, until the window's closed.
  *
- * @param log Its debug log, a copy of which each program it starts is given; its own lines go through base's logger.
+ * @param log Not used: its lines go through base's logger, to its session's ring.
  * @param surface Its connection to the compositor.
- * @param home The session's home, kept for each program it starts; without it, they're given none.
- * @param manager Its process manager connection, which programs are launched through.
- * @param programs Its programs connection, which finds them.
+ * @param home The session's home, each program it starts given a connection of its own to; without it, it starts
+ *     none.
+ * @param programs Its session's own programs connection, which lists and starts programs.
  * @param open Not used: it's asked to open nothing.
- * @return 0 once its window's closed; 2 without a compositor, the process manager or a programs connection, or when its
- *     window can't be made.
+ * @param terminal Not used: it serves no terminal.
+ * @return 0 once its window's closed; 2 without a compositor or a programs connection, or when its window can't be
+ *     made.
  */
 main :: fn(
     log : slop_os.DebugLog?,
     surface : os.Channel[surface.Surface]?,
     home : os.Channel[dir.Dir]?,
-    manager : os.Channel[process_manager.ProcessManager]?,
     programs : os.Channel[programs.Programs]?,
-    open : string?
+    open : string?,
+    terminal : os.Channel[terminal.Terminal]?
 ) -> int {
     startup :: slop_os.startup_block()
     launcher :: runtime.new(Launcher)
-    launcher.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
-    launcher.manager = manager or_return 2
-    launcher.manager_port = os.port_for(startup.budget, launcher.manager.end) or_return 2
     launcher.programs = programs or_return 2
     launcher.programs_port = os.port_for(startup.budget, launcher.programs.end) or_return 2
     launcher.home_port = cast[slop_os.Port](slop_os.NO_HANDLE)
-    launcher.ended_port = slop_os.port_create(startup.budget) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
     match home {
         case Some(given) => {
             match os.port_for(startup.budget, given.end) {
@@ -141,48 +116,7 @@ main :: fn(
         if launcher.window.due {
             frame(launcher)
         }
-        reap(launcher)
-        // Looked at again within a second while a program it started runs, to let go of it once it's ended
-        deadline :: if launcher.started.count > 0 {
-            (slop_os.clock_monotonic() or_else 0) + 1_000_000_000
-        }
-        else {
-            slop_os.NO_DEADLINE
-        }
-        gui_kit.wait(launcher.window, deadline)
-    }
-}
-
-/**
- * Let go of the programs it started that have ended, as its ended port says: their budgets, closed, give what they
- * were split back to the launcher's.
- *
- * @param launcher The launcher, whose started loses those that ended.
- */
-reap :: fn(launcher : ptr[mut Launcher]) {
-    if cast[slop_os.Handle](launcher.ended_port) == slop_os.NO_HANDLE {
-        return void
-    }
-    // What's ended since it last looked, without waiting: each packet's key is a process's handle
-    loop {
-        packets : slop_os.Packet[8]
-        taken :: slop_os.port_wait(launcher.ended_port, packets, 0) or_else 0
-        if taken == 0 {
-            break
-        }
-        for packet, n in packets {
-            if n >= cast[usize](taken) {
-                break
-            }
-            for each, i in launcher.started {
-                if cast[u64](cast[slop_os.Handle](each.process)) == packet.key {
-                    _ = slop_os.handle_close(cast[slop_os.Handle](each.process))
-                    _ = slop_os.handle_close(cast[slop_os.Handle](each.budget))
-                    runtime.array_remove(&launcher.started, i)
-                    break
-                }
-            }
-        }
+        gui_kit.wait(launcher.window, slop_os.NO_DEADLINE)
     }
 }
 
@@ -248,19 +182,6 @@ count_of :: fn(launcher : ptr[Launcher], gui : bool) -> usize {
         }
     }
     return count
-}
-
-/** Find a program by name: its executable and manifest, the caller's to close. */
-find :: fn(launcher : ptr[mut Launcher], name : u8[]) -> programs.Program? {
-    out := os.Outgoing.{}
-    request :: os.begin[programs.Request](&out)
-    request^ = .Find(os.append(&out, name))
-    into := os.Incoming.{}
-    answer :: ask(launcher, &out, &into) or_else programs.Response.Unsupported
-    match answer {
-        case Found(program) => return program
-        case _ => return null
-    }
 }
 
 /**
@@ -435,60 +356,36 @@ choose :: fn(launcher : ptr[mut Launcher], index : usize) {
 }
 
 /**
- * Start a program, with its grants: a GUI program's, given what to open.
+ * Have the session manager start a program in the session (programs' Start), given a connection of its own to the
+ * home: a GUI program, or the terminal window, whose shell it starts too.
  *
  * @param name_bytes The program's name.
- * @param open What it's to open (GuiGrants' open), only read; null for nothing.
+ * @param open What it's to open, only read: for the terminal window, the command line its shell runs alone. Null for
+ *     nothing.
  */
 start :: fn(launcher : ptr[mut Launcher], name_bytes : u8[], open : string?) {
     if name_bytes.count == 0 {
         return void
     }
     name :: string_of_bytes(name_bytes)
-    found :: find(launcher, name_bytes) or_return void
-    defer slop_os.handle_close(cast[slop_os.Handle](found.executable))
-    _ = slop_os.handle_close(cast[slop_os.Handle](found.manifest))
-    budget :: slop_os.startup_block().budget
-    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
-        | cast[u32](slop_os.RIGHT_DUPLICATE)
-        | cast[u32](slop_os.RIGHT_TRANSFER))
-    log_copy := cast[slop_os.DebugLog?](null)
-    if launcher.log != cast[slop_os.DebugLog](slop_os.NO_HANDLE) {
-        match slop_os.handle_duplicate(cast[slop_os.Handle](launcher.log), log_rights) {
-            case Ok(copy) => log_copy = cast[slop_os.DebugLog](copy)
-            case Error(_) => {}
+    given :: launcher.home or_return void
+    home :: dir.connect(given.end, launcher.home_port, slop_os.startup_block().budget) or_return void
+    out := os.Outgoing.{}
+    // Begun before the bytes are appended, as begin starts the message afresh
+    request :: os.begin[programs.Request](&out)
+    request^ = .Start(
+        programs.Starting.{
+            name = os.append(&out, name_bytes),
+            home = home,
+            open = os.append(&out, string_bytes(open or_else "")),
         }
-    }
-    grants := gui_programs.GuiGrants.{
-        log = log_copy,
-        surface = surface.connect(launcher.window.end, launcher.window.port, budget),
-        manager = process_manager.connect(launcher.manager.end, launcher.manager_port, budget),
-        programs = programs.connect(launcher.programs.end, launcher.programs_port, budget),
-        open = open,
-    }
-    match launcher.home {
-        case Some(home) => grants.home = dir.connect(home.end, launcher.home_port, budget)
-        case None => {}
-    }
-    match os.launch(
-        launcher.manager,
-        launcher.manager_port,
-        name,
-        found.executable,
-        PROGRAM_BUDGET,
-        type_of(gui_programs.shape),
-        grants
-    ) {
-        case Ok(launched) => {
-            // Held while it runs, and let go of once it's ended, so its budget comes back (reap)
-            runtime.array_add(&launcher.started, Started.{process = launched.process, budget = launched.budget})
-            if cast[slop_os.Handle](launcher.ended_port) != slop_os.NO_HANDLE {
-                handle :: cast[slop_os.Handle](launched.process)
-                _ = slop_os.port_bind(launcher.ended_port, handle, slop_os.SIGNAL_TERMINATED, cast[u64](handle), .Once)
-            }
-            runtime.log_info("started %", name)
-        }
-        case Error(error) => runtime.log_info("% didn't start: %", name, error)
+    )
+    into := os.Incoming.{}
+    answer :: ask(launcher, &out, &into) or_else programs.Response.Unsupported
+    match answer {
+        case Done => runtime.log_info("started %", name)
+        case Missing => runtime.log_info("% didn't start: it isn't a GUI program", name)
+        case _ => runtime.log_info("% didn't start", name)
     }
 }
 

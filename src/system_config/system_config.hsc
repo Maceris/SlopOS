@@ -276,7 +276,7 @@ SERVICES :: Service.[
         module = "supervisor.elf",
         starter = .RootTask,
         by_manager = true,
-        budget = 368 * MIB,
+        budget = 400 * MIB,
         entry = type_of(supervisor.main),
     },
     /*
@@ -350,15 +350,15 @@ SERVICES :: Service.[
         cpu = TRUSTED_PATH_CPU,
     },
     /*
-     * Each session, made once someone's logged in, its powerbox, its first program, echo, and its installations, their
-     * budgets split off this one's (decisions/0150, 0153, 0156)
+     * Each session, made once someone's logged in, its powerbox, its first program, echo, its installations, and a GUI
+     * session's programs, their budgets split off this one's (decisions/0150, 0153, 0156, 0192)
      */
     Service.{
         name = "sessions",
         module = "session_manager.elf",
         starter = .Supervisor,
         by_manager = true,
-        budget = 64 * MIB,
+        budget = 96 * MIB,
         entry = type_of(session_manager.main),
         cpu = SESSIONS_CPU,
         cpu_splits = true,

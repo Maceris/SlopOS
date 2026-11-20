@@ -320,7 +320,8 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     gets 24 MiB, and the terminal window's shell 16 MiB.
   - A program the launcher starts is given a duplicate of its log. Base's logger doesn't use it (it writes only to an
     events ring, which such a program hasn't), so the terminal window and the viewer write their lines to it with
-    log_line, as the first services do (`gui_kit.log_to`); see *Left open* below.
+    log_line, as the first services do (`gui_kit.log_to`). Since then, GUI programs are the session's, with rings
+    (below).
   - The greeter logs whom it logs in and each refusal, and exits with a code of its own for each way it ends.
 - **A typing test** (`src/tests/test_gui`, `--gui-typing`): a std/ui window filled in twice, by Tab and by Shift+Tab.
 - **The shell gets manifests alone** (`ManifestOf`), for viewing a typed file, help and completion. It used to be
@@ -365,9 +366,8 @@ The boot tests pass again, all 291, with the GUI login's back among them.
   - The launcher lists the commands as well as the GUI programs, with a find field over both. A command clicked shows
     its form; Run, or Enter in a field, starts a terminal window (`GuiGrants.open`, the GUI entry's new parameter)
     whose shell runs that line alone, and which a key closes once it's done.
-  - The launcher gives each program it starts the session's home (it's given the session's now), and holds each one's
-    process and budget until it ends, as its ended port says, so what each was split comes back.
-  - The terminal window gives its shell the home, and a copy of its log rather than its own.
+  - The launcher gives each program it starts the session's home (it's given the session's now). The session manager
+    starts them now (*GUI programs are the session's programs*, below).
 - **The typed-data viewer** (`src/apps/viewer`): the session's home listed, folders first, and a file shown as the
   shell's view shows it: a typed file's value by its type's schema, found among the programs' manifests and written
   as the shell writes values; text as text; other bytes in hexadecimal. Only the lines on screen are made each frame.
@@ -408,9 +408,25 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     the store's root, then the program's bundle, for each List and ManifestOf. It keeps the root's entries for as long
     as the root's the same, and each bundle's references (a bundle never changes, its hash naming its bytes): 40 to
     90 ms a program, the whole ~4 s, and the GUI login passed three times running among the others.
+- **GUI programs are the session's programs** (chosen with the project's owner over handing the launcher the
+  session's locale, CPU budget and rings to pass on): the launcher starts nothing itself. It asks the session manager
+  on the session's own programs connection (`programs`' new `Start`: a name, a home connection, and what to open), and
+  each GUI program is one of the session's, with its log ring, lifecycle channel, locale and CPU budget, listed and
+  ended by the trusted path and reported when it crashes, as the console shell's first program is. What the launcher
+  and its ended port did to get budgets back is gone.
+  - Only the session's own connection, in a session started with `StartGui`, may `Start`; a finding connection is
+    refused, and the home it sent closed. So scripts can't start anything they couldn't before.
+  - `Start` of the terminal window starts it and a shell, both the session's: the window serves one end of a new
+    terminal channel (`GuiGrants.terminal`, a new parameter of the GUI entry) and the shell has the other, as the
+    console's first shell has the session's terminal. The shell is given what that shell is (its CPU budget, data
+    directory and network) and a programs connection that answers what the session's own does of its session
+    (`Running`, `Install` and the rest) but doesn't start programs (a finder marked `shell`), since `launch_shell`
+    used to give every shell the session's one connection, taking it from the launcher.
+  - The GUI entry lost its process manager connection, which no GUI program uses now.
+  - The session's first program is marked so (`Program.first`), rather than being any program that isn't the
+    powerbox or an installation, so a GUI program ending doesn't end the session's `Wait`.
+  - Budgets: the launcher's 16 MiB, each GUI program's 16 MiB, the terminal window's shell 16 MiB, all split off the
+    session manager's, now 96 MiB, and so the supervisor's 400 MiB; it keeps up to 48 programs and 32 finding
+    connections, across its sessions.
 - **Left open, for the project's owner**:
-  - Programs the launcher starts, and the terminal window's shell, aren't the session's programs: no events ring,
-    lifecycle channel, session CPU budget or locale. The session manager starting them (a `StartGui` and a
-    `StartShell` on the programs connection) would fix it, but its `launch_shell` replaces the session's one programs
-    connection, the launcher's, and a finding connection that may start shells gives scripts more than they have.
   - The GUI's elevation (accounts, shutdown, traces, keys) is still only the console's.
