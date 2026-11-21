@@ -49,6 +49,8 @@ WITH_IMAGE_BUILDER = "<image builder>"
 JOBS = 1
 # Each test's time the last run, slowest first next time; kept outside the repository
 TIMINGS_FILE = Path(tempfile.gettempdir()) / "slopos_boot_test_timings.json"
+# What a serial line has in it that a passing test shows, as it's measured: the input-to-photon latency (test_gui)
+MEASURES = ("input to photon: ",)
 # Tests booted again alone that passed then
 FLAKY: list[str] = []
 # One test's lines printed at a time
@@ -306,12 +308,15 @@ TESTS = [
         "--expect-line=[user] test_compositor: B pasted from A",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A std/ui window through gui_kit (decisions/0192, 15g): test_gui's field typed into on the virtio keyboard, through
-    # the seat lent to the compositor, line after line, each submitted with Enter
+    # the seat lent to the compositor, line after line, each submitted with Enter; and the input-to-photon latency
+    # (15h), from a key taken from the device to the frame that showed it presented, none past test_gui's SLOWEST_MS
     ("types into a std/ui window, line after line", 7, [WITH_PROGRAMS, "--gui-typing", "--timeout=300",
         "--command-line=test_exit test_services test_settle=180 test_gui",
         "--expect-line=[user] test_gui: showing its window",
         "--expect-line=[user] test_gui: submitted admin, 28 bytes of password",
         "--expect-line=[user] test_gui: submitted bob, 7 bytes of password",
+        "--expect-line-start=[user] test_gui: input to photon: ",
+        "--refuse-line=[user] test_gui: input to photon past 250 ms",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
     ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",
@@ -1980,6 +1985,9 @@ def run_jobs(jobs: list) -> int:
                 for line in output.splitlines():
                     if line.startswith("boot.py: ") and line.endswith(" s in)"):
                         print(f"    {line[len('boot.py: '):]}", flush=True)
+                    # And what it measured, like the input-to-photon latency
+                    elif any(measure in line for measure in MEASURES):
+                        print(f"    {line}", flush=True)
             elif JOBS == 1:
                 print(f"FAILED: {name} ({TIMINGS[name]:.1f} s)")
                 sys.stdout.write(output)

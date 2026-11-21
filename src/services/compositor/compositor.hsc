@@ -1049,6 +1049,7 @@ take_event :: fn(compositor : ptr[mut Compositor], event : seat.Event, text : u8
             key.code = cast[u32](event.code)
             key.modifiers = event.modifiers
             key.pressed = 1
+            key.time_ns = event.time_ns
             queue(compositor, window.client, key, string_of_bytes(typed))
         }
         case .PointerMotion => move_pointer(compositor, compositor.pointer_x + event.x, compositor.pointer_y + event.y)

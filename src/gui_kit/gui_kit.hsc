@@ -103,6 +103,20 @@ Window :: struct {
     reading : bool,
     /** The buffer given to the compositor longest ago, drawn into when neither's been released. */
     oldest : usize,
+    /**
+     * For the input-to-photon latency: the earliest time a key taken since the last frame submitted was taken from its
+     * device, in the monotonic clock's nanoseconds; 0 for none, or none that said.
+     */
+    input_since : u64,
+    /** The same, of the frame submitted with it, until that frame's Presented; 0 for none. */
+    presenting_since : u64,
+    /**
+     * The latency last measured, from a key taken from its device to the frame that showed it presented, in
+     * nanoseconds; 0 before any.
+     */
+    latency_ns : u64,
+    /** How many latencies have been measured, so a program sees when there's a new one. */
+    latencies : u64,
 }
 
 /**
@@ -404,6 +418,13 @@ take_input :: fn(window : ptr[mut Window], into : ptr[os.Incoming], given : surf
                     window.buffers[index].busy = false
                 }
             }
+            case .Presented => {
+                if window.presenting_since != 0 && event.time_ns >= window.presenting_since {
+                    window.latency_ns = event.time_ns - window.presenting_since
+                    window.latencies += 1
+                }
+                window.presenting_since = 0
+            }
             case _ => {}
         }
     }
@@ -411,6 +432,9 @@ take_input :: fn(window : ptr[mut Window], into : ptr[os.Incoming], given : surf
 
 /** A key: kept as it came, and one std/ui reads as a key, or its text typed. */
 take_key :: fn(window : ptr[mut Window], event : surface.Event, text : u8[]) {
+    if event.time_ns != 0 && (window.input_since == 0 || event.time_ns < window.input_since) {
+        window.input_since = event.time_ns
+    }
     raw := event
     raw.text_start = cast[u32](window.raw_text.count)
     raw.text_bytes = cast[u32](text.count)
@@ -529,6 +553,8 @@ finish :: fn(window : ptr[mut Window]) -> ui.Event[] {
      * for a buffer to paint nothing new
      */
     if canvas.is_empty(frame.damage) {
+        // Input that changed nothing shows nothing, so no latency is measured for it
+        window.input_since = 0
         return ui.events_of(&window.ui)
     }
     /*
@@ -578,7 +604,16 @@ finish :: fn(window : ptr[mut Window]) -> ui.Event[] {
             },
         }
     )
-    _ = surface.send_request(window.end, window.port, &out)
+    /*
+     * Its input's latency is measured at its Presented; input while an earlier frame's still to be presented waits for
+     * the frame after that one
+     */
+    if surface.send_request(window.end, window.port, &out) == null
+        && window.input_since != 0
+        && window.presenting_since == 0 {
+        window.presenting_since = window.input_since
+        window.input_since = 0
+    }
     return ui.events_of(&window.ui)
 }
 

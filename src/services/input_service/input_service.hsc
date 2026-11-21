@@ -412,7 +412,7 @@ take_keys :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Inc
                 for event in os.items(into, given) {
                     kind :: input.kind_of(event) or_else input.EventKind.Key
                     if kind == .Key {
-                        press(service, index, event.code, input.is_pressed(event))
+                        press(service, index, event.code, input.is_pressed(event), event.time_ns)
                     }
                     else {
                         point(service, index, kind, event)
@@ -436,8 +436,10 @@ take_keys :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Inc
  * @param index The keyboard's index, below MAX_KEYBOARDS; the seat event says it as which.
  * @param usage The key's HID usage.
  * @param pressed True when it goes down, false when it comes up; only a modifier coming up does anything.
+ * @param time_ns When the keyboard's driver took it, in the monotonic clock's nanoseconds; 0 if it didn't say. A key
+ *     typed passes it on, for the input-to-photon latency.
  */
-press :: fn(service : ptr[mut Service], index : usize, usage : u16, pressed : bool) {
+press :: fn(service : ptr[mut Service], index : usize, usage : u16, pressed : bool, time_ns : u64) {
     keyboard :: &service.keyboards[index % MAX_KEYBOARDS]
     bit :: modifier_of(usage)
     if bit != 0 {
@@ -468,6 +470,7 @@ press :: fn(service : ptr[mut Service], index : usize, usage : u16, pressed : bo
     made := seat.event_of(.Key, which)
     made.code = usage
     made.modifiers = keyboard.modifiers
+    made.time_ns = time_ns
     add(service, made, text)
 }
 

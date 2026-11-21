@@ -366,7 +366,9 @@ take_events :: fn(driver : ptr[mut Driver]) {
         offer_buffer(driver, buffer)
         match translate(driver, kind, code, value) {
             case Some(event) => {
-                driver.waiting[cast[usize](driver.written % WAITING)] = event
+                stamped := event
+                stamped.time_ns = slop_os.clock_monotonic() or_else 0
+                driver.waiting[cast[usize](driver.written % WAITING)] = stamped
                 driver.written += 1
             }
             case None => {}

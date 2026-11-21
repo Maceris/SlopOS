@@ -22,8 +22,8 @@ Input :: struct {}
  */
 PROTOCOL :: slop_os.Protocol.{name = "input", major_version = 1, lending = .Server}
 
-/** The most events one Events has: 32. */
-MAX_EVENTS :: 32
+/** The most events one Events has: 16, which fit half a channel's default ring with room to spare. */
+MAX_EVENTS :: 16
 
 /** What an event is, as Event's kind holds it. */
 EventKind :: enum #backed_by(u8) {
@@ -54,6 +54,11 @@ Event :: struct {
     x : i32,
     /** For a Motion, how far it moved down; for a Position, where it is down; for a Wheel, how far it turned. */
     y : i32,
+    /**
+     * When the driver took it from the device, in the monotonic clock's nanoseconds, where input-to-photon latency
+     * starts; 0 from a driver that doesn't say.
+     */
+    time_ns : u64,
 }
 
 /**

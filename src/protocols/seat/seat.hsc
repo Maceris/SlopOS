@@ -90,6 +90,11 @@ Event :: struct {
     y : i32,
     /** For a Button, 1 if it went down, 0 if it came up; 0 otherwise. */
     pressed : u8,
+    /**
+     * For a Key, when the keyboard's driver took it from the device, in the monotonic clock's nanoseconds (the input
+     * protocol's time_ns); 0 when it didn't say, and for the other kinds.
+     */
+    time_ns : u64,
 }
 
 /** Events, oldest first, and their text. */

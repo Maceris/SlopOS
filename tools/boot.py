@@ -2129,6 +2129,8 @@ def main() -> int:
     parser.add_argument("--expect", type=int, help="the exit code the kernel should write; exits 0 if it does")
     parser.add_argument("--expect-line", action="append", default=[],
                         help="a line the serial output should contain, with --expect; may be repeated")
+    parser.add_argument("--refuse-line", action="append", default=[],
+                        help="a line the serial output mustn't contain, with --expect; may be repeated")
     parser.add_argument("--expect-line-start", action="append", default=[],
                         help="the start of a line the serial output should contain, for a line part of which changes from "
                         "boot to boot, with --expect; may be repeated")
@@ -2427,6 +2429,10 @@ def main() -> int:
         for start in missing_starts:
             print(f"boot.py: the serial output has no line starting {start!r}", file=sys.stderr)
         missing += missing_starts
+        refused = [line for line in arguments.refuse_line if line in lines]
+        for line in refused:
+            print(f"boot.py: the serial output has the line {line!r}, which it mustn't", file=sys.stderr)
+        missing += refused
         missing += failed_tests(output)
         shown = console.lines() if console is not None else []
         missing_shown = [line for line in arguments.expect_console_line if line not in shown]

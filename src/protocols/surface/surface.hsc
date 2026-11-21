@@ -247,7 +247,11 @@ Event :: struct {
     x : i32,
     /** For a Configure, the height; for the pointer's, where down; for a Wheel, how far it turned; 0 otherwise. */
     y : i32,
-    /** For a Presented, when, in the monotonic clock's nanoseconds; 0 otherwise. */
+    /**
+     * In the monotonic clock's nanoseconds: for a Presented, when the frame was shown; for a Key, when the keyboard's
+     * driver took it from the device, so the two give the input-to-photon latency (0 when the driver didn't say); 0
+     * otherwise.
+     */
     time_ns : u64,
     /** Where its text starts in its Events' text, in bytes. */
     text_start : u32,
