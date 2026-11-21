@@ -85,13 +85,19 @@ Target :: union {
  *
  * @param interpreter The interpreter, whose steps and nesting grow; leave takes the nesting back.
  * @error Steps The budget of steps is spent.
- * @error Depth Terms are nested as deep as they may be.
+ * @error Depth Terms are nested as deep as they may be, or have used Limits.stack_bytes of the stack.
  */
 enter :: fn(interpreter : ptr[mut Interpreter]) -> Result[void, Error] {
     if interpreter.steps >= interpreter.limits.steps {
         return .Error(.Steps)
     }
     if interpreter.nesting >= interpreter.limits.nesting {
+        return .Error(.Depth)
+    }
+    // The stack grows down: how far it has since the evaluation began
+    here : u8 = 0
+    at :: cast[u64](&here)
+    if interpreter.stack_start > at && interpreter.stack_start - at > interpreter.limits.stack_bytes {
         return .Error(.Depth)
     }
     interpreter.steps += 1

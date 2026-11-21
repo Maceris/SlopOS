@@ -507,6 +507,14 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     window's client copies. A session holds at most half of the session manager's finding connections. The
     framebuffer display checks the firmware's pitch and sizes. A form's values go bare only as letters, digits and
     _ . / : + @ -, and not as a keyword; anything else is quoted.
+- **The AML interpreter's stack**: the `aml_random` fuzz target overflowed the hosted test's 1 MiB stack within
+  seconds, every run, though nesting stops at 256 terms: some terms take far more stack than others, and a program's
+  stack on SlopOS is 256 KiB, so the ACPI service could have overflowed on firmware AML a quarter as deep. Each
+  evaluation measures how far its stack has grown as terms are entered, and stops with Depth past `stack_bytes`
+  (96 KiB); ToDecimalString writes its digits in the evaluation's arena, not a 4 KiB buffer on the stack.
+- **M15's full suites**, 2026-11-21: boot 292 of 292, both architectures (the storage manager's crash below among the
+  others once, passing alone); unit tests 25 of 25; Hemera's HemeraTest 296 of 296; Linux 79 of 79 on x86-64 and 77 of
+  77 on AArch64; the fuzz targets a minute each, nothing found once the AML stack was bounded.
 - **Left open, for the project's owner**:
   - A program's powerbox name is still what the shell, or any program with a finding connection, says it is, so a
     program can ask as another and Reopen what the user let that one keep. Naming it by the program the session
@@ -522,6 +530,10 @@ The boot tests pass again, all 291, with the GUI login's back among them.
   - A prompt can be asked as often as a program likes, and shows at once; it ignores no input just after it's shown.
   - Float-to-int casts of NaN, infinities and out-of-range values are LLVM's poison: Hemera could define them, as
     saturating (`fptosi.sat`, NaN to 0), at some cost in the canvas's per-pixel code.
+  - In M15's full boot suite the storage manager crashed once, a write fault, on AArch64 among the other tests, as
+    the storage restart test's partition server was killed and what it served let go of; it passed alone, and three
+    more runs of the restart tests didn't see it again. The supervisor now logs a crash's address and frames on the
+    serial line, so the next one says where.
   - Lower: the terminal service draws the console even if TakeBack wasn't delivered; a dropped Borrow could make the
     compositor the seat's reader; the viewer's decode of a hostile typed file has no total budget; the terminal
     window draws the input line without safe_text; a wheel and a release can reach a client's window while the

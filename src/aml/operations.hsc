@@ -544,28 +544,52 @@ converted :: fn(
     if opcode == 0x98 {
         return .Ok(.String(string_of_value(interpreter, value)?))
     }
-    // ToDecimalString: an integer's digits, a buffer's bytes' separated by commas
-    storage : u8[4096]
-    count : usize = 0
-    match value {
-        case Integer(number) => count = decimal_into(storage[0..<storage.count], 0, number)
-        case Buffer(bytes) => {
-            for byte, i in bytes.data {
-                if i > 0 && count < storage.count {
-                    storage[count] = cast[u8](',')
-                    count += 1
-                }
-                count = decimal_into(storage[0..<storage.count], count, cast[u64](byte))
-            }
-        }
+    /*
+     * ToDecimalString: an integer's digits, a buffer's bytes' separated by commas, at most DECIMAL_STRING_BYTES.
+     * Written
+     * in the evaluation's arena, not on the stack: this is reached from nested terms, many levels deep, and a buffer
+     * this size in each level's frame ran the stack out
+     */
+    most :: match value {
+        case Integer(_) => cast[usize](20)
+        case Buffer(bytes) => 4 * bytes.data.count
         case String(text) => return .Ok(.String(text))
         case _ => return .Error(.WrongType)
+    }
+    /*
+     * A buffer past the limit at 4 bytes a byte may still fit, as small bytes take fewer digits: what's written is
+     * checked
+     */
+    made :: temporary_bytes(
+        interpreter,
+        cast[u64](if most < DECIMAL_STRING_BYTES { most } else { DECIMAL_STRING_BYTES })
+    )?
+    storage :: made.data
+    count : usize = 0
+    match value {
+        case Integer(number) => count = decimal_into(storage, 0, number)
+        case Buffer(bytes) => {
+            for byte, i in bytes.data {
+                if i > 0 {
+                    if count < storage.count {
+                        storage[count] = cast[u8](',')
+                    }
+                    count += 1
+                }
+                count = decimal_into(storage, count, cast[u64](byte))
+            }
+        }
+        case _ => {}
     }
     if count > storage.count {
         return .Error(.OutOfRange)
     }
-    return temporary_string(interpreter, storage[0..<count])
+    made.data = storage[0..<count]
+    return .Ok(.String(made))
 }
+
+/** The most bytes ToDecimalString makes; past them, it's OutOfRange. */
+DECIMAL_STRING_BYTES :: 4096
 
 /**
  * Write a number's decimal digits.

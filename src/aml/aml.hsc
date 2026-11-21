@@ -66,6 +66,12 @@ Limits :: struct {
      * The most terms nested inside one another, across calls, which bounds the interpreter's own stack; past it, Depth.
      */
     nesting : u32 = 256,
+    /**
+     * The most bytes of its own stack an evaluation's nested terms use, measured as they're entered; past it, Depth.
+     * Some terms take far more stack than others, so nesting alone doesn't bound it: a program's stack on SlopOS is
+     * 256 KiB.
+     */
+    stack_bytes : u64 = 96 * 1024,
     /** The most bytes one evaluation makes along the way, in its arena; past it, Memory. */
     evaluation_bytes : usize = 1024 * 1024,
     /** The most bytes the namespace holds: its nodes, the tables' bytecode and what's stored in it; past it, Memory. */
@@ -137,6 +143,8 @@ Interpreter :: struct {
     host : Host,
     /** Its limits. */
     limits : Limits,
+    /** Where the stack was when the evaluation began (begin), an address; 0 before one has. */
+    stack_start : u64,
     /** Whether integers are 64 bits, as a DSDT of revision 2 or more says; 32 bits, masked, before one says so. */
     wide : bool,
     /** The bytes the namespace holds now, its nodes, tables and stored values, at most limits.namespace_bytes. */
@@ -360,6 +368,9 @@ begin :: fn(interpreter : ptr[mut Interpreter]) {
     interpreter.steps = 0
     interpreter.calls = 0
     interpreter.nesting = 0
+    // Where the stack is now, which enter measures its growth from
+    here : u8 = 0
+    interpreter.stack_start = cast[u64](&here)
     interpreter.evaluating = true
     interpreter.failure_noted = false
 }
