@@ -2058,14 +2058,15 @@ launch_powerbox :: fn(
 /**
  * Make a connection to a session's powerbox for a program, which it serves under the program's name.
  *
- * It sends the powerbox Serve, with the connection's other end, and waits for its answer.
+ * It sends the powerbox Serve, with the connection's other end, and doesn't wait for its answer (decisions/0193,
+ * 16c): the powerbox asks the session manager things too, and each waiting on the other could hang every session.
  *
- * @param sessions The session manager, on whose session's powerbox connection Serve is sent and its answer
- *     waited for, with no deadline.
+ * @param sessions The session manager, on whose session's powerbox connection Serve is sent; answers to earlier ones
+ *     are taken from it first, without waiting.
  * @param number The session's number; past MAX_SESSIONS, or a session without a powerbox, null comes back.
  * @param name The program's name, which the powerbox shows on the trusted path when it asks the user for it.
  * @return The program's end, the caller's to give it; null without a powerbox, or if the channel couldn't be made or
- *     the powerbox didn't answer Done.
+ *     Serve couldn't be sent.
  */
 powerbox_for :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> os.Channel[powerbox.Powerbox]? {
     if cast[usize](number) >= sessions.sessions.count || sessions.sessions[cast[usize](number)].powerbox_end == NONE {
@@ -2078,27 +2079,29 @@ powerbox_for :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> 
     request^ = .Serve(
         powerbox.Served.{name = os.append(&out, string_bytes(name)), end = os.Channel[powerbox.Powerbox].{end = pair.a}}
     )
+    /*
+     * Not waited for: the powerbox may be asking the session manager something meanwhile (Locate, Attach), and each
+     * would wait on the other. Its answers to earlier Serves are taken first, without waiting, so they don't fill the
+     * ring; a Serve it refuses leaves the program's end with no one on the other side, which it sees as soon as it
+     * asks.
+     */
+    into := os.Incoming.{}
+    loop {
+        match powerbox.receive_response(made.powerbox_end, made.powerbox_port, &into, false) {
+            case Received => {
+                match os.message_of[powerbox.Response](&into)^ {
+                    case Done => {}
+                    case _ => runtime.log_info("the powerbox didn't serve a program it was asked to")
+                }
+            }
+            case _ => break
+        }
+    }
     if powerbox.send_request(made.powerbox_end, made.powerbox_port, &out) != null {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return null
     }
-    into := os.Incoming.{}
-    loop {
-        match powerbox.receive_response(made.powerbox_end, made.powerbox_port, &into, true) {
-            case Received => break
-            case _ => {
-                _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
-                return null
-            }
-        }
-    }
-    return match os.message_of[powerbox.Response](&into)^ {
-        case Done => os.Channel[powerbox.Powerbox].{end = pair.b}
-        case _ => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
-            null
-        }
-    }
+    return os.Channel[powerbox.Powerbox].{end = pair.b}
 }
 
 /**

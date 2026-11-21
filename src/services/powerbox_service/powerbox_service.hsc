@@ -36,6 +36,8 @@ NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 PROMPT_KEY : u64 : 1000
 /** The key a request to stop is bound to the port under. */
 STOP_KEY : u64 : 1001
+/** The port key the session manager's answers come under, on the programs connection. */
+SESSIONS_KEY : u64 : 1002
 /** The most bytes of a kept grant's link's path, grants/<program>/<key>; a longer one is cut. */
 PATH_BYTES :: 160
 /** The client index of the session manager's connection, the first client, which alone may send Serve. */
@@ -75,6 +77,16 @@ Waiting :: struct {
     policy : network.Policy,
 }
 
+/** What the powerbox has asked the session manager and waits to hear, for its waiting request. */
+SessionAsk :: enum {
+    /** Nothing. */
+    None,
+    /** Where the program a debugger's asked for runs (Locate), before the user's asked. */
+    Locate,
+    /** To attach the debugger the user allowed (Attach). */
+    Attach,
+}
+
 /** The powerbox's state: its connections, its clients, and the request waiting for the user. */
 Box :: struct {
     /** The port every client, the prompt connection and a stop are bound to, under their keys. */
@@ -95,6 +107,11 @@ Box :: struct {
     waiting : Waiting,
     /** Whether a request is waiting for the user; while one is, others are answered Busy. */
     has_waiting : bool,
+    /**
+     * What the waiting request asked the session manager, whose answer it waits for: it isn't waited for in place,
+     * as the session manager may be asking the powerbox to Serve meanwhile, and each would wait on the other.
+     */
+    asking_sessions : SessionAsk,
     /** The powerbox's programs connection to the session manager, for Attach (decisions/0185); NONE without one. */
     programs_end : slop_os.Channel,
     /** A port bound to programs_end, waited on for its answers. */
@@ -155,6 +172,10 @@ main :: fn(
         case Some(connection) => {
             box.programs_end = connection.end
             box.programs_port = os.port_for(block.budget, connection.end) or_return 2
+            // Its answers wake the loop, taken as they come (take_sessions_answer)
+            signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+            slop_os.port_bind(box.port, cast[slop_os.Handle](connection.end), signals, SESSIONS_KEY, .Persistent)
+                or_return 2
         }
         case None => {}
     }
@@ -190,6 +211,7 @@ main :: fn(
         }
         while i < box.clients.count
         take_answer(box, &into)
+        take_sessions_answer(box, &into)
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(box.port, packets, slop_os.NO_DEADLINE)
     }
@@ -664,20 +686,20 @@ ask_debug :: fn(
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
         return .Refused
     }
-    // The user is asked for their own session's program, the administrator for another user's
-    kind :: match locate(box, name) {
-        case .Here => prompt.Kind.Debug
-        case .Elsewhere => prompt.Kind.DebugOther
-        case _ => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](port))
-            return .Refused
-        }
-    }
-    asked :: ask(box, index, kind, false, purpose, name, u8.[])
-    if asked is_some {
+    /*
+     * The user is asked for their own session's program, the administrator for another user's: where it runs is
+     * asked of the session manager first, and the request waits for its answer (take_sessions_answer), not here
+     */
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Locate(os.append(&out, name))
+    if programs.send_request(box.programs_end, box.programs_port, &out) != null {
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
-        return asked
+        return .Refused
     }
+    box.has_waiting = true
+    box.asking_sessions = .Locate
+    box.waiting = Waiting.{client = index, kind = .Debug}
     for byte, i in name {
         if i < box.waiting.name.count {
             box.waiting.name[i] = byte
@@ -728,23 +750,99 @@ attach_allowed :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
         answer(box, .Refused)
         return void
     }
-    match programs.receive_response(box.programs_end, box.programs_port, into, true) {
+    // Answered as it comes (take_sessions_answer), not waited for here
+    box.asking_sessions = .Attach
+}
+
+/**
+ * Take the session manager's answer to what the waiting request asked of it, if it's come: where a program runs, then
+ * the user or the administrator asked; or the debugger attached, and the program answered.
+ *
+ * @param box The powerbox, whose waiting request goes on, or is answered.
+ * @param into Where the answer's received.
+ */
+take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
+    if box.asking_sessions == .None || box.programs_end == NONE {
+        return void
+    }
+    asked :: box.asking_sessions
+    match programs.receive_response(box.programs_end, box.programs_port, into, false) {
         case Received => {}
+        case Empty => return void
         case _ => {
+            box.asking_sessions = .None
+            refuse_debug_port(box)
             answer(box, .Refused)
             return void
         }
     }
-    match os.message_of[programs.Response](into)^ {
-        case Attached(attached) => {
-            runtime.log_info("attached a debugger to %", as_text(name))
-            answer_attached(box, attached, os.items(into, attached.program))
+    box.asking_sessions = .None
+    name := box.waiting.name[0..<0]
+    if box.waiting.name_count <= box.waiting.name.count {
+        name = box.waiting.name[0..<box.waiting.name_count]
+    }
+    if asked == .Attach {
+        match os.message_of[programs.Response](into)^ {
+            case Attached(attached) => {
+                runtime.log_info("attached a debugger to %", as_text(name))
+                answer_attached(box, attached, os.items(into, attached.program))
+            }
+            case Refused(problem) => {
+                runtime.log_info("couldn't attach a debugger to %: %", as_text(name), problem)
+                answer(box, .Refused)
+            }
+            case _ => answer(box, .Refused)
         }
-        case Refused(problem) => {
-            runtime.log_info("couldn't attach a debugger to %: %", as_text(name), problem)
+        return void
+    }
+    // Located: the user's asked for their own session's program, the administrator for another user's
+    location :: match os.message_of[programs.Response](into)^ {
+        case Located(where) => where
+        case _ => programs.Location.Nowhere
+    }
+    kind :: match location {
+        case .Here => prompt.Kind.Debug
+        case .Elsewhere => prompt.Kind.DebugOther
+        case _ => {
+            refuse_debug_port(box)
             answer(box, .Refused)
+            return void
         }
-        case _ => answer(box, .Refused)
+    }
+    // What ask keeps of the request is set again after it: the name, purpose, port and key stay the debugger's
+    kept := box.waiting
+    // The program that asked went meanwhile: no one's asked for it
+    if kept.client >= box.clients.ends.count
+        || cast[slop_os.Handle](box.clients.ends[kept.client]) == slop_os.NO_HANDLE {
+        refuse_debug_port(box)
+        box.has_waiting = false
+        return void
+    }
+    box.has_waiting = false
+    purpose := kept.purpose[0..<0]
+    if kept.purpose_count <= kept.purpose.count {
+        purpose = kept.purpose[0..<kept.purpose_count]
+    }
+    // From the copy: ask sets box.waiting afresh, which name was a view of
+    kept_name := kept.name[0..<0]
+    if kept.name_count <= kept.name.count {
+        kept_name = kept.name[0..<kept.name_count]
+    }
+    refused :: ask(box, kept.client, kind, false, purpose, kept_name, u8.[])
+    match refused {
+        case Some(response) => {
+            box.waiting = kept
+            refuse_debug_port(box)
+            answer(box, response)
+        }
+        case None => {
+            box.waiting.name = kept.name
+            box.waiting.name_count = kept.name_count
+            box.waiting.purpose = kept.purpose
+            box.waiting.purpose_count = kept.purpose_count
+            box.waiting.port = kept.port
+            box.waiting.stop_key = kept.stop_key
+        }
     }
 }
 
@@ -1146,29 +1244,4 @@ connection_to :: fn(end : slop_os.Channel, port : slop_os.Port) -> slop_os.Chann
         return null
     }
     return pair.b
-}
-
-/**
- * Ask the session manager where a program runs.
- *
- * @param box The powerbox, whose programs connection is asked, waiting for the answer.
- * @param name The program's name.
- * @return Where it runs; Nowhere if the session manager couldn't be asked.
- */
-locate :: fn(box : ptr[mut Box], name : u8[]) -> programs.Location {
-    out := os.Outgoing.{}
-    request :: os.begin[programs.Request](&out)
-    request^ = .Locate(os.append(&out, name))
-    if programs.send_request(box.programs_end, box.programs_port, &out) != null {
-        return .Nowhere
-    }
-    into := os.Incoming.{}
-    match programs.receive_response(box.programs_end, box.programs_port, &into, true) {
-        case Received => {}
-        case _ => return .Nowhere
-    }
-    return match os.message_of[programs.Response](&into)^ {
-        case Located(location) => location
-        case _ => programs.Location.Nowhere
-    }
 }
