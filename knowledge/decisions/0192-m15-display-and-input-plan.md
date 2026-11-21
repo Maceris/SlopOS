@@ -473,3 +473,56 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     connections, across its sessions.
 - **Left open, for the project's owner**:
   - The GUI's elevation (accounts, shutdown, traces, keys) is still only the console's.
+
+## As Built: 15h
+- **The input-to-photon latency** (`display.md` *Also proposed*): virtio_input stamps each event with when it took it
+  from the device (`input.Event.time_ns`; `input.MAX_EVENTS` is 16 now, as 32 of the larger events don't fit half a
+  default ring), the input service carries a key's into `seat.Event.time_ns`, and the compositor into the surface's
+  Key, whose `time_ns` said only a Presented's time before. gui_kit measures from the earliest key a frame took to that
+  frame's Presented, the display's answer to its present; test_gui logs the median and the slowest, and the typing
+  test refuses a slowest past 250 ms. Measured: 8 to 18 ms median, 26 to 31 ms slowest, both architectures.
+- **The security review** (independent reads of the display stack, the GUI's trusted path and sessions, and Hemera's
+  std/fonts, canvas and ui) found, and these were fixed:
+  - High: the compositor mapped whatever memory a client gave for a buffer. Paged memory, the client its pager, could
+    stop it whenever a page wasn't there, every window with it; memory the client still owned could be destroyed
+    under the mapping, a fault it can't catch. The kernel's new `memory_kind` says what memory is, and a buffer is
+    anonymous memory by its owning handle (`memory_holders`) or Unsupported. Only what the image uses is mapped.
+  - High: closing a GUI session's launcher left its terminal windows and their shells running for whoever logged in
+    next. The greeter ends the session (EndSession) before showing the login window again.
+  - High: the greeter's password field kept undo steps, so Ctrl+Z after the next login window came up brought back the
+    last password but for its last character. A secret field keeps no undo and wipes the copies its edits make;
+    stop_editing wipes what undo kept; the greeter drops the window's focus and editing after each try.
+  - High: a composite glyph could name the next many times through eight levels, a hang or gigabytes: at most 256
+    components and 2^18 points a glyph. Medium: GPOS kern features naming lookups over and over took billions of steps
+    to open (at most 4096 indices); NaN or infinite points reached float-to-int casts in the rasterizer, near-endless
+    loops (edges with a NaN end dropped, coordinates clamped to 2^24, text sizes checked); a stroke's dashes and round
+    joins could make gigabytes of polygons (at most 2^22 points).
+  - The powerbox's prompts in the trusted layer kept the last ask's focus, so the next Enter typed elsewhere could
+    answer a new ask: focus is dropped for each. A debugging or network ask now shows what it'd grant (the program,
+    the rules), apart from the program's own words. A new file's name is one name, no / or control characters, and
+    the home's `grants` folder, the powerbox's kept grants, isn't offered.
+  - A program's powerbox name is a plain name (letters, digits, _ - .), so it can't reach outside `grants/<name>`.
+  - The compositor takes at most 32 of a client's requests a pass, so one can't starve the others or the trusted
+    layer; a window takes focus only the first time it's shown, not each time it's shown again; only the focused
+    window's client copies. A session holds at most half of the session manager's finding connections. The
+    framebuffer display checks the firmware's pitch and sizes. A form's values go bare only as letters, digits and
+    _ . / : + @ -, and not as a keyword; anything else is quoted.
+- **Left open, for the project's owner**:
+  - A program's powerbox name is still what the shell, or any program with a finding connection, says it is, so a
+    program can ask as another and Reopen what the user let that one keep. Naming it by the program the session
+    manager or the shell actually launched needs the launch to say so; the shell launches programs itself.
+  - A new window still takes focus when it's first shown, with no gesture: a client can make windows to take the
+    keyboard. Activation tokens (`display.md` *Also proposed*) would close it.
+  - Clients and windows are shared: one client can take all 16 of the compositor's client places (Connect) or
+    windows, and the trusted layer's next prompt connection is refused. Places per client, and some kept for the
+    trusted listener, are needed.
+  - The session manager and the powerbox wait on each other with no deadline (powerbox_for; the powerbox's locate and
+    attach), so a program racing both could hang every session. Asynchronous requests, as the SSH service's became,
+    would fix it.
+  - A prompt can be asked as often as a program likes, and shows at once; it ignores no input just after it's shown.
+  - Float-to-int casts of NaN, infinities and out-of-range values are LLVM's poison: Hemera could define them, as
+    saturating (`fptosi.sat`, NaN to 0), at some cost in the canvas's per-pixel code.
+  - Lower: the terminal service draws the console even if TakeBack wasn't delivered; a dropped Borrow could make the
+    compositor the seat's reader; the viewer's decode of a hostile typed file has no total budget; the terminal
+    window draws the input line without safe_text; a wheel and a release can reach a client's window while the
+    trusted layer's shown.

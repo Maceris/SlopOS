@@ -78,6 +78,8 @@ MAX_PRESSED :: 16
  * shells'.
  */
 MAX_FINDERS :: 32
+/** The most of them one session holds, its powerbox's apart (add_finder), so it can't leave the others none. */
+FINDERS_PER_SESSION :: MAX_FINDERS / 2
 /** The percentage of its budget's limit at which the session manager's under memory pressure. */
 PRESSURE_PERCENT : u64 : 80
 /** The percentage of its budget's limit it stops idle installations until it's under. */
@@ -393,8 +395,7 @@ Manager :: struct {
     port : slop_os.Port,
     /**
      * Whether a wait for a program's end (end_program, crash_installation) took packets from port that weren't acted
-     * on,
-     * a client's Readable among them, so every client's to be read again before the main loop waits on it.
+     * on, a client's Readable among them, so every client's to be read again before the main loop waits on it.
      */
     took_packets : bool,
     /** Its connection to the process manager, dialed through the manager grant, which it launches through. */

@@ -1532,6 +1532,49 @@ sys_memory_size :: fn(thread : ptr[mut Thread], memory : slop_os.Memory) -> Resu
 }
 
 /**
+ * Tell what a memory object is, by which of its fields are set (memory.hsc's Memory); no right is needed.
+ *
+ * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
+ *     where the handles are looked up.
+ * @param memory The memory's handle, of any rights.
+ * @return Its kind: a window first, as a window onto paged memory is a window, then paged, DMA, contiguous, a boot
+ *     module's, device memory, and anonymous memory for the rest.
+ * @error InvalidHandle Not a handle in the caller's table.
+ * @error ObjectGone The memory was destroyed.
+ * @error WrongKind Not a memory object's handle.
+ */
+sys_memory_kind :: fn(
+    thread : ptr[mut Thread],
+    memory : slop_os.Memory
+) -> Result[slop_os.MemoryKind, slop_os.HandleError] {
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](memory),
+        slop_os.ObjectKind.Memory,
+        cast[slop_os.Rights](0)
+    )?
+    found :: cast[ptr[Memory]](object)
+    return .Ok(
+        if found.parent != 0 {
+            slop_os.MemoryKind.Window
+        }
+        else if found.pager_binding != 0 {
+            slop_os.MemoryKind.Paged
+        }
+        else if found.domain != 0 {
+            slop_os.MemoryKind.Dma
+        }
+        else if found.block_order != 0 {
+            slop_os.MemoryKind.Contiguous
+        }
+        else if found.boot_module {
+            slop_os.MemoryKind.BootModule
+        }
+        else if found.physical != 0 { slop_os.MemoryKind.Device } else { slop_os.MemoryKind.Anonymous }
+    )
+}
+
+/**
  * Map part of a memory object in an address space; nothing is mapped until it's touched.
  *
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is

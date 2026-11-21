@@ -135,12 +135,53 @@ take_prompts :: fn(greeter : ptr[mut Greeter]) {
         }
     }
     match greeter.prompt_window {
-        case Some(window) => window.due = true
+        case Some(window) => {
+            /*
+             * Nothing focused from the last ask: it's reused, so a field or button focused then would take the next
+             * Enter typed elsewhere as this one's answer
+             */
+            ui.set_focus(&window.ui, 0)
+            ui.stop_editing(&window.ui)
+            window.due = true
+        }
         case None => {
             runtime.log_info("the prompt window couldn't be made")
             answer(greeter, null, false)
         }
     }
+}
+
+/**
+ * Tell whether a new file's name is one name in the folder shown: not empty, not . or .., and without / or control
+ * characters, so the program's suggestion can't make it somewhere else.
+ *
+ * @param name The name, as typed or suggested.
+ * @return True if it's one name.
+ */
+one_name :: fn(name : u8[]) -> bool {
+    if name.count == 0 || is_text(name, ".") || is_text(name, "..") {
+        return false
+    }
+    for byte in name {
+        if byte == cast[u8]('/') || byte == cast[u8]('\\') || byte < 0x20 || byte == 0x7f {
+            return false
+        }
+    }
+    return true
+}
+
+/** Tell whether bytes are a text's, byte for byte. */
+is_text :: fn(bytes : u8[], wanted : string) -> bool {
+    expected :: string_bytes(wanted)
+    if bytes.count != expected.count {
+        return false
+    }
+    for byte, i in bytes {
+        if i >= expected.count || expected[i] != byte {
+            return false
+        }
+    }
+    return true
 }
 
 /** What an Ask asks for, as the log and the window say it. */
@@ -188,6 +229,13 @@ prompt_frame :: fn(greeter : ptr[mut Greeter]) {
     if asking.purpose.count > 0 {
         _ = gui_kit.label_of(u, string.["“", text(&asking.purpose), "”"], ui.TextStyle.{size = 14})
     }
+    // What's granted, apart from the program's own words: the program to be debugged, or the network's rules
+    if asking.kind == .Debug && asking.typed.count > 0 {
+        _ = gui_kit.label_of(u, string.["The program to debug: ", text(&asking.typed)], ui.TextStyle.{size = 14})
+    }
+    if asking.kind == .Network && asking.typed.count > 0 {
+        _ = gui_kit.label_of(u, string.["Where it would reach: ", text(&asking.typed)], ui.TextStyle.{size = 14})
+    }
     chosen := false
     chosen_path : u8[..]
     defer runtime.array_free(&chosen_path)
@@ -203,7 +251,14 @@ prompt_frame :: fn(greeter : ptr[mut Greeter]) {
         // A new file's name first, so Tab reaches it first and Enter in it makes the file
         if asking.kind == .File && asking.write {
             _ = ui.text_field(u, "New file's name", &asking.typed)
-            if asking.typed.count > 0 && ui.button(u, "New file") {
+            if !one_name(ui.contents(&asking.typed)) && asking.typed.count > 0 {
+                _ = gui_kit.label_of(
+                    u,
+                    string.["A name, without / or control characters, and not . or .."],
+                    ui.TextStyle.{size = 13}
+                )
+            }
+            if one_name(ui.contents(&asking.typed)) && ui.button(u, "New file") {
                 chosen = true
                 new = true
             }
@@ -266,7 +321,7 @@ prompt_frame :: fn(greeter : ptr[mut Greeter]) {
         submitted = submitted || event.kind == .Submitted
     }
     // Enter in the new file's name, its only field, makes the file, as New file does
-    if submitted && asking.kind == .File && asking.write && asking.typed.count > 0 {
+    if submitted && asking.kind == .File && asking.write && one_name(ui.contents(&asking.typed)) {
         chosen = true
         new = true
     }
@@ -413,10 +468,18 @@ list_folder :: fn(greeter : ptr[mut Greeter]) {
         into := os.Incoming.{}
         match ask_read_only(listed, port, &out, &into) {
             case Listed(found) => {
-                made := Entry.{directory = found.kind == .Directory}
-                add_bytes(&made.name, os.items(&into, found.name))
-                insert_sorted(&asking.entries, made)
                 cursor = found.next
+                name :: os.items(&into, found.name)
+                /*
+                 * The powerbox's kept grants, grants/<program>/<key> in the home, aren't offered: a folder chosen
+                 * there, or a file made in it, would hand a program what another kept
+                 */
+                if folder.count == 0 && is_text(name, "grants") {
+                    continue
+                }
+                made := Entry.{directory = found.kind == .Directory}
+                add_bytes(&made.name, name)
+                insert_sorted(&asking.entries, made)
             }
             case _ => break
         }

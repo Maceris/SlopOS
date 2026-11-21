@@ -25,6 +25,8 @@ import screen from "../../protocols/screen"
 BUFFERS : u32 : 2
 /** A page's size in bytes. */
 PAGE : u64 : 4096
+/** The most pixels a side of the framebuffer it takes, so its sizes in bytes stay well within their integers. */
+MOST_SIDE : u32 : 16384
 
 /** The framebuffer display's state, made once in main, on the heap. */
 Display :: struct {
@@ -94,6 +96,16 @@ main :: fn(
     given :: cast[ptr[slop_os.FramebufferLayout]](&read[0])^
     if given.bits_per_pixel != 32 || given.width == 0 || given.height == 0 {
         runtime.log_info("the framebuffer isn't 32 bits a pixel: % bits", given.bits_per_pixel)
+        return 2
+    }
+    // A row's pixels within its pitch, and sizes whose bytes can't wrap, or the last row's written past the mapping
+    if given.width > MOST_SIDE || given.height > MOST_SIDE || cast[u64](given.pitch) < 4 * cast[u64](given.width) {
+        runtime.log_info(
+            "the framebuffer's layout doesn't add up: % by %, % bytes a row",
+            given.width,
+            given.height,
+            given.pitch
+        )
         return 2
     }
     stride :: 4 * given.width

@@ -535,7 +535,7 @@ text_from :: fn(bytes : u8[]) -> string {
  * @param end The connection's end, which moves to the session manager; closed if there's no room, or it can't be bound.
  * @param powerbox Whether it's the session's powerbox's, which Attach and Locate are taken on.
  * @param shell Whether it's a GUI session's shell's, which answers what the session's own does of its session.
- * @return Whether it was taken; end's closed if not.
+ * @return Whether it was taken; end's closed if not, as when its session has FINDERS_PER_SESSION already.
  */
 add_finder :: fn(
     sessions : ptr[mut Manager],
@@ -544,6 +544,20 @@ add_finder :: fn(
     powerbox : bool = false,
     shell : bool = false
 ) -> bool {
+    /*
+     * A session's programs can't take every place, each Connect making another, and leave the other sessions' shells
+     * and programs, and their powerboxes, none: a session has at most half of them, its powerbox's apart
+     */
+    held := cast[usize](0)
+    for finder in sessions.finders {
+        if finder.in_use && finder.session == number && !finder.powerbox {
+            held += 1
+        }
+    }
+    if !powerbox && held >= FINDERS_PER_SESSION {
+        _ = slop_os.handle_close(cast[slop_os.Handle](end))
+        return false
+    }
     for &finder, i in sessions.finders {
         if finder.in_use {
             continue
@@ -741,10 +755,38 @@ first_bytes :: fn(bytes : u8[], count : usize) -> u8[] {
  *     if it couldn't be made.
  */
 powerbox_answer :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> programs.Response {
+    /*
+     * The powerbox keeps a program's grants under its name, grants/<name>/<key> in the home, and shows it to the user:
+     * a program's or a script's name alone, so it can't reach past its own folder there or say something else
+     */
+    if !plain_name(string_bytes(name)) {
+        return programs.Response.Refused(.NotAllowed)
+    }
     return match powerbox_for(sessions, number, name) {
         case Some(made) => programs.Response.PowerboxGiven(made)
         case None => programs.Response.Refused(.Failed)
     }
+}
+
+/**
+ * Tell whether a name is a program's or a script's alone: 1 to MAX_INSTALLATION_NAME ASCII letters, digits, _, - and
+ * ., not starting with a dot, so not . or .. and with no / or control characters.
+ *
+ * @param name The name's bytes.
+ * @return True if it's such a name.
+ */
+plain_name :: fn(name : u8[]) -> bool {
+    if name.count == 0 || name.count > programs.MAX_INSTALLATION_NAME || name[0] == cast[u8]('.') {
+        return false
+    }
+    for byte in name {
+        letter :: (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+        digit :: byte >= cast[u8]('0') && byte <= cast[u8]('9')
+        if !letter && !digit && byte != cast[u8]('_') && byte != cast[u8]('-') && byte != cast[u8]('.') {
+            return false
+        }
+    }
+    return true
 }
 
 /**

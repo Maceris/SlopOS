@@ -149,7 +149,11 @@ SubsurfaceSpec :: struct {
 NewBuffer :: struct {
     /** The client's number for it, not 0, nor one of its buffers'. */
     id : u32,
-    /** Its memory, which moves to the compositor, mapped read-only; every plane has to lie within it. */
+    /**
+     * Its memory, which moves to the compositor, mapped read-only; every plane has to lie within it. Anonymous memory
+     * (memory_create), by its owning handle; paged memory, a window onto memory, or a handle that doesn't own it is
+     * Unsupported, as what the compositor reads of it could wait on the client or be destroyed under it.
+     */
     memory : slop_os.Memory,
     /** What it holds. */
     description : BufferDescription,

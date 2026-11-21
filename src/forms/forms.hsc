@@ -273,8 +273,11 @@ add_argument :: fn(line : ptr[mut u8[..]], value : u8[]) {
 }
 
 /**
- * Tell whether a value is a word the shell reads bare: not empty, not starting with -- or one of the bytes that start
- * an expression, and without a space, a control byte, or a byte that ends a word.
+ * Tell whether a value is a word the shell reads bare, as a number or a path is: only ASCII letters, digits and
+ * _ . / : + @ -, not starting with --, and not a keyword, alone or ahead of a dot (or.txt reads as or). Anything else
+ * is
+ * quoted, which the shell reads as text whatever it holds, so a value can't start a comment (#), make the line a try
+ * (?), or end the word for something after it.
  *
  * @param value The value's bytes.
  * @return True if it can be given bare.
@@ -287,17 +290,45 @@ is_plain_word :: fn(value : u8[]) -> bool {
         return false
     }
     for byte in value {
-        if byte <= 32
-            || byte == cast[u8]('|')
-            || byte == cast[u8](';')
-            || byte == cast[u8](')')
-            || byte == cast[u8]('}')
-            || byte == cast[u8]('"')
-            || byte == cast[u8]('(')
-            || byte == cast[u8]('&')
-            || byte == cast[u8]('$')
-            || byte == cast[u8]('[')
-            || byte == cast[u8]('\\') {
+        letter :: (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+        digit :: byte >= cast[u8]('0') && byte <= cast[u8]('9')
+        other :: byte == cast[u8]('_')
+            || byte == cast[u8]('.')
+            || byte == cast[u8]('/')
+            || byte == cast[u8](':')
+            || byte == cast[u8]('+')
+            || byte == cast[u8]('@')
+            || byte == cast[u8]('-')
+        if !letter && !digit && !other {
+            return false
+        }
+    }
+    // The word before any dot, which the shell may read as a keyword
+    word_end := value.count
+    for byte, i in value {
+        if byte == cast[u8]('.') && word_end == value.count {
+            word_end = i
+        }
+    }
+    word :: value[0..<word_end]
+    for keyword in KEYWORDS {
+        if same_bytes(word, string_bytes(keyword)) {
+            return false
+        }
+    }
+    return true
+}
+
+/** The shell's keywords, and the names it reads as values, which a bare word mustn't be. */
+KEYWORDS :: string.["catch", "false", "fn", "let", "not", "null", "or", "param", "return", "true", "try"]
+
+/** Tell whether two byte slices hold the same bytes. */
+same_bytes :: fn(a : u8[], b : u8[]) -> bool {
+    if a.count != b.count {
+        return false
+    }
+    for byte, i in a {
+        if i >= b.count || b[i] != byte {
             return false
         }
     }

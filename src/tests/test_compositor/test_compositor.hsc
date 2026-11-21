@@ -6,7 +6,7 @@
  * - "windows shown" once both are on the screen, A red and B blue, B over A and focused;
  * - "<A or B> typed <text>" for each key its window is given, which only the focused window's should be;
  * - "<A or B> pressed at <x>, <y>" for a button pressed in its window, in its units;
- * - A copies "from A" the first time it's focused; "<A or B> pasted <text>" for what Ctrl+Shift+V pastes into it.
+ * - A copies "from A" the first time it's pressed, while it's focused; "<A or B> pasted <text>" for what Ctrl+Shift+V pastes into it.
  *
  * Neither client holds anything of the other's: their buffers are memory each made, given only to the compositor.
  * It runs until the system stops.
@@ -252,14 +252,20 @@ take :: fn(client : ptr[mut Client]) {
     }
 }
 
-/** Take one event: logged, A copying the first time it's focused. */
+/**
+ * Take one event: logged, A copying the first time it's pressed, as a program copies on the user's gesture, while
+ * it's focused, the only time the compositor takes a copy.
+ */
 take_event :: fn(client : ptr[mut Client], event : surface.Event, text : string) {
     kind :: surface.kind_of(event) or_return void
     match kind {
         case .Presented => client.shown = true
         case .Released => runtime.log_info("% released buffer %", client.name, event.code)
-        case .FocusIn => {
-            if client.name == "A" && !client.copied {
+        case .Button => {
+            if event.pressed != 0 {
+                runtime.log_info("% pressed at %, %", client.name, event.x, event.y)
+            }
+            if event.pressed != 0 && client.name == "A" && !client.copied {
                 client.copied = true
                 out := os.Outgoing.{}
                 request :: os.begin[surface.Request](&out)
@@ -274,11 +280,6 @@ take_event :: fn(client : ptr[mut Client], event : surface.Event, text : string)
             }
         }
         case .Key => runtime.log_info("% typed %", client.name, text)
-        case .Button => {
-            if event.pressed != 0 {
-                runtime.log_info("% pressed at %, %", client.name, event.x, event.y)
-            }
-        }
         case .Paste => runtime.log_info("% pasted %", client.name, text)
         case _ => {}
     }

@@ -348,6 +348,24 @@ memory_counts_who_holds_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcom
         "a window onto it is made"
     )?
     testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 2, "a window holds it")
+    // What each is, as a server taking memory from a client asks
+    testing.expect(t, (slop_os.memory_kind(memory) or_else .Device) == .Anonymous, "memory_create's is anonymous")
+    testing.expect(t, (slop_os.memory_kind(copy) or_else .Device) == .Anonymous, "as a duplicate says, with no rights")
+    testing.expect(t, (slop_os.memory_kind(window) or_else .Device) == .Window, "a window is one")
+    testing.require_ok(t, slop_os.port_bind_wake(port, 0x7000), "a wake binding for paged memory is made")?
+    paged :: testing.require_ok(
+        t,
+        slop_os.memory_create_paged(block.budget, port, 0x7000, PAGE),
+        "paged memory's made"
+    )?
+    testing.expect(t, (slop_os.memory_kind(paged) or_else .Device) == .Paged, "paged memory is")
+    _ = slop_os.handle_close(cast[slop_os.Handle](paged))
+    testing.expect_error(
+        t,
+        slop_os.memory_kind(cast[slop_os.Memory](port)),
+        slop_os.HandleError.WrongKind,
+        "a port isn't memory"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](window))
     testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 1, "a closed window doesn't")
     // The duplicate moved over a channel: held on its way, and once it's taken

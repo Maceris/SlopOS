@@ -41,6 +41,8 @@ BAND_TEXT : f32 : 14
 CLOSE :: 16
 /** The most windows, of every client together. */
 MAX_WINDOWS :: 16
+/** The most requests taken from a client in one pass of the main loop, before the others and a frame. */
+REQUESTS_PER_PASS :: 32
 /** The most buffers a client has at once. */
 MAX_BUFFERS :: 8
 /** The most events waiting for a client; past them, the oldest are dropped. */
@@ -128,6 +130,11 @@ Window :: struct {
     submitted : bool,
     /** Whether it's in the trusted layer, above every other client's, without a band. */
     trusted : bool,
+    /**
+     * Whether it's been shown before, so showing it again doesn't take focus: hidden and shown again, a client's
+     * window could otherwise take the keyboard, and what the user types elsewhere, whenever it liked.
+     */
+    shown_before : bool,
     /** Its title, the first title_count bytes. */
     title : u8[TITLE_BYTES],
     /** How many of title's bytes it has. */
@@ -138,6 +145,8 @@ Window :: struct {
 Compositor :: struct {
     /** The port its clients and the seat are bound to. */
     port : slop_os.Port,
+    /** Whether a client was cut short at REQUESTS_PER_PASS this pass, so every client's served again before a wait. */
+    cut_short : bool,
     /** The display's channel. */
     display_end : slop_os.Channel,
     /** The port the display's answers come to. */
@@ -285,6 +294,11 @@ main :: fn(
         if service_kit.stopping() {
             return 0
         }
+        // A client cut short has requests left, with nothing on the port to say so: every client's served again first
+        if compositor.cut_short {
+            compositor.cut_short = false
+            continue
+        }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(compositor.port, packets, slop_os.NO_DEADLINE)
     }
@@ -420,7 +434,9 @@ any_submitted :: fn(compositor : ptr[Compositor]) -> bool {
 // ---- Clients' requests
 
 /**
- * Take every request a client has sent, until there are none left, or it's gone, which ends its windows.
+ * Take the requests a client has sent, up to REQUESTS_PER_PASS, until there are none left, or it's gone, which ends its
+ * windows. One that has more is cut short (cut_short), so it can't keep the compositor from the others, or from
+ * drawing, by sending as fast as it's answered.
  *
  * @param compositor The compositor.
  * @param index The client's index; a freed place is passed over.
@@ -434,7 +450,13 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
     if cast[slop_os.Handle](end) == slop_os.NO_HANDLE {
         return void
     }
+    taken := cast[usize](0)
     loop {
+        if taken >= REQUESTS_PER_PASS {
+            compositor.cut_short = true
+            return void
+        }
+        taken += 1
         match surface.receive_request(end, compositor.port, into, false) {
             case Received => {}
             case Empty => return void
@@ -504,6 +526,16 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
             case Copy(offer) => {
                 answered = false
                 _ = slop_os.handle_close(cast[slop_os.Handle](offer.data))
+                /*
+                 * Only the focused window's client, as only the user copies: a program in the background can't swap
+                 * what was copied before it's pasted
+                 */
+                focused :: compositor.focus < MAX_WINDOWS
+                    && compositor.windows[compositor.focus % MAX_WINDOWS].used
+                    && compositor.windows[compositor.focus % MAX_WINDOWS].client == index
+                if !focused {
+                    continue
+                }
                 text :: os.items(into, offer.text)
                 compositor.clipboard_count = 0
                 for byte in text {
@@ -614,10 +646,25 @@ create_window :: fn(
 }
 
 /**
- * Take a client's buffer: its description checked, its memory mapped read-only.
+ * Tell whether memory a client gave for a buffer is anonymous memory, given by its owning handle: what the compositor
+ * reads of it then is there while it's mapped. Paged memory would wait on its pager, the client, whenever a page isn't
+ * there, stopping every window; a window onto memory has its parent's pages, which may be paged; and memory the client
+ * still owns can be destroyed under the mapping, a fault the compositor can't catch.
+ *
+ * @param memory The memory, as it came.
+ * @return True if it's anonymous and the handle owns it.
+ */
+owned_anonymous :: fn(memory : slop_os.Memory) -> bool {
+    kind :: slop_os.memory_kind(memory) or_return false
+    return kind == .Anonymous && (slop_os.memory_holders(memory) is_ok)
+}
+
+/**
+ * Take a client's buffer: its description checked, its memory mapped read-only, only as far as the image reaches.
  *
  * @return Added with its id; Refused for an id in use or 0, a description it doesn't take, a plane outside its memory,
- *     every place taken, or memory that couldn't be mapped. The memory's closed when it's refused.
+ *     memory that isn't anonymous and owned by the handle given (owned_anonymous), every place taken, or memory that
+ *     couldn't be mapped. The memory's closed when it's refused.
  */
 add_buffer :: fn(compositor : ptr[mut Compositor], client : usize, given : surface.NewBuffer) -> surface.Response {
     refusal := surface.Refusal.NoSuchThing
@@ -647,13 +694,18 @@ add_buffer :: fn(compositor : ptr[mut Compositor], client : usize, given : surfa
             && plane.stride >= 4 * description.width
             && plane.offset <= size
             && rows <= size - plane.offset
+            && owned_anonymous(given.memory)
         refusal = if taken {
             surface.Refusal.NoSuchThing
         }
         else if !fits { surface.Refusal.Unsupported } else { surface.Refusal.TooMany }
         if !taken && fits && place < MAX_BUFFERS {
             buffer :: &state.buffers[place]
-            mapped :: (size + 4095) / 4096 * 4096
+            /*
+             * Only what the image uses is mapped, not all the memory, which may be far bigger: addresses reserved for
+             * a place are kept for the next buffer there, so a place's grow only to the largest image allowed
+             */
+            mapped :: (plane.offset + rows + 4095) / 4096 * 4096
             if buffer.reserved_bytes < mapped {
                 buffer.reserved = runtime.reserve_addresses(cast[usize](mapped)) or_else 0
                 buffer.reserved_bytes = if buffer.reserved == 0 { cast[u64](0) } else { mapped }
@@ -670,7 +722,7 @@ add_buffer :: fn(compositor : ptr[mut Compositor], client : usize, given : surfa
                 buffer.id = given.id
                 buffer.memory = given.memory
                 buffer.address = buffer.reserved
-                buffer.bytes = size
+                buffer.bytes = mapped
                 buffer.format = description.format
                 buffer.width = description.width
                 buffer.height = description.height
@@ -774,7 +826,11 @@ submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surf
     }
     else if first && submission.buffer != 0 {
         runtime.log_info("window '%' shown", title_of(window))
-        focus_window(compositor, index)
+        // Focused the first time it's shown; again only on the user's gesture, but for the trusted layer's
+        if !window.shown_before || window.trusted {
+            focus_window(compositor, index)
+        }
+        window.shown_before = true
     }
     return null
 }

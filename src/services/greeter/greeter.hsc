@@ -173,6 +173,7 @@ log_in :: fn(greeter : ptr[mut Greeter]) {
         byte^ = 0
     }
     runtime.array_reset(&greeter.password)
+    forget_editing(greeter)
     if !sent {
         say(greeter, "The account service couldn't be asked.")
         return void
@@ -253,6 +254,35 @@ string_of_bytes :: fn(bytes : u8[]) -> string {
     return if bytes.count > 0 { string_of(&bytes[0], bytes.count) } else { "" }
 }
 
+/**
+ * End a session and wait until it has: every program of it asked to stop, then killed after a grace period.
+ *
+ * @param greeter The greeter, whose session manager connection asks.
+ * @param number The session's number; one that's already gone is answered at once.
+ */
+end_session :: fn(greeter : ptr[mut Greeter], number : u32) {
+    out := os.Outgoing.{}
+    os.begin[session.Request](&out)^ = .EndSession(number)
+    if session.send_request(greeter.sessions_end, greeter.sessions_port, &out) is_some {
+        runtime.log_info("the session couldn't be ended")
+        return void
+    }
+    into := os.Incoming.{}
+    match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, true) {
+        case Received => runtime.log_info("ended the GUI session")
+        case _ => runtime.log_info("the session couldn't be ended")
+    }
+}
+
+/**
+ * Forget the login window's focus and editing state, what the password field kept among it wiped, so the next to use
+ * it finds nothing of the last.
+ */
+forget_editing :: fn(greeter : ptr[mut Greeter]) {
+    ui.set_focus(&greeter.window.ui, 0)
+    ui.stop_editing(&greeter.window.ui)
+}
+
 /** Once the session's first program has ended: the login window shown again, for the next. */
 wait_for_session :: fn(greeter : ptr[mut Greeter]) {
     into := os.Incoming.{}
@@ -262,7 +292,16 @@ wait_for_session :: fn(greeter : ptr[mut Greeter]) {
     }
     match os.message_of[session.Response](&into)^ {
         case Exited(_) => {
+            /*
+             * The rest of the session ended with its first program, the launcher: its terminal windows, their shells,
+             * and every program it started, so the next to log in finds none of them
+             */
+            match greeter.session {
+                case Some(number) => end_session(greeter, number)
+                case None => {}
+            }
             greeter.session = null
+            forget_editing(greeter)
             // What it asked, refused: its powerbox has gone with it
             if greeter.asking.active {
                 answer(greeter, null, false)
