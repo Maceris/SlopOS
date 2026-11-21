@@ -358,6 +358,13 @@ The boot tests pass again, all 291, with the GUI login's back among them.
   - The boot tests build into a new folder each run, whose path is in the build's settings, so their targets are
     checked each time, but their programs come from the cache.
   - `-O0` crashes LLVM's instruction selection (an `insertvalue` in SelectionDAG), probably on a large constant.
+  - The editor (hemera-lsp, `hemera.root` set to `src/build`): opening the first file checks every target, ~18 s, the
+    compiler peaking near 9 GB, with a 16 MB name index. Then a save checks the targets that read the file. A
+    service's file is read by its program, the root task and the supervisor, the last two ~3 s each, so a save's
+    diagnostics took ~5 s. hemera-lsp checks the target that reads the fewest files first now, and shows what it
+    finds: ~1.5 s from a save to its diagnostics, the others' following. What's left is about a second of checking the
+    program (~0.55 s), writing its 3 MB index (~0.2 s, over half of it std's declarations, which barely change), and
+    the server reading and merging that index (~0.4 s); a save soon after another waits for the last one's others.
 - **Outputs out of the sources**: the build package's outputs go in the repository's `build/` folder by default, which
   git ignores, and `hemera --check src/build` writes nothing (the compiler's `compiler.checking()`, and it makes an
   output's folder as it builds into it).
