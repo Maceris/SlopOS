@@ -92,11 +92,20 @@ main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]
     }
 }
 
+/** Send a Name, which isn't answered. */
+name_connection :: fn(client : ptr[mut Client], name : string) {
+    out := os.Outgoing.{}
+    request :: os.begin[surface.Request](&out)
+    request^ = .Name(os.append(&out, string_bytes(name)))
+    _ = surface.send_request(client.end, client.port, &out)
+}
+
 /**
  * Connect a client, and make and show its window, filled with a colour.
  *
  * @param dialing The connector to the compositor.
- * @param first Whether it's A, the first; B otherwise. Its name is its window's title.
+ * @param first Whether it's A, the first; B otherwise. Its name is its window's title, and A's connection is named
+ *     "A" too, then named again, which is refused.
  * @param blue The colour's blue, 0 to 255.
  * @param green Its green.
  * @param red Its red.
@@ -117,6 +126,14 @@ open :: fn(
     client.name = if first { "A" } else { "B" }
     client.end = channel.end
     client.port = os.port_for(startup.budget, channel.end) or_return null
+    /*
+     * A names its connection, as whoever dials does for the program it's for, by its first request; then tries to
+     * name it again, which is refused. B names it nothing, so its band has its title alone.
+     */
+    if first {
+        name_connection(client, "A")
+        name_connection(client, "spoofed")
+    }
 
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)

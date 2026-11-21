@@ -297,6 +297,9 @@ TESTS = [
     ("composites two clients' windows, moved, raised and pasted into", 7, [WITH_PROGRAMS, "--compositor", "--timeout=300",
         "--command-line=test_exit test_services test_settle=180 test_compositor",
         "--expect-line=[user] compositor: serving 1280 by 800",
+        # A's connection named by its first request, a second refused (decisions/0193, 16b)
+        "--expect-line=[user] compositor: a client named 'A'",
+        "--expect-line=[user] compositor: refused a client's name: a connection's named only by its first request",
         "--expect-line=[user] compositor: window 'A' shown",
         "--expect-line=[user] compositor: window 'B' shown",
         "--expect-line=[user] test_compositor: windows shown",
@@ -477,6 +480,8 @@ TESTS = [
         "--expect-line=[user] greeter: started a GUI session for admin",
         "--expect-line=[user] sessions: a session for admin, in en-US",
         "--expect-line=[user] compositor: window 'Programs' shown",
+        # The launcher's connection named by the session manager, which starts it (decisions/0193, 16b)
+        "--expect-line=[user] compositor: a client named 'launcher'",
         "--expect-line-start=[user] launcher: lists 2 programs and ",
         "--expect-line=[user] launcher: a form for test_shell_calls",
         "--expect-line=[user] launcher: runs test_shell_calls --count 3 --label \"from a form\" --speed Fast",

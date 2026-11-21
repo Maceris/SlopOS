@@ -2406,6 +2406,12 @@ def main() -> int:
         leaked = [text for text in arguments.refuse_disk_text if text.encode() in image_bytes]
         if arguments.serial is not None:
             arguments.serial.write_text(output)
+        # The screenshots a run took, the console's and a GUI driver's, kept where SLOPOS_SAVE_SCREENS says, to look at
+        saved_to = os.environ.get("SLOPOS_SAVE_SCREENS")
+        for taken in (screenshot, folder / "display.ppm"):
+            if saved_to and taken.exists():
+                Path(saved_to).mkdir(parents=True, exist_ok=True)
+                shutil.copy(taken, Path(saved_to) / f"{taken.stem}-{os.getpid()}.ppm")
     sys.stdout.write(output)
     for boot, again, text in later:
         print(f"boot.py: boot {boot}")

@@ -1016,7 +1016,22 @@ launch_gui :: fn(
     }
     port :: os.port_for(slop_os.startup_block().budget, dialer) or_return .Refused(.Failed)
     defer slop_os.handle_close(cast[slop_os.Handle](port))
-    grants.surface = connector.dial[surface.Surface](dialer, port) or_return .Refused(.Failed)
+    dialed :: connector.dial[surface.Surface](dialer, port) or_return .Refused(.Failed)
+    /*
+     * Named for the program, its first request, before the program has it: its windows' bands show the name, and it
+     * can't name itself anything else (decisions/0193, 16b)
+     */
+    naming := os.Outgoing.{}
+    request :: os.begin[surface.Request](&naming)
+    request^ = .Name(os.append(&naming, string_bytes(name)))
+    surface_port :: os.port_for(slop_os.startup_block().budget, dialed.end) or_return .Refused(.Failed)
+    sent :: surface.send_request(dialed.end, surface_port, &naming) == null
+    _ = slop_os.handle_close(cast[slop_os.Handle](surface_port))
+    if !sent {
+        _ = slop_os.handle_close(cast[slop_os.Handle](dialed.end))
+        return .Refused(.Failed)
+    }
+    grants.surface = dialed
     prepared :: prepare(sessions, number, name) or_return .Refused(.Failed)
     grants.log = duplicate_log(sessions.log)
     grants.programs = if first { programs_connection(sessions, number) } else { finding_connection(sessions, number) }

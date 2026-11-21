@@ -104,6 +104,20 @@ ClientState :: struct {
     next_surface : u32,
     /** Whether it connected through the trusted listener, its windows then the trusted layer's. */
     trusted : bool,
+    /**
+     * Whether it's one of the listeners a dialer reaches the compositor through, whose Connects make unnamed
+     * connections for the dialer to name; a client's Connects make connections with its own name.
+     */
+    listener : bool,
+    /**
+     * Whether its name is settled: once its first request's been taken, a Name or anything else, or from its maker's
+     * for one made by Connect. A Name after that is refused, so a program can't name itself what it isn't.
+     */
+    named : bool,
+    /** Its program's name, as its dialer named it (Name), the first name_count bytes; none when it wasn't. */
+    name : u8[surface.NAME_BYTES],
+    /** How many of name's bytes are used. */
+    name_count : usize,
 }
 
 /** A window. */
@@ -262,15 +276,16 @@ main :: fn(
         case Some(dialer) => connect_seat(compositor, dialer)
         case None => {}
     }
-    if !service_kit.add_client(&compositor.clients, compositor.port, clients.end) {
-        return 2
+    listening :: service_kit.add_client_index(&compositor.clients, compositor.port, clients.end) or_return 2
+    if listening < compositor.states.count {
+        compositor.states[listening] = ClientState.{next_surface = 1, listener = true}
     }
     match trusted {
         case Some(listener) => {
             match service_kit.add_client_index(&compositor.clients, compositor.port, listener.end) {
                 case Some(added) => {
                     if added < compositor.states.count {
-                        compositor.states[added] = ClientState.{next_surface = 1, trusted = true}
+                        compositor.states[added] = ClientState.{next_surface = 1, trusted = true, listener = true}
                     }
                 }
                 case None => {}
@@ -473,16 +488,46 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
         out := os.Outgoing.{}
         response :: os.begin[surface.Response](&out)
         answered := true
+        // A connection's name is settled by its first request, whatever it is: only a Name then names it
+        first_request :: !compositor.states[index].named
+        compositor.states[index].named = true
         match os.message_of[surface.Request](into)^ {
+            case Name(given) => {
+                answered = false
+                if first_request && index < compositor.states.count && !compositor.states[index].listener {
+                    state :: &compositor.states[index]
+                    text :: os.items(into, given)
+                    kept :: if text.count < state.name.count { text.count } else { state.name.count }
+                    for byte, i in text {
+                        if i < kept && i < state.name.count {
+                            state.name[i] = byte
+                        }
+                    }
+                    state.name_count = kept
+                    if kept <= state.name.count {
+                        runtime.log_info("a client named '%'", string_of_bytes(state.name[0..<kept]))
+                    }
+                }
+                else {
+                    runtime.log_info("refused a client's name: a connection's named only by its first request")
+                }
+            }
             case Connect(connection) => {
                 answered = false
                 match service_kit.add_client_index(&compositor.clients, compositor.port, connection.end) {
                     case Some(added) => {
-                        // A trusted client's connections are trusted too
+                        /*
+                         * A trusted client's connections are trusted too; a client's have its name, settled, while a
+                         * listener's are its dialer's to name
+                         */
                         if added < compositor.states.count {
+                            maker :: compositor.states[index]
                             compositor.states[added] = ClientState.{
                                 next_surface = 1,
-                                trusted = compositor.states[index].trusted,
+                                trusted = maker.trusted,
+                                named = !maker.listener,
+                                name = maker.name,
+                                name_count = maker.name_count,
                             }
                         }
                     }
@@ -1482,11 +1527,41 @@ draw_window :: fn(compositor : ptr[mut Compositor], buffer : u32, index : usize,
         )
         // Opened where it's used, as a font holds a view of its bytes; the glyph cache keeps its glyphs between frames
         font :: fonts.open(SANS[0..<SANS.count]) or_else fonts.Font.{}
+        /*
+         * The program's name first, as its dialer named it (Name), dark on a light box no title can draw, since a
+         * title is only text on the band's colour; then the title the program chose
+         */
+        title_at := cast[f32](band.x0 + 8)
+        if window.client < compositor.states.count {
+            state :: &compositor.states[window.client]
+            if state.name_count > 0 && state.name_count <= state.name.count {
+                name :: state.name[0..<state.name_count]
+                wide :: fonts.measure(&font, BAND_TEXT, name)
+                canvas.fill_rect(
+                    painter,
+                    cast[f32](band.x0 + 4),
+                    cast[f32](band.y0 + 4),
+                    wide + 10,
+                    cast[f32](BAND - 8),
+                    canvas.Paint.Solid(canvas.rgb(236, 239, 241))
+                )
+                _ = canvas.draw_text(
+                    painter,
+                    &font,
+                    BAND_TEXT,
+                    cast[f32](band.x0 + 9),
+                    cast[f32](band.y0 + 19),
+                    name,
+                    canvas.Paint.Solid(canvas.rgb(33, 33, 33))
+                )
+                title_at = cast[f32](band.x0 + 4) + wide + 10 + 8
+            }
+        }
         _ = canvas.draw_text(
             painter,
             &font,
             BAND_TEXT,
-            cast[f32](band.x0 + 8),
+            title_at,
             cast[f32](band.y0 + 19),
             string_bytes(title_of(window)),
             canvas.Paint.Solid(canvas.rgb(255, 255, 255))

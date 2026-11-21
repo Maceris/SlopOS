@@ -301,7 +301,18 @@ Request :: union {
      * has as many clients as it takes. Sent on the listener, and answered with nothing.
      */
     Connect(os.Channel[Surface]),
+    /**
+     * Name the connection's client, the program it is, as its windows' identity bands show it apart from their
+     * titles (decisions/0193, 16b). Taken only as a connection's first request, from whoever dialed the compositor
+     * and names the program it hands the connection to, as the session manager does for each GUI program it starts;
+     * any later, or a second, is refused without an answer. A connection made by Connect has its maker's name. UTF-8;
+     * at most NAME_BYTES are kept. Not answered.
+     */
+    Name(slop_os.Relative[u8]),
 }
+
+/** The most bytes of a client's name (Name) the compositor keeps. */
+NAME_BYTES :: 48
 
 /** What the compositor answers. */
 Response :: union {
@@ -369,6 +380,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Read(_) => false
         case Copy(_) => true
         case Connect(_) => true
+        case Name(_) => false
     }
 }
 
