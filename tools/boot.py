@@ -1014,7 +1014,8 @@ class DisplayTest(Keyboard):
 class CompositorTest(DisplayTest):
     """
     A virtio GPU, tablet and keyboard for the compositor and test_compositor (decisions/0192, 15c), driven through QEMU's
-    machine protocol once its windows are shown: B, focused, is typed into; A is clicked, which raises it; B's band is
+    machine protocol once its windows are shown: B, waiting for attention (decisions/0193, 16d), is clicked, which focuses
+    it, and typed into; A is clicked, which raises it; B's band is
     dragged to move it, which raises it again; Ctrl+Shift+V pastes what A copied into B. Each step waits for the line
     that says it happened. Then the screen's taken and checked (windows_drawn), and the power button ends the run.
     """
@@ -1083,8 +1084,15 @@ class CompositorTest(DisplayTest):
             if not self.connect():
                 self.problem = "the machine protocol couldn't be reached"
                 return
-            # B, on top and focused once it's shown, typed into
-            if not self.step("[user] compositor: focused 'B'", "B focused"):
+            # B, on top, shown while A has focus and with no activation token: it waits for attention, not focused
+            if not self.step("[user] compositor: window 'B' wants attention", "B waiting for attention"):
+                return
+            # Clicked, as the user chooses it: focused, then typed into
+            since = self.mark()
+            self.point(300, 250)
+            self.button(True)
+            self.button(False)
+            if not self.after(since, "[user] compositor: focused 'B'", "B focused by a click"):
                 return
             since = self.mark()
             self.key("b", True)

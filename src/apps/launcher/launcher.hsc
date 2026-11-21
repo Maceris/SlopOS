@@ -75,6 +75,7 @@ Launcher :: struct {
  * @param programs Its session's own programs connection, which lists and starts programs.
  * @param open Not used: it's asked to open nothing.
  * @param terminal Not used: it serves no terminal.
+ * @param activation Not used: its window is the session's first, with nothing else to take focus from.
  * @return 0 once its window's closed; 2 without a compositor or a programs connection, or when its window can't be
  *     made.
  */
@@ -84,7 +85,8 @@ main :: fn(
     home : os.Channel[dir.Dir]?,
     programs : os.Channel[programs.Programs]?,
     open : string?,
-    terminal : os.Channel[terminal.Terminal]?
+    terminal : os.Channel[terminal.Terminal]?,
+    activation : u64?
 ) -> int {
     startup :: slop_os.startup_block()
     launcher :: runtime.new(Launcher)
@@ -103,7 +105,7 @@ main :: fn(
         }
         case None => {}
     }
-    launcher.window = gui_kit.open_on(surface or_return 2, "Programs", 360, 560) or_return 2
+    launcher.window = gui_kit.open_on(surface or_return 2, "Programs", 360, 560, activation or_else 0) or_return 2
     list_programs(launcher)
     runtime.log_info("lists % programs and % commands", count_of(launcher, true), count_of(launcher, false))
     loop {
@@ -370,6 +372,8 @@ start :: fn(launcher : ptr[mut Launcher], name_bytes : u8[], open : string?) {
     name :: string_of_bytes(name_bytes)
     given :: launcher.home or_return void
     home :: dir.connect(given.end, launcher.home_port, slop_os.startup_block().budget) or_return void
+    // The token for the click, or the Enter, that asked for it, so its window takes focus when it's shown
+    activation :: gui_kit.token(launcher.window)
     out := os.Outgoing.{}
     // Begun before the bytes are appended, as begin starts the message afresh
     request :: os.begin[programs.Request](&out)
@@ -378,6 +382,7 @@ start :: fn(launcher : ptr[mut Launcher], name_bytes : u8[], open : string?) {
             name = os.append(&out, name_bytes),
             home = home,
             open = os.append(&out, string_bytes(open or_else "")),
+            activation = activation,
         }
     )
     into := os.Incoming.{}

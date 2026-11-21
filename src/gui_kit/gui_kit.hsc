@@ -144,9 +144,17 @@ open :: fn(dialer : os.Channel[connector.Connector], title : string, width : u32
  * @param title Its title.
  * @param width Its width, in pixels.
  * @param height Its height, in pixels.
+ * @param activation The activation token for the user's gesture that asked for it, as the program was given it, which
+ *     it presents to take focus when it's first shown; 0 for none, when it takes focus only if nothing has it.
  * @return The window, on the heap, its first frame due; null if anything failed.
  */
-open_on :: fn(channel : os.Channel[surface.Surface], title : string, width : u32, height : u32) -> ptr[mut Window]? {
+open_on :: fn(
+    channel : os.Channel[surface.Surface],
+    title : string,
+    width : u32,
+    height : u32,
+    activation : u64 = 0
+) -> ptr[mut Window]? {
     startup :: slop_os.startup_block()
     window :: runtime.new(Window)
     window.end = channel.end
@@ -165,6 +173,7 @@ open_on :: fn(channel : os.Channel[surface.Surface], title : string, width : u32
             scale = surface.SCALE_ONE,
             color = .Srgb,
             title = os.append(&out, string_bytes(title)),
+            activation = activation,
         }
     )
     match ask(window, &out) {
@@ -615,6 +624,22 @@ finish :: fn(window : ptr[mut Window]) -> ui.Event[] {
         window.input_since = 0
     }
     return ui.events_of(&window.ui)
+}
+
+/**
+ * Ask the compositor for an activation token for the user's gesture in the window a moment ago, as a program does
+ * that's about to start another, or open a window, the user asked for (the surface protocol's Activation).
+ *
+ * @param window The window, whose connection asks.
+ * @return The token, to give with what's started; 0 when there's been no gesture, or its token was given already.
+ */
+token :: fn(window : ptr[mut Window]) -> u64 {
+    out := os.Outgoing.{}
+    os.begin[surface.Request](&out)^ = .Activation
+    return match ask(window, &out) {
+        case Token(value) => value
+        case _ => cast[u64](0)
+    }
 }
 
 /** A rectangle grown to take in another. */

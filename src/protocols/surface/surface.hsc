@@ -127,6 +127,13 @@ WindowSpec :: struct {
     color : ColorSpace,
     /** Its title, UTF-8, shown in its identity band after the program's name; at most 128 bytes are kept. */
     title : slop_os.Relative[u8],
+    /**
+     * An activation token (Activation), from the user's gesture that started the program, or that the focused client
+     * passed on; 0 for none. A window takes focus when it's first shown only with one not used before and a few
+     * seconds old at most, or when no other window has focus; otherwise it's shown unfocused, its band marked as
+     * wanting attention, until the user chooses it (decisions/0193, 16d).
+     */
+    activation : u64,
 }
 
 /** A new subsurface: a surface drawn over its parent, at an offset, moving with it. */
@@ -309,6 +316,12 @@ Request :: union {
      * at most NAME_BYTES are kept. Not answered.
      */
     Name(slop_os.Relative[u8]),
+    /**
+     * Ask for an activation token, for a window the user's gesture asked for: one of the client's windows was
+     * pressed or typed into a moment ago, the gesture's, which a token's given for once. Answered with Token, 0 when
+     * there's been no such gesture, or its token was given already.
+     */
+    Activation,
 }
 
 /** The most bytes of a client's name (Name) the compositor keeps. */
@@ -324,6 +337,8 @@ Response :: union {
     Added(u32),
     /** Read's answer: the events waiting, at most MAX_EVENTS and as many as fit MAX_TEXT bytes, at least one. */
     Input(Events),
+    /** Activation's answer: the token, which a window presents in its WindowSpec, or 0 for none. */
+    Token(u64),
     /** A request that wasn't done, and why. */
     Refused(Refusal),
     /** The answer to a request the compositor doesn't know, as from a newer client; every protocol has it. */
@@ -381,6 +396,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Copy(_) => true
         case Connect(_) => true
         case Name(_) => false
+        case Activation => false
     }
 }
 

@@ -24,6 +24,7 @@ import memory from "std:memory"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
+import random from "std:random"
 import service_kit from "../../libraries/service_kit"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
@@ -43,6 +44,18 @@ CLOSE :: 16
 MAX_WINDOWS :: 16
 /** The most requests taken from a client in one pass of the main loop, before the others and a frame. */
 REQUESTS_PER_PASS :: 32
+/** The most connections a client and those it makes hold together, so one can't take every place (16d). */
+CONNECTIONS_PER_CLIENT :: 4
+/** The most windows a client and its connections hold together. */
+WINDOWS_PER_CLIENT :: 8
+/** The client places and the windows kept for the trusted listener's clients, the login and the prompts. */
+KEPT_FOR_TRUSTED :: 4
+/** How long after a gesture its client may ask for its activation token, in nanoseconds: 2 s. */
+GESTURE_LIFE : u64 : 2_000_000_000
+/** How long a token stays good for a window to present, in nanoseconds: 5 s. */
+TOKEN_LIFE : u64 : 5_000_000_000
+/** How many tokens are kept at once; the oldest is forgotten for a new one. */
+MAX_TOKENS :: 8
 /** The most buffers a client has at once. */
 MAX_BUFFERS :: 8
 /** The most events waiting for a client; past them, the oldest are dropped. */
@@ -114,10 +127,23 @@ ClientState :: struct {
      * for one made by Connect. A Name after that is refused, so a program can't name itself what it isn't.
      */
     named : bool,
+    /**
+     * The client its places are counted against: the connection its dialer made, which the connections it makes
+     * share (CONNECTIONS_PER_CLIENT, WINDOWS_PER_CLIENT).
+     */
+    root : usize,
     /** Its program's name, as its dialer named it (Name), the first name_count bytes; none when it wasn't. */
     name : u8[surface.NAME_BYTES],
     /** How many of name's bytes are used. */
     name_count : usize,
+}
+
+/** An activation token given for a gesture, until a window presents it or it's too old. */
+ActivationToken :: struct {
+    /** Its value, never 0; 0 for a place not in use. */
+    value : u64,
+    /** When it was given, in the monotonic clock's nanoseconds. */
+    at : u64,
 }
 
 /** A window. */
@@ -149,6 +175,10 @@ Window :: struct {
      * window could otherwise take the keyboard, and what the user types elsewhere, whenever it liked.
      */
     shown_before : bool,
+    /** Whether it presented an activation token that was good, so it takes focus when it's first shown. */
+    activated : bool,
+    /** Whether it's waiting for the user: shown without focus when it asked for it, its band marked, until chosen. */
+    attention : bool,
     /** Its title, the first title_count bytes. */
     title : u8[TITLE_BYTES],
     /** How many of title's bytes it has. */
@@ -161,6 +191,14 @@ Compositor :: struct {
     port : slop_os.Port,
     /** Whether a client was cut short at REQUESTS_PER_PASS this pass, so every client's served again before a wait. */
     cut_short : bool,
+    /** The client the user's last gesture (a key or a button pressed) went to, for its activation token. */
+    gesture_client : usize,
+    /** When it was, in the monotonic clock's nanoseconds; 0 for none. */
+    gesture_at : u64,
+    /** Whether its token's been given already: one a gesture. */
+    gesture_given : bool,
+    /** The tokens given, for windows to present (WindowSpec.activation). */
+    tokens : ActivationToken[MAX_TOKENS],
     /** The display's channel. */
     display_end : slop_os.Channel,
     /** The port the display's answers come to. */
@@ -492,6 +530,7 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
         first_request :: !compositor.states[index].named
         compositor.states[index].named = true
         match os.message_of[surface.Request](into)^ {
+            case Activation => response^ = .Token(token_for(compositor, index))
             case Name(given) => {
                 answered = false
                 if first_request && index < compositor.states.count && !compositor.states[index].listener {
@@ -514,6 +553,11 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
             }
             case Connect(connection) => {
                 answered = false
+                if !may_connect(compositor, index) {
+                    runtime.log_info("refused a connection: its client has as many as it may")
+                    _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                    continue
+                }
                 match service_kit.add_client_index(&compositor.clients, compositor.port, connection.end) {
                     case Some(added) => {
                         /*
@@ -528,6 +572,7 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
                                 named = !maker.listener,
                                 name = maker.name,
                                 name_count = maker.name_count,
+                                root = if maker.listener { added } else { maker.root },
                             }
                         }
                     }
@@ -650,7 +695,7 @@ create_window :: fn(
             break
         }
     }
-    if free >= MAX_WINDOWS || client >= compositor.states.count {
+    if free >= MAX_WINDOWS || client >= compositor.states.count || !may_make_window(compositor, client) {
         return .Refused(.TooMany)
     }
     state :: &compositor.states[client]
@@ -666,6 +711,7 @@ create_window :: fn(
         width = spec.width,
         height = spec.height,
         trusted = state.trusted,
+        activated = took_token(compositor, spec.activation),
     }
     if made.trusted {
         // Centred, above everything
@@ -871,9 +917,20 @@ submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surf
     }
     else if first && submission.buffer != 0 {
         runtime.log_info("window '%' shown", title_of(window))
-        // Focused the first time it's shown; again only on the user's gesture, but for the trusted layer's
-        if !window.shown_before || window.trusted {
+        /*
+         * Focused the first time it's shown with an activation token from the user's gesture, or when no other window
+         * has focus, whose keys it could take; the trusted layer's always. Otherwise it's shown waiting, its band
+         * marked, until the user chooses it. Shown again, it's never focused but by the user's gesture.
+         */
+        nothing_focused :: compositor.focus >= MAX_WINDOWS
+            || !compositor.windows[compositor.focus].used
+            || compositor.windows[compositor.focus].buffer == 0
+        if window.trusted || (!window.shown_before && (window.activated || nothing_focused)) {
             focus_window(compositor, index)
+        }
+        else if !window.shown_before {
+            window.attention = true
+            runtime.log_info("window '%' wants attention", title_of(window))
         }
         window.shown_before = true
     }
@@ -1083,6 +1140,7 @@ focus_window :: fn(compositor : ptr[mut Compositor], index : usize) {
     }
     compositor.focus = index
     window :: &compositor.windows[index]
+    window.attention = false
     queue(compositor, window.client, surface.event_of(.FocusIn, window.surface), "")
     runtime.log_info("focused '%'", title_of(window))
 }
@@ -1146,6 +1204,7 @@ take_event :: fn(compositor : ptr[mut Compositor], event : seat.Event, text : u8
                 runtime.log_info("pasted into '%'", title_of(window))
                 return void
             }
+            gestured(compositor, window.client)
             key := surface.event_of(.Key, window.surface)
             key.code = cast[u32](event.code)
             key.modifiers = event.modifiers
@@ -1261,7 +1320,124 @@ press :: fn(compositor : ptr[mut Compositor], button : u16, pressed : bool) {
         return void
     }
     compositor.grab = index
+    gestured(compositor, window.client)
     button_event(compositor, index, button, true)
+}
+
+/** Note the user's gesture, a key or a button pressed, in a client's window: its token may be asked for, once. */
+gestured :: fn(compositor : ptr[mut Compositor], client : usize) {
+    compositor.gesture_client = client
+    compositor.gesture_at = slop_os.clock_monotonic() or_else 0
+    compositor.gesture_given = false
+}
+
+/**
+ * Give a client an activation token for the user's gesture in its window a moment ago (GESTURE_LIFE), once.
+ *
+ * @param compositor The compositor, whose tokens keep the one given, the oldest forgotten for it.
+ * @param client The client asking.
+ * @return The token, never 0; 0 when the client's had no such gesture, or its token was given already.
+ */
+token_for :: fn(compositor : ptr[mut Compositor], client : usize) -> u64 {
+    now :: slop_os.clock_monotonic() or_else 0
+    if compositor.gesture_at == 0
+        || compositor.gesture_client != client
+        || compositor.gesture_given
+        || now - compositor.gesture_at > GESTURE_LIFE {
+        return 0
+    }
+    compositor.gesture_given = true
+    value := random.next_u64() | 1
+    oldest := cast[usize](0)
+    for token, i in compositor.tokens {
+        if token.at < compositor.tokens[oldest].at {
+            oldest = i
+        }
+    }
+    if oldest < compositor.tokens.count {
+        compositor.tokens[oldest] = ActivationToken.{value = value, at = now}
+    }
+    return value
+}
+
+/**
+ * Take a token a new window presents: good once, if it was given and isn't too old (TOKEN_LIFE).
+ *
+ * @param compositor The compositor, whose token's forgotten once it's taken.
+ * @param value The token, 0 for none.
+ * @return Whether it was good.
+ */
+took_token :: fn(compositor : ptr[mut Compositor], value : u64) -> bool {
+    if value == 0 {
+        return false
+    }
+    now :: slop_os.clock_monotonic() or_else 0
+    for &token in compositor.tokens {
+        if token.value == value {
+            token.value = 0
+            return now - token.at <= TOKEN_LIFE
+        }
+    }
+    return false
+}
+
+/** How many client places are in use by untrusted clients, and by those counted against a root. */
+places_in_use :: fn(compositor : ptr[mut Compositor], root : usize) -> (usize, usize) {
+    untrusted := cast[usize](0)
+    of_root := cast[usize](0)
+    for state, i in compositor.states {
+        if i >= compositor.clients.ends.count
+            || cast[slop_os.Handle](compositor.clients.ends[i]) == slop_os.NO_HANDLE
+            || state.listener {
+            continue
+        }
+        if !state.trusted {
+            untrusted += 1
+        }
+        if state.root == root {
+            of_root += 1
+        }
+    }
+    return untrusted, of_root
+}
+
+/**
+ * Tell whether a client may make another connection: a listener's for a dialer, unless what isn't trusted would take
+ * the places kept for the trusted; a client's, up to CONNECTIONS_PER_CLIENT with those it made.
+ */
+may_connect :: fn(compositor : ptr[mut Compositor], index : usize) -> bool {
+    if index >= compositor.states.count {
+        return false
+    }
+    maker :: compositor.states[index]
+    if maker.trusted {
+        return true
+    }
+    untrusted, of_root :: places_in_use(compositor, maker.root)
+    if untrusted + KEPT_FOR_TRUSTED >= service_kit.MAX_CLIENTS {
+        return false
+    }
+    return maker.listener || of_root < CONNECTIONS_PER_CLIENT
+}
+
+/** Tell whether a client may make another window: up to WINDOWS_PER_CLIENT with its connections', some kept. */
+may_make_window :: fn(compositor : ptr[mut Compositor], client : usize) -> bool {
+    if client >= compositor.states.count || compositor.states[client].trusted {
+        return true
+    }
+    root :: compositor.states[client].root
+    untrusted := cast[usize](0)
+    of_root := cast[usize](0)
+    for window in compositor.windows {
+        if !window.used || window.trusted {
+            continue
+        }
+        untrusted += 1
+        if window.client < compositor.states.count && compositor.states[window.client].root == root {
+            of_root += 1
+        }
+    }
+    return of_root < WINDOWS_PER_CLIENT && untrusted + KEPT_FOR_TRUSTED < MAX_WINDOWS
 }
 
 /** Tell a window a button went down or came up, where the pointer is in its units. */
@@ -1507,7 +1683,10 @@ draw_window :: fn(compositor : ptr[mut Compositor], buffer : u32, index : usize,
     band :: band_of(window)
     if !canvas.is_empty(canvas.intersect(band, region)) {
         focused :: compositor.focus == index
-        colour :: if focused { canvas.rgb(25, 118, 210) } else { canvas.rgb(96, 125, 139) }
+        colour :: if focused {
+            canvas.rgb(25, 118, 210)
+        }
+        else if window.attention { canvas.rgb(255, 160, 0) } else { canvas.rgb(96, 125, 139) }
         canvas.fill_rect(
             painter,
             cast[f32](band.x0),

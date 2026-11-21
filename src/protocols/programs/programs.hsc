@@ -169,6 +169,11 @@ Starting :: struct {
      * home; for the terminal window, a command line its shell runs alone. Empty for nothing.
      */
     open : slop_os.Relative[u8],
+    /**
+     * The activation token the compositor gave the starter for the user's gesture that asked for the program (the
+     * surface protocol's Activation), which its first window presents to take focus; 0 for none (decisions/0193, 16d).
+     */
+    activation : u64,
 }
 
 /** The most bytes of Start's open. */

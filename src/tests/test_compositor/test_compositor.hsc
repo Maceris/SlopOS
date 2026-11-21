@@ -67,6 +67,13 @@ main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]
         _ = slop_os.port_wait(a.port, packets, (slop_os.clock_monotonic() or_else 0) + 10_000_000)
     }
     runtime.log_info("windows shown")
+    /*
+     * A asks for four more connections: with its own, one past what a client and those it makes hold (16d), so the
+     * last is refused, its end closed
+     */
+    for i in 0..<4 {
+        _ = surface.connect(a.end, a.port, slop_os.startup_block().budget)
+    }
     // A's second frame, from a second buffer: its first comes back once it's shown
     if give_buffer(a, BUFFER + 1, 0, 0, 255) {
         out := os.Outgoing.{}

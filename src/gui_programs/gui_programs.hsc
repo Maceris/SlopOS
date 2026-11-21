@@ -33,6 +33,11 @@ GuiGrants :: struct {
     open : string?,
     /** The terminal window's only: the terminal it serves, whose other end its shell's given. Null for the rest. */
     terminal : os.Channel[terminal.Terminal]?,
+    /**
+     * The activation token for the user's gesture that started it, which its first window presents to take focus
+     * (the surface protocol's WindowSpec.activation); null for none (decisions/0193, 16d).
+     */
+    activation : u64?,
 }
 
 /**
@@ -44,6 +49,7 @@ GuiGrants :: struct {
  * @param programs Its programs connection.
  * @param open What it's asked to open (GuiGrants' open).
  * @param terminal The terminal it serves (GuiGrants' terminal).
+ * @param activation Its activation token (GuiGrants' activation).
  * @return Never run; 0.
  */
 shape :: fn(
@@ -52,7 +58,8 @@ shape :: fn(
     home : os.Channel[dir.Dir]?,
     programs : os.Channel[programs.Programs]?,
     open : string?,
-    terminal : os.Channel[terminal.Terminal]?
+    terminal : os.Channel[terminal.Terminal]?,
+    activation : u64?
 ) -> int {
     return 0
 }

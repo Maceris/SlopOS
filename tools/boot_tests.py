@@ -302,6 +302,10 @@ TESTS = [
         "--expect-line=[user] compositor: refused a client's name: a connection's named only by its first request",
         "--expect-line=[user] compositor: window 'A' shown",
         "--expect-line=[user] compositor: window 'B' shown",
+        # Shown while A has focus, without an activation token: it waits for the user (16d)
+        "--expect-line=[user] compositor: window 'B' wants attention",
+        # A's fifth connection, one past what a client holds (16d)
+        "--expect-line=[user] compositor: refused a connection: its client has as many as it may",
         "--expect-line=[user] test_compositor: windows shown",
         "--expect-line=[user] test_compositor: A released buffer 1",
         "--expect-line=[user] test_compositor: B typed b",

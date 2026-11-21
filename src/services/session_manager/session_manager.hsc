@@ -981,6 +981,8 @@ GUI_PROGRAM_BUDGET : u64 : 16 * 1024 * 1024
  * @param budget Its memory, split off the session manager's.
  * @param first Whether it's the session's first program, the launcher, given the session's own programs connection,
  *     which starts programs; the rest are given finding connections.
+ * @param activation The activation token Start gave, for the gesture that asked for it, which its first window presents
+ *     to take focus; 0 for none.
  * @return Done once it's started; Missing without a GUI program of that name in the bundle store; Refused(Failed)
  *     without a compositor, without room for another program, or if its connection or launch failed.
  */
@@ -992,9 +994,13 @@ launch_gui :: fn(
     open : u8[],
     serving : os.Channel[terminal.Terminal]?,
     budget : u64,
-    first : bool
+    first : bool,
+    activation : u64 = 0
 ) -> programs.Response {
     grants := gui_programs.GuiGrants.{home = home, terminal = serving}
+    if activation != 0 {
+        grants.activation = activation
+    }
     // What it's given is closed unless the launch took it
     given := false
     defer {
@@ -1116,7 +1122,7 @@ start_program :: fn(
         }
     }
     if same_bytes(name, string_bytes("terminal_window")) {
-        return start_terminal(sessions, number, starting.home, open)
+        return start_terminal(sessions, number, starting.home, open, starting.activation)
     }
     return launch_gui(
         sessions,
@@ -1126,7 +1132,8 @@ start_program :: fn(
         open,
         null,
         GUI_PROGRAM_BUDGET,
-        false
+        false,
+        starting.activation
     )
 }
 
@@ -1139,6 +1146,7 @@ start_program :: fn(
  * @param number The session's number, a GUI session's.
  * @param home A connection to the session's home, which moves to the shell; closed if it isn't started.
  * @param command A command line for the shell to run alone, only read; empty for one that reads lines.
+ * @param activation The activation token Start gave, which the window presents; 0 for none.
  * @return Done once both have started; as launch_gui's when the window doesn't; Refused(Failed) when the shell
  *     doesn't, the window then ending as its terminal's closed.
  */
@@ -1146,7 +1154,8 @@ start_terminal :: fn(
     sessions : ptr[mut Manager],
     number : u32,
     home : os.Channel[dir.Dir],
-    command : u8[]
+    command : u8[],
+    activation : u64
 ) -> programs.Response {
     pair :: match os.channel_for[terminal.Terminal](slop_os.startup_block().budget, terminal.RING_BYTES) {
         case Ok(made) => made
@@ -1164,7 +1173,8 @@ start_terminal :: fn(
         command,
         os.Channel[terminal.Terminal].{end = pair.a},
         GUI_PROGRAM_BUDGET,
-        false
+        false,
+        activation
     )
     match window {
         case Done => {}

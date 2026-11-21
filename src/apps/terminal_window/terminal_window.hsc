@@ -91,6 +91,7 @@ Term :: struct {
  * @param open The command line its shell runs alone, only read for whether there's one: if there is, the window stays
  *     once the shell's ended. Null for a shell that reads lines.
  * @param terminal The terminal it serves, whose other end its shell has.
+ * @param activation The token for the gesture that started it, which its window presents to take focus.
  * @return 0 once the shell's ended (or, for a command line, once the window's closed after) or the window's closed; 2
  *     without a compositor or a terminal, or when the window can't be made.
  */
@@ -100,7 +101,8 @@ main :: fn(
     home : os.Channel[dir.Dir]?,
     programs : os.Channel[programs.Programs]?,
     open : string?,
-    terminal : os.Channel[terminal.Terminal]?
+    terminal : os.Channel[terminal.Terminal]?,
+    activation : u64?
 ) -> int {
     term :: runtime.new(Term)
     term.cursor_shown = true
@@ -109,7 +111,14 @@ main :: fn(
     served :: terminal or_return 2
     columns :: cast[f32](screen.COLUMNS) * COLUMN_WIDTH + 16
     rows :: cast[f32](screen.PROGRAM_ROWS) * ROW_HEIGHT + 12
-    term.window = gui_kit.open_on(surface or_return 2, "Terminal", cast[u32](columns), cast[u32](rows)) or_return 2
+    term.window = gui_kit.open_on(
+        surface or_return 2,
+        "Terminal",
+        cast[u32](columns),
+        cast[u32](rows),
+        activation or_else 0
+    )
+        or_return 2
     if !service_kit.add_client(&term.clients, term.window.port, served.end) {
         return 2
     }

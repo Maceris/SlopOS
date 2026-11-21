@@ -84,6 +84,7 @@ Viewer :: struct {
  *     can't be read, and says so.
  * @param open A file's path beneath home, shown first; null to start with home's listing.
  * @param terminal Not used: it serves no terminal.
+ * @param activation The token for the gesture that started it, which its window presents to take focus.
  * @return 0 once its window's closed; 2 without a compositor, or when its window can't be made.
  */
 main :: fn(
@@ -92,7 +93,8 @@ main :: fn(
     home : os.Channel[dir.Dir]?,
     programs : os.Channel[programs.Programs]?,
     open : string?,
-    terminal : os.Channel[terminal.Terminal]?
+    terminal : os.Channel[terminal.Terminal]?,
+    activation : u64?
 ) -> int {
     startup :: slop_os.startup_block()
     viewer :: runtime.new(Viewer)
@@ -120,7 +122,7 @@ main :: fn(
         }
         case None => {}
     }
-    viewer.window = gui_kit.open_on(surface or_return 2, "Viewer", 720, 560) or_return 2
+    viewer.window = gui_kit.open_on(surface or_return 2, "Viewer", 720, 560, activation or_else 0) or_return 2
     list_folder(viewer)
     match open {
         case Some(path) => show_file(viewer, path)
