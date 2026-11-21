@@ -164,7 +164,7 @@ proposed in each milestone's design note. Each stage gets an "as built" record a
                                               │                                              │
                                      B bootloader (boot counting)       P power ◄────────────┤
                                                                                              ▼
-                                   M16 audio ◄─ M15 GUI ◄─ M14 remote ◄─ M13 network ◄─ M12 debugging
+                  M17 audio ◄─ M16 GUI trust ◄─ M15 GUI ◄─ M14 remote ◄─ M13 network ◄─ M12 debugging
                                                                                          H hardening
 ```
 
@@ -566,7 +566,18 @@ fixing the failing boot tests, finishing 15e and 15f, and profiling and optimizi
 
 Stresses: SIMD in composition and rasterization, floating point in user space, a large generic UI library.
 
-## M16 — Audio (L3, L4)
+## M16 — Trust in the GUI (L3, L4, L6)
+
+- What M15's security review left, settled with the owner (`decisions/0192`, *Settled after M15*): a program's
+  identity from its launch, for the powerbox and the identity band; activation tokens for focus; the compositor's
+  places capped per client and kept for the trusted layer; the session manager and the powerbox no longer waiting
+  on each other; prompts that ignore keys at first and are rate-limited; the administrator asked in the GUI.
+- Hemera's fixes found on the way: saturating float-to-int casts, branches' types found together, `-O0` builds.
+- Shared fonts and typed paste; the supervisor starting a service again in order of its grants.
+
+Planned 2026-11-21 (`decisions/0193`), with the owner, after M15 and before audio, whose programs are GUI programs.
+
+## M17 — Audio (L3, L4)
 
 - virtio-sound and an audio service mixing clients' streams, with a high-priority budget of short periods (`0037`).
 - The soft real-time goal (`design/scheduling.md`) measured: no underruns with the CPUs saturated by other budgets.
@@ -616,4 +627,5 @@ Stresses: SIMD in composition and rasterization, floating point in user space, a
 | Linear Algebra | decided 2026-11-10 (`decisions/0189`), scheduled 2026-11-11 between M13's 13c and 13e: L1 to L4; done 2026-11-11: float intrinsics, std/math and correctly rounded parsing (L1), arrays as vectors with swizzles (L2), matrices (L3), std/linear_algebra (L4); L5, f32's own, vector and fast float math (`decisions/0190`), 2026-11-11 |
 | M14 | built 2026-11-13 (`decisions/0191`), 14a to 14g: SHA-3, ML-KEM-768 and OpenSSH's ChaCha20-Poly1305; `std/ssh`, tested against OpenSSH; accounts' public keys and `keys`; the SSH service, its sessions' terminals served from `remote_terminal`; SFTP and scp; `ssh` and `ssh_keygen`; a security review, its high finding fixed. Its full suites passed 2026-11-13; what the review left, and three changes from the plan, for the owner (0191's As Built) |
 | M15 | built 2026-11-21 (`decisions/0192`), 15a to 15h: std/canvas, std/fonts and std/ui (immediate mode, a tree each frame); virtio-gpu and the firmware framebuffer as displays; the compositor with floating windows, the identity band and the trusted layer; the greeter, the powerbox's prompts in the trusted layer; the terminal window, launcher, typed-data viewer and forms from manifests; an input-to-photon latency test; a security review, its high findings fixed. Its full suites passed 2026-11-21; what the review left for the owner (0192's As Built: 15h) |
-| M16 | planned 2026-10-24 (*After M7*, above): the order decided (`decisions/0072`), its stages proposed until it starts; not started |
+| M16 | planned 2026-11-21 (`decisions/0193`): trust in the GUI, in seven stages, M16a to M16g, from what M15's review left and Hemera's fixes; not started |
+| M17 | audio, planned 2026-10-24 as M16 (*After M7*, above; `decisions/0072`), renumbered when M16 was planned; its stages proposed until it starts; not started |

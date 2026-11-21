@@ -302,7 +302,7 @@ mistake can leave a machine that doesn't start at all.
 
 ---
 
-## 8. M15 and M16 — Display and Audio
+## 8. M15 and M17 — Display and Audio
 
 | Problem | Where | SlopOS answer |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Display, Input and Audio
 
-Status: **proposed** 2026-10-24, for roadmap M15 and M16; the surface protocol's later-proofing (§3), real
+Status: **proposed** 2026-10-24, for roadmap M15 and M17 (audio, M16 when proposed); the surface protocol's later-proofing (§3), real
 hardware's framebuffer (§2) and the canvas (§6) added 2026-11-10. Builds on `../decisions/0018` (the powerbox's GUI front end), `0043`
 (the trusted path), `0037` and `scheduling.md` (soft real-time), `console-and-sessions.md` (the input service and the
 secure attention key) and `../problems-and-directions.md` §12 and §15. The choices still to make are at the end and in
@@ -110,7 +110,7 @@ Each is asked for through the powerbox and granted by the user on the trusted pa
 - **Programs:** a terminal emulator speaking the terminal protocol (`console-and-sessions.md` §2), the typed-data
   viewer, a launcher, the powerbox's chooser.
 
-## 7. Audio (M16)
+## 7. Audio (M17)
 
 - **virtio-sound** and an `audio` device-class protocol: streams of PCM frames through shared rings, with their
   formats and rates in `Features`.
@@ -122,7 +122,7 @@ Each is asked for through the powerbox and granted by the user on the trusted pa
 
 ## Also Proposed (`lessons.md` §8, 2026-10-30)
 
-Decided when M15 and M16 are planned:
+Decided when M15 and M17 are planned:
 - The lock screen in the trusted layer, so a crashed locker leaves the screen locked.
 - Focus moving only on the user's gesture or with an activation token from the focused client.
 - Notifications as a capability per installation, rate-limited and listed with the session's grants.
