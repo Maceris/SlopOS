@@ -1,3 +1,10 @@
 # Build outputs: the build package puts them here by default (src/build/build.hsc)
 /build/
 __pycache__/
+
+# Visual Studio settings
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
