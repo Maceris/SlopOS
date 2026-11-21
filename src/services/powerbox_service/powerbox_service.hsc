@@ -38,6 +38,14 @@ PROMPT_KEY : u64 : 1000
 STOP_KEY : u64 : 1001
 /** The port key the session manager's answers come under, on the programs connection. */
 SESSIONS_KEY : u64 : 1002
+/**
+ * A program asks at most this many times in a row, then about as many a minute (decisions/0193, 16e): its credit, in
+ * thousandths of an ask, refills at ASKS_PER_MINUTE a minute, an ask spends one, and a refusal one more; an ask the
+ * user grants gives its one back, so only what the user refuses or leaves unanswered limits it.
+ */
+ASKS_PER_MINUTE : u64 : 3
+/** The programs whose asks are counted at once; the one heard from longest ago is forgotten for another. */
+MAX_ASKERS :: 16
 /** The most bytes of a kept grant's link's path, grants/<program>/<key>; a longer one is cut. */
 PATH_BYTES :: 160
 /** The client index of the session manager's connection, the first client, which alone may send Serve. */
@@ -77,6 +85,17 @@ Waiting :: struct {
     policy : network.Policy,
 }
 
+/** A program's credit for asking the user, by its name (ASKS_PER_MINUTE). */
+Asker :: struct {
+    /** Its name, the first count bytes; count 0 for a place not in use. */
+    name : u8[powerbox.NAME_BYTES],
+    count : usize,
+    /** Its credit, in thousandths of an ask, at most ASKS_PER_MINUTE thousand. */
+    credit : u64,
+    /** When its credit was last brought up to date, in the monotonic clock's nanoseconds. */
+    at : u64,
+}
+
 /** What the powerbox has asked the session manager and waits to hear, for its waiting request. */
 SessionAsk :: enum {
     /** Nothing. */
@@ -112,6 +131,8 @@ Box :: struct {
      * as the session manager may be asking the powerbox to Serve meanwhile, and each would wait on the other.
      */
     asking_sessions : SessionAsk,
+    /** The programs that have asked, and their credit for asking again. */
+    askers : Asker[MAX_ASKERS],
     /** The powerbox's programs connection to the session manager, for Attach (decisions/0185); NONE without one. */
     programs_end : slop_os.Channel,
     /** A port bound to programs_end, waited on for its answers. */
@@ -436,6 +457,12 @@ ask :: fn(
     if key.count > 0 && !valid_key(key) {
         return .Refused
     }
+    // Asked too often: refused without asking the user, who'd otherwise be asked over and over
+    if !spend(box, name_of(box, index), 1000) {
+        who :: name_of(box, index)
+        runtime.log_info("refused % without asking: it's asked too often", as_text(who))
+        return .Refused
+    }
     if box.home_end == NONE || box.prompt_end == NONE {
         return .Refused
     }
@@ -597,6 +624,15 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
         }
         case _ => return void
     }
+    // What the user granted doesn't count against the program: only what's refused, or never answered, does
+    granted :: match os.message_of[prompt.Response](into)^ {
+        case Refused => false
+        case Unsupported => false
+        case _ => true
+    }
+    if granted {
+        give_back(box, name_of(box, box.waiting.client), 1000)
+    }
     match os.message_of[prompt.Response](into)^ {
         case Allowed => {
             if box.waiting.kind == .Debug || box.waiting.kind == .DebugOther {
@@ -651,10 +687,101 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
         }
         case _ => {
             runtime.log_info("the user refused")
+            // A refusal counts double against the program, so one the user keeps refusing is asked less
+            _ = spend(box, name_of(box, box.waiting.client), 1000)
             refuse_debug_port(box)
             answer(box, .Refused)
         }
     }
+}
+
+/**
+ * Spend some of a program's credit for asking the user, its credit first brought up to date: ASKS_PER_MINUTE thousand
+ * thousandths a minute, at most that many.
+ *
+ * @param box The powerbox, whose askers keep the program's credit; one not among them takes the place of the one heard
+ *     from longest ago, with full credit.
+ * @param name The program's name; empty, as for the session manager's own connection, is never limited.
+ * @param cost Thousandths of an ask.
+ * @return Whether it had the credit, which is then spent; false leaves it as it was, but at zero for a refusal's.
+ */
+spend :: fn(box : ptr[mut Box], name : u8[], cost : u64) -> bool {
+    if name.count == 0 {
+        return true
+    }
+    now :: slop_os.clock_monotonic() or_else 0
+    most :: ASKS_PER_MINUTE * 1000
+    place := box.askers.count
+    oldest := cast[usize](0)
+    for asker, i in box.askers {
+        if asker.count == name.count
+            && asker.count <= asker.name.count
+            && same_text(asker.name[0..<asker.count], name) {
+            place = i
+        }
+        if asker.at < box.askers[oldest].at {
+            oldest = i
+        }
+    }
+    if place >= box.askers.count {
+        place = oldest
+        if place >= box.askers.count {
+            return true
+        }
+        fresh := Asker.{credit = most, at = now}
+        for byte, i in name {
+            if i < fresh.name.count {
+                fresh.name[i] = byte
+                fresh.count = i + 1
+            }
+        }
+        box.askers[place] = fresh
+    }
+    asker :: &box.askers[place]
+    // Refilled for the time since: ASKS_PER_MINUTE thousand a minute, in nanoseconds' thousandths
+    refill :: (now - asker.at) / (60_000_000_000 / most)
+    asker.credit = if asker.credit + refill > most { most } else { asker.credit + refill }
+    asker.at = now
+    if asker.credit < cost {
+        asker.credit = 0
+        return false
+    }
+    asker.credit -= cost
+    return true
+}
+
+/**
+ * Give back some of a program's credit for asking the user, as for an ask the user granted.
+ *
+ * @param box The powerbox, whose askers keep the program's credit; a program not among them is left out.
+ * @param name The program's name; empty is never limited, so nothing's done.
+ * @param amount Thousandths of an ask; its credit is at most ASKS_PER_MINUTE thousand after.
+ */
+give_back :: fn(box : ptr[mut Box], name : u8[], amount : u64) {
+    if name.count == 0 {
+        return void
+    }
+    most :: ASKS_PER_MINUTE * 1000
+    for &asker in box.askers {
+        if asker.count == name.count
+            && asker.count <= asker.name.count
+            && same_text(asker.name[0..<asker.count], name) {
+            asker.credit = if asker.credit + amount > most { most } else { asker.credit + amount }
+        }
+    }
+}
+
+/** Tell whether two byte slices hold the same bytes. */
+same_text :: fn(a : u8[], b : u8[]) -> bool {
+    if a.count != b.count {
+        return false
+    }
+    for byte, i in a {
+        if i >= b.count || b[i] != byte {
+            return false
+        }
+    }
+    return true
 }
 
 /**

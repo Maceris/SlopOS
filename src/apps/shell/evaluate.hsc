@@ -423,6 +423,9 @@ call :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, 
     if tree.text == "trace" {
         return trace_system(shell, tree)
     }
+    if tree.text == "add-account" {
+        return add_account(shell, tree)
+    }
     if tree.text == "shut-down" || tree.text == "restart" {
         return power_down(shell, tree, tree.text == "restart")
     }

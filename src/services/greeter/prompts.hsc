@@ -6,6 +6,7 @@ import slop_os from "std:os/slop_os"
 import files from "std:os/slop_os/files"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import ui from "std:ui"
+import account_records from "../../account_records"
 import gui_kit from "../../gui_kit"
 import prompt from "../../protocols/prompt"
 import surface from "../../protocols/surface"
@@ -23,8 +24,7 @@ import surface from "../../protocols/surface"
  * - Debugging one of the session's own programs, or a network connection allowing more than the session's: Allow or
  *   Refuse, with no password, as on the console (decisions/0185, 0188).
  * - What needs the administrator's password (an account, a shutdown or restart, another's program debugged, a trace,
- *   the system's log) or the account service (a public key added or removed, the keys listed) is refused, said in its
- *   debug log, as the GUI's elevation isn't built: those are the console's trusted path's.
+ *   the system's log) or the account service (a public key added or removed, the keys listed): elevation.hsc's.
  *
  * Refuse, Escape, and the session ending all refuse. It says what it does in its debug log: "asked by <program> for
  * <what>", "chose <path> for <program>", "allowed <program>", "refused <program>".
@@ -34,6 +34,11 @@ import surface from "../../protocols/surface"
 PROMPT_WIDTH : u32 : 480
 /** Its height. */
 PROMPT_HEIGHT : u32 : 440
+/**
+ * How long after the prompt window is shown for an ask its input is dropped, in nanoseconds: 400 ms. Keys held down
+ * through it repeat after it, as the compositor sends no key releases to tell them apart.
+ */
+IGNORE_AFTER_SHOWN : u64 : 400_000_000
 /** The most bytes of an Ask's requester, purpose or suggestion kept; past them, cut. */
 ASK_BYTES :: 160
 /** The most entries of a folder listed. */
@@ -51,6 +56,16 @@ Entry :: struct {
 Asking :: struct {
     /** Whether something's asked, and the prompt window shows it. */
     active : bool,
+    /**
+     * When the prompt window was shown for it, in the monotonic clock's nanoseconds: input until IGNORE_AFTER_SHOWN
+     * after is dropped, so a key or a click meant for the window below can't answer it.
+     */
+    shown_at : u64,
+    /**
+     * Whether IGNORE_AFTER_SHOWN has passed, and the prompt window takes input: set by take_prompt_input, which says so
+     * in the debug log.
+     */
+    taking : bool,
     /** The program asking, by the name the session manager gave it. */
     requester : u8[..],
     /** Why it asks, in its own words. */
@@ -71,8 +86,29 @@ Asking :: struct {
     folder : u8[..],
     /** What's in it, folders first, then by name. */
     entries : Entry[..],
-    /** A new file's name, as typed; it starts as the Ask's suggestion. */
+    /**
+     * A new file's name, as typed; it starts as the Ask's suggestion, which for RemoveKey is the key's fingerprint and
+     * for Debug and Network what's granted.
+     */
     typed : u8[..],
+    /** For AddKey, the key's whole line, as suggested; empty if it's longer than account_records.KEY_LINE_BYTES. */
+    key_line : u8[..],
+    /** For an elevation, the administrator's name, as typed. */
+    admin : u8[..],
+    /** Their password, as typed; wiped once it's sent. */
+    admin_password : u8[..],
+    /** For an account, its name, as typed. */
+    new_name : u8[..],
+    /** Its password, as typed; wiped once it's sent. */
+    new_password : u8[..],
+    /** Its password again, as typed; wiped with the other. */
+    again : u8[..],
+    /** Once the account's made, its recovery code, shown until Done; empty before. */
+    code : u8[..],
+    /** What the prompt window says under an elevation's fields; empty for nothing. */
+    message : u8[..],
+    /** What the next frame asks the account service, the frame saying so shown first. */
+    pending : Pending,
 }
 
 /**
@@ -112,11 +148,22 @@ take_prompts :: fn(greeter : ptr[mut Greeter]) {
     add_cut(&made.requester, os.items(&into, asked.requester))
     add_cut(&made.purpose, os.items(&into, asked.purpose))
     add_cut(&made.typed, os.items(&into, asked.suggested))
+    if asked.kind == .AddKey && os.items(&into, asked.suggested).count <= account_records.KEY_LINE_BYTES {
+        add_bytes(&made.key_line, os.items(&into, asked.suggested))
+    }
     greeter.asking = made
     runtime.log_info("asked by % for %", text(&greeter.asking.requester), what_of(&greeter.asking))
-    shown :: asked.kind == .File || asked.kind == .Directory || asked.kind == .Debug || asked.kind == .Network
-    if !shown {
-        runtime.log_info("the GUI can't ask for %: that's the console's trusted path's", what_of(&greeter.asking))
+    if asked.kind == .ListKeys {
+        list_keys(greeter)
+        return void
+    }
+    shown :: asked.kind == .File
+        || asked.kind == .Directory
+        || asked.kind == .Debug
+        || asked.kind == .Network
+        || is_elevation(asked.kind)
+    if !shown || asked.kind == .AddKey && greeter.asking.key_line.count == 0 {
+        runtime.log_info("the GUI can't ask for %", what_of(&greeter.asking))
         answer(greeter, null, false)
         return void
     }
@@ -142,6 +189,8 @@ take_prompts :: fn(greeter : ptr[mut Greeter]) {
              */
             ui.set_focus(&window.ui, 0)
             ui.stop_editing(&window.ui)
+            gui_kit.drop_input(window)
+            greeter.asking.shown_at = slop_os.clock_monotonic() or_else 0
             window.due = true
         }
         case None => {
@@ -149,6 +198,26 @@ take_prompts :: fn(greeter : ptr[mut Greeter]) {
             answer(greeter, null, false)
         }
     }
+}
+
+/**
+ * Once IGNORE_AFTER_SHOWN has passed since the prompt window was shown, let it take input: "the prompt takes input" in
+ * the debug log, and a frame drawn, which no longer drops what comes.
+ *
+ * @param greeter The greeter; nothing's done while nothing's asked, or once it takes input.
+ */
+take_prompt_input :: fn(greeter : ptr[mut Greeter]) {
+    asking :: &greeter.asking
+    if !asking.active || asking.taking {
+        return void
+    }
+    if (slop_os.clock_monotonic() or_else 0) - asking.shown_at < IGNORE_AFTER_SHOWN {
+        return void
+    }
+    window :: greeter.prompt_window or_return void
+    asking.taking = true
+    window.due = true
+    runtime.log_info("the prompt takes input")
 }
 
 /**
@@ -222,6 +291,14 @@ what_of :: fn(asking : ptr[Asking]) -> string {
 prompt_frame :: fn(greeter : ptr[mut Greeter]) {
     window :: greeter.prompt_window or_return void
     asking :: &greeter.asking
+    if is_elevation(asking.kind) {
+        elevation_frame(greeter)
+        return void
+    }
+    // Just shown: what came meanwhile was meant for something else
+    if !asking.taking {
+        gui_kit.drop_input(window)
+    }
     u :: gui_kit.begin(window)
     escaped :: ui.key_pressed(u, .Escape)
     _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 16, padding_y = 14, gap = 8})
@@ -397,9 +474,21 @@ drop_asking :: fn(greeter : ptr[mut Greeter]) {
     runtime.array_free(&asking.purpose)
     runtime.array_free(&asking.folder)
     runtime.array_free(&asking.typed)
+    runtime.array_free(&asking.key_line)
+    runtime.array_free(&asking.message)
+    // What an elevation's typed, wiped: none of it reaches the next ask, or anything given the memory after
+    wipe(&asking.admin)
+    wipe(&asking.admin_password)
+    wipe(&asking.new_name)
+    wipe(&asking.new_password)
+    wipe(&asking.again)
+    wipe(&asking.code)
     greeter.asking = Asking.{}
     match greeter.prompt_window {
-        case Some(window) => gui_kit.hide(window)
+        case Some(window) => {
+            forget_fields(window)
+            gui_kit.hide(window)
+        }
         case None => {}
     }
 }

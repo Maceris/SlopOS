@@ -126,3 +126,36 @@ end.
 - **The chaos test's restarts**: not reproduced yet. `os.launch` says why now, `NoCpuBudget` and `ProgramGone` apart
   from `BadGrants`, so the next failure names its cause; the supervisor's CPU budgets, asked of the scheduler service
   at each launch, are the likelier.
+
+## As Built: 16d
+- **Places**: a client, with the connections it makes by `Connect`, holds at most 4 connections and 8 windows; past
+  them, a `Connect` is refused (its end closed) and a `CreateWindow` answered `Refused`, each logged. The compositor
+  keeps 4 connections and 4 windows of its whole for the trusted listener's clients, the greeter and its prompt, which
+  an ordinary client can't take.
+- **Activation tokens** (the surface protocol's `Activation`, answered `Token`): the compositor gives the focused
+  client a token for its last gesture, a click or a key, at most 2 s old; it's good for 5 s and once. The launcher
+  hands the token for the click or Enter that started a program to it, through the session manager's `Start`, and
+  gui_kit's `open_on` sends it with the first window. A first window with a good token, or shown when nothing's
+  focused, takes focus; the trusted layer's always does; any other's shown unfocused, its band amber and "wants
+  attention" logged, until it's clicked.
+- Tests: the compositor test's B opens without a token and is clicked to focus; A makes four more connections, the
+  last refused.
+
+## As Built: 16e
+- **The prompt's input guard**: for 400 ms after the prompt window's shown, what comes is dropped, and then "the
+  prompt takes input" is logged, which the boot tests wait for. Keys held through it can't be told apart, as the
+  compositor sends no releases; the 400 ms is the guard.
+- **Asks rate-limited**: the powerbox keeps each program's credit by its name, 3 asks, refilled at 3 a minute; a
+  refusal by the user costs one more, and an ask the user grants gives its one back, so a run of wanted asks (the
+  chooser test's) isn't cut short. Past it, the ask's refused without the user and "asked too often" logged. The
+  session manager's own connection, without a name, isn't limited. (Names are still the program's own until 16b's
+  identity is settled.)
+- **Elevation in the GUI** (the greeter's `elevation.hsc`): adding or removing one of the user's keys is Allow or
+  Refuse, the key's fingerprint shown; a list's answered at once. A shutdown, a restart, a trace, the system's log, or
+  another's program debugged takes the administrator's name and password, checked by the account service; an account
+  takes those and the new account's name and password twice, then shows its recovery code once. The greeter has a
+  power connection of its own for them (the supervisor's `GREETER_POWER`), the trusted path's like the console's, and
+  the supervisor logs which asked. Every password's wiped once it's sent, the request's words too, and every field
+  when the ask's done. The shell has `add-account`, as the console's echo has `adduser`.
+- Tests: the GUI login test lists the keys, has bob's account made in the prompt, and shuts down from the GUI
+  terminal's shell, a wrong password refused first.

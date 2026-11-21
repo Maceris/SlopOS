@@ -91,6 +91,7 @@ BUILTINS :: Builtin.[
     },
     Builtin.{name = "installations", summary = "List the installations your sessions run: the system's and yours."},
     Builtin.{name = "grants", summary = "List the grants kept through the powerbox, or revoke one: grants --revoke 3."},
+    Builtin.{name = "add-account", summary = "Have another account made, once an administrator allows it."},
     Builtin.{name = "restart", summary = "Restart the system, once an administrator allows it on the trusted path."},
     Builtin.{
         name = "trace",

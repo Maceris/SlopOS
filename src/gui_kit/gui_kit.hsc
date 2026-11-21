@@ -675,6 +675,24 @@ hide :: fn(window : ptr[mut Window]) {
     }
 }
 
+/**
+ * Drop the input gathered and not yet taken by a frame: keys and text queued, pastes, presses and releases, and the raw
+ * keys; where the pointer is stays. A prompt does this as it's shown, so what was typed or clicked for the window
+ * below can't answer it.
+ *
+ * @param window The window, whose input's emptied.
+ */
+drop_input :: fn(window : ptr[mut Window]) {
+    runtime.array_reset(&window.queued)
+    runtime.array_reset(&window.typed)
+    runtime.array_reset(&window.pasted)
+    runtime.array_reset(&window.raw_keys)
+    runtime.array_reset(&window.raw_text)
+    window.input.pressed = false
+    window.input.released = false
+    window.input.wheel = 0
+}
+
 /** Empty the raw keys, once a program's taken them. */
 take_keys :: fn(window : ptr[mut Window]) {
     runtime.array_reset(&window.raw_keys)

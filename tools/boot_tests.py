@@ -471,7 +471,8 @@ TESTS = [
     # and which a key closes once it's done; a second, of check boxes, makes a typed file, which the viewer, found by
     # name, shows by its path, before Escape closes it; a third's powerbox asks for a file, chosen in the prompt the
     # greeter draws in the trusted layer; then the terminal's found and started, which starts the shell on a terminal
-    # it serves. Argon2id twice under emulation: a long settle, cut short by the power button once it's done
+    # it serves, where keys lists the user's keys, adduser has bob's account made, and shut-down asks the administrator, in the prompt, to shut down.
+    # Argon2id under emulation: a long settle, cut short by the shutdown
     ("logs in on the GUI to a session whose launcher starts a terminal", 7,
      with_before_qemu([argument.replace("test_services", "test_services gui test_settle=400").replace("--timeout=120", "--timeout=600")
                        for argument in BOOT_DISK_BASE], ["--gui-login", "admin", "correct horse battery staple",
@@ -502,7 +503,17 @@ TESTS = [
         "--expect-line=[user] sessions: started shell in the session",
         "--expect-line=[user] launcher: started terminal_window",
         "--expect-line=[user] terminal_window: serving its shell",
-        "--expect-line=[user] compositor: window 'Terminal' shown"])),
+        "--expect-line=[user] compositor: window 'Terminal' shown",
+        # The GUI's elevation (decisions/0193, 16e): the keys listed at once; a shutdown the administrator allows in the
+        # prompt, a wrong password refused first; and the system shuts itself down
+        "--expect-line=[user] greeter: asked by keys for your public keys",
+        "--expect-line=[user] greeter: asked by shell for a new account",
+        "--expect-line=[user] greeter: made the account bob",
+        "--expect-line=[user] greeter: answered shell with the account bob",
+        "--expect-line=[user] greeter: asked by shell for the system shut down",
+        "--expect-line=[user] greeter: not the administrator's name and password",
+        "--expect-line=[user] greeter: the administrator allowed the system shut down",
+        "--expect-line=[user] supervisor: the GUI's login asked to shut down"])),
     # The GUI on the firmware's framebuffer (decisions/0192, 15g): no virtio GPU, so the supervisor starts the
     # framebuffer display for the compositor, and the terminal service lends it the framebuffer with the seat; the
     # greeter's drawn there and logged into, and the secure attention key gives the framebuffer back to the console

@@ -1147,7 +1147,9 @@ class GuiLoginTest(CompositorTest):
     launcher's find field, and its form (15g) filled in and run, in a terminal window closed by a key once it's done;
     another, test_file_tree, makes a typed file with a check box, which the viewer shows by its path before Escape
     closes it; test_kept_grant's powerbox asks for a new file, chosen in the greeter's prompt in the trusted layer;
-    then the terminal is found the same way and started, and the power button ends the run.
+    then the terminal is found the same way and started, keys run in it, which lists the user's keys at once, and
+    shut-down, which the administrator allows in the prompt, a wrong password refused first (16e): the system shuts
+    itself down.
 
     Nothing waits a fixed time: before keys are sent, the line that says they'll land where they're meant is waited for,
     the compositor focusing the window or the program saying it's drawn what takes them; and each wait looks only at
@@ -1262,7 +1264,8 @@ class GuiLoginTest(CompositorTest):
             self.press("tab")
             self.press("ret")
             if not self.after(since, "[user] greeter: asked by test_kept_grant for a file to write", "asking for a file") \
-                    or not self.after(since, "[user] compositor: focused 'Asked'", "the prompt's window focused"):
+                    or not self.after(since, "[user] compositor: focused 'Asked'", "the prompt's window focused") \
+                    or not self.after(since, "[user] greeter: the prompt takes input", "the prompt taking input"):
                 return
             since = self.mark()
             self.press("tab")
@@ -1271,10 +1274,57 @@ class GuiLoginTest(CompositorTest):
                     or not self.run_form_and_close(since, "writing the file chosen"):
                 return
             # The terminal: found by name, and Enter, its shell reading lines
-            if not self.find("terminal", "[user] terminal_window: serving its shell", "starting the terminal"):
+            if not self.find("terminal", "[user] terminal_window: serving its shell", "starting the terminal") \
+                    or not self.after(0, "[user] compositor: focused 'Terminal'", "the terminal's window focused"):
+                return
+            # The user's keys listed at once, without the prompt (16e)
+            since = self.mark()
+            self.type_line("keys")
+            if not self.after(since, "[user] greeter: asked by keys for your public keys", "listing the keys"):
+                return
+            # An account, which the administrator allows in the prompt (16e): its recovery code shown, then Done
+            since = self.mark()
+            self.type_line("add-account")
+            if not self.after(since, "[user] greeter: asked by shell for a new account", "asking for an account") \
+                    or not self.after(since, "[user] compositor: focused 'Asked'", "the prompt's window focused") \
+                    or not self.after(since, "[user] greeter: the prompt takes input", "the prompt taking input"):
+                return
+            since = self.mark()
+            for field in (self.name, self.password, "bob", "another good passphrase"):
+                self.press("tab")
+                self.type_text(field)
+            self.press("tab")
+            self.type_line("another good passphrase")
+            if not self.after(since, "[user] greeter: made the account bob", "making the account"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.press("ret")
+            if not self.after(since, "[user] greeter: answered shell with the account bob", "answering with the account") \
+                    or not self.after(since, "[user] compositor: focused 'Terminal'", "the terminal focused again"):
+                return
+            # A shutdown, which the administrator allows in the prompt (16e): a wrong password first, then the right one
+            since = self.mark()
+            self.type_line("shut-down")
+            if not self.after(since, "[user] greeter: asked by shell for the system shut down", "asking to shut down") \
+                    or not self.after(since, "[user] compositor: focused 'Asked'", "the prompt's window focused") \
+                    or not self.after(since, "[user] greeter: the prompt takes input", "the prompt taking input"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.type_text(self.name)
+            self.press("tab")
+            self.type_line("not the password")
+            if not self.after(since, "[user] greeter: not the administrator's name and password", "a wrong password refused"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.press("tab")
+            self.type_line(self.password)
+            if not self.after(since, "[user] greeter: the administrator allowed the system shut down", "allowing the shutdown") \
+                    or not self.after(since, "[user] supervisor: the GUI's login asked to shut down", "shutting down"):
                 return
             self.problem = None
-            self.command("system_powerdown")
         except OSError as error:
             self.problem = f"the machine protocol failed: {error}"
 

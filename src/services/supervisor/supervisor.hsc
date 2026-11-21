@@ -170,6 +170,11 @@ CONSOLE_POWER : u32 : 0
 ACPI_POWER : u32 : 1
 /** The GPIO power button's driver's power connection's slot. */
 GPIO_POWER : u32 : 2
+/**
+ * The GUI's login's power connection's slot (decisions/0193, 16e): the trusted path's, as the terminal service's is,
+ * so it shuts down and restarts, and gives trace and events connections, once the administrator's allowed it.
+ */
+GREETER_POWER : u32 : 3
 /** How long after a failed try to open a lost system volume again the next is made, in nanoseconds: 100 ms. */
 SYSTEM_RETRY : u64 : 100_000_000
 /**
@@ -409,6 +414,11 @@ GreeterGrants :: struct {
     sessions : os.Channel[session.Session]?,
     /** Its connection to the compositor's trusted layer. */
     trusted : os.Channel[surface.Surface]?,
+    /**
+     * Its power connection, the trusted path's (GREETER_POWER): shutting down, restarting, and trace and events
+     * connections, for what the administrator allows in the GUI.
+     */
+    power : os.Channel[power_protocol.Power]?,
 }
 
 /** What the compositor's test client is given (test_compositor.main); its handles move to it at its launch. */
@@ -963,6 +973,8 @@ Supervisor :: struct {
      * terminal service starts; null before it has, or once the terminal service's end is gone.
      */
     power : slop_os.Channel?,
+    /** The supervisor's end of the greeter's power connection (GREETER_POWER); null before it's started. */
+    greeter_power : slop_os.Channel?,
     /**
      * Its ends of the power connections of what brings the power button (decisions/0182): the ACPI service's, bound
      * under POWER_KEY + ACPI_POWER, and the GPIO button's driver's, under POWER_KEY + GPIO_POWER; NONE before one's
@@ -5629,6 +5641,7 @@ start_greeter :: fn(supervisor : ptr[mut Supervisor]) {
         accounts_service = connector_to(supervisor, supervisor.accounts),
         sessions = session_connection(supervisor),
         trusted = os.Channel[surface.Surface].{end = supervisor.trusted_surface},
+        power = power_connection(supervisor, GREETER_POWER),
     }
     supervisor.trusted_surface = NONE
     match os.launch(
@@ -6398,12 +6411,15 @@ power_connection :: fn(
  * The supervisor's end of a power connection.
  *
  * @param supervisor The supervisor.
- * @param slot CONSOLE_POWER, ACPI_POWER or GPIO_POWER.
+ * @param slot CONSOLE_POWER, ACPI_POWER, GPIO_POWER or GREETER_POWER.
  * @return The end; null for none.
  */
 power_end :: fn(supervisor : ptr[Supervisor], slot : u32) -> slop_os.Channel? {
     if slot == CONSOLE_POWER {
         return supervisor.power
+    }
+    if slot == GREETER_POWER {
+        return supervisor.greeter_power
     }
     at :: cast[usize](slot - 1)
     if slot == 0 || at >= supervisor.buttons.count || supervisor.buttons[at] == NONE {
@@ -6424,6 +6440,10 @@ set_power_end :: fn(supervisor : ptr[mut Supervisor], slot : u32, end : slop_os.
         supervisor.power = end
         return void
     }
+    if slot == GREETER_POWER {
+        supervisor.greeter_power = end
+        return void
+    }
     at :: cast[usize](slot - 1)
     if slot != 0 && at < supervisor.buttons.count {
         supervisor.buttons[at] = end or_else NONE
@@ -6436,7 +6456,7 @@ set_power_end :: fn(supervisor : ptr[mut Supervisor], slot : u32, end : slop_os.
  * @param supervisor The supervisor.
  */
 serve_power :: fn(supervisor : ptr[mut Supervisor]) {
-    for slot in u32.[CONSOLE_POWER, ACPI_POWER, GPIO_POWER] {
+    for slot in u32.[CONSOLE_POWER, ACPI_POWER, GPIO_POWER, GREETER_POWER] {
         serve_power_on(supervisor, slot)
     }
 }
@@ -6482,7 +6502,7 @@ serve_power_on :: fn(supervisor : ptr[mut Supervisor], slot : u32) {
             case _ => false
         }
         if reading {
-            given : os.Channel[events.Events]? = if slot == CONSOLE_POWER {
+            given : os.Channel[events.Events]? = if slot == CONSOLE_POWER || slot == GREETER_POWER {
                 admin_events_connection(supervisor)
             }
             else {
@@ -6496,7 +6516,12 @@ serve_power_on :: fn(supervisor : ptr[mut Supervisor], slot : u32) {
             continue
         }
         if tracing {
-            given : os.Channel[trace.Trace]? = if slot == CONSOLE_POWER { trace_connection(supervisor) } else { null }
+            given : os.Channel[trace.Trace]? = if slot == CONSOLE_POWER || slot == GREETER_POWER {
+                trace_connection(supervisor)
+            }
+            else {
+                null
+            }
             match given {
                 case Some(connection) => response^ = .TraceConnection(connection)
                 case None => response^ = .Refused
@@ -6523,6 +6548,12 @@ serve_power_on :: fn(supervisor : ptr[mut Supervisor], slot : u32) {
             supervisor.log,
             if pressed {
                 "supervisor: the power button was pressed"
+            }
+            else if slot == GREETER_POWER && restart {
+                "supervisor: the GUI's login asked to restart"
+            }
+            else if slot == GREETER_POWER {
+                "supervisor: the GUI's login asked to shut down"
             }
             else if restart {
                 "supervisor: the console asked to restart"

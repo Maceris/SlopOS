@@ -17,6 +17,7 @@ import ui from "std:ui"
 import gui_kit from "../../gui_kit"
 import accounts from "../../protocols/accounts"
 import connector from "../../protocols/connector"
+import power as power_protocol from "../../protocols/power"
 import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
 import surface from "../../protocols/surface"
@@ -58,6 +59,11 @@ Greeter :: struct {
     asking : Asking,
     /** The window prompts are shown in, in the trusted layer; null until the first's shown. */
     prompt_window : ptr[mut gui_kit.Window]?,
+    /**
+     * Its power connection to the supervisor, the trusted path's: a shutdown, a restart, and trace and events
+     * connections, once the administrator's allowed them; null without one.
+     */
+    power : os.Channel[power_protocol.Power]?,
 }
 
 /**
@@ -67,6 +73,8 @@ Greeter :: struct {
  * @param accounts_service A connector to the account service.
  * @param sessions A connection to the session manager.
  * @param trusted Its connection to the compositor's trusted layer.
+ * @param power Its power connection to the supervisor; without it, what the administrator allows that needs it is
+ *     refused.
  * @return 2 without any of them; 3 if the account service can't be dialed, 4 if its session connection can't be
  *     bound, 5 if its window can't be made. It doesn't return otherwise.
  */
@@ -74,10 +82,12 @@ main :: fn(
     log : slop_os.DebugLog?,
     accounts_service : os.Channel[connector.Connector]?,
     sessions : os.Channel[session.Session]?,
-    trusted : os.Channel[surface.Surface]?
+    trusted : os.Channel[surface.Surface]?,
+    power : os.Channel[power_protocol.Power]?
 ) -> int {
     startup :: slop_os.startup_block()
     greeter :: runtime.new(Greeter)
+    greeter.power = power
     greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
     greeter.prompts_port = cast[slop_os.Port](slop_os.NO_HANDLE)
     accounts_dialer :: accounts_service or_return 2
@@ -98,6 +108,7 @@ main :: fn(
                 if !gui_kit.take(window) {
                     runtime.log_info("the prompt window's gone")
                 }
+                take_prompt_input(greeter)
                 if greeter.asking.active && window.due {
                     prompt_frame(greeter)
                 }

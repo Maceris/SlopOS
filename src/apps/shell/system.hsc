@@ -604,6 +604,56 @@ power_down :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node], restart : b
 }
 
 /**
+ * Have another account made, once an administrator allows it (decisions/0158; 0193, 16e): the session's powerbox asks
+ * on the trusted path, where the administrator's name and password, and the new account's name and password, are
+ * typed; the program's never given either. It waits until then.
+ *
+ * @param shell The shell, whose session's powerbox is asked.
+ * @param tree The Call node of add-account, which takes no arguments.
+ * @return The new account's name, as text, once it's made; an error without a powerbox, for arguments, or if it's
+ *     refused.
+ */
+add_account :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
+    if tree.children.count > 0 {
+        return .Error(EvalError.{message = message("% takes nothing", tree.text), at = tree.at})
+    }
+    end :: powerbox_connection(shell, "shell")
+        or_return .Error(
+            EvalError.{
+                message = message("% needs the session's powerbox, which this session hasn't", tree.text),
+                at = tree.at,
+            }
+        )
+    defer slop_os.handle_close(cast[slop_os.Handle](end))
+    port :: os.port_for(slop_os.startup_block().budget, end)
+        or_return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .RequestAccount(
+        powerbox.AccountRequest.{purpose = os.append(&out, string_bytes("as you asked in the shell"))}
+    )
+    if powerbox.send_request(end, port, &out) != null {
+        return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+    }
+    into := os.Incoming.{}
+    match powerbox.receive_response(end, port, &into, true) {
+        case Received => {}
+        case _ => return .Error(EvalError.{message = "the powerbox can't be reached", at = tree.at})
+    }
+    match os.message_of[powerbox.Response](&into)^ {
+        case AccountMade(made) => return .Ok(.Text(copied(os.items(&into, made))))
+        case Busy => return .Error(
+            EvalError.{
+                message = "the powerbox is asking the user something else; try again once that's answered",
+                at = tree.at,
+            }
+        )
+        case _ => return .Error(EvalError.{message = message("% was refused", tree.text), at = tree.at})
+    }
+}
+
+/**
  * Ask the session manager for a connection to the session's powerbox, for a program the shell starts (decisions/0181,
  * F4).
  *
