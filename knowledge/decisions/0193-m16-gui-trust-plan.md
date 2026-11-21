@@ -90,3 +90,18 @@ end.
 - **Only the security items, the features later** (shared fonts, typed paste, GUI elevation): smaller, but GUI
   elevation is what keeps a GUI user from needing the console, and the fonts' memory is felt with every GUI program.
 - **Compile-time constant folding for UI IDs**: a compiler feature for microseconds a frame; not taken (above).
+
+## As Built: 16a
+- **Float-to-int casts saturate** (Hemera's `docs/operators.md`): LLVM's `fptosi.sat` and `fptoui.sat`, so past the
+  type's range it's the type's least or most, an infinity too, and NaN is 0; vectors lane by lane; at compile time as
+  at run time, since compile-time code is generated the same way. `intrinsics.to_integer_unchecked[T](x)` is the
+  plain conversion. The canvas's scenario took 15.5 s against 15.2 before, within its noise; its per-pixel `channel`,
+  which clamped by hand, is the cast alone now, as the cast clamps the same way.
+- **Branches find their type together** (`docs/control_flow.md`): an untyped constant in an `if`'s branch or a
+  `match`'s arm takes the type another gives, wherever it's written; alone, the widest's. std/ui's four
+  `cast[u64](0)` are gone.
+- **`-O0` builds every SlopOS target**: storing a large literal a part at a time (memset and the parts) left the
+  `insertvalue` chain it had been built as unused, which `-O2` deletes and `-O0`'s instruction selection still visited;
+  it's taken away now. Every target builds at `-O0` in 24 s.
+- Tests: hosted `float_casts` and `large_literals`, each optimized and at `-O0`, on Windows and both Linux
+  architectures; a front-end scenario of branches' types. HemeraTest 299 of 299.
