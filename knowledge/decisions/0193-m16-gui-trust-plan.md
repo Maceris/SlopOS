@@ -105,3 +105,24 @@ end.
   it's taken away now. Every target builds at `-O0` in 24 s.
 - Tests: hosted `float_casts` and `large_literals`, each optimized and at `-O0`, on Windows and both Linux
   architectures; a front-end scenario of branches' types. HemeraTest 299 of 299.
+
+## As Built so far: 16b
+- **The identity band names the program** (the surface protocol's `Name`): a connection's client named only by its
+  first request, from whoever dialed the compositor; the session manager names each GUI program's connection, the
+  launcher's among them, before the program has it. A second `Name`, or one after another request, is refused and
+  logged; a connection a client makes with `Connect` has its name, while one made on a listener is its dialer's to
+  name. The band draws the name dark on a light box, which no title can draw, then the title.
+  `boot.py` keeps a run's screenshots where `SLOPOS_SAVE_SCREENS` says, which showed it.
+- **Waiting on a decision**: naming a powerbox by the launch. Nothing tells the session manager which program a process
+  runs: the shell makes the process and the process manager loads it, its name "for the log only", and no system
+  call says whether two handles are one object. Either the session manager launches every program, as it does GUI
+  programs (`Start`), or the kernel identifies objects and the process manager says what it loaded where.
+
+## As Built so far: 16c
+- **The session manager and the powerbox stop waiting on each other**: the session manager sends `Serve` and gives the
+  program its end at once, the powerbox's answers taken as they come; the powerbox sends `Locate` and `Attach` and
+  goes on, its debugger's request waiting (others answered Busy), the answers taken in its main loop, which the
+  session manager's connection now wakes.
+- **The chaos test's restarts**: not reproduced yet. `os.launch` says why now, `NoCpuBudget` and `ProgramGone` apart
+  from `BadGrants`, so the next failure names its cause; the supervisor's CPU budgets, asked of the scheduler service
+  at each launch, are the likelier.
