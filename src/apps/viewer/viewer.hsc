@@ -72,6 +72,13 @@ Viewer :: struct {
     text : u8[..],
     /** Where each of text's lines starts, in bytes. */
     lines : usize[..],
+    /**
+     * For a typed value shown, its schema's hash and its bytes, which Ctrl+C copies, typed, with its text
+     * (decisions/0193, 16f); data empty for anything else.
+     */
+    shown_hash : u8[32],
+    /** The typed value's bytes, in its schema's encoding; empty when what's shown isn't one. */
+    shown_data : u8[..],
 }
 
 /**
@@ -155,6 +162,15 @@ main :: fn(
 /** A frame: the folder's listing, or the file shown; what's clicked acted on after. */
 frame :: fn(viewer : ptr[mut Viewer]) {
     u :: gui_kit.begin(viewer.window)
+    // A paste with typed data shows its value, as a typed file's is shown; its text alone is for the path field
+    match gui_kit.take_paste(viewer.window) {
+        case Some(given) => {
+            pasted := given
+            show_pasted(viewer, pasted)
+            runtime.array_free(&pasted.bytes)
+        }
+        case None => {}
+    }
     // Escape goes back from a file to its folder, and from the folder closes the window
     escaped :: ui.key_pressed(u, .Escape)
     _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 12, padding_y = 12, gap = 8})
@@ -244,6 +260,16 @@ file_frame :: fn(viewer : ptr[mut Viewer], u : ptr[mut ui.Ui]) {
         _ = ui.label(u, text_of(ui.contents(&viewer.note)), ui.TextStyle.{size = 13})
     }
     back :: ui.button(u, "Back")
+    // Ctrl+C copies a typed value, typed, with its text for what doesn't know its type
+    if ui.key_pressed(u, .Copy) && viewer.shown_data.count > 0 {
+        gui_kit.offer_typed(
+            viewer.window,
+            viewer.shown_hash,
+            ui.contents(&viewer.shown_data),
+            ui.contents(&viewer.text)
+        )
+        gui_kit.log_to(viewer.log, "viewer: copied %", text_of(ui.contents(&viewer.note)))
+    }
     count :: viewer.lines.count
     range :: ui.list(u, "lines", count, LINE_HEIGHT, ui.Box.{width = ui.grow(), height = ui.grow()})
     for i in range.first..<range.last {
@@ -336,6 +362,7 @@ show_file :: fn(viewer : ptr[mut Viewer], path : string) {
     add_bytes(&viewer.shown_path, string_bytes(path))
     runtime.array_reset(&viewer.note)
     runtime.array_reset(&viewer.text)
+    runtime.array_reset(&viewer.shown_data)
     viewer.viewing = true
     viewer.window.due = true
     shown :: written(viewer, path)
@@ -346,6 +373,25 @@ show_file :: fn(viewer : ptr[mut Viewer], path : string) {
     else {
         gui_kit.log_to(viewer.log, "viewer: showing %", path)
     }
+}
+
+/**
+ * Show what was pasted, typed: its value written out by its type, found as a typed file's is, under "What was pasted".
+ *
+ * @param pasted The paste's typed data, copied; another program's, decoded as a stranger's (language.decode).
+ */
+show_pasted :: fn(viewer : ptr[mut Viewer], pasted : gui_kit.TypedPaste) {
+    runtime.array_reset(&viewer.shown_path)
+    add_bytes(&viewer.shown_path, string_bytes("What was pasted"))
+    runtime.array_reset(&viewer.note)
+    runtime.array_reset(&viewer.text)
+    runtime.array_reset(&viewer.shown_data)
+    viewer.viewing = true
+    viewer.window.due = true
+    viewer.shown_hash = pasted.schema
+    add_bytes(&viewer.shown_data, pasted.bytes[0..<pasted.bytes.count])
+    set_text(viewer, typed_text(viewer, pasted.schema, pasted.bytes[0..<pasted.bytes.count]))
+    gui_kit.log_to(viewer.log, "viewer: showing what was pasted, %", text_of(ui.contents(&viewer.note)))
 }
 
 /**
@@ -391,6 +437,11 @@ written :: fn(viewer : ptr[mut Viewer], path : string) -> string {
     }
     held :: bytes[0..<filled]
     if !os.all_zero(hash) {
+        // Kept whole, to be copied, only when it was read whole
+        if cast[u64](filled) == size {
+            viewer.shown_hash = hash
+            add_bytes(&viewer.shown_data, held)
+        }
         return typed_text(viewer, hash, held)
     }
     unread :: size - cast[u64](filled)

@@ -77,6 +77,7 @@ import virtio_gpu from "../../drivers/virtio_gpu"
 import virtio_input from "../../drivers/virtio_input"
 import virtio_net from "../../drivers/virtio_net"
 import virtio_rng from "../../drivers/virtio_rng"
+import gui_programs from "../../gui_programs"
 import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
@@ -991,6 +992,11 @@ Supervisor :: struct {
     store_end : slop_os.Channel,
     /** The port store_end's answers wake. */
     store_port : slop_os.Port,
+    /**
+     * The fonts the greeter and test_gui are given (gui_programs.FONTS), in its order: the bundle store's memory, got
+     * the first time one's started and kept; NO_HANDLE for one not got yet.
+     */
+    fonts : slop_os.Memory[gui_programs.FONT_COUNT],
     /** Its end of the config store's admin listener, for any owner's values; NONE without a config store. */
     config_end : slop_os.Channel,
     /** Its connection to the system's installations in the config store; NONE until it's made. */
@@ -1373,6 +1379,7 @@ main :: fn(
         clock_setting = NONE,
         events_end = NONE,
         store_end = NONE,
+        fonts = slop_os.Memory.[cast[slop_os.Memory](slop_os.NO_HANDLE), cast[slop_os.Memory](slop_os.NO_HANDLE)],
         config_end = NONE,
         installations_end = NONE,
         update_end = NONE,
@@ -5644,6 +5651,10 @@ start_greeter :: fn(supervisor : ptr[mut Supervisor]) {
         power = power_connection(supervisor, GREETER_POWER),
     }
     supervisor.trusted_surface = NONE
+    // The fonts, shared with every GUI program's (decisions/0193, 16f)
+    fonts : os.NamedGrant[gui_programs.FONT_COUNT]
+    options := options_for(supervisor, service.name)
+    options.extra = font_copies(supervisor, &fonts)
     match os.launch(
         supervisor.manager,
         supervisor.manager_port,
@@ -5652,10 +5663,13 @@ start_greeter :: fn(supervisor : ptr[mut Supervisor]) {
         service.budget,
         type_of(greeter.main),
         grants,
-        options_for(supervisor, service.name)
+        options
     ) {
         case Ok(launched) => _ = place(supervisor, "greeter", kept(supervisor, launched), NOWHERE)
-        case Error(error) => failed(supervisor, service.name, error)
+        case Error(error) => {
+            gui_programs.close_font_grants(options.extra, error)
+            failed(supervisor, service.name, error)
+        }
     }
 }
 
@@ -5675,6 +5689,12 @@ start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
         log = duplicate_log(supervisor),
         compositor = connector_to(supervisor, supervisor.compositor),
     }
+    // test_gui draws with the fonts GUI programs are given; test_compositor draws none
+    fonts : os.NamedGrant[gui_programs.FONT_COUNT]
+    options := options_for(supervisor, service.name)
+    if name == "test_gui" {
+        options.extra = font_copies(supervisor, &fonts)
+    }
     match os.launch(
         supervisor.manager,
         supervisor.manager_port,
@@ -5684,7 +5704,7 @@ start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
         // Its entry's type, which test_gui's shares
         type_of(test_compositor.main),
         grants,
-        options_for(supervisor, service.name)
+        options
     ) {
         // Placed under its name as a constant: place keeps it
         case Ok(
@@ -5695,8 +5715,45 @@ start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
             kept(supervisor, launched),
             NOWHERE
         )
-        case Error(error) => failed(supervisor, service.name, error)
+        case Error(error) => {
+            gui_programs.close_font_grants(options.extra, error)
+            failed(supervisor, service.name, error)
+        }
     }
+}
+
+/**
+ * Make the font grants for a GUI program's launch (gui_programs.font_grants), each font got from the bundle store the
+ * first time, and again when a copy can't be made, as when the store that gave it has gone, and its memory with it.
+ *
+ * @param supervisor The supervisor, whose fonts are kept, and whose bundle store gives them (stored_program).
+ * @param into Where the grants are made.
+ * @return The grants made, a view of into's first, the launch's to give; fewer than FONT_COUNT if the store hasn't
+ *     one, when the program can't open a window, which it logs.
+ */
+font_copies :: fn(
+    supervisor : ptr[mut Supervisor],
+    into : ptr[mut os.NamedGrant[gui_programs.FONT_COUNT]]
+) -> os.NamedGrant[] {
+    made :: gui_programs.font_grants(supervisor.fonts, into)
+    if made.count == gui_programs.FONT_COUNT {
+        return made
+    }
+    // Copies made for none of a launch: closed, as no launch has them
+    for grant in made {
+        _ = slop_os.handle_close(grant.handle)
+    }
+    for &font, i in supervisor.fonts {
+        if cast[slop_os.Handle](font^) != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](font^))
+        }
+        font^ = cast[slop_os.Memory](slop_os.NO_HANDLE)
+        if i < gui_programs.FONTS.count {
+            font^ = stored_program(supervisor, gui_programs.FONTS[i].name)
+                or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+        }
+    }
+    return gui_programs.font_grants(supervisor.fonts, into)
 }
 
 /**

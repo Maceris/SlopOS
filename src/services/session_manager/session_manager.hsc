@@ -418,6 +418,11 @@ Manager :: struct {
     store_end : slop_os.Channel,
     /** A port for store_end. */
     store_port : slop_os.Port,
+    /**
+     * The fonts GUI programs are given (gui_programs.FONTS), in its order: the bundle store's memory, got the first
+     * time one's launched and kept; NO_HANDLE for one not got yet.
+     */
+    fonts : slop_os.Memory[gui_programs.FONT_COUNT],
     /** The system volume's apps directory, for a session with no user; NONE without it. */
     apps_end : slop_os.Channel,
     /** The system's list of installations, the config store's value "installations" of owner "system"; NONE without. */
@@ -568,6 +573,9 @@ main :: fn(
     sessions.ballast = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
     sessions.settings_end = NONE
     sessions.store_end = NONE
+    for &font in sessions.fonts {
+        font^ = cast[slop_os.Memory](slop_os.NO_HANDLE)
+    }
     sessions.apps_end = NONE
     sessions.list_end = NONE
     match settings {
@@ -1045,6 +1053,11 @@ launch_gui :: fn(
         // A view of the caller's bytes: the launch copies values to the program's arguments
         grants.open = string_of(&open[0], open.count)
     }
+    // The fonts, shared with every GUI program's rather than built into each (decisions/0193, 16f)
+    fonts : os.NamedGrant[gui_programs.FONT_COUNT]
+    given_fonts :: font_copies(sessions, &fonts)
+    options := prepared.options
+    options.extra = given_fonts
     launched :: os.launch(
         sessions.manager,
         sessions.manager_port,
@@ -1053,15 +1066,61 @@ launch_gui :: fn(
         budget,
         type_of(gui_programs.shape),
         grants,
-        prepared.options
+        options
     )
     given = launched is_ok
+    match launched {
+        case Error(error) => gui_programs.close_font_grants(given_fonts, error)
+        case Ok(_) => {}
+    }
     return if placed(sessions, number, name, prepared, launched, false, first = first) {
         programs.Response.Done
     }
     else {
         programs.Response.Refused(.Failed)
     }
+}
+
+/**
+ * Make the font grants for a GUI program's launch (gui_programs.font_grants), each font got from the bundle store the
+ * first time, and again when a copy can't be made, as when the store that gave it has gone, and its memory with it.
+ *
+ * @param sessions The session manager, whose fonts are kept, and whose bundle store gives them.
+ * @param into Where the grants are made.
+ * @return The grants made, a view of into's first, the launch's to give; fewer than FONT_COUNT if the store hasn't
+ *     one, when the program can't open a window, which it logs.
+ */
+font_copies :: fn(
+    sessions : ptr[mut Manager],
+    into : ptr[mut os.NamedGrant[gui_programs.FONT_COUNT]]
+) -> os.NamedGrant[] {
+    made :: gui_programs.font_grants(sessions.fonts, into)
+    if made.count == gui_programs.FONT_COUNT {
+        return made
+    }
+    // Copies made for none of a launch: closed, as no launch has them
+    for grant in made {
+        _ = slop_os.handle_close(grant.handle)
+    }
+    for &font, i in sessions.fonts {
+        if cast[slop_os.Handle](font^) != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](font^))
+        }
+        font^ = cast[slop_os.Memory](slop_os.NO_HANDLE)
+        if i >= gui_programs.FONTS.count {
+            continue
+        }
+        found :: bundle_named(sessions, gui_programs.FONTS[i].name) or_else bundle.Hash.{}
+        referred : bundle.Hash[..]
+        if refers_of(sessions, found, &referred) && referred.count > 0 {
+            match store_request(sessions, .Get(referred[0])) {
+                case Got(object) => font^ = object.memory
+                case _ => {}
+            }
+        }
+        runtime.array_free(&referred)
+    }
+    return gui_programs.font_grants(sessions.fonts, into)
 }
 
 /** Close the handles of a GUI program's grants that its launch didn't take. */

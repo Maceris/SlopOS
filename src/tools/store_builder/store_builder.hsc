@@ -10,6 +10,9 @@
  * type, decisions/0044), and its documentation <name>.docs (decisions/0174), each put as an object of its own; all
  * zeros if there's none. With --debug-files, its debug file <name>.debug too (decisions/0185), which is several times
  * the program's size, so a test system that doesn't debug leaves it out.
+ *
+ * A file that isn't a program, as a font GUI programs are given (decisions/0193, 16f), is put the same way: an object
+ * with a bundle naming it as its program, under its file's name, without a manifest, so nothing launches it.
  */
 package store_builder
 

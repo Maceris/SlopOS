@@ -14,6 +14,7 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import terminal from "std:os/slop_os/terminal"
 import ui from "std:ui"
+import gui_programs from "../gui_programs"
 import log_line from "../log_line"
 import connector from "../protocols/connector"
 import surface from "../protocols/surface"
@@ -25,10 +26,6 @@ WAIT_FOR_BUFFER : u64 : 200_000_000
  * 10 ms.
  */
 READ_RETRY : u64 : 10_000_000
-
-/** The typefaces windows are drawn with, Noto Sans and Noto Sans Mono (SIL Open Font License, assets/fonts/OFL.txt). */
-SANS :: #file_data("../../assets/fonts/NotoSans-Regular.ttf")
-MONO :: #file_data("../../assets/fonts/NotoSansMono-Regular.ttf")
 
 /** One of a window's buffers: its pixels, mapped, and whether the compositor has it. */
 Buffer :: struct {
@@ -84,6 +81,12 @@ Window :: struct {
     /** The text pasted since the last frame. */
     pasted : u8[..],
     /**
+     * Whether the paste since the last frame has typed data, which take_paste gives; set until the next frame's begun.
+     */
+    typed_pasted : bool,
+    /** Whether the frame begun has a paste with typed data (typed_pasted, as it was when the frame began). */
+    paste_typed : bool,
+    /**
      * Every key since they were last taken, as the compositor gave it, for a program that reads keys itself, as a
      * terminal does: its text_start into raw_text. take_keys empties them; a frame doesn't.
      */
@@ -138,6 +141,33 @@ open :: fn(dialer : os.Channel[connector.Connector], title : string, width : u32
 }
 
 /**
+ * Map a font the program's granted (gui_programs.FONTS): its memory, whole and read-only, at addresses of its own.
+ *
+ * @param label The grant's label.
+ * @return The font's bytes, whole pages, the font's followed by zeros; mapped for as long as the program runs, a
+ *     window's ui referring to them. Null without a memory grant of that label, or if it couldn't be mapped.
+ */
+granted_font :: fn(label : string) -> u8[]? {
+    startup :: slop_os.startup_block()
+    memory :: cast[slop_os.Memory](slop_os.find_grant(startup, label, .Memory) or_return null)
+    size :: slop_os.memory_size(memory) or_else 0
+    if size == 0 {
+        return null
+    }
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
+    if slop_os.memory_map(memory, startup.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+        return null
+    }
+    return view_of(cast[ptr[u8]](address), cast[usize](size))
+}
+
+/** Log that a font wasn't granted, for open_on, which then makes no window. */
+no_font :: fn(name : string) -> ptr[mut Window]? {
+    runtime.log_info("gui_kit: no window without the font %, which wasn't granted", name)
+    return null
+}
+
+/**
  * Open a window on a connection to the compositor, as a GUI program's given (src/gui_programs).
  *
  * @param channel The connection, which the window keeps.
@@ -146,7 +176,8 @@ open :: fn(dialer : os.Channel[connector.Connector], title : string, width : u32
  * @param height Its height, in pixels.
  * @param activation The activation token for the user's gesture that asked for it, as the program was given it, which
  *     it presents to take focus when it's first shown; 0 for none, when it takes focus only if nothing has it.
- * @return The window, on the heap, its first frame due; null if anything failed.
+ * @return The window, on the heap, its first frame due; null if anything failed, as when the program wasn't given
+ *     the fonts (gui_programs.FONTS), which is logged.
  */
 open_on :: fn(
     channel : os.Channel[surface.Surface],
@@ -156,12 +187,15 @@ open_on :: fn(
     activation : u64 = 0
 ) -> ptr[mut Window]? {
     startup :: slop_os.startup_block()
+    // The typefaces it's drawn with, the program's grants, shared with every GUI program's (decisions/0193, 16f)
+    sans :: granted_font(gui_programs.FONTS[0].label) or_return no_font(gui_programs.FONTS[0].name)
+    mono :: granted_font(gui_programs.FONTS[1].label) or_return no_font(gui_programs.FONTS[1].name)
     window :: runtime.new(Window)
     window.end = channel.end
     window.port = os.port_for(startup.budget, channel.end) or_return null
     window.width = width
     window.height = height
-    window.ui = ui.make(SANS[0..<SANS.count], MONO[0..<MONO.count])
+    window.ui = ui.make(sans, mono)
     window.input = ui.Input.{}
     window.due = true
     out := os.Outgoing.{}
@@ -419,6 +453,7 @@ take_input :: fn(window : ptr[mut Window], into : ptr[os.Incoming], given : surf
                 for byte in bytes {
                     runtime.array_add(&window.pasted, byte)
                 }
+                window.typed_pasted = event.code == 1
                 window.due = true
             }
             case .Released => {
@@ -531,6 +566,8 @@ begin :: fn(window : ptr[mut Window]) -> ptr[mut ui.Ui] {
         runtime.array_reset(&window.typed)
     }
     runtime.array_reset(&window.pasted)
+    window.paste_typed = window.typed_pasted
+    window.typed_pasted = false
     window.due = window.queued.count > 0
     return &window.ui
 }
@@ -652,11 +689,84 @@ grown :: fn(a : canvas.Rect, b : canvas.Rect) -> canvas.Rect {
 
 /** Offer text to be pasted, as plain text, with no typed data. */
 offer :: fn(window : ptr[mut Window], text : u8[]) {
-    data :: slop_os.memory_create(slop_os.startup_block().budget, 4096) or_return void
     out := os.Outgoing.{}
     request :: os.begin[surface.Request](&out)
-    request^ = .Copy(surface.Offer.{data = data, text = os.append(&out, text)})
+    request^ = .Copy(surface.Offer.{data = cast[slop_os.Memory](slop_os.NO_HANDLE), text = os.append(&out, text)})
     _ = surface.send_request(window.end, window.port, &out)
+}
+
+/**
+ * Offer typed data to be pasted (decisions/0193, 16f), and the same as text for whatever doesn't know its schema; only
+ * the focused window's offer is taken, on the user's gesture.
+ *
+ * @param window The window, focused.
+ * @param schema The data's schema's hash (std/schema), what it is.
+ * @param data The data, in its schema's encoding: copied, at most surface.MAX_PASTE_BYTES; more offers the text alone.
+ * @param text The same as text, UTF-8.
+ */
+offer_typed :: fn(window : ptr[mut Window], schema : u8[32], data : u8[], text : u8[]) {
+    given := cast[slop_os.Memory](slop_os.NO_HANDLE)
+    bytes := cast[u64](0)
+    if data.count > 0 && cast[u64](data.count) <= surface.MAX_PASTE_BYTES {
+        size :: (cast[u64](data.count) + 4095) / 4096 * 4096
+        match slop_os.memory_create(slop_os.startup_block().budget, size) {
+            case Ok(made) => {
+                if slop_os.memory_write(made, 0, data) is_ok {
+                    given = made
+                    bytes = cast[u64](data.count)
+                }
+                else {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](made))
+                }
+            }
+            case Error(_) => {}
+        }
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[surface.Request](&out)
+    request^ = .Copy(surface.Offer.{schema = schema, data = given, bytes = bytes, text = os.append(&out, text)})
+    _ = surface.send_request(window.end, window.port, &out)
+}
+
+/** What take_paste gives: a paste's typed data. */
+TypedPaste :: struct {
+    /** Its schema's hash, what it says it is; decode the bytes as a stranger's, as another program copied them. */
+    schema : u8[32],
+    /** The data, in the schema's encoding, on the heap; the caller's to free. */
+    bytes : u8[..],
+}
+
+/**
+ * Take the typed data of the paste the frame begun has (decisions/0193, 16f), as a window that knows the schema
+ * does instead of taking its text; the compositor gives it once, for a few seconds after the paste.
+ *
+ * @param window The window, between begin and finish.
+ * @return The data; null if the frame's paste has none, or it was taken already, or it couldn't be read.
+ */
+take_paste :: fn(window : ptr[mut Window]) -> TypedPaste? {
+    if !window.paste_typed {
+        return null
+    }
+    window.paste_typed = false
+    out := os.Outgoing.{}
+    os.begin[surface.Request](&out)^ = .TakePaste
+    offered :: match ask(window, &out) {
+        case Pasted(given) => given
+        case _ => return null
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](offered.data))
+    if offered.bytes == 0 || offered.bytes > surface.MAX_PASTE_BYTES {
+        return null
+    }
+    taken := TypedPaste.{schema = offered.schema}
+    for i in cast[u64](0)..<offered.bytes {
+        runtime.array_add(&taken.bytes, cast[u8](0))
+    }
+    if slop_os.memory_read(offered.data, 0, taken.bytes[0..<taken.bytes.count]) is_error {
+        runtime.array_free(&taken.bytes)
+        return null
+    }
+    return taken
 }
 
 /**

@@ -6,7 +6,9 @@
  * - "windows shown" once both are on the screen, A red and B blue, B over A and focused;
  * - "<A or B> typed <text>" for each key its window is given, which only the focused window's should be;
  * - "<A or B> pressed at <x>, <y>" for a button pressed in its window, in its units;
- * - A copies "from A" the first time it's pressed, while it's focused; "<A or B> pasted <text>" for what Ctrl+Shift+V pastes into it.
+ * - A copies "from A" the first time it's pressed, while it's focused, with typed data, "typed from A" (16f);
+ *   "<A or B> pasted <text>" for what Ctrl+Shift+V pastes into it, then "<A or B> took typed data: <it>" once it's
+ *   taken it (TakePaste), and "<A or B> took it once" when taking it again is refused.
  *
  * Neither client holds anything of the other's: their buffers are memory each made, given only to the compositor.
  * It runs until the system stops.
@@ -291,12 +293,21 @@ take_event :: fn(client : ptr[mut Client], event : surface.Event, text : string)
             }
             if event.pressed != 0 && client.name == "A" && !client.copied {
                 client.copied = true
+                typed :: string_bytes("typed from A")
+                data :: slop_os.memory_create(slop_os.startup_block().budget, 4096)
+                    or_else cast[slop_os.Memory](slop_os.NO_HANDLE)
+                _ = slop_os.memory_write(data, 0, typed)
+                schema : u8[32]
+                for &byte in schema {
+                    byte^ = 0x5a
+                }
                 out := os.Outgoing.{}
                 request :: os.begin[surface.Request](&out)
                 request^ = .Copy(
                     surface.Offer.{
-                        data = slop_os.memory_create(slop_os.startup_block().budget, 4096)
-                            or_else cast[slop_os.Memory](slop_os.NO_HANDLE),
+                        schema = schema,
+                        data = data,
+                        bytes = cast[u64](typed.count),
                         text = os.append(&out, string_bytes("from A")),
                     }
                 )
@@ -304,7 +315,40 @@ take_event :: fn(client : ptr[mut Client], event : surface.Event, text : string)
             }
         }
         case .Key => runtime.log_info("% typed %", client.name, text)
-        case .Paste => runtime.log_info("% pasted %", client.name, text)
+        case .Paste => {
+            runtime.log_info("% pasted %", client.name, text)
+            if event.code == 1 {
+                take_typed(client)
+            }
+        }
         case _ => {}
+    }
+}
+
+/**
+ * Take a paste's typed data (TakePaste), and log it; then ask again, which is refused, as it's given once. No Read's
+ * held meanwhile: the events are taken, the answer to the last.
+ */
+take_typed :: fn(client : ptr[mut Client]) {
+    out := os.Outgoing.{}
+    os.begin[surface.Request](&out)^ = .TakePaste
+    match ask(client, &out) {
+        case Pasted(given) => {
+            defer slop_os.handle_close(cast[slop_os.Handle](given.data))
+            storage : u8[64]
+            if given.bytes > 0 && given.bytes <= cast[u64](storage.count) && given.schema[0] == 0x5a {
+                kept :: storage[0..<cast[usize](given.bytes)]
+                if slop_os.memory_read(given.data, 0, kept) is_ok {
+                    runtime.log_info("% took typed data: %", client.name, string_of(&kept[0], kept.count))
+                }
+            }
+        }
+        case _ => runtime.log_info("% couldn't take typed data", client.name)
+    }
+    again := os.Outgoing.{}
+    os.begin[surface.Request](&again)^ = .TakePaste
+    match ask(client, &again) {
+        case Refused(_) => runtime.log_info("% took it once", client.name)
+        case _ => runtime.log_info("% took it twice", client.name)
     }
 }

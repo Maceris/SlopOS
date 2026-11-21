@@ -188,13 +188,21 @@ Title :: struct {
     text : slop_os.Relative[u8],
 }
 
-/** What a client offers to be pasted: typed data, in up to a few representations. */
+/**
+ * What a client offers to be pasted: typed data, and the same as text (Copy); or what was offered, as TakePaste gives
+ * it.
+ */
 Offer :: struct {
-    /** The data's schema's hash (decisions/0040), what it is. */
+    /** The data's schema's hash (decisions/0040), what it is; all zeros with no data. */
     schema : u8[32],
-    /** The data, in its schema's encoding, as memory that moves to the compositor. */
+    /**
+     * The data, in its schema's encoding. Copy's moves to the compositor, which copies its first bytes, at most
+     * MAX_PASTE_BYTES, to memory of its own, so what's pasted can't change after; NO_HANDLE for text alone.
+     * TakePaste's is a read-only handle to that copy, which moves to the client; it's still the copier's data, to be
+     * decoded as a stranger's.
+     */
     data : slop_os.Memory,
-    /** How many bytes of data there are. */
+    /** How many bytes of data there are: at most MAX_PASTE_BYTES, past which Copy keeps only the text. */
     bytes : u64,
     /** The same as plain text, UTF-8, for clients that don't know the schema; empty for none. */
     text : slop_os.Relative[u8],
@@ -238,7 +246,10 @@ EventKind :: enum #backed_by(u8) {
     Released = 11,
     /** A surface's frame was shown, at time_ns. */
     Presented = 12,
-    /** Text pasted into the focused window on the user's gesture, in the Events' text. */
+    /**
+     * Text pasted into the focused window on the user's gesture, in the Events' text; code 1 when the copy has typed
+     * data too, which TakePaste gives the window's client once, within PASTE_LIFE, and 0 otherwise.
+     */
     Paste = 13,
 }
 
@@ -322,7 +333,17 @@ Request :: union {
      * there's been no such gesture, or its token was given already.
      */
     Activation,
+    /**
+     * Take the typed data of the paste just given (decisions/0193, 16f): a Paste event whose code was 1, to this
+     * client, at most PASTE_LIFE ago, and not taken yet. Answered with Pasted, or Refused(NoSuchThing) for none.
+     */
+    TakePaste,
 }
+
+/** The most bytes of a copy's typed data (Offer.data) the compositor keeps: 1 MiB. */
+MAX_PASTE_BYTES : u64 : 1 << 20
+/** How long after a Paste event its typed data can be taken (TakePaste), in nanoseconds: 5 s. */
+PASTE_LIFE : u64 : 5_000_000_000
 
 /** The most bytes of a client's name (Name) the compositor keeps. */
 NAME_BYTES :: 48
@@ -339,6 +360,8 @@ Response :: union {
     Input(Events),
     /** Activation's answer: the token, which a window presents in its WindowSpec, or 0 for none. */
     Token(u64),
+    /** TakePaste's answer: the typed data, its text empty. */
+    Pasted(Offer),
     /** A request that wasn't done, and why. */
     Refused(Refusal),
     /** The answer to a request the compositor doesn't know, as from a newer client; every protocol has it. */
@@ -397,6 +420,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Connect(_) => true
         case Name(_) => false
         case Activation => false
+        case TakePaste => false
     }
 }
 

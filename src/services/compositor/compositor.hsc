@@ -249,6 +249,19 @@ Compositor :: struct {
     clipboard : u8[TITLE_BYTES],
     /** How many bytes of clipboard there are. */
     clipboard_count : usize,
+    /**
+     * What was copied last as typed data (decisions/0193, 16f): the compositor's own copy, paste_bytes of it, its
+     * schema's hash paste_schema; nothing while paste_bytes is 0.
+     */
+    paste_data : slop_os.Memory,
+    /** How many bytes of paste_data are the data's; 0 for none. */
+    paste_bytes : u64,
+    /** The typed data's schema's hash. */
+    paste_schema : u8[32],
+    /** The client last given a Paste with typed data, which may take it (TakePaste). */
+    paste_client : usize,
+    /** When, in the monotonic clock's nanoseconds; 0 when there's none to take, or it's been taken. */
+    paste_at : u64,
 }
 
 /**
@@ -613,9 +626,9 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
                 answered = false
                 compositor.states[index].held = if most == 0 { cast[u32](1) } else { most }
             }
+            case TakePaste => response^ = take_paste(compositor, index)
             case Copy(offer) => {
                 answered = false
-                _ = slop_os.handle_close(cast[slop_os.Handle](offer.data))
                 /*
                  * Only the focused window's client, as only the user copies: a program in the background can't swap
                  * what was copied before it's pasted
@@ -624,8 +637,10 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
                     && compositor.windows[compositor.focus % MAX_WINDOWS].used
                     && compositor.windows[compositor.focus % MAX_WINDOWS].client == index
                 if !focused {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](offer.data))
                     continue
                 }
+                keep_typed(compositor, offer)
                 text :: os.items(into, offer.text)
                 compositor.clipboard_count = 0
                 for byte in text {
@@ -642,8 +657,101 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
     }
 }
 
+/**
+ * Keep a copy's typed data, in place of what was kept: its first bytes copied to memory of the compositor's own, so
+ * what's pasted can't change after, whatever its client does with what it gave.
+ *
+ * @param compositor The compositor, whose paste_ fields are replaced; none kept for data that isn't anonymous memory
+ *     its handle owns (owned_anonymous), as reading paged memory would wait on its pager, its client; for none, or past
+ *     MAX_PASTE_BYTES; or if it can't be copied.
+ * @param offer The copy; its data's closed here.
+ */
+keep_typed :: fn(compositor : ptr[mut Compositor], offer : surface.Offer) {
+    drop_typed(compositor)
+    defer {
+        if cast[slop_os.Handle](offer.data) != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](offer.data))
+        }
+    }
+    if offer.bytes == 0
+        || offer.bytes > surface.MAX_PASTE_BYTES
+        || cast[slop_os.Handle](offer.data) == slop_os.NO_HANDLE
+        || !owned_anonymous(offer.data) {
+        return void
+    }
+    size :: (offer.bytes + 4095) / 4096 * 4096
+    copy :: slop_os.memory_create(slop_os.startup_block().budget, size) or_return void
+    chunk : u8[4096]
+    at := cast[u64](0)
+    loop {
+        if at >= offer.bytes {
+            break
+        }
+        left :: offer.bytes - at
+        count :: if left >= 4096 { cast[usize](4096) } else { cast[usize](left) }
+        if count > chunk.count {
+            _ = slop_os.handle_close(cast[slop_os.Handle](copy))
+            return void
+        }
+        piece :: chunk[0..<count]
+        read :: slop_os.memory_read(offer.data, at, piece) is_ok
+        written :: read && (slop_os.memory_write(copy, at, piece) is_ok)
+        if !written {
+            _ = slop_os.handle_close(cast[slop_os.Handle](copy))
+            return void
+        }
+        at += cast[u64](count)
+    }
+    compositor.paste_data = copy
+    compositor.paste_bytes = offer.bytes
+    compositor.paste_schema = offer.schema
+}
+
+/** Let go of the typed data kept, and of any paste of it still to take. */
+drop_typed :: fn(compositor : ptr[mut Compositor]) {
+    if compositor.paste_bytes > 0 {
+        _ = slop_os.handle_close(cast[slop_os.Handle](compositor.paste_data))
+    }
+    compositor.paste_bytes = 0
+    compositor.paste_at = 0
+}
+
+/**
+ * Give a client the typed data of the paste it was just given (TakePaste): once, within PASTE_LIFE.
+ *
+ * @param compositor The compositor, whose paste's taken.
+ * @param client The client asking.
+ * @return Pasted with a read-only handle to the compositor's copy; Refused(NoSuchThing) if this client wasn't the last
+ *     given a paste with typed data, it's past PASTE_LIFE, it's taken already, or the handle can't be made.
+ */
+take_paste :: fn(compositor : ptr[mut Compositor], client : usize) -> surface.Response {
+    now :: slop_os.clock_monotonic() or_else 0
+    if compositor.paste_at == 0
+        || compositor.paste_bytes == 0
+        || compositor.paste_client != client
+        || now - compositor.paste_at > surface.PASTE_LIFE {
+        return .Refused(.NoSuchThing)
+    }
+    compositor.paste_at = 0
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    given :: slop_os.handle_duplicate(cast[slop_os.Handle](compositor.paste_data), rights)
+        or_return .Refused(.NoSuchThing)
+    runtime.log_info("gave a paste's typed data, % bytes", compositor.paste_bytes)
+    return .Pasted(
+        surface.Offer.{
+            schema = compositor.paste_schema,
+            data = cast[slop_os.Memory](given),
+            bytes = compositor.paste_bytes,
+        }
+    )
+}
+
 /** End a client's windows and give back its buffers, as it's gone. */
 forget_client :: fn(compositor : ptr[mut Compositor], index : usize) {
+    // A paste it was given can't be taken by whoever has its place next
+    if compositor.paste_client == index {
+        compositor.paste_at = 0
+    }
     for i in cast[usize](0)..<MAX_WINDOWS {
         if compositor.windows[i].used && compositor.windows[i].client == index {
             destroy(compositor, i)
@@ -1200,7 +1308,14 @@ take_event :: fn(compositor : ptr[mut Compositor], event : seat.Event, text : u8
                 else {
                     kept
                 }
-                queue(compositor, window.client, surface.event_of(.Paste, window.surface), string_of_bytes(pasted))
+                given := surface.event_of(.Paste, window.surface)
+                // Typed data too, which the window's client may take once, for a while (TakePaste)
+                if compositor.paste_bytes > 0 {
+                    given.code = 1
+                    compositor.paste_client = window.client
+                    compositor.paste_at = slop_os.clock_monotonic() or_else 0
+                }
+                queue(compositor, window.client, given, string_of_bytes(pasted))
                 runtime.log_info("pasted into '%'", title_of(window))
                 return void
             }

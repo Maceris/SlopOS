@@ -67,6 +67,9 @@ KERNEL_FLAGS = [
 ]
 
 ROOT = Path(__file__).resolve().parent.parent
+# The fonts every GUI program's given, objects in the bundle store named by their files' names (decisions/0193, 16f): the
+# GUI programs' FONTS
+FONTS = [ROOT / "assets" / "fonts" / "NotoSans-Regular.ttf", ROOT / "assets" / "fonts" / "NotoSansMono-Regular.ttf"]
 BUILD_PACKAGE = ROOT / "src" / "build"
 # The TLS boot tests' test authority (decisions/0188, 13f): its root, and the peers' chains and keys
 TLS_PEERS = ROOT / "tools" / "tls_peers"
@@ -1245,9 +1248,22 @@ class GuiLoginTest(CompositorTest):
             self.type_line("reading/made.value")
             if not self.after(since, "[user] viewer: showing reading/made.value, a ", "viewing the typed file"):
                 return
+            # Its value copied, typed (16f), and pasted back from the folder, shown as the file was
+            since = self.mark()
+            self.chord(("ctrl", "c"))
+            if not self.after(since, "[user] viewer: copied a ", "copying the typed value"):
+                return
             since = self.mark()
             self.press("esc")
             if not self.after(since, "[user] viewer: back to the folder", "back to the folder"):
+                return
+            since = self.mark()
+            self.chord(("ctrl", "shift", "v"))
+            if not self.after(since, "[user] viewer: showing what was pasted, a ", "pasting the typed value"):
+                return
+            since = self.mark()
+            self.press("esc")
+            if not self.after(since, "[user] viewer: back to the folder", "back to the folder again"):
                 return
             since = self.mark()
             self.press("esc")
@@ -1327,6 +1343,13 @@ class GuiLoginTest(CompositorTest):
             self.problem = None
         except OSError as error:
             self.problem = f"the machine protocol failed: {error}"
+
+    def chord(self, keys: tuple[str, ...]) -> None:
+        """Keys held down in order, then let go in the other order, as Ctrl+C is pressed."""
+        for key in keys:
+            self.key(key, True)
+        for key in reversed(keys):
+            self.key(key, False)
 
     def keyboard_line(self, line: str) -> None:
         """A line typed, shift held where it's needed, and Enter."""
@@ -2077,7 +2100,8 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
     store_builder = next(image_builder.parent.glob("store_builder*"))
     with_debug = ["--debug-files"] if debug_files else []
     stored = subprocess.run([str(store_builder), *with_debug, str(system / "store")] + [str(program) for program in programs
-                                                                           if program.stem not in BOOT_SET and program.suffix == ".elf"],
+                                                                           if program.stem not in BOOT_SET and program.suffix == ".elf"]
+                            + [str(font) for font in FONTS],
                             capture_output=True, text=True)
     if stored.returncode != 0:
         sys.exit(f"boot.py: the store builder failed:\n{stored.stdout}{stored.stderr}")
@@ -2103,7 +2127,8 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
             shutil.copy(staged_next.with_suffix(".docs"), renamed / "hello.docs")
             stored = subprocess.run([str(store_builder), *with_debug, str(system / "store")] + [
                 str(renamed / "hello.elf") if program.stem == "hello" else str(program) for program in programs
-                if program.stem not in BOOT_SET and program.suffix == ".elf"], capture_output=True, text=True)
+                if program.stem not in BOOT_SET and program.suffix == ".elf"] + [str(font) for font in FONTS],
+                                    capture_output=True, text=True)
             if stored.returncode != 0:
                 sys.exit(f"boot.py: the store builder failed on the next build:\n{stored.stdout}{stored.stderr}")
         staging = subprocess.run([str(generation_builder), "--stage", str(system), str(system / "store"), "2", "yes" if kaslr else "no",

@@ -159,3 +159,21 @@ end.
   when the ask's done. The shell has `add-account`, as the console's echo has `adduser`.
 - Tests: the GUI login test lists the keys, has bob's account made in the prompt, and shuts down from the GUI
   terminal's shell, a wrong password refused first.
+
+## As Built: 16f
+- **Shared fonts**: Noto Sans and Noto Sans Mono are objects in the bundle store, under their files' names
+  (gui_programs' `FONTS`), put there by the store builder beside the programs. The session manager, and the supervisor
+  for the greeter and test_gui, get each once and give every GUI program a read-only copy of the handle, beside its
+  entry's grants (Hemera's `os.LaunchOptions.extra`, labels `font_sans` and `font_mono`); gui_kit maps them, and opens
+  no window without them, which it logs. The store's paged memory is one object however many map it, so the fonts'
+  pages are shared, and each GUI program's image is about 820 KB smaller (the viewer's 1.3 MB). A font got again when
+  a copy can't be made, as after the store's restarted. The compositor still builds Noto Sans in, for its bands.
+  test_gui's test boots from the disk now, as GUI programs need the store.
+- **Typed paste**: a copy's typed data (its schema's hash and bytes, at most 1 MiB) is copied by the compositor to
+  memory of its own, from anonymous memory the copier's handle owns only, so it can't change once copied, nor stall
+  the compositor on a pager. A paste with typed data says so (`Paste`'s code 1), and only that client may take it
+  (`TakePaste`), once, within 5 s, as a read-only handle; another client that takes the slot can't. gui_kit has
+  `offer_typed` and `take_paste`. The viewer copies a typed value it shows with Ctrl+C, typed and as text, and shows a
+  typed paste's value as it shows a typed file's.
+- Tests: the compositor test's A copies typed data, which B takes once; the GUI login test copies a typed file's value
+  in the viewer and pastes it back.

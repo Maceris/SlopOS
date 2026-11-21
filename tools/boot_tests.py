@@ -313,18 +313,22 @@ TESTS = [
         "--expect-line=[user] compositor: moved 'B' to 490, 418",
         "--expect-line=[user] compositor: pasted into 'B'",
         "--expect-line=[user] test_compositor: B pasted from A",
+        # Its typed data too, taken once (decisions/0193, 16f)
+        "--expect-line=[user] test_compositor: B took typed data: typed from A",
+        "--expect-line=[user] test_compositor: B took it once",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A std/ui window through gui_kit (decisions/0192, 15g): test_gui's field typed into on the virtio keyboard, through
     # the seat lent to the compositor, line after line, each submitted with Enter; and the input-to-photon latency
-    # (15h), from a key taken from the device to the frame that showed it presented, none past test_gui's SLOWEST_MS
-    ("types into a std/ui window, line after line", 7, [WITH_PROGRAMS, "--gui-typing", "--timeout=300",
-        "--command-line=test_exit test_services test_settle=180 test_gui",
+    # (15h), from a key taken from the device to the frame that showed it presented, none past test_gui's SLOWEST_MS.
+    # From the disk, whose bundle store has the fonts GUI programs are given (decisions/0193, 16f)
+    ("types into a std/ui window, line after line", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=180 test_gui").replace("--timeout=120", "--timeout=300")
+                       for argument in BOOT_DISK_BASE], ["--gui-typing",
         "--expect-line=[user] test_gui: showing its window",
         "--expect-line=[user] test_gui: submitted admin, 28 bytes of password",
         "--expect-line=[user] test_gui: submitted bob, 7 bytes of password",
         "--expect-line-start=[user] test_gui: input to photon: ",
-        "--refuse-line=[user] test_gui: input to photon past 250 ms",
-        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+        "--refuse-line=[user] test_gui: input to photon past 250 ms"])),
     # The same without an IOMMU, where only trusted drivers will get DMA (decisions/0079)
     ("drives virtio-rng without an IOMMU", 7, [WITH_PROGRAMS, "--no-iommu", "--command-line=test_exit test_services",
         "--expect-line=[user] platform: the firmware tables describe no IOMMU, so devices' DMA reaches all of memory",
@@ -496,6 +500,10 @@ TESTS = [
         "--expect-line=[user] sessions: started viewer in the session",
         "--expect-line=[user] launcher: started viewer",
         "--expect-line-start=[user] viewer: showing reading/made.value, a ",
+        # Its value copied and pasted back, typed (decisions/0193, 16f)
+        "--expect-line-start=[user] viewer: copied a ",
+        "--expect-line-start=[user] compositor: gave a paste's typed data, ",
+        "--expect-line-start=[user] viewer: showing what was pasted, a ",
         "--expect-line=[user] viewer: closed by Escape",
         "--expect-line=[user] greeter: asked by test_kept_grant for a file to write",
         "--expect-line=[user] greeter: chose kept.txt for test_kept_grant",

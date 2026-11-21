@@ -63,3 +63,71 @@ shape :: fn(
 ) -> int {
     return 0
 }
+
+/** A font GUI programs draw with: its bundle's name in the bundle store's root, and the label it's granted under. */
+Font :: struct {
+    /** Its bundle's name, its file's without the extension, as the store builder names it. */
+    name : string,
+    /** The label of its grant, beside the entry's (os.LaunchOptions.extra), which gui_kit finds it by. */
+    label : string,
+}
+
+/** How many fonts FONTS has. */
+FONT_COUNT :: 2
+
+/**
+ * The fonts every GUI program's given (decisions/0193, 16f), Noto Sans and Noto Sans Mono (SIL Open Font License,
+ * assets/fonts/OFL.txt), in this order: each the bundle store's memory, read-only and shared by every program given it,
+ * rather than built into each.
+ */
+FONTS :: Font.[
+    Font.{name = "NotoSans-Regular", label = "font_sans"},
+    Font.{name = "NotoSansMono-Regular", label = "font_mono"}
+]
+
+/**
+ * Make the font grants for one launch: a copy of each font's memory, read-only, under its label.
+ *
+ * @param fonts Each of FONTS' memory, in its order, which stays the caller's; NO_HANDLE for one the caller hasn't,
+ *     which
+ *     isn't given.
+ * @param into Where the grants are made, the first of them the count returned.
+ * @return The grants made, a view of into's first: the program's once it's launched with them, the caller's to close
+ *     otherwise (close_font_grants). One whose copy couldn't be made isn't among them.
+ */
+font_grants :: fn(fonts : slop_os.Memory[FONT_COUNT], into : ptr[mut os.NamedGrant[FONT_COUNT]]) -> os.NamedGrant[] {
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    made := cast[usize](0)
+    for memory, i in fonts {
+        if cast[slop_os.Handle](memory) == slop_os.NO_HANDLE || i >= FONTS.count || made >= into.count {
+            continue
+        }
+        match slop_os.handle_duplicate(cast[slop_os.Handle](memory), rights) {
+            case Ok(copy) => {
+                into^[made] = os.NamedGrant.{label = FONTS[i].label, handle = copy}
+                made += 1
+            }
+            case Error(_) => {}
+        }
+    }
+    if made > into.count {
+        return into^[0..<0]
+    }
+    return into^[0..<made]
+}
+
+/**
+ * Close font grants a launch didn't take (font_grants): it failed before the process manager was sent them, so they're
+ * still the caller's. Past that, they went to the manager, and are left alone, as their numbers may name others now.
+ *
+ * @param grants The grants made for the launch.
+ * @param error Why the launch failed.
+ */
+close_font_grants :: fn(grants : os.NamedGrant[], error : os.LaunchError) {
+    if error == .ManagerGone || error == .NotLoaded {
+        return void
+    }
+    for grant in grants {
+        _ = slop_os.handle_close(grant.handle)
+    }
+}
