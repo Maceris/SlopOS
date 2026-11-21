@@ -538,3 +538,30 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     compositor the seat's reader; the viewer's decode of a hostile typed file has no total budget; the terminal
     window draws the input line without safe_text; a wheel and a release can reach a client's window while the
     trusted layer's shown.
+
+## Settled after M15, with the project's owner (2026-11-21)
+- **A program's identity is the launch's, not its word.** The process or session manager records which bundle each
+  process was launched from, and a powerbox connection is named by that; the shell asks for a child's powerbox with
+  the child's process handle, not a name.
+- **Focus follows activation tokens** (`display.md` *Also proposed*): a new window takes focus only with a token from
+  a recent user gesture, the launcher's click handing one to what it starts and the focused client able to pass one
+  on; otherwise it's shown unfocused, its band marked as wanting attention.
+- **The compositor's places are capped per client and kept for the trusted layer**: a client and the connections it
+  makes hold at most 4 connections and 8 windows, and 4 of each are kept for the trusted listener's clients.
+- **The session manager and the powerbox stop waiting on each other**: both send their requests and take answers as
+  they come in their main loops, keyed by request, as the SSH service does.
+- **Prompts ignore keys briefly and are rate-limited**: input for about 400 ms after one's shown, and keys already
+  held, are ignored; a program asks at most a few times a minute, refusals counting double, the rest refused unasked
+  and logged.
+- **Hemera defines float-to-int casts as saturating** (out of range clamps to the type's least or most, NaN is 0, as
+  `fptosi.sat`), with an explicit unchecked conversion for code that proves its range.
+- **The GUI asks for the administrator in its trusted layer**: accounts, shutdown and restart, traces and keys, as the
+  console's elevation screen does.
+- **The identity band shows the program's name, then its title**: the session manager names each GUI program's
+  compositor connection when it starts it.
+- **Fonts are shared**, a read-only object from the bundle store each GUI program maps, rather than embedded in each;
+  **paste offers typed data** to a program that takes it, text to the rest.
+- **The compiler's M15 items are investigated first** (assignments whose right side runs first, `-O0`'s crash, folding
+  calls on constants for UI IDs, the ID-alias bug), each with a reproduction and a proposed fix, before changing them.
+- **The flaky failures are soaked**: the AArch64 large-page test and the storage manager's crash, run among load until
+  each fails again.
