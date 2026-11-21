@@ -2,8 +2,9 @@
  * Elevation in the GUI's trusted layer (decisions/0193, 16e; 0158, 0182, 0185, 0191), as the console's elevation screen
  * does it: what a GUI session's program asks its powerbox for beyond the user's own say.
  *
- * - The user's keys: adding one or removing one is confirmed, Allow or Refuse, the key's fingerprint shown, and the
- *   account service does it for the session's user; a list's answered at once, without asking.
+ * - The user's keys: adding one takes the user's own password, as the prompt appears when a program asks rather than
+ *   when the user does (16g); removing one is Allow or Refuse; the key's fingerprint is shown, and the account service
+ *   does it for the session's user. A list's answered at once, without asking.
  * - A shutdown, a restart, a trace, the system's log, or another user's program debugged: the administrator's name and
  *   password, always, checked by the account service (CheckAdministrator); then it's done, through the greeter's power
  *   connection for a shutdown, a restart, a trace connection or an events connection.
@@ -38,6 +39,8 @@ Pending :: enum {
     Check,
     /** The account made on the administrator's say (CreateBy). */
     Create,
+    /** The session's user's password checked (OpenHome, its home closed at once), for a key added. */
+    CheckUser,
 }
 
 /**
@@ -78,6 +81,9 @@ elevation_frame :: fn(greeter : ptr[mut Greeter]) {
         asking.pending = .None
         if pending == .Check {
             check_administrator(greeter)
+        }
+        else if pending == .CheckUser {
+            check_user(greeter)
         }
         else {
             make_account(greeter)
@@ -129,9 +135,14 @@ elevation_frame :: fn(greeter : ptr[mut Greeter]) {
             _ = gui_kit.label_of(u, string.[text_buffer.as_string(&line)], ui.TextStyle.{size = 14})
             _ = gui_kit.label_of(
                 u,
-                string.["Whoever has its private key could log in as you over SSH."],
+                string.["Whoever has its private key could log in as you over SSH. Your password allows it."],
                 ui.TextStyle.{size = 13}
             )
+            /*
+             * The user's own password, not a click alone: the prompt appears when a program asks, not when the user
+             * does, as on the console, so a click meant for something else could land on Allow
+             */
+            _ = ui.text_field(u, "Your password", &asking.admin_password, secret = true)
         }
         else {
             _ = gui_kit.label_of(u, string.["The key: ", text(&asking.typed)], ui.TextStyle.{size = 14})
@@ -158,7 +169,17 @@ elevation_frame :: fn(greeter : ptr[mut Greeter]) {
     for event in gui_kit.finish(window) {
         submitted = submitted || event.kind == .Submitted
     }
-    if is_keys(asking.kind) && go {
+    if asking.kind == .AddKey && (go || submitted) {
+        window.due = true
+        if asking.admin_password.count == 0 {
+            say_asked(asking, "Type your password.")
+        }
+        else {
+            say_asked(asking, "Checking.")
+            asking.pending = .CheckUser
+        }
+    }
+    else if asking.kind == .RemoveKey && go {
         respond_simply(greeter, if change_key(greeter) { prompt.Response.Allowed } else { prompt.Response.Refused })
     }
     else if !is_keys(asking.kind) && (go || submitted) {
@@ -239,6 +260,47 @@ check_administrator :: fn(greeter : ptr[mut Greeter]) {
         }
         case RateLimited(wait) => say_wait(asking, wait)
         case _ => say_asked(asking, "The administrator couldn't be checked.")
+    }
+}
+
+/**
+ * Ask the account service whether the password typed is the session's user's (OpenHome, the home closed at once), and
+ * wait: if it is, the key's added and the program answered; otherwise what's wrong is said, the password to type again.
+ *
+ * @param greeter The greeter, AddKey asked, the password typed; it's wiped, what was sent too.
+ */
+check_user :: fn(greeter : ptr[mut Greeter]) {
+    asking :: &greeter.asking
+    out := os.Outgoing.{}
+    request :: os.begin[accounts.Request](&out)
+    request^ = .OpenHome(
+        accounts.Credentials.{
+            name = os.append(&out, ui.contents(&greeter.name)),
+            password = os.append(&out, ui.contents(&asking.admin_password)),
+        }
+    )
+    into := os.Incoming.{}
+    asked :: ask_accounts(greeter, &out, &into)
+    wipe(&asking.admin_password)
+    match greeter.prompt_window {
+        case Some(window) => forget_fields(window)
+        case None => {}
+    }
+    if !asked {
+        say_asked(asking, "The account service couldn't be asked.")
+        return void
+    }
+    match os.message_of[accounts.Response](&into)^ {
+        case OpenedHome(home) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](home.end))
+            respond_simply(greeter, if change_key(greeter) { prompt.Response.Allowed } else { prompt.Response.Refused })
+        }
+        case WrongCredentials => {
+            runtime.log_info("not the user's password")
+            say_asked(asking, "That's not your password. Type it again.")
+        }
+        case RateLimited(wait) => say_wait(asking, wait)
+        case _ => say_asked(asking, "Your password couldn't be checked.")
     }
 }
 
@@ -527,8 +589,11 @@ respond :: fn(greeter : ptr[mut Greeter], out : ptr[mut os.Outgoing]) {
     drop_asking(greeter)
 }
 
-/** Say something in the prompt window, under its fields. */
+/** Say something in the prompt window, under its fields, and in the debug log. */
 say_asked :: fn(asking : ptr[mut Asking], said : string) {
+    if said.count > 0 {
+        runtime.log_info("the prompt says: %", said)
+    }
     runtime.array_reset(&asking.message)
     add_bytes(&asking.message, string_bytes(said))
 }

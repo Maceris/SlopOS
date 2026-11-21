@@ -123,9 +123,21 @@ main :: fn(
         else if greeter.window.due {
             frame(greeter)
         }
-        // Prompts and the prompt window's input looked for at least every 50 ms while something's asked
+        /*
+         * While something's asked, the prompt window's port is waited on, so its input's taken as it comes: the
+         * compositor keeps a client's events only so long, and fast typing waited on elsewhere would lose keys
+         * (16g). Prompts are looked for at least every 50 ms then, and every 250 ms otherwise.
+         */
+        deadline :: slop_os.clock_monotonic() or_else 0
+        waited := greeter.window
+        if greeter.asking.active {
+            match greeter.prompt_window {
+                case Some(window) => waited = window
+                case None => {}
+            }
+        }
         wait :: if greeter.asking.active { cast[u64](50_000_000) } else { cast[u64](250_000_000) }
-        gui_kit.wait(greeter.window, (slop_os.clock_monotonic() or_else 0) + wait)
+        gui_kit.wait(waited, deadline + wait)
     }
 }
 

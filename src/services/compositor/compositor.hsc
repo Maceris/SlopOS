@@ -175,8 +175,12 @@ Window :: struct {
      * window could otherwise take the keyboard, and what the user types elsewhere, whenever it liked.
      */
     shown_before : bool,
-    /** Whether it presented an activation token that was good, so it takes focus when it's first shown. */
-    activated : bool,
+    /**
+     * When the activation token it presented was given, in the monotonic clock's nanoseconds, if it was good; 0 for
+     * none. It takes focus when it's first shown only while that's within TOKEN_LIFE, so a window made with a token
+     * and shown long after can't take the keys then (16g).
+     */
+    activated_at : u64,
     /** Whether it's waiting for the user: shown without focus when it asked for it, its band marked, until chosen. */
     attention : bool,
     /** Its title, the first title_count bytes. */
@@ -748,9 +752,18 @@ take_paste :: fn(compositor : ptr[mut Compositor], client : usize) -> surface.Re
 
 /** End a client's windows and give back its buffers, as it's gone. */
 forget_client :: fn(compositor : ptr[mut Compositor], index : usize) {
-    // A paste it was given can't be taken by whoever has its place next
+    // A paste it was given, or its gesture's token, can't be taken by whoever has its place next
     if compositor.paste_client == index {
         compositor.paste_at = 0
+    }
+    if compositor.gesture_client == index {
+        compositor.gesture_at = 0
+    }
+    // The connections it made are their own roots now, so they don't count against whoever has its place next
+    for &state, i in compositor.states {
+        if i != index && state.root == index {
+            state.root = i
+        }
     }
     for i in cast[usize](0)..<MAX_WINDOWS {
         if compositor.windows[i].used && compositor.windows[i].client == index {
@@ -819,7 +832,7 @@ create_window :: fn(
         width = spec.width,
         height = spec.height,
         trusted = state.trusted,
-        activated = took_token(compositor, spec.activation),
+        activated_at = took_token(compositor, spec.activation),
     }
     if made.trusted {
         // Centred, above everything
@@ -1033,7 +1046,9 @@ submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surf
         nothing_focused :: compositor.focus >= MAX_WINDOWS
             || !compositor.windows[compositor.focus].used
             || compositor.windows[compositor.focus].buffer == 0
-        if window.trusted || (!window.shown_before && (window.activated || nothing_focused)) {
+        now :: slop_os.clock_monotonic() or_else 0
+        activated :: window.activated_at != 0 && now - window.activated_at <= TOKEN_LIFE
+        if window.trusted || (!window.shown_before && (activated || nothing_focused)) {
             focus_window(compositor, index)
         }
         else if !window.shown_before {
@@ -1480,20 +1495,20 @@ token_for :: fn(compositor : ptr[mut Compositor], client : usize) -> u64 {
  *
  * @param compositor The compositor, whose token's forgotten once it's taken.
  * @param value The token, 0 for none.
- * @return Whether it was good.
+ * @return When it was given, in the monotonic clock's nanoseconds, if it was good; 0 if it wasn't.
  */
-took_token :: fn(compositor : ptr[mut Compositor], value : u64) -> bool {
+took_token :: fn(compositor : ptr[mut Compositor], value : u64) -> u64 {
     if value == 0 {
-        return false
+        return 0
     }
     now :: slop_os.clock_monotonic() or_else 0
     for &token in compositor.tokens {
         if token.value == value {
             token.value = 0
-            return now - token.at <= TOKEN_LIFE
+            return if now - token.at <= TOKEN_LIFE && token.at != 0 { token.at } else { cast[u64](0) }
         }
     }
-    return false
+    return 0
 }
 
 /** How many client places are in use by untrusted clients, and by those counted against a root. */
@@ -1501,9 +1516,12 @@ places_in_use :: fn(compositor : ptr[mut Compositor], root : usize) -> (usize, u
     untrusted := cast[usize](0)
     of_root := cast[usize](0)
     for state, i in compositor.states {
-        if i >= compositor.clients.ends.count
-            || cast[slop_os.Handle](compositor.clients.ends[i]) == slop_os.NO_HANDLE
-            || state.listener {
+        if i >= compositor.clients.ends.count || cast[slop_os.Handle](compositor.clients.ends[i]) == slop_os.NO_HANDLE {
+            continue
+        }
+        // A listener's place is taken too, so it's counted against what's kept for the trusted (16g)
+        if state.listener {
+            untrusted += 1
             continue
         }
         if !state.trusted {

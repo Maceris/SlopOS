@@ -177,3 +177,38 @@ end.
   typed paste's value as it shows a typed file's.
 - Tests: the compositor test's A copies typed data, which B takes once; the GUI login test copies a typed file's value
   in the viewer and pastes it back.
+
+## As Built: 16g, the review
+A review of M16's changes, by a reader who hadn't written them, found nothing high; what it found, and what's done:
+- **The rate limit keyed by a name the program chooses** (medium-high): a program names its own powerbox connection,
+  and can make more, so it could ask under name after name, keeping the user answering, or ask as the shell and spend
+  the shell's credit. Now the session's asks are limited as a whole too, 6 in a row then 6 a minute, refusals double
+  and grants given back, so no set of names keeps the user answering; at worst a program spends the session's asks
+  for a minute. Keying the limit by who a program is, not what it says, waits on 16b's identity.
+- **An activation token taken when a window was made, its focus when it's first shown** (medium): a window made with
+  a token and shown minutes later took the keys. Now the token's time is kept, and it's good at first show only
+  within its 5 s.
+- **A key added on one click** (medium): a prompt in the GUI appears when a program asks, not when the user does, as on
+  the console, so a click meant for something else could land on Allow once the 400 ms are past. Adding a key takes
+  the user's own password now (the account service's OpenHome, its home closed at once). Removing one is still Allow.
+  No boot test types it yet: the GUI's shell can't write a key's file without the editor, which says nothing to wait
+  on.
+- **A client's place reused** (low): its gesture's token could be asked for by the next client in its place, and the
+  connections it made counted against that client. Both are let go of with it now.
+- **The places kept for the trusted** (low): the listeners' places weren't counted, so 2 were kept, not 4; they are now.
+- Left as they are, and why:
+  - A launch whose request to the process manager couldn't be sent leaks its font handles: `ManagerGone` is both
+    "not sent" and "sent, not answered", and closing a sent handle could close another's. Two handles a failed
+    launch; a distinct error would need os.launch's errors split again.
+  - Keys typed into the greeter pass through gui_kit's and the compositor's queues, which aren't zeroed. None is
+    reachable by an untrusted program.
+  - ListKeys answers without asking, as on the console: public keys, and their comments.
+  - The greeter's fonts are the bundle store's memory, so without the store there's no GUI login; the store is what
+    every GUI program's loaded from already.
+- **Keys lost in a prompt**, found by the GUI login test failing once in a while: while something was asked the
+  greeter waited on its hidden login window's port, and took the prompt window's input only every 50 ms, so typing
+  fast filled the compositor's 64 events kept for it, and the rest were dropped ("isn't reading"). It waits on the
+  prompt window's port while something's asked now. What the prompt says under its fields is logged too.
+- **The canvas's fuzz target widened** (`draws_anything`, Hemera's canvas scenario): any transform, rotations and raw
+  matrices of huge, NaN and infinite entries among them; clips, saved and restored; the fast paths (clear, fill_rect,
+  fill_box); images, gradients, shapes and strokes of any join, cap and dashes; what's damaged on the image.

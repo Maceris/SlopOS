@@ -44,6 +44,12 @@ SESSIONS_KEY : u64 : 1002
  * user grants gives its one back, so only what the user refuses or leaves unanswered limits it.
  */
 ASKS_PER_MINUTE : u64 : 3
+/**
+ * The session asks at most this many times in a row, all its programs together, then about as many a minute
+ * (decisions/0193, 16g), counted as ASKS_PER_MINUTE is. A program names its own powerbox connection, and can make
+ * more, so it could ask under name after name; this bounds them all, so the user can't be kept answering.
+ */
+SESSION_ASKS_PER_MINUTE : u64 : 6
 /** The programs whose asks are counted at once; the one heard from longest ago is forgotten for another. */
 MAX_ASKERS :: 16
 /** The most bytes of a kept grant's link's path, grants/<program>/<key>; a longer one is cut. */
@@ -133,6 +139,8 @@ Box :: struct {
     asking_sessions : SessionAsk,
     /** The programs that have asked, and their credit for asking again. */
     askers : Asker[MAX_ASKERS],
+    /** The session's credit, all its programs' asks together (SESSION_ASKS_PER_MINUTE); its name's unused. */
+    session_asks : Asker,
     /** The powerbox's programs connection to the session manager, for Attach (decisions/0185); NONE without one. */
     programs_end : slop_os.Channel,
     /** A port bound to programs_end, waited on for its answers. */
@@ -463,6 +471,11 @@ ask :: fn(
         runtime.log_info("refused % without asking: it's asked too often", as_text(who))
         return .Refused
     }
+    if name_of(box, index).count > 0 && !charge(&box.session_asks, SESSION_ASKS_PER_MINUTE, 1000) {
+        who :: name_of(box, index)
+        runtime.log_info("refused % without asking: the session's asked too often", as_text(who))
+        return .Refused
+    }
     if box.home_end == NONE || box.prompt_end == NONE {
         return .Refused
     }
@@ -632,6 +645,9 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
     }
     if granted {
         give_back(box, name_of(box, box.waiting.client), 1000)
+        if name_of(box, box.waiting.client).count > 0 {
+            refill_by(&box.session_asks, SESSION_ASKS_PER_MINUTE, 1000)
+        }
     }
     match os.message_of[prompt.Response](into)^ {
         case Allowed => {
@@ -689,6 +705,9 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
             runtime.log_info("the user refused")
             // A refusal counts double against the program, so one the user keeps refusing is asked less
             _ = spend(box, name_of(box, box.waiting.client), 1000)
+            if name_of(box, box.waiting.client).count > 0 {
+                _ = charge(&box.session_asks, SESSION_ASKS_PER_MINUTE, 1000)
+            }
             refuse_debug_port(box)
             answer(box, .Refused)
         }
@@ -737,8 +756,22 @@ spend :: fn(box : ptr[mut Box], name : u8[], cost : u64) -> bool {
         }
         box.askers[place] = fresh
     }
-    asker :: &box.askers[place]
-    // Refilled for the time since: ASKS_PER_MINUTE thousand a minute, in nanoseconds' thousandths
+    return charge(&box.askers[place], ASKS_PER_MINUTE, cost)
+}
+
+/**
+ * Spend some of a credit for asking, brought up to date first: per_minute thousand thousandths a minute, at most that
+ * many.
+ *
+ * @param asker The credit; one never charged is full.
+ * @param per_minute How many asks a minute it refills by, and holds at most.
+ * @param cost Thousandths of an ask.
+ * @return Whether it had the credit, which is then spent; false leaves it at zero.
+ */
+charge :: fn(asker : ptr[mut Asker], per_minute : u64, cost : u64) -> bool {
+    now :: slop_os.clock_monotonic() or_else 0
+    most :: per_minute * 1000
+    // Refilled for the time since, in nanoseconds' thousandths
     refill :: (now - asker.at) / (60_000_000_000 / most)
     asker.credit = if asker.credit + refill > most { most } else { asker.credit + refill }
     asker.at = now
@@ -748,6 +781,12 @@ spend :: fn(box : ptr[mut Box], name : u8[], cost : u64) -> bool {
     }
     asker.credit -= cost
     return true
+}
+
+/** Give back some of a credit for asking, at most per_minute thousand after, as for an ask the user granted. */
+refill_by :: fn(asker : ptr[mut Asker], per_minute : u64, amount : u64) {
+    most :: per_minute * 1000
+    asker.credit = if asker.credit + amount > most { most } else { asker.credit + amount }
 }
 
 /**
