@@ -2,6 +2,7 @@ package supervisor
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 import crash_reports from "../../crash_reports"
 import log_line from "../../log_line"
 
@@ -32,6 +33,24 @@ crashed :: fn(supervisor : ptr[mut Supervisor], index : usize) {
     for &report in reports {
         crash_reports.log(report^)
         log_line.write(supervisor.log, "supervisor: % crashed: %", entry.name, slop_os.fault_name(report.fault))
+        /*
+         * And where, on the serial line too, a line at a time: the address it touched, and its frames as offsets in its
+         * image, which hemera --symbolize names, so a crash in a boot test says where it was
+         */
+        room : u8[1024]
+        described := text_buffer.make(room)
+        crash_reports.describe(report, &described)
+        text :: string_bytes(text_buffer.as_string(&described))
+        start := cast[usize](0)
+        for byte, i in text {
+            if byte == cast[u8]('\n') || i + 1 == text.count {
+                end :: if byte == cast[u8]('\n') { i } else { i + 1 }
+                if start < end && end <= text.count {
+                    log_line.write(supervisor.log, "supervisor: crash: %", string_of(&text[start], end - start))
+                }
+                start = i + 1
+            }
+        }
     }
     if reports.count > 0 {
         _ = slop_os.process_kill(entry.process)
