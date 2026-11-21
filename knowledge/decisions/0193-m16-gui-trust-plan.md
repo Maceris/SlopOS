@@ -1,6 +1,7 @@
 # 0193: M16, Trust in the GUI, Planned
 
-Status: accepted, chosen with the project's owner (2026-11-21); not started
+Status: accepted, chosen with the project's owner (2026-11-21); built 2026-11-21 but for 16b's powerbox names, which
+wait on the owner's choice
 Date: 2026-11-21
 Related: `0192` (M15, its security review and *Settled after M15*), `0181` (the powerbox's names), `0185` (debugging
 and elevation), `0191` (the SSH service's asynchronous requests), `0186` (H, the fuzzers), `../design/display.md`
@@ -212,3 +213,15 @@ A review of M16's changes, by a reader who hadn't written them, found nothing hi
 - **The canvas's fuzz target widened** (`draws_anything`, Hemera's canvas scenario): any transform, rotations and raw
   matrices of huge, NaN and infinite entries among them; clips, saved and restored; the fast paths (clear, fill_rect,
   fill_box); images, gradients, shapes and strokes of any join, cap and dashes; what's damaged on the image.
+
+## As Built: 16g, the full suites
+Run 2026-11-21: the boot suite three times, HemeraTest (299 passed), the Linux tests (83 of 83 on x86-64, 81 of 81 on
+AArch64), the unit tests (25 of 25) and every fuzz target for 60 s (25, nothing found).
+- **The session's asks, empty at the start**: the boot suite's runs failed the powerbox's tests, 2 to 4 a run, the
+  first ask refused unasked ("the session's asked too often"). The session's credit started at zero, refilled for the
+  clock's time since boot, a few seconds' worth when the session began, not full. It starts full now; the 16 tests
+  that ask, on both architectures, passed after.
+- **The system call fuzzer** failed once among the others, a fault of its own (a write to an unmapped address), and
+  passed alone with the same seed: something its run depends on is timing. Not M16's; left to look into.
+- Left: 16b's powerbox names, which wait on the owner's choice (*As Built so far: 16b*), and the chaos test's
+  restarts, not reproduced in the three runs.

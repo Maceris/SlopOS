@@ -187,6 +187,8 @@ main :: fn(
     box.port = slop_os.port_create(block.budget) or_return 1
     box.programs_end = NONE
     box.network_end = NONE
+    // Full from the start: charge() refills only for the time since, and the clock counts from boot, not from here
+    box.session_asks = Asker.{credit = SESSION_ASKS_PER_MINUTE * 1000, at = slop_os.clock_monotonic() or_else 0}
     match network {
         case Some(found) => match os.port_for(block.budget, found.end) {
             case Some(port) => {
@@ -763,7 +765,7 @@ spend :: fn(box : ptr[mut Box], name : u8[], cost : u64) -> bool {
  * Spend some of a credit for asking, brought up to date first: per_minute thousand thousandths a minute, at most that
  * many.
  *
- * @param asker The credit; one never charged is full.
+ * @param asker The credit, which should start full: one zeroed refills only for the clock's time, since boot.
  * @param per_minute How many asks a minute it refills by, and holds at most.
  * @param cost Thousandths of an ask.
  * @return Whether it had the credit, which is then spent; false leaves it at zero.
