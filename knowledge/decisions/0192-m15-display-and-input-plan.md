@@ -1,6 +1,6 @@
 # 0192: M15, Display and Input, Planned
 
-Status: accepted, chosen with the project's owner (2026-11-13); not started
+Status: accepted, chosen with the project's owner (2026-11-13); built (15a to 15h)
 Date: 2026-11-13
 Related: `0018` (the powerbox), `0043` (the trusted path), `0037` (budgets), `0072` (the milestones' order), `0136` to
 `0161` (M10's console, input and sessions), `0189` (float math and linear algebra, for the canvas), `0191` (M14),
