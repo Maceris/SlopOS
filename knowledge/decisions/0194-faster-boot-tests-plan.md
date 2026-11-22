@@ -1,6 +1,6 @@
 # 0194: Faster Boot Tests, Planned
 
-Status: accepted in part (2026-11-21): T1 to T3 now, then T4 and T5 with the owner; T6 waits on what they measure
+Status: accepted (2026-11-21); built 2026-11-21: T1 to T3, T5 and the explicit waits; T4 and T6 dropped with the owner
 Date: 2026-11-21
 Related: `0144` (the parallel runner), `0146` (boot tests steady under load, `test_settle`), `0192` (15g: the builds
 made faster, the suite from 22.8 to 13.8 minutes), `0193` (M16's suites), `0186` (the KVM path)
@@ -142,3 +142,10 @@ depends on its test's command line. The explicit waits cleared next, then T6.
   tablet's queue.
 - **The suite, 2026-11-21**: 294 of 294 passed in 6.4 minutes, 41.3 minutes of test time added up (54.8 after T5), none
   flaky.
+
+## T6 dropped, with the owner (2026-11-21)
+Measured after the waits were cleared: 28 of 75 boot-disk tests on each architecture share a command line and devices,
+the rest each a word of their own that the services read at boot, and a restored machine would save each 3 to 4 s:
+200 to 250 s of 41 minutes of test time, under a minute of the suite's 6.4. Not worth snapshots' files, a console
+seeded with what it showed, every test of a group starting with one randomness, and the words moved off the command
+line to reach the rest.
