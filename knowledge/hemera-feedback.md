@@ -35,7 +35,8 @@ Known limits, each an error rather than wrong code. Severity: nice.
   Marked `//STD(missing)`.
 - `is_ok` and `is_error` bind as loosely as `if`, so `a is_error || b is_error` doesn't parse: each needs parentheses
   or a variable of its own, as M16's greeter and powerbox kept needing. Chosen with the project's owner (2026-11-21):
-  they bind tighter than `&&` and `||`, as a comparison does. Severity: friction.
+  they bind tighter than `&&` and `||`, as a comparison does. Severity: friction. Done 2026-11-21 (Hemera 0454b7c):
+  a level of their own between `&&` and the comparisons, in the parser and the formatter (`docs/operators.md`).
 
 ### Targets and runtime
 
