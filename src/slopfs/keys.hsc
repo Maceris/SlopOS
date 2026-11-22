@@ -115,11 +115,23 @@ SEAL_COUNT : usize : 24
 /** Argon2id's parameters for a passphrase, unless they're given (RFC 9106's second choice, with less memory). */
 DEFAULT_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 1}
 /**
- * Argon2id's parameters for a volume made at run time (decisions/0141), wrapped by its volume server inside the 8 MiB
- * its budget has for Argon2id: its passphrase is a random secret the account service keeps, which hashes the password
- * it's kept by itself.
+ * Whether the build set test_kdf=on (decisions/0194, T5): the boot tests' build, whose volumes made at run time wrap
+ * their keys with a fraction of Argon2id's work. Never a release's: off by default.
  */
-MADE_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 4096, passes = 3, lanes = 1}
+TEST_KDF :: #run compiler.target_setting("test_kdf", default = "off") == "on"
+
+#if TEST_KDF {
+    /** Argon2id's parameters for a volume made at run time in the boot tests' build: 64 KiB, 1 pass, 1 lane. */
+    MADE_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 64, passes = 1, lanes = 1}
+}
+#else {
+    /**
+     * Argon2id's parameters for a volume made at run time (decisions/0141), wrapped by its volume server inside the
+     * 8 MiB its budget has for Argon2id: its passphrase is a random secret the account service keeps, which hashes the
+     * password it's kept by itself.
+     */
+    MADE_PASSPHRASE :: crypto.Argon2Parameters.{memory_kib = 4096, passes = 3, lanes = 1}
+}
 
 /**
  * Make an empty set of keys for a cipher: no volume key, no generation.

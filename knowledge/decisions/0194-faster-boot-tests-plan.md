@@ -104,3 +104,22 @@ it under 5.
 - **The suite, 2026-11-21**: 294 of 294 passed in 9.8 minutes (14 to 19 before), 62 minutes of test time added up (85
   before). One flaky: the SSH client's test hung once among the others after its command had run and the server had
   closed, and passed alone; the client's end, left to look into.
+
+## As Built: T5
+- **`test_kdf`**, a build setting, off by default and never a release's: with it on, a password goes through Argon2id
+  with 256 KiB and 1 pass rather than 64 MiB and 3 (`account_records.PASSWORD_ARGON2`, 4 lanes still), and a volume
+  made at run time wraps its key with 64 KiB and 1 pass rather than 4 MiB and 3 (`slopfs.MADE_PASSPHRASE`). What's made
+  keeps its parameters, as everything Argon2id wraps does, so nothing reads them as the build's. `DEFAULT_PASSPHRASE`,
+  for volumes made on the host, is as it was.
+- **The boot tests build with it**, and `tools/profile_boot.py` too. The account test boots x86-64's programs built
+  without it (`WITH_REAL_KDF`), for the account service's budget holding Argon2id's whole 64 MiB, as a release's must.
+- A test with first-boot setup and a login: its boot from 11.4 s to 5.9 s.
+- **The suite, 2026-11-21**: 294 of 294 passed in 8.5 minutes, 54.8 minutes of test time added up. Two flaky:
+  - The trace test's timeline missed the services started last, on a busy host, as they hadn't run yet when it was
+    read, and the run ended, its settle out, before its ping was traced. The supervisor reads the trace again until
+    every running service has run, up to 5 s, and the test ends when its lines are in (`--end-when-done`, a settle of
+    60 s).
+  - The editor's test: once edit had quit and the shell had said its result, the shell's prompt didn't come back, as
+    in the SSH client's test; the shell's end of a job, likely, left with the SSH client's for that work.
+- **T4 not built yet**: with T5, a first-boot setup costs a typed form and one quick Argon2id, about 1 s; what's
+  left of T4 is the disk made for each test, ~1 s each, for the owner to weigh.

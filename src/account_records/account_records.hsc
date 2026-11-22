@@ -28,8 +28,21 @@ MAX_PASSWORD_BYTES : usize : 256
 /** The most bytes an account's or a share's name may have, which is the room a record keeps for it. */
 MAX_NAME_BYTES : usize : 32
 
-/** Argon2id's parameters for a password: RFC 9106's second recommendation, 64 MiB, 3 passes, 4 lanes. */
-PASSWORD_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 4}
+/**
+ * Whether the build set test_kdf=on (decisions/0194, T5): the boot tests' build, whose passwords go through Argon2id
+ * with a fraction of its work, as emulated machines spend seconds on each. Never a release's: off by default, and
+ * nothing on a machine can turn it on.
+ */
+TEST_KDF :: #run compiler.target_setting("test_kdf", default = "off") == "on"
+
+#if TEST_KDF {
+    /** Argon2id's parameters for a password in the boot tests' build: 256 KiB, 1 pass, 4 lanes, as lanes are tested. */
+    PASSWORD_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 256, passes = 1, lanes = 4}
+}
+#else {
+    /** Argon2id's parameters for a password: RFC 9106's second recommendation, 64 MiB, 3 passes, 4 lanes. */
+    PASSWORD_ARGON2 :: crypto.Argon2Parameters.{memory_kib = 65536, passes = 3, lanes = 4}
+}
 
 /** Why a password is refused. */
 PasswordProblem :: enum #backed_by(u8) {

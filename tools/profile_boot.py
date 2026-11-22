@@ -163,7 +163,7 @@ def main() -> int:
     kernel = built / f"kernel_{arguments.arch}.elf"
     programs = built / f"programs_{arguments.arch}"
     tools = built / "tools"
-    if not (boot_tests.build_kernel(kernel, architecture=arguments.arch) and boot_tests.build_programs(programs, arguments.arch)
+    if not (boot_tests.build_kernel(kernel, architecture=arguments.arch) and boot_tests.build_programs(programs, arguments.arch, test_kdf=True)
             and boot_tests.build_tools(tools)):
         print("profile_boot.py: the build failed")
         return 1

@@ -16,6 +16,13 @@ import log_line from "../../log_line"
 
 /** How many trace events the supervisor takes at a time. */
 TRACE_BATCH :: 256
+/**
+ * How long test_trace waits for every running service to have run once everything has started, in nanoseconds: 5 s.
+ * One started last may not have run yet, on a host that's busy.
+ */
+TRACE_RUN_WAIT : u64 : 5_000_000_000
+/** How often it reads the trace again meanwhile, in nanoseconds: 20 ms. */
+TRACE_RUN_POLL : u64 : 20_000_000
 /** The Ping's sequence test_trace's ping carries. */
 TRACE_PING : u32 : 0x7ace
 /** How long test_trace waits for the ping's answer, in nanoseconds: 2 s. */
@@ -73,6 +80,30 @@ has_run :: fn(supervisor : ptr[Supervisor], thread : u64) -> bool {
 }
 
 /**
+ * When a process first ran, as the trace kept it: its threads' earliest first run.
+ *
+ * @param supervisor The supervisor, whose first_runs are read.
+ * @param process The process; its first 16 threads are looked at.
+ * @return In nanoseconds of the monotonic clock; 0 if none of them has run, as far as the trace's been read.
+ */
+first_run_of :: fn(supervisor : ptr[Supervisor], process : slop_os.Process) -> u64 {
+    ids : u64[16]
+    count :: slop_os.process_threads(process, ids) or_else 0
+    earliest : u64 = 0
+    for id, i in ids {
+        if cast[u32](i) >= count {
+            break
+        }
+        for run in supervisor.first_runs {
+            if run.thread == id && (earliest == 0 || run.time < earliest) {
+                earliest = run.time
+            }
+        }
+    }
+    return earliest
+}
+
+/**
  * Run test_trace once everything has started: log the boot's timeline, each running service's first run, earliest
  * first; then trace a ping of the clock service and its answer.
  *
@@ -80,6 +111,22 @@ has_run :: fn(supervisor : ptr[Supervisor], thread : u64) -> bool {
  */
 check_trace :: fn(supervisor : ptr[mut Supervisor]) {
     drain_trace(supervisor)
+    // Until every running service has run, or TRACE_RUN_WAIT has passed, its events handled meanwhile
+    deadline :: (slop_os.clock_monotonic() or_else 0) + TRACE_RUN_WAIT
+    loop {
+        waiting := false
+        for entry, index in supervisor.started {
+            if index < supervisor.started_count && entry.running && first_run_of(supervisor, entry.process) == 0 {
+                waiting = true
+            }
+        }
+        now :: slop_os.clock_monotonic() or_else 0
+        if !waiting || now >= deadline {
+            break
+        }
+        wait_and_handle_until(supervisor, now + TRACE_RUN_POLL)
+        drain_trace(supervisor)
+    }
     // Each running service's first run: its threads' earliest
     services : u32 = 0
     found : u32 = 0
@@ -88,19 +135,7 @@ check_trace :: fn(supervisor : ptr[mut Supervisor]) {
             continue
         }
         services += 1
-        ids : u64[16]
-        count :: slop_os.process_threads(entry.process, ids) or_else 0
-        earliest : u64 = 0
-        for id, i in ids {
-            if cast[u32](i) >= count {
-                break
-            }
-            for run in supervisor.first_runs {
-                if run.thread == id && (earliest == 0 || run.time < earliest) {
-                    earliest = run.time
-                }
-            }
-        }
+        earliest :: first_run_of(supervisor, entry.process)
         if earliest != 0 {
             found += 1
             log_line.write(

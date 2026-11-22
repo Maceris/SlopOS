@@ -42,6 +42,10 @@ PROGRAMS_AARCH64 = Path()
 # How long each test took, in seconds, by name, for the summary of the slowest
 TIMINGS: dict[str, float] = {}
 WITH_PROGRAMS = "<programs>"
+# x86-64's programs built without test_kdf (decisions/0194, T5), whose passwords take Argon2id's whole work, for the
+# tests whose arguments have WITH_REAL_KDF in place of WITH_PROGRAMS; on AArch64 they're its programs, as for the rest
+PROGRAMS_REAL_KDF = Path()
+WITH_REAL_KDF = "<programs with Argon2id's whole work>"
 # The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
 IMAGE_BUILDER = Path()
 WITH_IMAGE_BUILDER = "<image builder>"
@@ -76,10 +80,11 @@ def boot_arguments(arguments: list, more: list) -> list:
     WITH_IMAGE_BUILDER. Every boot needs both, for the bootloader and the ISO's generation (decisions/0135), so a test
     without WITH_PROGRAMS boots the kernel alone, with the programs only for the bootloader.
     """
-    programs = PROGRAMS_AARCH64 if "--arch=aarch64" in more + arguments else PROGRAMS
-    alone = [] if WITH_PROGRAMS in arguments else ["--kernel-alone"]
+    aarch64 = "--arch=aarch64" in more + arguments
+    programs = PROGRAMS_AARCH64 if aarch64 else PROGRAMS_REAL_KDF if WITH_REAL_KDF in arguments else PROGRAMS
+    alone = [] if WITH_PROGRAMS in arguments or WITH_REAL_KDF in arguments else ["--kernel-alone"]
     return more + [f"--programs={programs}", f"--image-builder={IMAGE_BUILDER}"] + alone + [
-        argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_IMAGE_BUILDER)]
+        argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_REAL_KDF, WITH_IMAGE_BUILDER)]
 
 
 def summary(count: int, passed: int, skipped: int = 0) -> str:
@@ -1463,8 +1468,10 @@ TESTS = [
         "--console-input-after=echo: first line", "--console-input-after=  Log in",
         "--expect-line=[user] terminal: login: another session",
         "--expect-line=[user] sessions: test_session_cpu: 2 sessions on CPU budgets of their own, 25000 millionths of a CPU each; the first's programs ran on its"])),
+    # With Argon2id's whole work, as a release's (WITH_REAL_KDF, decisions/0194): its 64 MiB in the account service's budget
     ("makes the administrator's account and home volume, limits wrong passwords, and recovers it with its recovery code", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_accounts") for argument in BOOT_DISK_BASE], [
+     with_before_qemu([WITH_REAL_KDF if argument == WITH_PROGRAMS else argument.replace("test_services", "test_services test_accounts")
+                       for argument in BOOT_DISK_BASE], [
         "--expect-line=[user] storage_manager: made the accounts volume",
         "--expect-line=[user] account_service: made the accounts volume",
         "--expect-line=[user] account_service: serving 0 accounts",
@@ -1515,8 +1522,8 @@ TESTS = [
     # Tracing (decisions/0183, 12d): the kernel's trace from its start, the supervisor's boot timeline from it, and a
     # ping of the clock service, which the trace shows woken by it and run
     ("traces the boot's timeline and a known exchange", 7, with_before_qemu(
-        [argument.replace("test_services", "test_services trace_boot test_trace") for argument in BOOT_DISK_BASE], [
-        "--expect-line=[user] supervisor: test_trace: every running service is in the boot's timeline",
+        [argument.replace("test_services", "test_services trace_boot test_trace test_settle=60") for argument in BOOT_DISK_BASE],
+        ["--end-when-done", "--expect-line=[user] supervisor: test_trace: every running service is in the boot's timeline",
         "--expect-line=[user] supervisor: test_trace: a ping's exchange is in the trace: the clock service woken by it, and run to "
         "answer"])),
     ("boots degraded, with a record of why, when a service the system needs ends for good", 7, with_before_qemu(
@@ -1851,13 +1858,15 @@ def build_tools(output: Path) -> bool:
     return subprocess.run(command).returncode == 0
 
 
-def build_programs(output: Path, architecture: str = "x86_64", robustness: bool = False) -> bool:
+def build_programs(output: Path, architecture: str = "x86_64", robustness: bool = False, test_kdf: bool = False) -> bool:
     """
     Builds SlopOS's programs through the build package, for an architecture, into the folder output; the system call
     fuzzer runs for SLOPOS_FUZZ_SECONDS, if it's set (fuzz_seconds).
     """
     output.mkdir(parents=True, exist_ok=True)
     setting = ",robustness=on" if robustness else ""
+    # A fraction of Argon2id's work for passwords and made volumes, as the boot tests use (decisions/0194, T5)
+    setting += ",test_kdf=on" if test_kdf else ""
     if os.environ.get("SLOPOS_FUZZ_SECONDS"):
         setting += f",fuzz_seconds={int(os.environ['SLOPOS_FUZZ_SECONDS'])}"
     command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}{setting}",
@@ -1868,7 +1877,7 @@ def build_programs(output: Path, architecture: str = "x86_64", robustness: bool 
 
 
 def main() -> int:
-    global PROGRAMS, PROGRAMS_AARCH64, IMAGE_BUILDER
+    global PROGRAMS, PROGRAMS_AARCH64, PROGRAMS_REAL_KDF, IMAGE_BUILDER
     suite_started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
@@ -1876,11 +1885,15 @@ def main() -> int:
             print("FAILED: the kernel doesn't build")
             return 1
         PROGRAMS = Path(temporary) / "programs"
-        if not build_programs(PROGRAMS):
+        if not build_programs(PROGRAMS, test_kdf=True):
             print("FAILED: the programs don't build")
             return 1
+        PROGRAMS_REAL_KDF = Path(temporary) / "programs_real_kdf"
+        if not build_programs(PROGRAMS_REAL_KDF):
+            print("FAILED: the programs don't build without test_kdf")
+            return 1
         PROGRAMS_AARCH64 = Path(temporary) / "programs_aarch64"
-        if not build_programs(PROGRAMS_AARCH64, "aarch64"):
+        if not build_programs(PROGRAMS_AARCH64, "aarch64", test_kdf=True):
             print("FAILED: the programs don't build for AArch64")
             return 1
         tools = Path(temporary) / "tools"

@@ -24,6 +24,10 @@
  *   it is compiled in. Read by the code with compiler.target_setting, as every target gets the command line's settings.
  * - coverage: on, for the system call fuzzer (decisions/0186, He): the kernel built with coverage counters, which it
  *   gives user space read only (coverage_memory). off by default.
+ * - test_kdf: on, for the boot tests (decisions/0194, T5): passwords (account_records.PASSWORD_ARGON2) and volumes
+ *   made at run time (slopfs.MADE_PASSPHRASE) go through Argon2id with a fraction of its work, as an emulated machine
+ *   spends seconds on each. off by default, and never a release's; what's made with it keeps its parameters, as
+ *   everything Argon2id wraps does.
  * - model_checked: on, for the tests' model checks (decisions/0187, C3): every test program built with --model-checked,
  *   its atomics the model checker's to switch threads at, and stack checks that grow fibers' stacks;
  *   tools/unit_tests.py
