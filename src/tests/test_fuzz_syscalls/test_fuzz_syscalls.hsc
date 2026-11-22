@@ -9,6 +9,12 @@
  * It runs for FUZZ_SECONDS, or the build's fuzz_seconds setting. Calls that end it (thread_exit, process_exit), that
  * start code in it (thread_create), that change its own thread (thread_set_page, thread_use_cpu_budget) or that change
  * what it measures (coverage_take) aren't made; every other is. Waits get a deadline a few milliseconds off.
+ *
+ * No call is given a handle of the fuzzer's own, which the runtime holds: closing or moving the owning handle of its
+ * heap's memory destroys the memory, and the fuzzer faults on its next write there. So a wrong handle is one it closed
+ * itself, never a pooled one with another generation, which may be the next handle the runtime takes; and the handles
+ * a call reads from a slice (channel_send_handles, process_give_handles) are drawn into a page of their own, never read
+ * from the scratch memory, where calls write numbers that may name any of its handles.
  */
 package test_fuzz_syscalls
 
@@ -40,6 +46,13 @@ MOST_KEPT :: 512
 MOST_POOLED :: 64
 /** The bytes of scratch memory calls are pointed at, between two unmapped ranges as big. */
 SCRATCH_BYTES : u64 : 64 * 1024
+/**
+ * The bytes of the page the handles a call reads from a slice are drawn into: room for MAX_HANDLES_PER_BATCH of them,
+ * the most a call reads, so a count past them fails as TooBig before the kernel reads anything.
+ */
+HANDLES_BYTES : u64 : 4096
+/** How many handles the handles page holds: slop_os.MAX_HANDLES_PER_BATCH. */
+HANDLE_SLOTS :: 64
 /** The budget the objects it fuzzes with are charged to. */
 POOL_BUDGET : u64 : 8 << 20
 /** The most argument words a call takes. */
@@ -77,8 +90,12 @@ Kind :: enum {
     Pointer,
     /** A slice's data address. */
     SliceData,
+    /** The data address of a slice of handles the call reads: the handles page, filled with drawn handles. */
+    HandleSliceData,
     /** A slice's count, after its data. */
     SliceCount,
+    /** The count of a slice of handles the call reads, after its data: at most HANDLE_SLOTS, or past any batch. */
+    HandleSliceCount,
     /** A wait's deadline, in nanoseconds of the monotonic clock. */
     Deadline,
 }
@@ -123,6 +140,12 @@ Fuzzer :: struct {
     pool_count : usize,
     /** The scratch memory's address, mapped read/write for SCRATCH_BYTES. */
     scratch : u64,
+    /** The handles page's memory, which draws for a HandleSliceData word write through. */
+    handles_memory : slop_os.Memory,
+    /** The handles page's address, mapped read-only for HANDLES_BYTES. */
+    handles : u64,
+    /** A handle it made and closed, as a word: its generation has moved on, so it never names anything again. */
+    closed : u64,
     /** The kernel's counters, as taken after an input; empty without them. */
     counters : mut u8[],
     /** Which hit-count buckets each counter has reached, a bit each. */
@@ -180,11 +203,16 @@ shape_code :: fn() -> compiler.Code {
         for input in function.input {
             kind := #code(Kind.Number)
             if slop_os.is_slice(input.type) {
+                data := #code(Kind.SliceData)
+                kind = #code(Kind.SliceCount)
+                if is_read_handle_slice(input.type) {
+                    data = #code(Kind.HandleSliceData)
+                    kind = #code(Kind.HandleSliceCount)
+                }
                 runtime.array_add(&stores, #code {
-                    shape.kinds[#insert index] = Kind.SliceData
+                    shape.kinds[#insert index] = #insert data
                 })
                 index += 1
-                kind = #code(Kind.SliceCount)
             }
             else if os.is_handle(input.type) {
                 kind = #code(Kind.Handle)
@@ -240,6 +268,17 @@ shape_code :: fn() -> compiler.Code {
         })
     }
     return compiler.list(made)
+}
+
+/**
+ * Tell whether a slice parameter is of handles the call reads, at compile time: Handle[] and the like, not mut.
+ *
+ * @param type A slice type, as slop_os.is_slice tells.
+ * @return True for a slice of handles that isn't mut; false for one the call writes, or of anything else.
+ */
+is_read_handle_slice :: fn(type : ptr[compiler.TypeInfo]) -> bool {
+    array :: cast[ptr[compiler.TypeInfoArray]](slop_os.underlying(type))
+    return array.dimensions.count == 1 && !array.dimensions[0].is_mutable && os.is_handle(array.base_type)
 }
 
 /**
@@ -313,6 +352,29 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> t
         "it's mapped"
     )?
     fuzzer.scratch = reserved + SCRATCH_BYTES
+    // The handles page, which only the fuzzer writes, through its memory
+    fuzzer.handles_memory = testing.require_ok(
+        t,
+        slop_os.memory_create(block.budget, HANDLES_BYTES),
+        "the handles page is made"
+    )?
+    fuzzer.handles = testing.require_some(
+        t,
+        runtime.reserve_addresses(cast[usize](HANDLES_BYTES)),
+        "an address for it is reserved"
+    )?
+    testing.require_ok(
+        t,
+        slop_os.memory_map(
+            fuzzer.handles_memory,
+            block.space,
+            fuzzer.handles,
+            0,
+            HANDLES_BYTES,
+            slop_os.PROTECTION_READ
+        ),
+        "it's mapped"
+    )?
     // What it fuzzes with, under a budget of their own
     budget :: testing.require_ok(
         t,
@@ -320,6 +382,10 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> t
         "a budget for what's fuzzed"
     )?
     add_handle(&fuzzer, cast[slop_os.Handle](budget))
+    // A wrong handle: one closed, whose entry's next handles have later generations
+    closing :: testing.require_ok(t, slop_os.port_create(budget), "a port to close")?
+    fuzzer.closed = cast[u64](cast[u32](closing))
+    testing.require_ok(t, slop_os.handle_close(cast[slop_os.Handle](closing)), "it's closed")?
     match slop_os.address_space_create(budget) {
         case Ok(made) => add_handle(&fuzzer, cast[slop_os.Handle](made))
         case Error(error) => {}
@@ -560,19 +626,35 @@ draw_word :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source], kind : K
                     case None => {}
                 }
             }
-            if way == 13 && fuzzer.pool_count > 0 {
-                // One of its handles of another generation, as a closed one's next would be
-                return cast[u64](cast[u32](fuzzer.pool[0])) ~ (cast[u64](1) << 16)
+            if way == 13 {
+                // A closed one; not a pooled one's next generation, which may be live and the runtime's
+                return fuzzer.closed
             }
             return if way == 14 { cast[u64](0) } else { cast[u64](0xffff_ffff) }
         }
         case .Pointer => return draw_address(fuzzer, source, way)
         case .SliceData => return draw_address(fuzzer, source, way)
+        case .HandleSliceData => {
+            if way >= 12 {
+                edge :: cast[usize](way - 12) % EDGE_ADDRESSES.count
+                return if edge < EDGE_ADDRESSES.count { EDGE_ADDRESSES[edge] } else { cast[u64](0) }
+            }
+            fill_handles(fuzzer, source)
+            return fuzzer.handles
+        }
         case .SliceCount => {
             if way < 10 {
                 return testing.draw_below(source, SCRATCH_BYTES / 8 + 1)
             }
             edge :: cast[usize](way - 10) % EDGE_COUNTS.count
+            return if edge < EDGE_COUNTS.count { EDGE_COUNTS[edge] } else { cast[u64](0) }
+        }
+        case .HandleSliceCount => {
+            // Every edge count is 0, 1, or past a batch's most, which fails before the kernel reads past the page
+            if way < 12 {
+                return testing.draw_below(source, HANDLE_SLOTS + 1)
+            }
+            edge :: cast[usize](way - 12) % EDGE_COUNTS.count
             return if edge < EDGE_COUNTS.count { EDGE_COUNTS[edge] } else { cast[u64](0) }
         }
         case .Deadline => return (slop_os.clock_monotonic() or_else 0) + testing.draw_below(source, MOST_WAIT)
@@ -597,6 +679,29 @@ draw_word :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source], kind : K
             return if edge < EDGE_NUMBERS.count { EDGE_NUMBERS[edge] } else { cast[u64](0) }
         }
     }
+}
+
+/**
+ * Fill the start of the handles page with handles drawn as a Handle word of any kind is: pooled ones, or wrong ones,
+ * never one of the fuzzer's own. The rest keeps what earlier fills drew, or the zeros it was made with.
+ *
+ * @param fuzzer The fuzzer, whose handles page it writes.
+ * @param source The input's source; a few draws for each handle, so a handful of them are drawn.
+ */
+fill_handles :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source]) {
+    drawn :: cast[usize](testing.draw_below(source, 5))
+    bytes : u8[HANDLE_SLOTS * 4]
+    _ = slop_os.memory_read(fuzzer.handles_memory, 0, bytes)
+    for slot in 0..<drawn {
+        word :: draw_word(fuzzer, source, .Handle, 0)
+        for i in cast[usize](0)..<4 {
+            at :: slot * 4 + i
+            if at < bytes.count {
+                bytes[at] = cast[u8](word >> cast[u64](8 * i))
+            }
+        }
+    }
+    _ = slop_os.memory_write(fuzzer.handles_memory, 0, bytes)
 }
 
 /**
