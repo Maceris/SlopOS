@@ -258,6 +258,7 @@ past_named :: fn(server : ptr[mut Server], name : u8[]) -> Result[usize, files.F
         }
         case Error(error) => {
             let_go_of_reach(&tree.reach)
+            slopfs.forget_nodes(&tree.nodes)
             runtime.free(tree)
             return .Error(.NoSpace)
         }
@@ -342,6 +343,7 @@ let_go_of_past :: fn(server : ptr[mut Server], slot : usize) {
         case None => {}
     }
     let_go_of_reach(&tree.reach)
+    slopfs.forget_nodes(&tree.nodes)
     runtime.free(tree)
     past.tree = null
     past.name_length = 0

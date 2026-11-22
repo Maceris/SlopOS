@@ -109,6 +109,8 @@ interrupt #never_returns :: fn(from : Interrupted, source : InterruptSource) {
             if from_user {
                 kernel.take_sample(kernel.per_cpu().kernel)
             }
+            // Any tick, user code or idle, with profile_boot (decisions/0194)
+            kernel.take_boot_sample(kernel.per_cpu().kernel, from_user)
             kernel.schedule(kernel.handle_timer())
         }
         case Ipi(kind) => {

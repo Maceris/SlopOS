@@ -41,6 +41,11 @@ Manager :: struct {
      * Where the builder stages each program it loads, kept so loading one after another doesn't use up its addresses.
      */
     staging : process_builder.Staging,
+    /**
+     * With profile_boot on the command line, where each program's image went is logged too, for the boot's profile
+     * (decisions/0194, T3).
+     */
+    profile : bool,
 }
 
 /**
@@ -62,13 +67,21 @@ Manager :: struct {
 main :: fn(
     log : slop_os.DebugLog?,
     entropy : os.Channel[connector.Connector],
-    clients : os.Listener[protocol.ProcessManager]
+    clients : os.Listener[protocol.ProcessManager],
+    command_line : slop_os.Memory?
 ) -> int {
     block :: slop_os.startup_block()
     manager := Manager.{
         block = block,
         entropy_connector = entropy.end,
         entropy = cast[slop_os.Channel](slop_os.NO_HANDLE),
+    }
+    match command_line {
+        case Some(memory) => {
+            words :: service_kit.text_of(block, memory) or_else ""
+            manager.profile = service_kit.has_word(words, "profile_boot")
+        }
+        case None => {}
     }
     manager.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     manager.connector_port = os.port_for(block.budget, manager.entropy_connector) or_return 1
@@ -224,6 +237,9 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
     ) {
         case Ok(built) => {
             log_line.write(manager.log, "process manager: started %", name)
+            if manager.profile {
+                log_line.write(manager.log, "process manager: profile: % at %", name, built.image)
+            }
             return .Loaded(protocol.Started.{thread = built.thread, image = built.image, seeds = seeds})
         }
         case Error(error) => {

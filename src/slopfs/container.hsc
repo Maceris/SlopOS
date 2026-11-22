@@ -328,6 +328,7 @@ unmount :: fn(container : ptr[mut Container]) {
         }
     }
     maps.map_free(&container.nodes.dirty)
+    forget_nodes(&container.nodes)
     space_free(&container.space)
     runtime.free(container)
 }

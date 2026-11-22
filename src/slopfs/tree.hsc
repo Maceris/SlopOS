@@ -250,6 +250,40 @@ owner_at :: fn(tree : ptr[Tree], birth : u64) -> u64 {
     return owner
 }
 
+/**
+ * How many nodes read and checked a Nodes keeps (decisions/0194, T3), so a node read again, as each walk from a tree's
+ * root reads its upper nodes, isn't read from the device and checked again. A node's bytes, at an address, born in a
+ * transaction and sealed as its pointer says, never change: a node that changes is written elsewhere, sealed anew.
+ */
+NODE_CACHE :: 16
+
+/** A node kept: the pointer it was read by, the tree it checked out in, and its bytes as read and checked. */
+CachedNode :: struct {
+    /** Its address; 0 for a slot not used yet. */
+    address : u64,
+    /** The transaction it was born in. */
+    birth : u64,
+    /** Its seal, as its pointer had it. */
+    seal : Seal,
+    /** The tree it was read in, and whose it was, as its header had to say. */
+    kind : TreeKind,
+    owner : u64,
+    /** Whether it was opened with keys, rather than checked by its BLAKE3 seal. */
+    encrypted : bool,
+    /** When it was last used, by the cache's clock; the least recently used is replaced. */
+    used : u64,
+    /** Its bytes, as read and checked. */
+    bytes : u8[NODE_SIZE],
+}
+
+/** The nodes a Nodes keeps, on the heap, made the first time one is kept. */
+NodeCache :: struct {
+    /** Counts each use, for CachedNode.used. */
+    clock : u64,
+    /** The nodes. */
+    nodes : CachedNode[NODE_CACHE],
+}
+
 /** The nodes of one transaction: the device they're on, the dirty ones by address, and where extents come from. */
 Nodes :: struct {
     /** The device the nodes are on. */
@@ -267,6 +301,94 @@ Nodes :: struct {
     allocate : fn(space : rawptr, blocks : u64, owner : u64, data : bool) -> u64?,
     /** Take back an extent an owner had, born in birth. */
     release : fn(space : rawptr, address : u64, blocks : u64, owner : u64, birth : u64),
+    /** The nodes read and checked that are kept (NODE_CACHE); null until one is. Freed by forget_nodes. */
+    cache : ptr[mut NodeCache]?,
+}
+
+/**
+ * Free the nodes a Nodes keeps, read and checked, if it keeps any: before the Nodes is let go of.
+ *
+ * @param nodes The Nodes; it keeps none after, and may go on being used.
+ */
+forget_nodes :: fn(nodes : ptr[mut Nodes]) {
+    match nodes.cache {
+        case Some(cache) => runtime.free(cache)
+        case None => {}
+    }
+    nodes.cache = null
+}
+
+/**
+ * Find a node kept, read by the same pointer in the same tree: its address, birth and seal, the tree's kind, whose it
+ * is and how it's sealed.
+ *
+ * @param nodes The Nodes, whose cache is looked in, the node's use noted.
+ * @param tree The tree it's being read in.
+ * @param pointer Its pointer.
+ * @return Its slot in the cache; null if it isn't kept.
+ */
+kept_node :: fn(nodes : ptr[mut Nodes], tree : ptr[Tree], pointer : ptr[BlockPointer]) -> usize? {
+    cache :: nodes.cache or_return null
+    address :: cast[u64](pointer.address)
+    birth :: cast[u64](pointer.birth)
+    owner :: owner_at(tree, birth)
+    encrypted :: tree.keys is_some
+    for i in 0..<cache.nodes.count {
+        if i < cache.nodes.count {
+            kept :: &cache.nodes[i]
+            if kept.address == address && kept.birth == birth && kept.seal == pointer.seal && kept.kind == tree.kind
+                && kept.owner == owner && kept.encrypted == encrypted {
+                cache.clock += 1
+                kept.used = cache.clock
+                return i
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * Keep a node read and checked, in place of the least recently used, the cache made the first time; without the
+ * memory for it, nothing's kept.
+ *
+ * @param nodes The Nodes, whose cache it goes in.
+ * @param tree The tree it was read and checked in.
+ * @param pointer The pointer it was read by.
+ * @param node The node, as read and checked; copied.
+ */
+keep_node :: fn(nodes : ptr[mut Nodes], tree : ptr[Tree], pointer : ptr[BlockPointer], node : ptr[mut Node]) {
+    if nodes.cache is_none {
+        made :: make(NodeCache) or_return void
+        // Each slot unused, at address 0, where no node is; not a whole NodeCache built on the stack
+        made.clock = 0
+        for i in 0..<made.nodes.count {
+            if i < made.nodes.count {
+                made.nodes[i].address = 0
+                made.nodes[i].used = 0
+            }
+        }
+        nodes.cache = made
+    }
+    cache :: nodes.cache or_return void
+    oldest := cast[usize](0)
+    for i in 0..<cache.nodes.count {
+        if i < cache.nodes.count && oldest < cache.nodes.count && cache.nodes[i].used < cache.nodes[oldest].used {
+            oldest = i
+        }
+    }
+    if oldest >= cache.nodes.count {
+        return void
+    }
+    cache.clock += 1
+    kept :: &cache.nodes[oldest]
+    kept.address = cast[u64](pointer.address)
+    kept.birth = cast[u64](pointer.birth)
+    kept.seal = pointer.seal
+    kept.kind = tree.kind
+    kept.owner = owner_at(tree, cast[u64](pointer.birth))
+    kept.encrypted = tree.keys is_some
+    kept.used = cache.clock
+    kept.bytes = node.bytes
 }
 
 // Fields of a node's bytes.
@@ -515,6 +637,17 @@ load :: fn(nodes : ptr[mut Nodes], tree : ptr[Tree], pointer : ptr[BlockPointer]
     node :: make(Node)?
     node.dirty = false
     node.copy = cast[u64](pointer.copy)
+    // Read and checked already (decisions/0194): its bytes as they were then, which is what reading it again gives
+    match kept_node(nodes, tree, pointer) {
+        case Some(slot) => match nodes.cache {
+            case Some(cache) => if slot < cache.nodes.count {
+                node.bytes = cache.nodes[slot].bytes
+                return .Ok(node)
+            }
+            case None => {}
+        }
+        case None => {}
+    }
     for place in u64.[address, cast[u64](pointer.copy)] {
         if place == 0 {
             continue
@@ -523,6 +656,7 @@ load :: fn(nodes : ptr[mut Nodes], tree : ptr[Tree], pointer : ptr[BlockPointer]
             continue
         }
         if node_checks_out(node, tree, pointer) {
+            keep_node(nodes, tree, pointer, node)
             return .Ok(node)
         }
     }

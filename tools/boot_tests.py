@@ -1426,6 +1426,13 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_chaos=6 test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
         "--expect-line=[user] supervisor: test_chaos: every service killed was started again and answered, and the budgets are as they were"])),
+    # The boot's profile (decisions/0194, T3): with profile_boot, every CPU's ticks sampled and written out once the root
+    # task's ended, and where the root task and the process manager put each image, which tools/profile_boot.py reads
+    ("samples every CPU's ticks through a boot, for its profile", 7,
+     with_before_qemu([argument.replace("test_services", "profile_boot test_services") for argument in BOOT_DISK_BASE], [
+        "--expect-line-start=[user] root task: profile: process_manager at ",
+        "--expect-line-start=[user] process manager: profile: container_service at ",
+        "--expect-line-start=[profile] ", "--expect-line=[profile] dropped 0"])),
     # Automatic snapshots (decisions/0179): every 2 seconds with test_snapshot_seconds=2, kept 20, of the two volumes
     # served, so after a while two are taken and two deleted each time
     ("takes automatic snapshots of the volumes it serves, and deletes the old ones", 7,

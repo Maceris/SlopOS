@@ -177,6 +177,8 @@ Kernel :: struct {
     lockup_test_held : u32,
     /** 1 while the trace is on (tracing.hsc, trace_set); read and written atomically. */
     tracing : u32,
+    /** With profile_boot, the boot's samples, a BootSamples on the kernel heap, as an address; 0 without. */
+    boot_samples : u64,
     /** The counter next_cpu_of turns from, so IRQs are routed to the CPUs in turn (irqs.hsc, devices.hsc). */
     next_irq_cpu : u32,
     /** Held while changing the list of devices from first_device (devices.hsc). */
@@ -421,6 +423,9 @@ boot #never_returns :: fn(info : ptr[boot_info.BootInfo]) {
         // The trace from here, every CPU online, for a boot's timeline (decisions/0183)
         if kernel.options.trace_boot && !set_tracing(kernel, true) {
             runtime.log_error("no memory for the trace's rings")
+        }
+        if kernel.options.profile_boot && !start_boot_samples(kernel) {
+            runtime.log_error("no memory for the boot's samples")
         }
         start_msis(kernel)
         leave_boot_stacks(kernel)

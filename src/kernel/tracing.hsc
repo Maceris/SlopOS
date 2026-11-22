@@ -4,6 +4,7 @@ import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -40,6 +41,31 @@ TraceRing :: struct {
     taken : u64,
     /** The events. */
     events : slop_os.TraceEvent[slop_os.TRACE_EVENTS],
+}
+
+/** With profile_boot, the most ticks sampled, every CPU's together; the boot's first, those after dropped. */
+BOOT_SAMPLES : u64 : 16384
+
+/** A tick sampled for profile_boot: when, on which CPU, and what it interrupted. */
+BootSample :: struct {
+    /** The kernel's monotonic clock at the tick, in nanoseconds. */
+    time : u64,
+    /** The CPU's index. */
+    cpu : u32,
+    /** What it interrupted in user code, as an intercept's sample is; its count 0 if the CPU was idle. */
+    sample : slop_os.Sample,
+}
+
+/**
+ * With profile_boot (decisions/0194, T3), the boot's samples, from the kernel heap: each tick of each CPU, in user code
+ * as an intercept's sample is (its thread, fiber, program counter and frame pointers' chain), or idle. Kernel code
+ * runs with interrupts off, so its time is sampled at the user code it returns to.
+ */
+BootSamples :: struct {
+    /** How many ticks have been sampled, ever, taken atomically; those from BOOT_SAMPLES on aren't kept. */
+    written : u64,
+    /** The samples, in the order their places were taken, which is about their times'. */
+    samples : BootSample[BOOT_SAMPLES],
 }
 
 /** An intercept's samples: its last, from the kernel heap. */
@@ -196,6 +222,26 @@ take_sample :: fn(kernel : ptr[mut Kernel]) {
     if intrinsics.atomic_load_u32_acquire(&intercept.sampling) == 0 || ring_address == 0 {
         return void
     }
+    sample :: sample_of(kernel, thread)
+    ring :: cast[ptr[mut SampleRing]](ring_address)
+    lock_at(&intercept.lock, .Intercept)
+    // Unless free_samples took it meanwhile
+    if intercept.samples == ring_address {
+        ring.samples[cast[usize](ring.written % cast[u64](slop_os.SAMPLES))] = sample
+        ring.written += 1
+    }
+    unlock_at(&intercept.lock, .Intercept)
+}
+
+/**
+ * Sample a thread interrupted in its user code: its ID, its fiber, its program counter and the return addresses its
+ * frame pointers chain, as far as they're readable and go up the stack. Reads the stack through its space's lock.
+ *
+ * @param kernel The kernel.
+ * @param thread The thread, its registers saved at the interrupt.
+ * @return The sample, its count 1 or more.
+ */
+sample_of :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) -> slop_os.Sample {
     sample := slop_os.Sample.{thread = thread.id, fiber = running_fiber_of(kernel, thread), count = 1}
     sample.frames[0] = cast[u64](arch.instruction_pointer(&thread.registers))
     frame := arch.get_user_register(&thread.registers, SAMPLE_FRAME_REGISTER)
@@ -214,14 +260,92 @@ take_sample :: fn(kernel : ptr[mut Kernel]) {
         }
         frame = record[0]
     }
-    ring :: cast[ptr[mut SampleRing]](ring_address)
-    lock_at(&intercept.lock, .Intercept)
-    // Unless free_samples took it meanwhile
-    if intercept.samples == ring_address {
-        ring.samples[cast[usize](ring.written % cast[u64](slop_os.SAMPLES))] = sample
-        ring.written += 1
+    return sample
+}
+
+/**
+ * Start sampling the boot, for profile_boot: the samples' ring made, and every CPU's ticks sampled from now.
+ *
+ * @param kernel The kernel, whose boot_samples is set.
+ * @return False if the ring couldn't be made, nothing sampled.
+ */
+start_boot_samples :: fn(kernel : ptr[mut Kernel]) -> bool {
+    ring, failed :: runtime.new_aligned(BootSamples, align_of(BootSamples))
+    if failed != null {
+        return false
     }
-    unlock_at(&intercept.lock, .Intercept)
+    intrinsics.atomic_store_u64_release(&kernel.boot_samples, cast[u64](ring))
+    return true
+}
+
+/**
+ * Sample the calling CPU at a tick, for profile_boot: its current thread's user code, as take_sample does, or idle.
+ * Called at the interrupt's entry, with no lock held.
+ *
+ * @param kernel The kernel; nothing's sampled without its boot_samples.
+ * @param from_user Whether the tick interrupted user code; otherwise the CPU was idle.
+ */
+take_boot_sample :: fn(kernel : ptr[mut Kernel], from_user : bool) {
+    ring_address :: intrinsics.atomic_load_u64_acquire(&kernel.boot_samples)
+    if ring_address == 0 {
+        return void
+    }
+    ring :: cast[ptr[mut BootSamples]](ring_address)
+    index :: intrinsics.interlocked_exchange_add_u64(&ring.written, 1)
+    if index >= BOOT_SAMPLES {
+        return void
+    }
+    cpu :: per_cpu()
+    taken := BootSample.{time = cast[u64](kernel_monotonic(cast[mut rawptr](kernel))), cpu = cpu.index}
+    if from_user && cpu.current != 0 {
+        taken.sample = sample_of(kernel, cast[ptr[mut Thread]](cpu.current))
+    }
+    ring.samples[cast[usize](index)] = taken
+}
+
+/**
+ * Write the boot's samples to the serial line, for profile_boot, once the root task's ended: a line for each,
+ * "[profile] ", its time in microseconds and its CPU, then "idle", or its thread's ID, its program counter and each
+ * caller's return address in hex; and at the end, how many were dropped. The serial line alone: the framebuffer
+ * console would take far longer to draw them. Every other CPU's stopped by then.
+ *
+ * @param kernel The kernel; nothing's written without its boot_samples.
+ */
+write_boot_samples :: fn(kernel : ptr[mut Kernel]) {
+    ring_address :: intrinsics.atomic_load_u64_acquire(&kernel.boot_samples)
+    if ring_address == 0 {
+        return void
+    }
+    intrinsics.atomic_store_u64_release(&kernel.boot_samples, 0)
+    ring :: cast[ptr[mut BootSamples]](ring_address)
+    kept :: if ring.written < BOOT_SAMPLES { ring.written } else { BOOT_SAMPLES }
+    for taken, i in ring.samples {
+        if cast[u64](i) >= kept {
+            break
+        }
+        storage : u8[256]
+        line := text_buffer.make(storage)
+        text_buffer.append_format(&line, "[profile] % % ", taken.time / 1000, taken.cpu)
+        if taken.sample.count == 0 {
+            text_buffer.append(&line, "idle")
+        }
+        else {
+            text_buffer.append_unsigned(&line, taken.sample.thread)
+        }
+        for frame, depth in taken.sample.frames {
+            if depth >= cast[usize](taken.sample.count) {
+                break
+            }
+            text_buffer.append(&line, " ")
+            text_buffer.append_unsigned(&line, frame, 16)
+        }
+        text_buffer.append(&line, "\n")
+        arch.early_console_write(text_buffer.as_string(&line))
+    }
+    storage : u8[128]
+    line := text_buffer.make(storage)
+    text_buffer.append_format(&line, "[profile] dropped %\n", ring.written - kept)
+    arch.early_console_write(text_buffer.as_string(&line))
 }
 
 /**

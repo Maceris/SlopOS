@@ -121,6 +121,7 @@ root_task_ended :: fn(kernel : ptr[mut Kernel], tick : u64) {
     if state != 2 || tick < kernel.root_stop_tick {
         return void
     }
+    write_boot_samples(kernel)
     log_objects_left(kernel)
     stop(.RootTaskEnded)
 }

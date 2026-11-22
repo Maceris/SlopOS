@@ -58,6 +58,114 @@ Volume :: struct {
     history_bytes : u64,
     /** Its record as it was opened, for what the volume doesn't change: a clone's origin, whose keys it uses. */
     opened : VolumeRecord,
+    /** The chunks read and checked that are kept (CHUNK_CACHE); null until one is. Freed by free_volume. */
+    chunks : ptr[mut ChunkCache]?,
+}
+
+/**
+ * How many chunks read and checked a volume keeps (decisions/0194, T3), so reading a file a page at a time doesn't
+ * read and check its chunk for each page. A chunk's blocks, sealed as their pointer says, never change: a chunk written
+ * again is written to new blocks, sealed anew.
+ */
+CHUNK_CACHE :: 2
+
+/** A chunk kept: the pointer it was read by, and its bytes as read and checked (opened, for an encrypted volume). */
+CachedChunk :: struct {
+    /** Its first block; 0 for a slot not used yet. */
+    address : u64,
+    /** The transaction it was born in. */
+    birth : u64,
+    /** How many blocks. */
+    blocks : u64,
+    /** Its seal, as its pointer had it. */
+    seal : Seal,
+    /** Whether it was opened with keys, rather than checked by its BLAKE3 seal. */
+    encrypted : bool,
+    /** When it was last used, by the cache's clock; the least recently used is replaced. */
+    used : u64,
+    /** Its bytes, as read and checked: its blocks' worth. */
+    bytes : u8[65536],
+}
+
+/** The chunks a volume keeps, on the heap, made the first time one is kept. */
+ChunkCache :: struct {
+    /** Counts each use, for CachedChunk.used. */
+    clock : u64,
+    /** The chunks. */
+    chunks : CachedChunk[CHUNK_CACHE],
+}
+
+/**
+ * Find a chunk a volume keeps, read by the same pointer, and copy its bytes out.
+ *
+ * @param volume The volume, whose cache is looked in, the chunk's use noted.
+ * @param pointer The chunk's pointer, from its record.
+ * @param into Where its bytes go, its blocks' worth.
+ * @return Whether it was kept, and copied.
+ */
+kept_chunk :: fn(volume : ptr[mut Volume], pointer : ptr[BlockPointer], into : mut u8[]) -> bool {
+    cache :: volume.chunks or_return false
+    encrypted :: volume.tree.keys is_some
+    for i in 0..<cache.chunks.count {
+        if i < cache.chunks.count {
+            kept :: &cache.chunks[i]
+            if kept.address == cast[u64](pointer.address) && kept.birth == cast[u64](pointer.birth)
+                && kept.blocks == cast[u64](cast[u32](pointer.blocks)) && kept.seal == pointer.seal
+                && kept.encrypted == encrypted {
+                cache.clock += 1
+                kept.used = cache.clock
+                length :: cast[usize](kept.blocks * BLOCK_BYTES)
+                if length > into.count || length > kept.bytes.count {
+                    return false
+                }
+                copy_bytes(into, 0, kept.bytes[0..<length])
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/**
+ * Keep a chunk read and checked, in place of the least recently used, the cache made the first time; without the
+ * memory for it, nothing's kept.
+ *
+ * @param volume The volume, whose cache it goes in.
+ * @param pointer The pointer it was read by.
+ * @param bytes Its bytes as read and checked, its blocks' worth; copied.
+ */
+keep_chunk :: fn(volume : ptr[mut Volume], pointer : ptr[BlockPointer], bytes : u8[]) {
+    if volume.chunks is_none {
+        made :: make(ChunkCache) or_return void
+        // Each slot unused, at address 0, where no chunk is; not a whole ChunkCache built on the stack
+        made.clock = 0
+        for i in 0..<made.chunks.count {
+            if i < made.chunks.count {
+                made.chunks[i].address = 0
+                made.chunks[i].used = 0
+            }
+        }
+        volume.chunks = made
+    }
+    cache :: volume.chunks or_return void
+    oldest := cast[usize](0)
+    for i in 0..<cache.chunks.count {
+        if i < cache.chunks.count && oldest < cache.chunks.count && cache.chunks[i].used < cache.chunks[oldest].used {
+            oldest = i
+        }
+    }
+    if oldest >= cache.chunks.count || bytes.count > cache.chunks[oldest].bytes.count {
+        return void
+    }
+    cache.clock += 1
+    kept :: &cache.chunks[oldest]
+    kept.address = cast[u64](pointer.address)
+    kept.birth = cast[u64](pointer.birth)
+    kept.blocks = cast[u64](cast[u32](pointer.blocks))
+    kept.seal = pointer.seal
+    kept.encrypted = volume.tree.keys is_some
+    kept.used = cache.clock
+    copy_bytes(kept.bytes, 0, bytes)
 }
 
 /** The most failed writes a volume remembers by their chunks; past it, every chunk read is refused. */
@@ -577,6 +685,10 @@ close_volume :: fn(container : ptr[mut Container], id : u64) {
 free_volume :: fn(volume : ptr[mut Volume]) {
     match volume.tree.keys {
         case Some(keys) => free_keys(keys)
+        case None => {}
+    }
+    match volume.chunks {
+        case Some(chunks) => runtime.free(chunks)
         case None => {}
     }
     runtime.free(volume)
@@ -1835,6 +1947,10 @@ read_chunk :: fn(volume : ptr[mut Volume], file : u64, index : u64, buffer : mut
         return .Error(.Corrupt)
     }
     device :: volume.device
+    // Read and checked already (decisions/0194): its bytes as they were then, which is what reading it again gives
+    if kept_chunk(volume, &extent.pointer, buffer[0..<length]) {
+        return .Ok(used)
+    }
     match volume.tree.keys {
         case Some(keys) => {
             sealed :: make(ChunkBuffer)?
@@ -1866,6 +1982,7 @@ read_chunk :: fn(volume : ptr[mut Volume], file : u64, index : u64, buffer : mut
             }
         }
     }
+    keep_chunk(volume, &extent.pointer, buffer[0..<length])
     return .Ok(used)
 }
 

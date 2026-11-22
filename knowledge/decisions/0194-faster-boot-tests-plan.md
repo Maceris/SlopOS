@@ -74,3 +74,33 @@ it under 5.
 ## Open questions
 - Groups that don't need the network or SSH could start without them (less to load), but the system under test would
   then differ by group. Wanted, or only after T3 shows what loading costs?
+
+## As Built: T1 to T3
+- **T1**: AArch64's QEMU boots with `-boot menu=on,splash-time=0`; edk2 no longer waits 5 s in every boot.
+- **T2**: `boot.py --end-when-done` presses the power button once the supervisor's started all its services, every
+  expected line but a run's end's is in, the console's typed its lines and shown what it's to show. The root task
+  shuts down as for the console's shutdown, ending with 0, its leak checks run as before. Eleven tests take it: the
+  console's, the snapshots' (55 to 63 s became 36 s), the recovery generation's. The network's tests keep their
+  settle: their peers' checks on this machine don't say when they're done.
+- **T3, the profiler**: `profile_boot` on the kernel's command line samples each tick of each CPU, user code with its
+  frame pointers' chain or idle, with its time and CPU, into a ring of 16384, written to the serial line once the root
+  task's ended. Kernel code runs with interrupts off, so its time shows at the system call it returns to. The root task
+  and the process manager, given the command line now, log where each image went (`profile: name at base`).
+  `tools/profile_boot.py` boots tests with it, names the samples by function through the programs' ELF symbols, and
+  with `--timeline` says each quarter second. A boot test checks the samples and the images' lines.
+- **T3, what it found**: the container's mount read 3011 blocks, 25 of them distinct, as every walk of a tree starts
+  from its root and slopfs kept no node it had read; each read 16 KiB and checked its BLAKE3. The mount took 2 s of a
+  9 s boot, nearly all of it waiting on the disk. Reading a file a page at a time read and checked its 64 KiB chunk
+  for each page, and its 3 nodes too: the bundle store's pages, so every program's loading.
+- **T3, what's done**: slopfs keeps the last 16 nodes a Nodes read and checked (`NODE_CACHE`) and the last 2 chunks a
+  volume read and checked (`CHUNK_CACHE`), each found again only by the same pointer: address, birth, seal, the tree
+  and its owner, and whether it's encrypted. What's at an address so sealed never changes, as a changed node or chunk is
+  written elsewhere and sealed anew, so a kept copy is what reading again would give, checked once. About 390 KiB, in
+  the container service's 4 MiB and the volume server's 6 MiB. A typical boot-disk test's boot went from 9.4 s to
+  4.6 s, the system healthy at 1.75 s rather than 6.5 s.
+- **What's left**: a test with first-boot setup and a login spends ~5.5 s of its 9 in Argon2id, the account service's
+  and the volume server's, at the account's making and the login (T5). The FAT server's free count, seen at first, was
+  its reads waiting behind the mount's.
+- **The suite, 2026-11-21**: 294 of 294 passed in 9.8 minutes (14 to 19 before), 62 minutes of test time added up (85
+  before). One flaky: the SSH client's test hung once among the others after its command had run and the server had
+  closed, and passed alone; the client's end, left to look into.

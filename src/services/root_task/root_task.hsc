@@ -283,6 +283,11 @@ RESTART_WINDOW : u64 : 60_000_000_000
 Root :: struct {
     /** The root task's startup block, for its budget, its space and its grants. */
     block : ptr[slop_os.StartupBlock],
+    /**
+     * With profile_boot on the command line, where the image of each service it loads itself went is logged, for the
+     * boot's profile (decisions/0194, T3).
+     */
+    profile : bool,
     /** The kernel's debug log, which the root task writes to and copies to what it starts. */
     log : slop_os.DebugLog,
     /** The system configuration, checked, copied to the heap and kept for good. */
@@ -451,6 +456,7 @@ main :: fn(
         }
     }
     words :: service_kit.text_of(block, command_line) or_return 4
+    root.profile = service_kit.has_word(words, "profile_boot")
     apply_substitutions(root)
     // The generation the bootloader booted, which it says on the command line (decisions/0113)
     if service_kit.has_word(words, "recovery") {
@@ -919,7 +925,12 @@ load_with_loader :: fn(
     }
     given :: if count <= all.count { all[0..<count] } else { all[0..<0] }
     match process_builder.build(target, file, given, seed, &root.stream, slop_os.ABI_VERSION, &root.staging) {
-        case Ok(thread) => return null
+        case Ok(built) => {
+            if root.profile {
+                log_line.write(root.log, "root task: profile: % at %", service.name, built.image)
+            }
+            return null
+        }
         case Error(error) => return "its loader failed"
     }
 }
@@ -1231,12 +1242,23 @@ start_manager :: fn(root : ptr[mut Root]) -> bool {
     block :: root.block
     pair :: os.channel_for[process_manager.ProcessManager](block.budget, process_manager.RING_BYTES) or_return false
     entropy_connector :: connector_to(root, .Entropy) or_return false
-    grants : process_builder.Grant[5]
+    grants : process_builder.Grant[6]
     grants[0] = process_builder.grant("log", cast[slop_os.Handle](duplicate_log(root) or_return false))
     grants[1] = process_builder.grant("entropy", cast[slop_os.Handle](entropy_connector.end))
     grants[2] = process_builder.grant("clients", cast[slop_os.Handle](pair.a))
-    count :: 3 + events_grants(root, "process_manager", grants[3..<5])
-    start_itself(root, "process_manager", if count <= grants.count { grants[0..<count] } else { grants[0..<3] })
+    given := cast[usize](3)
+    // The command line, for profile_boot (decisions/0194)
+    match slop_os.handle_duplicate(cast[slop_os.Handle](root.command_line), cast[slop_os.Rights](
+        cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER)
+    )) {
+        case Ok(copy) => {
+            grants[3] = process_builder.grant("command_line", copy)
+            given = 4
+        }
+        case Error(error) => {}
+    }
+    count :: given + events_grants(root, "process_manager", grants[given..<given + 2])
+    start_itself(root, "process_manager", if count <= grants.count { grants[0..<count] } else { grants[0..<given] })
         or_return false
     port :: os.port_for(block.budget, pair.b) or_return false
     concurrency.lock(&root.manager_lock)
