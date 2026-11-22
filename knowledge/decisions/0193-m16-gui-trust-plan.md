@@ -117,7 +117,9 @@ end.
 - **Waiting on a decision**: naming a powerbox by the launch. Nothing tells the session manager which program a process
   runs: the shell makes the process and the process manager loads it, its name "for the log only", and no system
   call says whether two handles are one object. Either the session manager launches every program, as it does GUI
-  programs (`Start`), or the kernel identifies objects and the process manager says what it loaded where.
+  programs (`Start`), or the kernel identifies objects and the process manager says what it loaded where. The owner
+  chose the second (2026-11-21): a system call saying whether two handles are one object, and the process manager
+  recording what it loaded into each process; the rate limit to be keyed by it too.
 
 ## As Built so far: 16c
 - **The session manager and the powerbox stop waiting on each other**: the session manager sends `Serve` and gives the
