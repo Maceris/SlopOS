@@ -39,6 +39,8 @@ main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]
     password : u8[..]
     frames := cast[u64](0)
     shown := false
+    // Said once, for boot.py to type once the window takes keys (decisions/0194)
+    focused := false
     // Each input-to-photon latency gui_kit measured, in nanoseconds, and how many it had when last looked at
     latencies : u64[..]
     seen := cast[u64](0)
@@ -68,6 +70,10 @@ main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]
             if !shown {
                 shown = true
                 runtime.log_info("showing its window")
+            }
+            if !focused && window.focused {
+                focused = true
+                runtime.log_info("its window has the keyboard's focus")
             }
             if frames % 20 == 0 {
                 runtime.log_info("% frames", frames)

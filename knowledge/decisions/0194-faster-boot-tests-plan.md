@@ -123,3 +123,22 @@ it under 5.
     in the SSH client's test; the shell's end of a job, likely, left with the SSH client's for that work.
 - **T4 not built yet**: with T5, a first-boot setup costs a typed form and one quick Argon2id, about 1 s; what's
   left of T4 is the disk made for each test, ~1 s each, for the owner to weigh.
+
+## Chosen with the owner, after T5 (2026-11-21)
+T4 dropped: measured after T5, a first-boot setup took 0.2 s and a disk 1.0 s, under 5% of the test time, and a disk
+depends on its test's command line. The explicit waits cleared next, then T6.
+
+## As Built: the explicit waits
+- **Every test_services test ends when it's done** (`boot_tests.boot_arguments` gives it `--end-when-done`), unless it
+  ends another way (`OWN_ENDINGS`: the console's shutdown or restart, the power button, reboots, the disk checked after,
+  the display's tests) or its length is what's tested (`KEEPS_SETTLE`: the watchdog kept from resetting the machine,
+  and the watchdog left to reset it).
+- **The network peers say when they're done**: each check against the machine (port 7's echo, TLS's, OpenSSH's) is
+  noted once it's ended, and `--end-when-done` waits for every one whose lines the serial output has.
+- **boot.py's fixed sleeps** wait on what they stood for: the power button is pressed once the supervisor's started its
+  services, not a second after its line; a new keyboard's next line is typed once the status line stops asking for
+  its code; the console's and the display's screens are taken until what's to be drawn is; the GUI's typing test
+  types once test_gui says its window has the keyboard's focus; the display test's click follows its move on the
+  tablet's queue.
+- **The suite, 2026-11-21**: 294 of 294 passed in 6.4 minutes, 41.3 minutes of test time added up (54.8 after T5), none
+  flaky.

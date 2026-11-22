@@ -46,6 +46,13 @@ WITH_PROGRAMS = "<programs>"
 # tests whose arguments have WITH_REAL_KDF in place of WITH_PROGRAMS; on AArch64 they're its programs, as for the rest
 PROGRAMS_REAL_KDF = Path()
 WITH_REAL_KDF = "<programs with Argon2id's whole work>"
+# A test_services test ends once it's shown what it's to show (boot.py --end-when-done, decisions/0194), rather than
+# when its settle runs out, unless its arguments have KEEPS_SETTLE, as one whose length is what's tested; or it ends
+# some other way, or what it checks isn't all in its lines (OWN_ENDINGS)
+KEEPS_SETTLE = "<keeps its settle>"
+OWN_ENDINGS = ("--shut-down-when-done", "--restart-when-done", "--power-button-after", "--end-when-done", "--allow-reboot",
+               "--boots", "--expect-boot-line", "--expect-disk-", "--refuse-disk-", "--display", "--compositor",
+               "--gui-login", "--gui-typing", "--framebuffer-gui", "--kvm")
 # The image builder, built once, for the tests whose arguments have WITH_IMAGE_BUILDER (decisions/0088)
 IMAGE_BUILDER = Path()
 WITH_IMAGE_BUILDER = "<image builder>"
@@ -83,8 +90,14 @@ def boot_arguments(arguments: list, more: list) -> list:
     aarch64 = "--arch=aarch64" in more + arguments
     programs = PROGRAMS_AARCH64 if aarch64 else PROGRAMS_REAL_KDF if WITH_REAL_KDF in arguments else PROGRAMS
     alone = [] if WITH_PROGRAMS in arguments or WITH_REAL_KDF in arguments else ["--kernel-alone"]
-    return more + [f"--programs={programs}", f"--image-builder={IMAGE_BUILDER}"] + alone + [
-        argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_REAL_KDF, WITH_IMAGE_BUILDER)]
+    given = [argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_REAL_KDF, WITH_IMAGE_BUILDER, KEEPS_SETTLE)]
+    services = any(argument.startswith("--command-line=") and "test_services" in argument.split("=", 1)[1].split()
+                   for argument in given)
+    ending = [] if not services or KEEPS_SETTLE in arguments or any(argument.startswith(OWN_ENDINGS) for argument in more + given) \
+        else ["--end-when-done"]
+    # boot.py's own arguments before "--", QEMU's after
+    at = given.index("--") if "--" in given else len(given)
+    return more + [f"--programs={programs}", f"--image-builder={IMAGE_BUILDER}"] + alone + given[:at] + ending + given[at:]
 
 
 def summary(count: int, passed: int, skipped: int = 0) -> str:
@@ -680,13 +693,13 @@ TESTS = [
     # its end, without an exit code
     ("keeps a hardware watchdog from resetting the machine while the services answer", 7,
      with_before_qemu([argument.replace("test_services", "test_services watchdog=4 test_settle=20").replace("--timeout=120", "--timeout=180")
-                       for argument in BOOT_DISK_BASE], [
+                       for argument in BOOT_DISK_BASE], [KEEPS_SETTLE,
         "--expect-line=[user] i6300esb: armed, 4 seconds", "--expect-line=[user] supervisor: the watchdog's armed, 4 seconds"])
      + ["-device", "i6300esb"]),
     ("lets the hardware watchdog reset a machine whose supervisor stops resetting it", 125,
      with_before_qemu([argument.replace("test_services", "test_services watchdog=4 test_watchdog_hang test_settle=60")
                        .replace("--timeout=120", "--timeout=180") for argument in BOOT_DISK_BASE
-                       if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
+                       if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [KEEPS_SETTLE,
         "--expect-line=[user] i6300esb: armed, 4 seconds",
         "--expect-line=[user] supervisor: test_watchdog_hang: the watchdog isn't reset"])
      + ["-device", "i6300esb"]),

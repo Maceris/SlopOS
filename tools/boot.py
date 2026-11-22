@@ -586,9 +586,29 @@ class NetworkPeers:
         self.nts_context.minimum_version = ssl.TLSVersion.TLSv1_3
         self.nts_context.load_cert_chain(TLS_PEERS / "forged.pem")
         self.nts_context.set_alpn_protocols(["ntske/1"])
+        # The checks run against the machine, by name, once it's written their lines; each name's put in finished once
+        # it's done, passed or not, for --end-when-done (decisions/0194)
+        self.finished: set[str] = set()
         for serve in (self.serve_tcp, self.serve_udp, self.serve_sink, self.serve_dns, self.connect_in, self.serve_tls,
                       self.connect_in_tls, self.serve_nts_ke, self.serve_forged_ntp, self.ssh_checks):
-            threading.Thread(target=serve, daemon=True).start()
+            threading.Thread(target=self.noting_end, args=(serve,), daemon=True).start()
+
+    def noting_end(self, serve) -> None:
+        """Run a server or a check, its name put in finished once it's ended, however it ends."""
+        try:
+            serve()
+        finally:
+            self.finished.add(serve.__name__)
+
+    def pending(self, written: list[str]) -> bool:
+        """
+        Whether a check against the machine is still to finish: one whose lines the serial output has, so it's begun
+        or is about to, that hasn't. A check whose lines haven't come isn't waited for.
+        """
+        checks = {"connect_in": [self.LISTENING], "connect_in_tls": [self.SERVING_TLS],
+                  "ssh_checks": [self.SSH_LISTENING, self.SSH_KEY_ADDED] if self.ssh_wanted.is_set() else None}
+        return any(lines is not None and all(line in written for line in lines) and name not in self.finished
+                   for name, lines in checks.items())
 
     def words(self, command_line: str) -> str:
         if "ssh_checks" in command_line.split():
@@ -922,14 +942,13 @@ class PowerButton(Keyboard):
         return ["-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
 
     def press_when_ready(self) -> None:
+        # Its line, and the supervisor's started all its services, the power button's driver among them
         while True:
             written = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
-            if self.after in written:
+            if self.after in written and any(line.startswith(ALL_STARTED) for line in written):
                 break
-            time.sleep(0.2)
+            time.sleep(0.1)
         try:
-            # A second for what follows the line, as the system settles
-            time.sleep(1)
             if self.connect():
                 self.command("system_powerdown")
         except OSError:
@@ -1019,11 +1038,10 @@ class DisplayTest(Keyboard):
             if not self.connect():
                 self.problem = "the machine protocol couldn't be reached"
                 return
-            time.sleep(0.5)
+            # The move, then the click, in order on the tablet's queue
             self.command("input-send-event", {"events": [
                 {"type": "abs", "data": {"axis": "x", "value": self.MIDDLE}},
                 {"type": "abs", "data": {"axis": "y", "value": self.MIDDLE}}]})
-            time.sleep(0.3)
             for down in (True, False):
                 self.command("input-send-event", {"events": [
                     {"type": "btn", "data": {"down": down, "button": "left"}}]})
@@ -1031,12 +1049,17 @@ class DisplayTest(Keyboard):
             if not self.wait_for(self.CLICKED, time.monotonic() + 30):
                 self.problem = "test_display never said where it clicked"
                 return
-            time.sleep(0.5)
-            reply = self.ask("screendump", {"filename": str(self.screenshot), "device": "gpu"})
-            if "error" in reply:
-                self.problem = f"the screen couldn't be taken: {reply['error'].get('desc')}"
-                return
-            self.problem = scene_drawn(self.screenshot)
+            # The screen, taken until it shows the scene, as the frame after the click may not be shown yet
+            deadline = time.monotonic() + 30
+            while True:
+                reply = self.ask("screendump", {"filename": str(self.screenshot), "device": "gpu"})
+                if "error" in reply:
+                    self.problem = f"the screen couldn't be taken: {reply['error'].get('desc')}"
+                    return
+                self.problem = scene_drawn(self.screenshot)
+                if self.problem is None or time.monotonic() > deadline:
+                    break
+                time.sleep(0.2)
             # Done: the power button ends the run, which test_settle bounds otherwise
             self.command("system_powerdown")
         except OSError as error:
@@ -1436,6 +1459,7 @@ class GuiTypingTest(GuiLoginTest):
     """
 
     SHOWN = "[user] test_gui: showing its window"
+    FOCUSED = "[user] test_gui: its window has the keyboard's focus"
     FORMS = [("admin", "correct horse battery staple"), ("bob", "hunter2")]
 
     def __init__(self, serial: Path, screenshot: Path):
@@ -1446,10 +1470,12 @@ class GuiTypingTest(GuiLoginTest):
             if not self.wait_for(self.SHOWN, time.monotonic() + 600):
                 self.problem = "test_gui never showed its window"
                 return
+            if not self.wait_for(self.FOCUSED, time.monotonic() + 60):
+                self.problem = "test_gui's window never had the keyboard's focus"
+                return
             if not self.connect():
                 self.problem = "the machine protocol couldn't be reached"
                 return
-            time.sleep(1)
             for index, (name, password) in enumerate(self.FORMS):
                 # To the name: Tab from nothing focused, then Shift+Tab back from the password a submission left focused
                 if index > 0:
@@ -1779,7 +1805,8 @@ class ConsoleLink:
     def type_keys(self) -> None:
         """
         The keyboard's lines, typed in turn; the line \\code types the code the terminal service's status line shows for a
-        new keyboard (src/services/input_service), once it shows one, and waits a second for it to be taken.
+        new keyboard (src/services/input_service), once it shows one, and waits for the status line to stop asking for it,
+        up to 10 seconds, as the keyboard's taken then.
         """
         try:
             if not self.keyboard.connect():
@@ -1795,14 +1822,20 @@ class ConsoleLink:
                     time.sleep(0.1)
                 if found is not None:
                     self.keyboard.type_line(found.group(1))
-                    time.sleep(1)
+                    deadline = time.monotonic() + 10
+                    while KEYBOARD_CODE.search(self.status()) and time.monotonic() < deadline:
+                        time.sleep(0.05)
             if self.screen_after is not None:
                 deadline = time.monotonic() + 30
                 while self.screen_after not in self.lines() and time.monotonic() < deadline:
                     time.sleep(0.1)
-                # Time for the terminal service to draw what it showed on the serial line
-                time.sleep(0.5)
-                self.keyboard.command("screendump", {"filename": str(self.screenshot)})
+                # Taken until the terminal service has drawn what it showed on the serial line, up to 10 seconds
+                deadline = time.monotonic() + 10
+                while True:
+                    self.keyboard.command("screendump", {"filename": str(self.screenshot)})
+                    if console_drawn(self.screenshot) is None or time.monotonic() > deadline:
+                        break
+                    time.sleep(0.2)
                 self.screen_taken = True
         except OSError:
             pass
@@ -2517,7 +2550,7 @@ def main() -> int:
             console.thread.start()
         ender = None
         if arguments.end_when_done:
-            ender = EndWhenDone(lambda: run_done(arguments, serial, console))
+            ender = EndWhenDone(lambda: run_done(arguments, serial, console, peers))
             extra += ender.qemu_arguments()
             ender.thread.start()
         booting_started = time.monotonic()
@@ -2655,14 +2688,17 @@ def main() -> int:
     return code
 
 
-def run_done(arguments: argparse.Namespace, serial: Path, console: "ConsoleLink | None") -> bool:
+def run_done(arguments: argparse.Namespace, serial: Path, console: "ConsoleLink | None",
+             peers: "NetworkPeers | None" = None) -> bool:
     """
     Whether a run's shown all it's to show, for --end-when-done: the supervisor's started all its services, the serial
-    output has every line --expect-line and --expect-line-start ask for but those of a run's end (RUN_END_LINES), and the
-    console's typed all its lines and shown what it's to show.
+    output has every line --expect-line and --expect-line-start ask for but those of a run's end (RUN_END_LINES), the
+    network peers' checks that have begun are done, and the console's typed all its lines and shown what it's to show.
     """
     written = serial.read_text(errors="replace").splitlines() if serial.exists() else []
     if not any(line.startswith(ALL_STARTED) for line in written):
+        return False
+    if peers is not None and peers.pending(written):
         return False
     if any(line not in written for line in arguments.expect_line if not line.startswith(RUN_END_LINES)):
         return False
