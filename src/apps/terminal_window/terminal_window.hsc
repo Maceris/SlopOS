@@ -68,6 +68,19 @@ Term :: struct {
     line : u8[LINE_BYTES],
     /** How many bytes of line. */
     line_count : usize,
+    /**
+     * The client whose Read came while another was the reader, held to make it the reader once the reader goes, as
+     * the shell's is when a program it gave the terminal to has ended but isn't seen gone yet; null for none.
+     */
+    waiting : usize?,
+    /** How many events that Read asked for. */
+    waiting_most : u32,
+    /** The client whose line, sent while it wasn't the reader, is kept for when it becomes the reader; null for none. */
+    kept_from : usize?,
+    /** That line, the first kept_count bytes. */
+    kept : u8[LINE_BYTES],
+    /** How many bytes of kept. */
+    kept_count : usize,
     /** Whether the cursor's shown. */
     cursor_shown : bool,
     /** Whether what's shown changed since the last frame. */
@@ -283,11 +296,20 @@ serve :: fn(term : ptr[mut Term], index : usize, into : ptr[mut os.Incoming]) {
             }
             case _ => {
                 service_kit.drop_client(&term.clients, index)
+                if (term.waiting or_else term.clients.ends.count) == index {
+                    term.waiting = null
+                    term.waiting_most = 0
+                }
+                if (term.kept_from or_else term.clients.ends.count) == index {
+                    term.kept_from = null
+                    term.kept_count = 0
+                }
                 if (term.reader or_else term.clients.ends.count) == index {
                     term.reader = null
                     term.held = 0
                     term.line_count = 0
                     term.changed = true
+                    hand_input(term)
                 }
                 return void
             }
@@ -331,8 +353,12 @@ serve :: fn(term : ptr[mut Term], index : usize, into : ptr[mut os.Incoming]) {
             case Read(most) => {
                 owned :: (term.reader or_else index) == index
                 if owned {
-                    term.reader = index
-                    term.held = if most == 0 { cast[u32](1) } else { most }
+                    read_by(term, index, most)
+                }
+                else {
+                    // Held for when the reader goes: the client reads only once, so a Read dropped is never sent again
+                    term.waiting = index
+                    term.waiting_most = most
                 }
             }
             case InputLine(given) => {
@@ -345,6 +371,17 @@ serve :: fn(term : ptr[mut Term], index : usize, into : ptr[mut os.Incoming]) {
                         }
                     }
                     term.changed = true
+                }
+                else {
+                    // Kept for when its Read makes it the reader, as the shell's prompt is
+                    term.kept_from = index
+                    term.kept_count = 0
+                    for byte in os.items(into, given.text) {
+                        if term.kept_count < term.kept.count {
+                            term.kept[term.kept_count] = byte
+                            term.kept_count += 1
+                        }
+                    }
                 }
             }
             case Connect(connection) => {
@@ -369,10 +406,63 @@ serve :: fn(term : ptr[mut Term], index : usize, into : ptr[mut os.Incoming]) {
                     term.held = 0
                     term.line_count = 0
                     term.changed = true
+                    hand_input(term)
+                }
+                else if (term.waiting or_else term.clients.ends.count) == index {
+                    // Its Read, held while another was the reader, answered empty as a reader's is
+                    out := os.Outgoing.{}
+                    response :: os.begin[terminal.Response](&out)
+                    response^ = .Input(
+                        terminal.Events.{
+                            events = os.append(&out, term.events[0..<0]),
+                            text = os.append(&out, term.text[0..<0]),
+                        }
+                    )
+                    _ = terminal.send_response(end, term.window.port, &out)
+                    term.waiting = null
+                    term.waiting_most = 0
                 }
             }
         }
     }
+}
+
+/**
+ * Make a client the reader, holding a Read: its line, sent before it was the reader, is shown now.
+ *
+ * @param term The terminal: its reader, held Read and line change.
+ * @param index The client, by its index among the clients.
+ * @param most How many events its Read asked for; 0 is taken as 1.
+ */
+read_by :: fn(term : ptr[mut Term], index : usize, most : u32) {
+    term.reader = index
+    term.held = if most == 0 { cast[u32](1) } else { most }
+    if (term.kept_from or_else term.clients.ends.count) == index {
+        term.line_count = 0
+        for byte, i in term.kept {
+            if i < term.kept_count && term.line_count < term.line.count {
+                term.line[term.line_count] = byte
+                term.line_count += 1
+            }
+        }
+        term.kept_from = null
+        term.kept_count = 0
+        term.changed = true
+    }
+}
+
+/**
+ * Give the input, which no client reads now, to the client whose Read was held while another was the reader, if one
+ * was.
+ *
+ * @param term The terminal: the waiting client, if any, becomes the reader, as read_by says, and none waits after.
+ */
+hand_input :: fn(term : ptr[mut Term]) {
+    waiting :: term.waiting or_return void
+    most :: term.waiting_most
+    term.waiting = null
+    term.waiting_most = 0
+    read_by(term, waiting, most)
 }
 
 /** Write text into the grid where the cursor is, a grapheme cluster at a time, made safe, in its runs' styles. */

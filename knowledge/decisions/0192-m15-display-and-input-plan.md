@@ -440,7 +440,11 @@ The boot tests pass again, all 291, with the GUI login's back among them.
     - A program's input line sent before its first Read wasn't drawn, as only the input's owner's is and a Read made
       the owner, so a session's first prompt showed only once a key was typed: the line takes the input as a Read
       does now. A line sent while another still owned it, as the shell's prompt is once a program it gave the
-      terminal to has ended but isn't seen gone yet, is kept for when the sender's Read makes it the owner.
+      terminal to has ended but isn't seen gone yet, is kept for when the sender's Read makes it the owner. Its Read,
+      sent then too, was dropped, and a client reads only once, so the shell's prompt never came back after a program
+      that had read the terminal (ssh asking to trust a host key, edit) when the host was loaded: a Read while another
+      owns the input is held now, and makes its sender the owner once the owner goes or releases it. terminal_window
+      does the same, and keeps a line sent before its sender reads.
     - Keys that came while the trusted path's screen was up reached the program if one of them closed it: the Enter
       that allowed a request was the debugger's too. What comes while a screen's up is dropped, whichever key closes
       it.

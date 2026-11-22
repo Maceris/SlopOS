@@ -366,6 +366,13 @@ View :: struct {
     owner : usize?,
     /** How many events the owner's Read asked for, which deliver sends at most; 0 when no Read is held. */
     held : u32,
+    /**
+     * The client whose Read came while another owned the input, held to make it the owner once the owner goes, as the
+     * shell's is when a program it gave the terminal to has ended but isn't seen gone yet; null for none.
+     */
+    waiting : usize?,
+    /** How many events that Read asked for. */
+    waiting_most : u32,
     /** The line the owner's editing (InputLine, decisions/0147), the first input_count bytes, UTF-8. */
     input : u8[INPUT_LINE_BYTES],
     /** How many bytes of input are used; 0 for no line, which isn't drawn. */
@@ -702,12 +709,14 @@ lend_seat :: fn(service : ptr[mut Service]) {
  * Writes, cursor moves, clears and scrolls go into the view's screen model, and onto the serial line if the view is
  * shown and nothing of the trusted path's is up; the line being typed is taken away first and drawn again after. A
  * Read makes the client the input's owner if there's none: it holds until the owner goes, or gives it up with
- * ReleaseInput, when a Read it holds is answered empty. An InputLine from the owner replaces the line. Describe is
+ * ReleaseInput, when a Read it holds is answered empty. A Read while another owns the input is held, the last one
+ * only, and makes its client the owner once the owner goes or gives it up; ReleaseInput from that client answers it
+ * empty. An InputLine from the owner replaces the line. Describe is
  * answered at once; requests it doesn't know are answered Unsupported. A Connect's new connection is added as a client,
  * or closed if there's no room.
  *
- * A client whose connection fails is dropped, and, if it owned its view's input, the input's freed and its line
- * forgotten.
+ * A client whose connection fails is dropped, and, if it owned its view's input, its line forgotten and the input
+ * given to the client whose Read is held, or freed.
  *
  * @param service The service's state, from its main loop: the client's view is the one in use while it's served and
  *     the active one after, and its screen model, input owner and line, and the serial queue change as requests say.
@@ -740,6 +749,10 @@ serve :: fn(
             case _ => {
                 service_kit.drop_client(connected, index)
                 use_view_of(service, index)
+                if waits(service, index) {
+                    view(service).waiting = null
+                    view(service).waiting_most = 0
+                }
                 match view(service).owner {
                     case Some(owner) => {
                         if owner == index {
@@ -747,6 +760,7 @@ serve :: fn(
                             view(service).input_count = 0
                             view(service).owner = null
                             view(service).held = 0
+                            hand_input(service)
                         }
                     }
                     case None => {}
@@ -823,16 +837,15 @@ serve :: fn(
                     case None => true
                 }
                 if owned {
-                    view(service).owner = index
-                    view(service).held = if most == 0 { cast[u32](1) } else { most }
-                    // Its line sent before it owned the input, drawn now
-                    if kept_by(service, index) {
-                        view(service).kept_from = null
-                        count :: view(service).kept_count
-                        if count <= view(service).kept.count {
-                            set_input(service, view(service).kept[0..<count], view(service).kept_cursor)
-                        }
-                    }
+                    own_input(service, index, most)
+                }
+                else {
+                    /*
+                     * Held for when the owner goes, as the shell's is when a program it gave the terminal to has ended
+                     * but isn't seen gone yet: the client reads only once, so a Read dropped here is never sent again
+                     */
+                    view(service).waiting = index
+                    view(service).waiting_most = most
                 }
             }
             case InputLine(line) => {
@@ -862,20 +875,17 @@ serve :: fn(
                     hide_input(service)
                     view(service).input_count = 0
                     if view(service).held > 0 {
-                        none : terminal.Event[1]
-                        no_text : u8[1]
-                        out := os.Outgoing.{}
-                        answer :: os.begin[terminal.Response](&out)
-                        answer^ = .Input(
-                            terminal.Events.{
-                                events = os.append(&out, none[0..<0]),
-                                text = os.append(&out, no_text[0..<0]),
-                            }
-                        )
-                        _ = terminal.send_response(end, service.port, &out)
+                        answer_empty(service, end)
                     }
                     view(service).owner = null
                     view(service).held = 0
+                    hand_input(service)
+                }
+                else if waits(service, index) {
+                    // Its Read, held while another owned the input, answered empty as an owner's is
+                    answer_empty(service, end)
+                    view(service).waiting = null
+                    view(service).waiting_most = 0
                 }
             }
         }
@@ -912,6 +922,75 @@ kept_by :: fn(service : ptr[mut Service], index : usize) -> bool {
         case Some(from) => from == index
         case None => false
     }
+}
+
+/**
+ * Tell whether a client's Read is held in the view in use while another owns its input.
+ *
+ * @param service The service's state, whose view in use is only read.
+ * @param index The client, by its index among the service's clients; any index can be given.
+ * @return True if it's the client waiting; false for any other, or when none is.
+ */
+waits :: fn(service : ptr[mut Service], index : usize) -> bool {
+    return match view(service).waiting {
+        case Some(waiting) => waiting == index
+        case None => false
+    }
+}
+
+/**
+ * Make a client the owner of the view in use's input, holding a Read: its line, sent before it owned the input, is
+ * drawn now.
+ *
+ * @param service The service's state: the view in use's owner, held Read and line change.
+ * @param index The client, by its index among the service's clients, in the view in use.
+ * @param most How many events its Read asked for; 0 is taken as 1.
+ */
+own_input :: fn(service : ptr[mut Service], index : usize, most : u32) {
+    view(service).owner = index
+    view(service).held = if most == 0 { cast[u32](1) } else { most }
+    if kept_by(service, index) {
+        view(service).kept_from = null
+        count :: view(service).kept_count
+        if count <= view(service).kept.count {
+            set_input(service, view(service).kept[0..<count], view(service).kept_cursor)
+        }
+    }
+}
+
+/**
+ * Give the view in use's input, which no one owns now, to the client whose Read was held while another owned it, if
+ * one was.
+ *
+ * @param service The service's state: the view in use's waiting client, if any, becomes its owner, as own_input says,
+ *     and none waits after.
+ */
+hand_input :: fn(service : ptr[mut Service]) {
+    waiting :: view(service).waiting or_return void
+    most :: view(service).waiting_most
+    view(service).waiting = null
+    view(service).waiting_most = 0
+    own_input(service, waiting, most)
+}
+
+/**
+ * Answer a client's held Read with no events, as giving up the input does.
+ *
+ * @param service The service, whose port it's sent on.
+ * @param end The client's end.
+ */
+answer_empty :: fn(service : ptr[mut Service], end : slop_os.Channel) {
+    none : terminal.Event[1]
+    no_text : u8[1]
+    out := os.Outgoing.{}
+    answer :: os.begin[terminal.Response](&out)
+    answer^ = .Input(
+        terminal.Events.{
+            events = os.append(&out, none[0..<0]),
+            text = os.append(&out, no_text[0..<0]),
+        }
+    )
+    _ = terminal.send_response(end, service.port, &out)
 }
 
 /**
