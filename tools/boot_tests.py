@@ -1702,7 +1702,7 @@ TESTS = [
     program_test("waits on ports, wakes them and sets their timers, and refuses a wait with no room", "test_ports", 4),
     program_test("passes handles and messages over channels", "test_channels", 3),
     # And counts who holds a memory object, and says when no one does (decisions/0178)
-    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 6),
+    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 7),
     program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets", 2),
     program_test("reads I/O ports through a range of them", "test_io_ports", 1),
     program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits", 2),

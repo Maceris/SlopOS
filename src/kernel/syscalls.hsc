@@ -287,6 +287,26 @@ sys_handle_info :: fn(
 }
 
 /**
+ * Tell whether two handles in the caller's table are to the same object (decisions/0193, 16b); no right is needed.
+ *
+ * @param thread The calling thread, whose process's table they're in.
+ * @param a A handle, of any kind.
+ * @param b Another, of any kind.
+ * @return True if both are to one object, false if not.
+ * @error InvalidHandle Either isn't a handle in the caller's table, or is one already closed.
+ * @error ObjectGone Either's object was destroyed.
+ */
+sys_handle_same :: fn(
+    thread : ptr[mut Thread],
+    a : slop_os.Handle,
+    b : slop_os.Handle
+) -> Result[bool, slop_os.HandleError] {
+    first :: lookup(&process_of(thread).table, a)?
+    second :: lookup(&process_of(thread).table, b)?
+    return .Ok(first.object == second.object)
+}
+
+/**
  * Find the object a handle in process's table refers to, if it's of kind and has every right in rights, with its error
  * as the call's: they share HandleError's tags.
  *

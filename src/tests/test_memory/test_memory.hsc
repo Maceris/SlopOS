@@ -668,3 +668,29 @@ page_tables_touching :: fn(block : ptr[slop_os.StartupBlock]) -> TableCosts? {
     }
     return TableCosts.{aligned = costs[0], unaligned = costs[1]}
 }
+
+// handle_same (decisions/0193, 16b): a handle and its duplicate are to one object, two objects' handles aren't
+handles_say_whether_they_are_to_one_object #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    first :: testing.require_ok(t, slop_os.memory_create(block.budget, 4096), "a memory object")?
+    defer slop_os.handle_close(cast[slop_os.Handle](first))
+    second :: testing.require_ok(t, slop_os.memory_create(block.budget, 4096), "another")?
+    defer slop_os.handle_close(cast[slop_os.Handle](second))
+    copy :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](first), slop_os.RIGHT_MEMORY_READ),
+        "a duplicate of the first, read only"
+    )?
+    defer slop_os.handle_close(copy)
+    testing.expect_eq(t, slop_os.handle_same(cast[slop_os.Handle](first), copy) or_else false, true,
+        "a handle and its duplicate, with fewer rights, are to one object")
+    testing.expect_eq(t, slop_os.handle_same(cast[slop_os.Handle](first), cast[slop_os.Handle](first)) or_else false, true,
+        "a handle is to its own object")
+    testing.expect_eq(t, slop_os.handle_same(cast[slop_os.Handle](first), cast[slop_os.Handle](second)) or_else true, false,
+        "two objects' handles aren't")
+    testing.expect_eq(t, slop_os.handle_same(cast[slop_os.Handle](first), cast[slop_os.Handle](block.budget)) or_else true, false,
+        "a memory object's and a budget's aren't")
+    testing.expect_error(t, slop_os.handle_same(cast[slop_os.Handle](first), cast[slop_os.Handle](0x7ffff0)),
+        slop_os.HandleError.InvalidHandle, "a handle that isn't the caller's is refused")
+    return .Ok
+}
