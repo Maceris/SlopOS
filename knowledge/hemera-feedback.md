@@ -33,6 +33,9 @@ Known limits, each an error rather than wrong code. Severity: nice.
   language (11d, `src/shell_language/arithmetic.hsc`) checks its own with the sign tricks (`added`, `subtracted`,
   `multiplied`); intrinsics over LLVM's `llvm.sadd.with.overflow` and its kin would be one instruction and a branch.
   Marked `//STD(missing)`.
+- `is_ok` and `is_error` bind as loosely as `if`, so `a is_error || b is_error` doesn't parse: each needs parentheses
+  or a variable of its own, as M16's greeter and powerbox kept needing. Chosen with the project's owner (2026-11-21):
+  they bind tighter than `&&` and `||`, as a comparison does. Severity: friction.
 
 ### Targets and runtime
 

@@ -1,0 +1,73 @@
+# 0194: Faster Boot Tests, Planned
+
+Status: proposed (2026-11-21), for the project's owner to choose from
+Date: 2026-11-21
+Related: `0144` (the parallel runner), `0146` (boot tests steady under load, `test_settle`), `0192` (15g: the builds
+made faster, the suite from 22.8 to 13.8 minutes), `0193` (M16's suites), `0186` (the KVM path)
+
+## Context
+The boot suite takes 14 to 19 minutes: 292 boots, about 85 minutes of test time added up, 8 at once. Each is a cold
+boot in QEMU without hardware acceleration (TCG; WHPX stays off for the Linux VM's KVM, `0186`), UEFI, the kernel,
+every service, and often first-boot setup and a login, before the test's own few seconds. The host's 24 logical
+processors are about 80% busy throughout, nearly all of it QEMU, so the suite is bound by what it emulates: it gets
+faster by emulating less, not by running more at once.
+
+## What was measured (2026-11-21)
+Times from M16's second suite run, and single boots timed line by line from their serial output:
+
+| Group | Tests | Test time | Each |
+|---|---|---|---|
+| Boot disk, first-boot setup typed (x86-64, AArch64) | 76 | 1990 s | 26 s |
+| Boot disk, no setup | 46 | 1096 s | 24 s |
+| The kernel and its modules (test programs, `test_program=`) | 86 | 761 s | 9 s |
+| The kernel alone | 45 | 224 s | 5 s |
+| Reboots, network, GUI, and the rest | 35 | 1093 s | 31 s |
+
+A typical boot-disk test on x86-64, 10.8 s: QEMU and boot.py starting 1.4 s; UEFI 1.1 s; the bootloader and the
+kernel 0.3 s; the root task until "the system is healthy" 6.4 s; the test and the shutdown 1.7 s. With first-boot
+setup and a login, about 3 s more each on x86-64 and 1.3 s each on AArch64.
+- **AArch64's firmware waits 5 s for a boot menu** (edk2's default timeout on the virt machine) in every boot:
+  `-boot menu=on,splash-time=0` takes an AArch64 boot from 6.4 s to 1.3 s, and every AArch64 test about 5 s faster.
+  x86-64's OVMF doesn't wait.
+- **Starting the services**, 5 to 6.4 s: the container's mount 1.8 to 2.3 s, though it reads a few blocks; each
+  program the supervisor loads from the bundle store 0.3 to 0.9 s; a session's programs after a login about 2 s. Not
+  profiled yet.
+- **Argon2id's 64 MiB**, once to make an account and again for each login, elevation or SSH password: most of the
+  3 s each on x86-64.
+- **`test_settle`**: a `test_services` boot that isn't shut down when it's done stays up for its settle time (`0146`)
+  after what it checks is seen; the console's tests, the snapshots' (45 s), the network's and TLS's.
+- No difference: AArch64's pointer authentication (`pauth-impdef=on`), x86-64's IOMMU (`--no-iommu`), typing (it waits
+  on what's shown, polled every 50 ms).
+
+## Proposal
+In stages, each measured by a suite run, and kept only if the suite stays steady (`0146`):
+- **T1, the firmware's wait**: `-boot menu=on,splash-time=0` for AArch64 (~730 s of test time, ~14%).
+- **T2, ending when done**: a test whose checks are all lines it expects ends once they're all seen, its machine shut
+  down as a user would (the power button, so the root task's leak checks and exit code still count), rather than when
+  `test_settle` runs out. Tests whose length is what's tested (a watchdog kept from resetting the machine, the chaos
+  test) keep theirs. ~250 s.
+- **T3, profiling the boot**: the kernel's clock in the boot log's lines, a test run's phases timed from them, and the
+  container's mount, the bundle store's loads and a session's start profiled and made faster. Every boot-disk test
+  waits ~6 s on these, and a real machine would too, if 20 times less. Unknown until profiled; perhaps 300 to 700 s.
+- **T4, disks made once**: the disk each test needs made once a run (per architecture and kind), and each test given a
+  copy-on-write overlay (qcow2) rather than its own 133 MB copy. Tests that don't test first-boot setup start from a
+  disk where it's been done, so they don't type it or pay its Argon2id. The setup's own tests keep doing it. ~300 s.
+- **T5, Argon2id's cost in tests**: a test build's accounts hashed with small parameters, a record keeping them as it
+  does now, so checking needs nothing else; one test keeps the real ones. Never a command-line word or anything a
+  release image can take. ~300 to 500 s, partly what T4 saves.
+- **T6, snapshots** (the largest and most invasive): each group's machine booted once to where its tests start (the
+  system healthy, or logged in), saved (`savevm`), and each test started from it (`-loadvm`). That needs a group's
+  tests to share the kernel's command line and devices, so what a test does moves from the command line to what it's
+  given after (typed, or a file on the disk); and every test of a group starts with the same randomness, keys and
+  addresses. A prototype on one group first. Up to 1500 to 2000 s on top of the rest.
+- **Not proposed**: more boots at once (the host's busy); several test programs in one boot (`test_program=a,b`),
+  ~130 s, and a failure would take the others with it.
+
+T1, T2, T4 and T5 together are about a third of the test time: the suite in about 9 to 10 minutes; T3 and T6 may take
+it under 5.
+
+## Open questions
+- T5: smaller Argon2id parameters in test builds only, or none and T4's disks alone?
+- T6: prototyped now, or after T1 to T5 are measured?
+- Groups that don't need the network or SSH could start without them (less to load), but the system under test would
+  then differ by group. Wanted, or only after T3 shows what loading costs?
