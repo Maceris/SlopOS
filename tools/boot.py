@@ -335,6 +335,8 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
         str(qemu), "-M", machine, "-m", "512M", "-cpu", cpu,
         *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}", *cd,
+        # No wait for edk2's boot menu, 5 s by default on virt, in every boot (decisions/0194, T1)
+        "-boot", "menu=on,splash-time=0",
         *serial_arguments(serial, keys), "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
         "-semihosting-config", "enable=on,target=native",
     ]
@@ -928,6 +930,33 @@ class PowerButton(Keyboard):
         try:
             # A second for what follows the line, as the system settles
             time.sleep(1)
+            if self.connect():
+                self.command("system_powerdown")
+        except OSError:
+            pass
+
+
+class EndWhenDone(Keyboard):
+    """
+    --end-when-done (decisions/0194, T2): the power button pressed, as PowerButton presses it, once done says the run's
+    shown all it's to show, so a test ends then rather than when the root task's settle runs out. done is asked every
+    100 ms until it says so or the run's ended.
+    """
+
+    def __init__(self, done):
+        super().__init__()
+        self.done = done
+        self.ended = threading.Event()
+        self.thread = threading.Thread(target=self.press_when_done, daemon=True)
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+
+    def press_when_done(self) -> None:
+        while not self.done():
+            if self.ended.wait(0.1):
+                return
+        try:
             if self.connect():
                 self.command("system_powerdown")
         except OSError:
@@ -1542,6 +1571,11 @@ class ConsoleLink:
         self.screenshot = screenshot
         self.screen_taken = False
         self.shown = ""
+        # How many of typed's lines have been typed to their end, waits and all, and whether the keyboard's lines have
+        # been, for --end-when-done
+        self.typed_lines = 0
+        self.keys_typed = False
+        self.typed_lock = threading.Lock()
         self.thread = threading.Thread(target=self.talk, daemon=True)
 
     def qemu_arguments(self) -> list[str]:
@@ -1577,7 +1611,7 @@ class ConsoleLink:
                         threading.Thread(target=target, args=(connection,), daemon=True).start()
                     elif banners < len(self.typed):
                         # On a thread of its own, as its waits read what this one receives
-                        threading.Thread(target=self.type_console, args=(connection, self.typed[banners]), daemon=True).start()
+                        threading.Thread(target=self.type_counted, args=(connection, self.typed[banners]), daemon=True).start()
                         if banners == 0:
                             self.typed_first.set()
                     if banners == 0 and not self.typed:
@@ -1592,7 +1626,7 @@ class ConsoleLink:
         """The first line, typed once the console shows typed_after."""
         self.wait_for_after()
         try:
-            self.type_console(connection, self.typed[0])
+            self.type_counted(connection, self.typed[0])
         except OSError:
             pass
         self.typed_first.set()
@@ -1600,7 +1634,7 @@ class ConsoleLink:
     def type_waiting(self, connection: socket.socket) -> None:
         """The first line, typed now, waiting where it has \\w until the console shows typed_after."""
         try:
-            self.type_console(connection, self.typed[0])
+            self.type_counted(connection, self.typed[0])
         except OSError:
             pass
         self.typed_first.set()
@@ -1624,6 +1658,19 @@ class ConsoleLink:
             self.type_console(connection, SECURE_ATTENTION + self.done_key.decode())
         except OSError:
             pass
+
+    def type_counted(self, connection: socket.socket, line: str) -> None:
+        """A line of typed, typed as type_console types it, and counted in typed_lines once it's ended, as it may fail."""
+        try:
+            self.type_console(connection, line)
+        finally:
+            with self.typed_lock:
+                self.typed_lines += 1
+
+    def all_typed(self) -> bool:
+        """Whether every line of typed has been typed to its end, and the keyboard's lines, if it has any."""
+        keyboard_lines = self.keyboard is not None and bool(self.keyed or self.screen_after)
+        return self.typed_lines >= len(self.typed) and (self.keys_typed or not keyboard_lines)
 
     def type_console(self, connection: socket.socket, line: str) -> None:
         """
@@ -1759,6 +1806,8 @@ class ConsoleLink:
                 self.screen_taken = True
         except OSError:
             pass
+        finally:
+            self.keys_typed = True
 
     def lines(self) -> list[str]:
         return [line.rstrip("\r") for line in plain_text(self.shown).split("\n")]
@@ -1802,6 +1851,10 @@ def console_drawn(screenshot: Path) -> str | None:
 RUN_END_LINES = ("[info] root task ended", "[info] objects left", "[user] root task: shutting down", "[user] supervisor: the console asked",
                  "[user] root task: restarting", "[user] root task: the machine can't", "[info] turning the machine off",
                  "[info] restarting the machine", "[user] supervisor: stopped", "[user] supervisor: killed")
+
+# The root task's line once the supervisor's started all its services, when a test_services boot's settle starts: what
+# --end-when-done waits for first, as the power button's driver is up by then
+ALL_STARTED = "[user] root task: the supervisor started all "
 
 # What the status line says while a new keyboard waits for its code
 KEYBOARD_CODE = re.compile("a new keyboard: type ([0-9]+) and Enter")
@@ -2276,6 +2329,11 @@ def main() -> int:
                         help="a virtio GPU and a virtio tablet for test_display: once it shows its cursor, the tablet clicks in the "
                         "screen's middle, and once it says where, the screen is taken and checked for its scene, with --expect "
                         "(decisions/0192, 15b)")
+    parser.add_argument("--end-when-done", action="store_true",
+                        help="press the machine's power button once the supervisor's started all its services, every "
+                        "--expect-line and --expect-line-start but those of a run's end is in the serial output, every "
+                        "--console-input and --keyboard-input typed, and every --expect-console-line, -start, -end and "
+                        "-contains shown, so the run ends then rather than when test_settle runs out (decisions/0194)")
     parser.add_argument("--power-button-after",
                         help="press the machine's power button, through QEMU's machine protocol, once the serial output has "
                         "this line (decisions/0182)")
@@ -2341,6 +2399,10 @@ def main() -> int:
     KVM_HOST = arguments.kvm
     if KVM_HOST is not None and arguments.arch == "aarch64":
         sys.exit("boot.py: --kvm boots x86-64 only")
+    if arguments.end_when_done and (arguments.shut_down_when_done or arguments.restart_when_done
+                                    or arguments.power_button_after is not None or KVM_HOST is not None):
+        sys.exit("boot.py: --end-when-done ends a run itself, so it can't be given with --shut-down-when-done, "
+                 "--restart-when-done, --power-button-after or --kvm")
 
     qemu = find_tool("QEMU", ["qemu-system-x86_64.exe", "qemu-system-x86_64"], [Path(r"C:\Program Files\qemu")])
     aarch64 = arguments.arch == "aarch64"
@@ -2453,6 +2515,11 @@ def main() -> int:
                               b"r" if arguments.restart_when_done else b"p")
             extra += console.qemu_arguments()
             console.thread.start()
+        ender = None
+        if arguments.end_when_done:
+            ender = EndWhenDone(lambda: run_done(arguments, serial, console))
+            extra += ender.qemu_arguments()
+            ender.thread.start()
         booting_started = time.monotonic()
         keys = SerialKeys(serial, "r") if arguments.recovery_key else None
         if arguments.bootloader_edit is not None:
@@ -2464,6 +2531,8 @@ def main() -> int:
             code = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, 1), keys,
                        arguments.allow_reboot)
         phases.append(("boot 1", time.monotonic() - booting_started))
+        if ender is not None:
+            ender.ended.set()
         # Read while the folder it's in is still there
         screen_wrong = None
         if arguments.screen_after:
@@ -2584,6 +2653,30 @@ def main() -> int:
                     later_failed = True
         return 0 if code == arguments.expect and not missing and not missing_shown and not unwritten and not leaked and not later_failed else 1
     return code
+
+
+def run_done(arguments: argparse.Namespace, serial: Path, console: "ConsoleLink | None") -> bool:
+    """
+    Whether a run's shown all it's to show, for --end-when-done: the supervisor's started all its services, the serial
+    output has every line --expect-line and --expect-line-start ask for but those of a run's end (RUN_END_LINES), and the
+    console's typed all its lines and shown what it's to show.
+    """
+    written = serial.read_text(errors="replace").splitlines() if serial.exists() else []
+    if not any(line.startswith(ALL_STARTED) for line in written):
+        return False
+    if any(line not in written for line in arguments.expect_line if not line.startswith(RUN_END_LINES)):
+        return False
+    if any(not any(line.startswith(start) for line in written) for start in arguments.expect_line_start
+           if not start.startswith(RUN_END_LINES)):
+        return False
+    if console is None:
+        return True
+    shown = console.lines()
+    return console.all_typed() and console.waiting is None \
+        and all(line in shown for line in arguments.expect_console_line) \
+        and all(any(line.startswith(start) for line in shown) for start in arguments.expect_console_start) \
+        and all(any(line.endswith(end) for line in shown) for end in arguments.expect_console_end) \
+        and all(any(part in line for line in shown) for part in arguments.expect_console_contains)
 
 
 # What the firmware's console writes besides text: ANSI escape sequences (CSI and the like), and carriage returns

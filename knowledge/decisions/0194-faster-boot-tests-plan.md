@@ -1,6 +1,6 @@
 # 0194: Faster Boot Tests, Planned
 
-Status: proposed (2026-11-21), for the project's owner to choose from
+Status: accepted in part (2026-11-21): T1 to T3 now, then T4 and T5 with the owner; T6 waits on what they measure
 Date: 2026-11-21
 Related: `0144` (the parallel runner), `0146` (boot tests steady under load, `test_settle`), `0192` (15g: the builds
 made faster, the suite from 22.8 to 13.8 minutes), `0193` (M16's suites), `0186` (the KVM path)
@@ -66,8 +66,11 @@ In stages, each measured by a suite run, and kept only if the suite stays steady
 T1, T2, T4 and T5 together are about a third of the test time: the suite in about 9 to 10 minutes; T3 and T6 may take
 it under 5.
 
+## Chosen with the owner (2026-11-21)
+- T1 to T3 first, then T4 and T5 checked with the owner before they're built.
+- T5 as proposed: smaller Argon2id parameters in test builds only, one test keeping the real ones.
+- T6 waits until T1 to T5 are measured.
+
 ## Open questions
-- T5: smaller Argon2id parameters in test builds only, or none and T4's disks alone?
-- T6: prototyped now, or after T1 to T5 are measured?
 - Groups that don't need the network or SSH could start without them (less to load), but the system under test would
   then differ by group. Wanted, or only after T3 shows what loading costs?

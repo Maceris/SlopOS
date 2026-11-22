@@ -352,7 +352,7 @@ TESTS = [
         "--", "-smp", "2", "-device", "edu"]),
     # A virtio console whose other end boot.py types into: hello's line through the terminal service, and echo's answer
     ("shows lines on a virtio console, and echoes what's typed into it", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=4", "--console-input=ping from the host",
+        "--command-line=test_exit test_services test_settle=4", "--end-when-done", "--console-input=ping from the host",
         "--console-input-after=hello: heap and random numbers working",
         "--expect-line=[user] virtio_console: serving", "--expect-line=[user] echo: read ping from the host",
         "--expect-console-line=SlopOS console", "--expect-console-line=hello: heap and random numbers working",
@@ -362,14 +362,14 @@ TESTS = [
     # Hemera's std/terminal line editor (decisions/0164), in echo: "abd", Left, "c" and Enter is abcd; then Up recalls it,
     # Home and "z" make zabcd
     ("edits a line with the cursor, and recalls a line from history", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=5", "--console-input=abd\\e[Dc\\r\\u{echo: abcd}\\e[A\\e[Hz",
+        "--command-line=test_exit test_services test_settle=5", "--end-when-done", "--console-input=abd\\e[Dc\\r\\u{echo: abcd}\\e[A\\e[Hz",
         "--console-input-after=hello: heap and random numbers working",
         "--expect-console-line=echo: abcd", "--expect-console-line=echo: zabcd", "--expect-line=[user] echo: read zabcd",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Half a line typed, then hello's lines while it's being typed, which go above it whole (decisions/0147), then the
     # rest: the line's written as typed and answered
     ("keeps the line being typed below what's written meanwhile", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=4", "--console-input=half typed, \\wand finished",
+        "--command-line=test_exit test_services test_settle=4", "--end-when-done", "--console-input=half typed, \\wand finished",
         "--console-input-after=hello: heap and random numbers working",
         "--expect-console-line=hello: heap and random numbers working", "--expect-console-line=half typed, and finished",
         "--expect-console-line=echo: half typed, and finished", "--expect-line=[user] echo: read half typed, and finished",
@@ -377,26 +377,26 @@ TESTS = [
     # Ctrl+Alt+Delete as a terminal sends it: the terminal service's own screen, which Enter leaves, the program's lines
     # drawn again, and what's typed after it the program's
     ("brings up the secure attention key's screen, and goes back to the program", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=5", "--console-input=\\e[3;7~\r\\S{secure attention}after attention",
+        "--command-line=test_exit test_services test_settle=5", "--end-when-done", "--console-input=\\e[3;7~\r\\S{secure attention}after attention",
         "--expect-line=[user] terminal: secure attention", "--expect-line=[user] terminal: secure attention ended",
         "--expect-console-line=  Secure attention", "--expect-console-line=echo: after attention",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The secure attention key's screen lists the console's programs, each pinged on its lifecycle channel; E ends the
     # one chosen, echo, which stops when its runtime tells it it's asked to, and isn't started again
     ("ends a program from the secure attention key's screen, which asks it to stop", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=6", "--console-input=\\e[3;7~e\\e",
+        "--command-line=test_exit test_services test_settle=6", "--end-when-done", "--console-input=\\e[3;7~e\\e",
         "--expect-line=[user] sessions: ending echo on the trusted path's request", "--expect-line=[user] echo: stopping, as asked",
         "--expect-line=[user] sessions: echo ended", "--expect-console-line=  Programs on the console:",
         "--expect-line=[user] terminal: secure attention ended", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A virtio keyboard boot.py types on through QEMU's machine protocol: keys as HID usages, typed by the terminal service's keymap
     ("types on a virtio keyboard into the console", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=4", "--keyboard-input=Hi there, 42!",
+        "--command-line=test_exit test_services test_settle=4", "--end-when-done", "--keyboard-input=Hi there, 42!",
         "--expect-line=[user] virtio_input: serving", "--expect-line=[user] echo: read Hi there, 42!",
         "--expect-console-line=echo: Hi there, 42!", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A keyboard that's new: what's typed on it before its code goes nowhere, the code on the status line typed on it
     # accepts it, and what's typed after reaches the program; Ctrl+Alt+Delete on it is the secure attention key
     ("accepts a new keyboard once the code on the console is typed on it", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_new_keyboards test_settle=5", "--keyboard-input=before the code",
+        "--command-line=test_exit test_services test_new_keyboards test_settle=5", "--end-when-done", "--keyboard-input=before the code",
         "--keyboard-input=\\code", "--keyboard-input=after the code",
         "--expect-line=[user] input: keyboard 0 is new: its code is on the console", "--expect-line=[user] input: keyboard 0 accepted",
         "--expect-console-line=echo: after the code", "--refuse-console-line=echo: before the code",
@@ -404,12 +404,12 @@ TESTS = [
     # The framebuffer: the kernel gives it up once the platform service gives it out, and the terminal service draws the
     # console there, the status line and what's typed, as on the serial line
     ("draws the console on the framebuffer too", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_settle=8", "--keyboard-input=on the screen", "--screen-after=echo: on the screen",
+        "--command-line=test_exit test_services test_settle=8", "--end-when-done", "--keyboard-input=on the screen", "--screen-after=echo: on the screen",
         "--expect-line=[info] the framebuffer is user space's now: the log stays on the serial console",
         "--expect-console-line=echo: on the screen", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The console's driver killed once the console has dialed it: restarted with its device reissued, and dialed again by the terminal service
     ("restarts a driver that's killed, and its client dials it again", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_restart test_settle=4", "--console-input=before the restart",
+        "--command-line=test_exit test_services test_restart test_settle=4", "--end-when-done", "--console-input=before the restart",
         "--console-input=after the restart", "--expect-line=[user] supervisor: test_restart: killing virtio_console",
         "--expect-line=[user] supervisor: restarted virtio_console", "--expect-line=[user] terminal: its serial line went; dialing again",
         "--expect-line=[user] echo: read after the restart", "--expect-console-line=echo: after the restart",
@@ -1430,7 +1430,7 @@ TESTS = [
     # served, so after a while two are taken and two deleted each time
     ("takes automatic snapshots of the volumes it serves, and deletes the old ones", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_snapshot_seconds=2 test_settle=45").replace("--timeout=120", "--timeout=180")
-                       for argument in BOOT_DISK_BASE], [
+                       for argument in BOOT_DISK_BASE], ["--end-when-done",
         "--expect-line=[user] storage_manager: automatic snapshots: 2 taken, 0 deleted",
         "--expect-line=[user] storage_manager: automatic snapshots: 2 taken, 2 deleted"])),
     # Memory pressure (decisions/0153): with two sessions, the session manager's budget charged to its threshold, it asks
@@ -1557,7 +1557,7 @@ TESTS = [
     ("boots the recovery generation by its key: the boot set, the drivers and the console", 7, with_before_qemu(
         [argument.replace("test_services", "test_services test_settle=5") for argument in BOOT_DISK_BASE
          if not argument.startswith("--expect-line=") or argument == HEALTHY_LINE], [
-        "--recovery-key", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
+        "--recovery-key", "--end-when-done", "--expect-line=[info] bootloader: the recovery generation, as a key asks",
         "--expect-line=[user] root task: booted the recovery generation",
         "--expect-line=[user] supervisor: recovery: the boot set, the drivers and the console only",
         "--expect-line=[user] terminal: serving"])),
