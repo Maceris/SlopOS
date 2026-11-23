@@ -3,6 +3,7 @@ package power
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import events from "../events"
+import microphone from "../microphone"
 import trace from "../trace"
 
 /*
@@ -49,6 +50,12 @@ Request :: union {
      * connection to the events service, for the program that asked. Answered with EventsConnection, or Refused.
      */
     EventsConnection,
+    /**
+     * The terminal service's or the greeter's, for the microphone (decisions/0196, 17f): a new connection to the audio
+     * service's microphone control, which makes and takes back the grants the user allows. Answered with
+     * MicrophoneConnection, or Refused from another connection or without an audio service.
+     */
+    MicrophoneConnection,
 }
 
 /** What the supervisor answers. */
@@ -61,6 +68,8 @@ Response :: union {
     TraceConnection(os.Channel[trace.Trace]),
     /** EventsConnection's answer: the connection's end, which moves to the terminal service. */
     EventsConnection(os.Channel[events.Events]),
+    /** MicrophoneConnection's answer: the connection's end, which moves to the trusted path. */
+    MicrophoneConnection(os.Channel[microphone.Microphone]),
     /** The answer to a request the supervisor doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }

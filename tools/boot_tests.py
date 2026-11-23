@@ -277,6 +277,21 @@ TESTS = [
         "--expect-line-start=[user] audio: mixed ",
         "--expect-line=[user] supervisor: test_sound ended",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The microphone's grants (decisions/0196, 17f): test_sound, given a microphone connection as the trusted path is,
+    # grants itself the microphone, whose connection refuses Play, records a second of QEMU's none input, silence, at
+    # 16 kHz mono 16-bit integers, then takes the grant back, heard as released and its connection gone
+    ("records through a microphone grant, and the grant taken back closes its connection", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_sound test_sound_record test_settle=60", "--audio-none",
+        "--expect-line=[user] virtio_sound: capturing from stream 1, 48 kHz stereo, as floats",
+        "--expect-line=[user] supervisor: a microphone connection for the trusted path",
+        "--expect-line=[user] audio: granted the microphone: grant 1",
+        "--expect-line=[user] test_sound: recorded 200 periods of 16 kHz mono 16-bit integers, the loudest sample 0 "
+        "thousandths, 0 overruns",
+        "--expect-line=[user] audio: took back grant 1",
+        "--expect-line=[user] test_sound: took back grant 1: released, and its connection gone",
+        "--expect-line-start=[user] audio: recorded ",
+        "--expect-line=[user] root task: the supervisor's test_sound ended with 0",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The soft real-time goal's load (decisions/0196, 17e): the same two streams for three seconds while test_spinner's
     # spinners keep every CPU busy in the background band, on QEMU's none backend, which takes what it's given at the
     # host's pace. Under an emulator the guest doesn't keep that pace with every CPU busy, so the service's and device's

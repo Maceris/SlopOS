@@ -5,6 +5,10 @@
  * boot.py's --audio-tone reads what QEMU played. Started by the supervisor with test_sound on the kernel's command
  * line; with test_sound_load too, three seconds each, while test_spinner keeps every CPU busy in the background
  * band, for the soft real-time goal: every period mixed in time, and none run out.
+ *
+ * With test_sound_record instead (17f), it records: given a microphone connection, as the trusted path is, it grants
+ * itself the microphone, records a second at 16 kHz mono 16-bit integers, and takes the grant back, which closes the
+ * grant's connection, heard as released first.
  */
 package test_sound
 
@@ -15,6 +19,7 @@ import audio as pcm from "std:audio"
 import math from "std:math"
 import connector from "../../protocols/connector"
 import service_kit from "../../libraries/service_kit"
+import microphone from "../../protocols/microphone"
 import sound from "../../protocols/sound"
 
 /** Each tone's level: a quarter of full scale, so the two mixed stay under it. */
@@ -157,19 +162,184 @@ take_answers :: fn(playing : ptr[mut Playing], port : slop_os.Port) -> bool {
 }
 
 /**
- * Play the two streams through the audio service, a second each, or three with test_sound_load on the command line.
+ * Send a microphone request and wait for its answer.
+ *
+ * @return Whether it came, in into.
+ */
+ask_microphone :: fn(end : slop_os.Channel, port : slop_os.Port, out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> bool {
+    if microphone.send_request(end, port, out) is_some {
+        return false
+    }
+    return match microphone.receive_response(end, port, into, true) {
+        case Received => true
+        case _ => false
+    }
+}
+
+/**
+ * Record a second through a microphone grant, then take it back.
+ *
+ * @param control A microphone connection to the audio service.
+ * @return 0 once it's recorded and taken back; 5 if the grant, 6 if the stream, 7 if recording, 8 if taking it back
+ *     failed, or the grant's connection outlived it.
+ */
+record :: fn(control : os.Channel[microphone.Microphone]) -> int {
+    startup :: slop_os.startup_block()
+    control_port :: os.port_for(startup.budget, control.end) or_return 5
+    into := os.Incoming.{}
+    asking := os.Outgoing.{}
+    os.begin[microphone.Request](&asking)^ = .Grant
+    if !ask_microphone(control.end, control_port, &asking, &into) {
+        return 5
+    }
+    granted :: match os.message_of[microphone.Response](&into)^ {
+        case Granted(made) => made
+        case _ => return 5
+    }
+    watching := os.Outgoing.{}
+    os.begin[microphone.Request](&watching)^ = .WaitReleased(granted.id)
+    if microphone.send_request(control.end, control_port, &watching) is_some {
+        return 5
+    }
+    end :: granted.end.end
+    port :: os.port_for(startup.budget, end) or_return 6
+    format :: sound.Format.{sample = 1, rate = 16000, channels = 1}
+    out := os.Outgoing.{}
+    os.begin[sound.Request](&out)^ = .Play(0)
+    // Its connection records: Play is refused, before it's even open
+    if !call(end, port, &out, &into) {
+        return 6
+    }
+    match os.message_of[sound.Response](&into)^ {
+        case PlayRefused(refused) => if refused.why != .NotAllowed {
+            return 6
+        }
+        case _ => return 6
+    }
+    os.begin[sound.Request](&out)^ = .Open(format)
+    if !call(end, port, &out, &into) {
+        return 6
+    }
+    opened :: match os.message_of[sound.Response](&into)^ {
+        case Opened(layout) => layout
+        case _ => return 6
+    }
+    os.begin[sound.Request](&out)^ = .GetBuffer
+    if !call(end, port, &out, &into) {
+        return 6
+    }
+    window :: match os.message_of[sound.Response](&into)^ {
+        case Buffer(memory) => memory
+        case _ => return 6
+    }
+    bytes :: (cast[u64](opened.periods) * cast[u64](opened.period_bytes) + 4095) / 4096 * 4096
+    ring :: runtime.reserve_addresses(cast[usize](bytes)) or_return 6
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    if slop_os.memory_map(window, startup.space, cast[u64](ring), 0, bytes, read_write) is_error {
+        return 6
+    }
+    for period in 0..<opened.periods {
+        os.begin[sound.Request](&out)^ = .Record(period)
+        if sound.send_request(end, port, &out) is_some {
+            return 7
+        }
+    }
+    wanted :: (format.rate + opened.period_frames - 1) / opened.period_frames
+    recorded := cast[u32](0)
+    overruns := cast[u32](0)
+    loudest := cast[f32](0.0)
+    samples : f32[MOST_SAMPLES]
+    loop {
+        if recorded >= wanted {
+            break
+        }
+        match sound.receive_response(end, port, &into, true) {
+            case Received => {}
+            case _ => return 7
+        }
+        done :: match os.message_of[sound.Response](&into)^ {
+            case Recorded(filled) => filled
+            case PlayRefused(refused) => {
+                runtime.log_info("record: period % refused: %", refused.period, refused.why)
+                return 7
+            }
+            case _ => return 7
+        }
+        recorded += 1
+        overruns = done.overruns
+        heard :: view_of(
+            cast[ptr[u8]](cast[u64](ring) + cast[u64](done.period) * cast[u64](opened.period_bytes)),
+            cast[usize](opened.period_bytes)
+        )
+        count :: pcm.decode(pcm.SampleFormat.S16, heard, samples[0..<samples.count])
+        for sample, i in samples {
+            if i < count {
+                size :: if sample < 0.0 { -sample } else { sample }
+                loudest = if size > loudest { size } else { loudest }
+            }
+        }
+        if recorded + opened.periods <= wanted {
+            os.begin[sound.Request](&out)^ = .Record(done.period)
+            if sound.send_request(end, port, &out) is_some {
+                return 7
+            }
+        }
+    }
+    runtime.log_info(
+        "recorded % periods of 16 kHz mono 16-bit integers, the loudest sample % thousandths, % overruns",
+        recorded,
+        cast[u32](loudest * 1000.0),
+        overruns
+    )
+    taking := os.Outgoing.{}
+    os.begin[microphone.Request](&taking)^ = .Revoke(granted.id)
+    if microphone.send_request(control.end, control_port, &taking) is_some {
+        return 8
+    }
+    heard_released := false
+    loop {
+        match microphone.receive_response(control.end, control_port, &into, true) {
+            case Received => {}
+            case _ => return 8
+        }
+        match os.message_of[microphone.Response](&into)^ {
+            case Released(id) => heard_released = id == granted.id
+            case Revoked => break
+            case _ => return 8
+        }
+    }
+    // The grant's connection is gone: its peer's closed
+    os.begin[sound.Request](&out)^ = .Stop
+    gone :: !call(end, port, &out, &into)
+    if !heard_released || !gone {
+        return 8
+    }
+    runtime.log_info("took back grant %: released, and its connection gone", granted.id)
+    return 0
+}
+
+/**
+ * Play the two streams through the audio service, a second each, or three with test_sound_load on the command line;
+ * or with test_sound_record, record a second through a microphone grant instead.
  *
  * @param log The debug log it says what it played in.
  * @param sound_service A connector to the audio service.
  * @param command_line The kernel's command line, for test_sound_load.
- * @return 0 once both have played; 2 without the service, 3 if a stream couldn't be opened, 4 if one failed.
+ * @param microphones A microphone connection to the audio service, given only with test_sound_record on it.
+ * @return 0 once both have played, or it's recorded; 2 without the service, 3 if a stream couldn't be opened, 4 if one
+ *     failed; record's codes.
  */
 main :: fn(
     log : slop_os.DebugLog?,
     sound_service : os.Channel[connector.Connector]?,
-    command_line : slop_os.Memory?
+    command_line : slop_os.Memory?,
+    microphones : os.Channel[microphone.Microphone]?
 ) -> int {
     startup :: slop_os.startup_block()
+    match microphones {
+        case Some(control) => return record(control)
+        case None => {}
+    }
     dialing :: sound_service or_return 2
     loaded := false
     match command_line {

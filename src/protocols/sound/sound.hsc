@@ -12,6 +12,11 @@ import slop_os from "std:os/slop_os"
  *
  * The service mixes every stream's frames, converted, resampled and remixed to the device's, each scaled by its
  * volume, and plays them. A stream that runs out is played as silence, its own underrun, never another's.
+ *
+ * A connection the microphone's control made (the microphone protocol, 17f), which the trusted path gives a program the
+ * user has let record, records instead: its client gives an empty period with Record, answered with Recorded once the
+ * service has filled it with what the device heard, converted to the stream's format. What's heard while the client
+ * has no period given is dropped, its own overrun. Play is refused on it, and Record on any other connection.
  */
 
 /**
@@ -77,6 +82,10 @@ Refused :: enum #backed_by(u8) {
     NoDevice = 6,
     /** No memory for the stream. */
     NoMemory = 7,
+    /** Play on a connection that records, or Record on one that plays: only the microphone's grants record. */
+    NotAllowed = 8,
+    /** The service's device has nothing to record from. */
+    NoInput = 9,
 }
 
 /** A period mixed in: which, and how often the stream had run out by then. */
@@ -87,7 +96,15 @@ Played :: struct {
     underruns : u32,
 }
 
-/** A Play refused: its period, and why. */
+/** A period recorded into: which, and how often what was heard had nowhere to go by then. */
+Recorded :: struct {
+    /** The period's index in the ring. */
+    period : u32,
+    /** How many periods of what was heard were dropped, the client having none given, since it started recording. */
+    overruns : u32,
+}
+
+/** A Play or a Record refused: its period, and why. */
 PlayRefused :: struct {
     /** The period's index, as given. */
     period : u32,
@@ -103,9 +120,17 @@ Request :: union {
     GetBuffer,
     /** Give a period, its frames written. Answered with Played once it's mixed in, or with PlayRefused. */
     Play(u32),
+    /**
+     * On a connection that records, give a period to be filled. Answered with Recorded once it's filled, or with
+     * PlayRefused. Recording starts with the first; Stop stops it, dropping the periods given.
+     */
+    Record(u32),
     /** Set the stream's volume, 0 silent to FULL_VOLUME as it is. Answered with VolumeSet. */
     SetVolume(u16),
-    /** Drop the periods given and not yet mixed in, each answered PlayRefused(Dropped) first. Answered with Stopped. */
+    /**
+     * Drop the periods given and not yet mixed in, or filled, each answered PlayRefused(Dropped) first. Answered with
+     * Stopped.
+     */
     Stop,
     /**
      * Have the service serve another client, on the end given, which moves to the service. Sent on the listener, and
@@ -122,7 +147,9 @@ Response :: union {
     Buffer(slop_os.Memory),
     /** Play's answer once the period's mixed in. */
     Played(Played),
-    /** Play's answer when it's refused. */
+    /** Record's answer once the period's filled. */
+    Recorded(Recorded),
+    /** Play's or Record's answer when it's refused. */
     PlayRefused(PlayRefused),
     /** Open's or GetBuffer's answer when they're refused. */
     Refused(Refused),
@@ -148,13 +175,14 @@ period_frames :: fn(rate : u32) -> u32 {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Play, whose period would be mixed in twice, and Open; true for the rest.
+ * @return False for Play and Record, whose period would be mixed in or filled twice, and Open; true for the rest.
  */
 is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
         case Open(_) => false
         case GetBuffer => true
         case Play(_) => false
+        case Record(_) => false
         case SetVolume(_) => true
         case Stop => true
         case Connect(_) => true

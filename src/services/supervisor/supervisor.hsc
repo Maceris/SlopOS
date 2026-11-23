@@ -113,6 +113,7 @@ import test_sound from "../../tests/test_sound"
 import test_spinner from "../../tests/test_spinner"
 import virtio_sound from "../../drivers/virtio_sound"
 import audio from "../../protocols/audio"
+import microphone from "../../protocols/microphone"
 import sound from "../../protocols/sound"
 import audio_service from "../audio_service"
 import account_service from "../account_service"
@@ -464,6 +465,8 @@ TestSoundGrants :: struct {
     sound_service : os.Channel[connector.Connector]?,
     /** A read-only copy of the kernel's command line, for test_sound_load. */
     command_line : slop_os.Memory?,
+    /** A microphone connection to the audio service, as the trusted path has, only with test_sound_record on it. */
+    microphones : os.Channel[microphone.Microphone]?,
 }
 
 /** What test_spinner is given (test_spinner.main): its log. */
@@ -480,6 +483,8 @@ AudioGrants :: struct {
     device : os.Channel[connector.Connector]?,
     /** The listener programs' connections arrive on; the supervisor keeps its other end, and dials it for connectors. */
     clients : os.Listener[sound.Sound],
+    /** The listener the trusted path's microphone connections arrive on; the supervisor keeps its other end. */
+    microphones : os.Listener[microphone.Microphone]?,
 }
 
 /** What test_network's client is given (test_network.main); its handles move to it at its launch. */
@@ -977,6 +982,11 @@ Supervisor :: struct {
     first_runs : FirstRun[..],
     /** Its end of the trace connection an administrator was allowed (system_trace.hsc); NONE without one. */
     trace_end : slop_os.Channel,
+    /**
+     * Its end of the audio service's microphone listener (decisions/0196, 17f), which power's MicrophoneConnection
+     * dials for the trusted path; NONE before the audio service starts, replaced each time it does.
+     */
+    microphones : slop_os.Channel,
     /** When the trace under way ends, in nanoseconds of the monotonic clock; 0 with none under way. */
     trace_until : u64,
     /** Each thread's counts in the trace under way. */
@@ -1448,6 +1458,7 @@ main :: fn(
         launched_lifecycle = NONE,
         last_panic = last_panic,
         trace_end = NONE,
+        microphones = NONE,
     }
     supervisor.modules = Modules.{
         events = events_module,
@@ -1533,6 +1544,7 @@ main :: fn(
     // The sound device's test client (decisions/0196, 17c), and its load (17e)
     test_sound_client := false
     test_sound_load := false
+    test_sound_record := false
     // The display's test client (decisions/0192, 15b)
     test_display_client := false
     // The compositor (decisions/0192, 15c), with gui; its test client with test_compositor
@@ -1549,6 +1561,7 @@ main :: fn(
             test_network_client = service_kit.has_word(text, "test_network")
             test_sound_client = service_kit.has_word(text, "test_sound")
             test_sound_load = service_kit.has_word(text, "test_sound_load")
+            test_sound_record = service_kit.has_word(text, "test_sound_record")
             test_display_client = service_kit.has_word(text, "test_display")
             test_compositor_client = service_kit.has_word(text, "test_compositor")
             test_gui_client = service_kit.has_word(text, "test_gui")
@@ -1664,7 +1677,7 @@ main :: fn(
             start_test_spinner(&supervisor)
         }
         if test_sound_client {
-            start_test_sound(&supervisor)
+            start_test_sound(&supervisor, test_sound_record)
         }
         if test_compositor_client {
             start_test_client(&supervisor, "test_compositor")
@@ -5938,6 +5951,17 @@ start_audio :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         device = connector_to(supervisor, supervisor.first_audio),
         clients = os.Listener[sound.Sound].{end = pair.a},
     }
+    if supervisor.microphones != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.microphones))
+        supervisor.microphones = NONE
+    }
+    match os.channel_for[microphone.Microphone](supervisor.block.budget, microphone.RING_BYTES) {
+        case Ok(made) => {
+            grants.microphones = os.Listener[microphone.Microphone].{end = made.a}
+            supervisor.microphones = made.b
+        }
+        case Error(error) => {}
+    }
     match os.launch(
         supervisor.manager,
         supervisor.manager_port,
@@ -5959,8 +5983,30 @@ start_audio :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         case Error(error) => {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            if supervisor.microphones != NONE {
+                _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.microphones))
+                supervisor.microphones = NONE
+            }
         }
     }
+}
+
+/**
+ * Make a connection to the audio service's microphone control, for the trusted path (power's MicrophoneConnection).
+ *
+ * @param supervisor The supervisor, whose end of the microphone listener is dialed, waiting without handling its port.
+ * @return The connection, which moves to the caller; null without an audio service, or if the Connect failed.
+ */
+microphone_connection :: fn(supervisor : ptr[mut Supervisor]) -> os.Channel[microphone.Microphone]? {
+    if supervisor.microphones == NONE {
+        return null
+    }
+    // A port of its own for the Connect, as dial has
+    port :: os.port_for(supervisor.block.budget, supervisor.microphones) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    made :: microphone.connect(supervisor.microphones, port, supervisor.block.budget) or_return null
+    log_line.write(supervisor.log, "supervisor: a microphone connection for the trusted path")
+    return made
 }
 
 /**
@@ -5968,8 +6014,9 @@ start_audio :: fn(supervisor : ptr[mut Supervisor], again : usize) {
  * test_sound on the kernel's command line, and an audio service.
  *
  * @param supervisor The supervisor.
+ * @param record Whether it records, test_sound_record on the command line: it's given a microphone connection.
  */
-start_test_sound :: fn(supervisor : ptr[mut Supervisor]) {
+start_test_sound :: fn(supervisor : ptr[mut Supervisor], record : bool) {
     if supervisor.audio_service == NOWHERE {
         log_line.write(supervisor.log, "supervisor: test_sound: no audio service")
         return void
@@ -5978,6 +6025,9 @@ start_test_sound :: fn(supervisor : ptr[mut Supervisor]) {
     grants := TestSoundGrants.{
         log = duplicate_log(supervisor),
         sound_service = connector_to(supervisor, supervisor.audio_service),
+    }
+    if record {
+        grants.microphones = microphone_connection(supervisor)
     }
     match supervisor.command_line {
         case Some(text) => {
@@ -6762,6 +6812,25 @@ serve_power_on :: fn(supervisor : ptr[mut Supervisor], slot : u32) {
         reading :: match asked {
             case EventsConnection => true
             case _ => false
+        }
+        // A microphone connection, the trusted path's only, whose grants the user allows
+        microphones :: match asked {
+            case MicrophoneConnection => true
+            case _ => false
+        }
+        if microphones {
+            given : os.Channel[microphone.Microphone]? = if slot == CONSOLE_POWER || slot == GREETER_POWER {
+                microphone_connection(supervisor)
+            }
+            else {
+                null
+            }
+            match given {
+                case Some(connection) => response^ = .MicrophoneConnection(connection)
+                case None => response^ = .Refused
+            }
+            _ = power_protocol.send_response(end, supervisor.port, &out)
+            continue
         }
         if reading {
             given : os.Channel[events.Events]? = if slot == CONSOLE_POWER || slot == GREETER_POWER {

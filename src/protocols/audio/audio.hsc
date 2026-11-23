@@ -117,16 +117,17 @@ Request :: union {
     /**
      * Make the capture ring, CAPTURE periods' worth as the playing ring is, if there's none, give a window onto it, and
      * make the connection's client the one that records: another that did has its periods dropped. Answered with
-     * CaptureBuffer, or with Refused(NoInput) with period 0.
+     * CaptureBuffer, or with RecordRefused(NoInput) with period 0.
      */
     GetCaptureBuffer,
     /**
      * Give a period of the capture ring to be filled; the client leaves it alone until it's answered. Answered with
-     * Recorded once the device has filled it, or with Refused.
+     * Recorded once the device has filled it, or with RecordRefused.
      */
     Record(u32),
     /**
-     * Stop recording: the periods given and not yet filled are dropped, each answered with Refused(Replaced) first.
+     * Stop recording: the periods given and not yet filled are answered first, Recorded with what the device had
+     * filled of them, or RecordRefused.
      * Answered with RecordingStopped; a Record after it starts again.
      */
     StopRecording,
@@ -153,6 +154,11 @@ Response :: union {
     CaptureBuffer(slop_os.Memory),
     /** Record's answer: the device has filled the period. */
     Recorded(Recorded),
+    /**
+     * Record's or GetCaptureBuffer's answer when it's refused, apart from Refused so neither is taken for the other's
+     * period.
+     */
+    RecordRefused(PlayRefused),
     /** StopRecording's answer. */
     RecordingStopped,
     /** The answer to a request the driver doesn't know, as from a newer client; every protocol has it. */

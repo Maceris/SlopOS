@@ -564,7 +564,7 @@ serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]
             case Record(period) => match record(driver, index, period) {
                 // Answered once the device has filled it
                 case None => continue
-                case Some(why) => response^ = .Refused(audio.PlayRefused.{period = period, why = why})
+                case Some(why) => response^ = .RecordRefused(audio.PlayRefused.{period = period, why = why})
             }
             case StopRecording => {
                 if driver.recorder == index {
@@ -740,13 +740,13 @@ stop :: fn(driver : ptr[mut Driver]) {
  *
  * @param driver The driver.
  * @param index The client's index.
- * @return CaptureBuffer with the window; Refused(NoInput) without an input stream; Unsupported if the ring or the
+ * @return CaptureBuffer with the window; RecordRefused(NoInput) without an input stream; Unsupported if the ring or the
  *     window couldn't be made.
  */
 capture_buffer_for :: fn(driver : ptr[mut Driver], index : usize) -> audio.Response {
     startup :: slop_os.startup_block()
     if driver.capture_stream == NO_STREAM {
-        return audio.Response.Refused(audio.PlayRefused.{period = 0, why = .NoInput})
+        return audio.Response.RecordRefused(audio.PlayRefused.{period = 0, why = .NoInput})
     }
     if cast[slop_os.Handle](driver.capture_ring) == slop_os.NO_HANDLE {
         memory :: slop_os.memory_create(startup.budget, audio.BUFFER_BYTES) or_return audio.Response.Unsupported
@@ -867,7 +867,7 @@ answer_recorded :: fn(driver : ptr[mut Driver], period : u32, status : u32) {
         audio.Response.Recorded(audio.Recorded.{period = period, overruns = driver.overruns})
     }
     else {
-        audio.Response.Refused(audio.PlayRefused.{period = period, why = .DeviceFailed})
+        audio.Response.RecordRefused(audio.PlayRefused.{period = period, why = .DeviceFailed})
     }
     _ = audio.send_response(end, driver.port, &out)
 }
