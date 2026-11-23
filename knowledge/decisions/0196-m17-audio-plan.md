@@ -134,3 +134,27 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
 - **The test**: `test_sound` plays two streams through the service, a second each: 1 kHz at 48 kHz stereo floats and
   1.5 kHz at 44.1 kHz mono 16-bit integers, a quarter of full scale each. `boot.py --audio-tone=HZ:LEVEL`, repeated,
   checks each: 1000 Hz at 0.250 and 1500 Hz at 0.249, harmonics 0, on both architectures.
+
+## As Built: 17e, the soft real-time goal measured
+- **The load, `test_spinner`** (`src/tests/test_spinner`): a spinner flat out on each of 4 threads, more than the boot
+  tests' CPUs, until the system shuts down. Each gives up its CPU budget (`thread_use_cpu_budget` with no handle), so
+  it runs in the background band under every budget, and takes no share of its own: the root's two CPUs are already
+  allotted whole, and a share of a twentieth left `virtio_gpu` with none. Started by the supervisor with
+  `test_sound_load` on the kernel's command line; `test_sound` then plays three seconds of each stream. Its first form
+  ran the spinners inside `test_sound` on its own budget, which starved the client: its streams ran out 233 and 249
+  times and the 3 s took 8.7. Its four 256 KiB stacks need a budget of 4 MiB; with 1 the process took a write fault.
+- **The driver's own share**, `SOUND_DRIVER_CPU`: priority 245, just above the service, 0.5 ms of every 5, taken from
+  the service's, which is 2.5 ms now. On the default budget the driver fell into the background band with the
+  spinners once that was spent, and the device ran out 76 to 130 times while the mix missed nothing.
+- **The service's counts** are lines of their own: `missed M of N periods mixed`, `the device ran out K times`.
+- **Under KVM** (`boot.py --audio-none`, QEMU's `none` backend, which takes what it's given at the host's pace): with
+  every CPU busy, 0 of 625 periods missed, the latest 0.7 ms late, each mix at most 0.5 ms and 0.09 on average, the
+  device never running out, the client's streams 1 and 0 underruns. The test holds both counts to 0. It ends by the
+  root task's settle, 15 s, since its QEMU is on the KVM host, out of `--end-when-done`'s reach.
+- **The host's floor**: the KVM host is a 2-core VM, and the guest's two CPUs flat out take both, leaving QEMU's own
+  loop, which paces the `none` backend, to wait its turn. About one run in three the device ran out (47 times, the
+  mix 0 missed) or one period was missed; each passed booted again alone. The plan's zero is met where the host keeps
+  the pace; a third core on the KVM host would take the floor away.
+- **Under TCG** the guest doesn't keep the host's pace with every CPU busy, so the plan's zero on both architectures
+  isn't held there: 0 to 2 periods of about 1,500 missed, the device's underruns 0 to 185, the mix each at most 1.2 ms
+  and 0.27 on average. The emulator's test plays under the load and says both counts; the KVM test holds them.

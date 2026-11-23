@@ -273,9 +273,21 @@ TESTS = [
         "--expect-line=[user] root task: the supervisor started virtio_sound",
         "--expect-line-start=[user] virtio_sound: serving stream ",
         "--expect-line=[user] audio: serving",
-        "--expect-line-start=[user] test_sound: played a second of 1 kHz at 48 kHz stereo floats and of 1.5 kHz",
+        "--expect-line-start=[user] test_sound: played 1 s of 1 kHz at 48 kHz stereo floats and of 1.5 kHz",
         "--expect-line-start=[user] audio: mixed ",
         "--expect-line=[user] supervisor: test_sound ended",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The soft real-time goal's load (decisions/0196, 17e): the same two streams for three seconds while test_spinner's
+    # spinners keep every CPU busy in the background band, on QEMU's none backend, which takes what it's given at the
+    # host's pace. Under an emulator the guest doesn't keep that pace with every CPU busy, so the service's and device's
+    # counts are only said here; the KVM test holds them to nothing missed. test_sound has no CPU budget of its own, so
+    # its streams may run short under the load, which the service plays as silence
+    ("mixes and plays while every CPU is busy, its periods missed and the device's underruns said", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_sound test_sound_load test_settle=60", "--audio-none",
+        "--expect-line=[user] test_spinner: 4 spinners started, in the background band",
+        "--expect-line-start=[user] test_sound: played 3 s of 1 kHz",
+        "--expect-line-start=[user] audio: missed ",
+        "--expect-line-start=[user] audio: the device ran out ",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # virtio-net and the network layer (decisions/0188, 13a and 13b): the driver serving QEMU's MAC, the network service
     # taking the interface, a lease from QEMU's user-mode DHCP, a link-local address and one from its router's prefix
@@ -1842,6 +1854,17 @@ KVM_TESTS = [
     program_test("KVM: refuses a tampered return through the shadow stack", "test_control", "8 tests: 6 passed, 0 failed, 2 skipped"),
     # The latency test where the guest's CPUs keep the host's pace and its timer is the hardware's (decisions/0196, 17a)
     program_test("KVM: wakes a high-priority thread for its deadlines, with the CPUs idle and with every one busy", "test_latency", 2),
+    # The soft real-time goal where the guest's CPUs keep the host's pace (decisions/0196, 17e): with test_spinner's
+    # spinners keeping every CPU busy in the background band, every period mixed in time, and the device never running
+    # out, as QEMU's none backend takes what it's given at the right pace. Its QEMU runs on the KVM host, out of
+    # --end-when-done's reach, so the root task's settle ends it, long enough for the three seconds played
+    ("KVM: mixes every period in time while every CPU is busy, the device never running out", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_sound test_sound_load test_settle=15", "--audio-none",
+        "--expect-line=[user] test_spinner: 4 spinners started, in the background band",
+        "--expect-line-start=[user] test_sound: played 3 s of 1 kHz",
+        "--expect-line-start=[user] audio: missed 0 of ",
+        "--expect-line=[user] audio: the device ran out 0 times",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
 ]
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS, own=False)

@@ -75,6 +75,7 @@ import test_memory from "../tests/test_memory"
 import test_msi_dma from "../tests/test_msi_dma"
 import test_network from "../tests/test_network"
 import test_sound from "../tests/test_sound"
+import test_spinner from "../tests/test_spinner"
 import audio_service from "../services/audio_service"
 import virtio_sound from "../drivers/virtio_sound"
 import test_pager from "../tests/test_pager"
@@ -164,11 +165,18 @@ INTERACTIVE_CPU :: CpuShare.{priority = 200, period_ns = 10_000_000, time_ns = 1
 TRUSTED_PATH_CPU :: CpuShare.{priority = 250, period_ns = 10_000_000, time_ns = 1_000_000}
 /**
  * The audio service (decisions/0196, 17d): soft real time, a period of the mix every 5 ms, so its budget's period is
- * one, above everything people run and under the trusted path. Its time, 3 ms of the 5, is sized for an emulator, where
- * a period's mix of two streams, one resampled, takes 0.6 ms on average and up to 2; with 1 ms it ran out of time and
- * missed periods. On hardware it needs a twentieth of that.
+ * one, above everything people run and under the trusted path. Its time, 2.5 ms of the 5, is sized for an emulator,
+ * where a period's mix of two streams, one resampled, takes 0.6 ms on average and up to 2; with 1 ms it ran out of time
+ * and missed periods. On hardware it needs a twentieth of that.
  */
-AUDIO_CPU :: CpuShare.{priority = 240, period_ns = 5_000_000, time_ns = 3_000_000}
+AUDIO_CPU :: CpuShare.{priority = 240, period_ns = 5_000_000, time_ns = 2_500_000}
+/**
+ * A sound device's driver (decisions/0196, 17e): the mix's next hop, on the same period, just above the audio service so
+ * what it's given reaches the device first; half a millisecond of the 5, taken from the audio service's 3. Without it
+ * the driver ran on the default budget, and once that was spent, in the background band with everything else, and the
+ * device ran out while the mix was in time.
+ */
+SOUND_DRIVER_CPU :: CpuShare.{priority = 245, period_ns = 5_000_000, time_ns = 500_000}
 
 /** A service the system starts: what it is, who starts it, what it's given, and how it's run. */
 Service :: struct {
@@ -493,6 +501,16 @@ SERVICES :: Service.[
         entry = type_of(audio_service.main),
         cpu = AUDIO_CPU,
     },
+    // Load for the audio's test (decisions/0196, 17e), started only with test_sound_load on the kernel's command line
+    Service.{
+        name = "test_spinner",
+        module = "test_spinner.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 4 * MIB,
+        entry = type_of(test_spinner.main),
+        not_restarted = true,
+    },
     // The sound device's test client (decisions/0196, 17c), started only with test_sound on the kernel's command line
     Service.{
         name = "test_sound",
@@ -628,6 +646,7 @@ SERVICES :: Service.[
         by_manager = true,
         budget = 2 * MIB,
         entry = type_of(virtio_sound.main),
+        cpu = SOUND_DRIVER_CPU,
         devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1059, class = platform_protocol.ANY_CLASS},
         trusted_with_dma = true,
     },

@@ -124,6 +124,8 @@ SupervisorGrants :: struct {
     test_sound_module : slop_os.Memory?,
     /** The audio service's module. */
     audio_module : slop_os.Memory?,
+    /** test_spinner's module. */
+    test_spinner_module : slop_os.Memory?,
     /** test_display's client's module. */
     test_display_module : slop_os.Memory?,
     /** test_compositor's client's module. */
@@ -571,6 +573,7 @@ main :: fn(
         virtio_sound_module = module_copy(root, "virtio_sound", program_rights),
         test_sound_module = module_copy(root, "test_sound", program_rights),
         audio_module = module_copy(root, "audio", program_rights),
+        test_spinner_module = module_copy(root, "test_spinner", program_rights),
         test_display_module = module_copy(root, "test_display", program_rights),
         test_compositor_module = module_copy(root, "test_compositor", program_rights),
         test_gui_module = module_copy(root, "test_gui", program_rights),

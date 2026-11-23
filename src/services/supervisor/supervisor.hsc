@@ -110,6 +110,7 @@ import test_compositor from "../../tests/test_compositor"
 import test_display from "../../tests/test_display"
 import test_network from "../../tests/test_network"
 import test_sound from "../../tests/test_sound"
+import test_spinner from "../../tests/test_spinner"
 import virtio_sound from "../../drivers/virtio_sound"
 import audio from "../../protocols/audio"
 import sound from "../../protocols/sound"
@@ -461,6 +462,14 @@ TestSoundGrants :: struct {
     log : slop_os.DebugLog?,
     /** A connector to the audio service. */
     sound_service : os.Channel[connector.Connector]?,
+    /** A read-only copy of the kernel's command line, for test_sound_load. */
+    command_line : slop_os.Memory?,
+}
+
+/** What test_spinner is given (test_spinner.main): its log. */
+TestSpinnerGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
 }
 
 /** What the audio service is given (audio_service.main); its handles move to it at its launch. */
@@ -792,6 +801,8 @@ Modules :: struct {
     test_sound : slop_os.Memory?,
     /** The audio service's module. */
     audio : slop_os.Memory?,
+    /** test_spinner's module. */
+    test_spinner : slop_os.Memory?,
     /** test_display's client's module. */
     test_display : slop_os.Memory?,
     /** test_compositor's client's module. */
@@ -1296,6 +1307,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param virtio_sound_module The virtio sound driver's program.
  * @param test_sound_module test_sound's client's program.
  * @param audio_module The audio service's program.
+ * @param test_spinner_module test_spinner's program.
  * @param test_display_module test_display's client's program.
  * @param test_compositor_module test_compositor's client's program.
  * @param test_gui_module test_gui's client's program.
@@ -1348,6 +1360,7 @@ main :: fn(
     virtio_sound_module : slop_os.Memory?,
     test_sound_module : slop_os.Memory?,
     audio_module : slop_os.Memory?,
+    test_spinner_module : slop_os.Memory?,
     test_display_module : slop_os.Memory?,
     test_compositor_module : slop_os.Memory?,
     test_gui_module : slop_os.Memory?,
@@ -1463,6 +1476,7 @@ main :: fn(
         virtio_sound = virtio_sound_module,
         test_sound = test_sound_module,
         audio = audio_module,
+        test_spinner = test_spinner_module,
         test_display = test_display_module,
         test_compositor = test_compositor_module,
         test_gui = test_gui_module,
@@ -1516,8 +1530,9 @@ main :: fn(
     no_disk_check := false
     // The network's test client (decisions/0188, 13c)
     test_network_client := false
-    // The sound device's test client (decisions/0196, 17c)
+    // The sound device's test client (decisions/0196, 17c), and its load (17e)
     test_sound_client := false
+    test_sound_load := false
     // The display's test client (decisions/0192, 15b)
     test_display_client := false
     // The compositor (decisions/0192, 15c), with gui; its test client with test_compositor
@@ -1533,6 +1548,7 @@ main :: fn(
             test_restart = service_kit.has_word(text, "test_restart")
             test_network_client = service_kit.has_word(text, "test_network")
             test_sound_client = service_kit.has_word(text, "test_sound")
+            test_sound_load = service_kit.has_word(text, "test_sound_load")
             test_display_client = service_kit.has_word(text, "test_display")
             test_compositor_client = service_kit.has_word(text, "test_compositor")
             test_gui_client = service_kit.has_word(text, "test_gui")
@@ -1643,6 +1659,9 @@ main :: fn(
         }
         if test_display_client {
             start_test_display(&supervisor)
+        }
+        if test_sound_load {
+            start_test_spinner(&supervisor)
         }
         if test_sound_client {
             start_test_sound(&supervisor)
@@ -5056,6 +5075,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "audio" {
         modules.audio
     }
+    else if name == "test_spinner" {
+        modules.test_spinner
+    }
     else if name == "test_network" {
         modules.test_network
     }
@@ -5877,6 +5899,28 @@ start_test_display :: fn(supervisor : ptr[mut Supervisor]) {
 }
 
 /**
+ * Start test_spinner, the audio's test's load (decisions/0196, 17e): only with test_sound_load on the command line.
+ *
+ * @param supervisor The supervisor.
+ */
+start_test_spinner :: fn(supervisor : ptr[mut Supervisor]) {
+    service :: service_named(supervisor, "test_spinner") or_return void
+    match os.launch(
+        supervisor.manager,
+        supervisor.manager_port,
+        service.name,
+        module_of(supervisor, "test_spinner"),
+        service.budget,
+        type_of(test_spinner.main),
+        TestSpinnerGrants.{log = duplicate_log(supervisor)},
+        options_for(supervisor, service.name)
+    ) {
+        case Ok(launched) => _ = place(supervisor, "test_spinner", kept(supervisor, launched), NOWHERE)
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/**
  * Start the audio service (decisions/0196, 17d), with a connector to the first sound device's driver; only when there's
  * a sound device.
  *
@@ -5934,6 +5978,16 @@ start_test_sound :: fn(supervisor : ptr[mut Supervisor]) {
     grants := TestSoundGrants.{
         log = duplicate_log(supervisor),
         sound_service = connector_to(supervisor, supervisor.audio_service),
+    }
+    match supervisor.command_line {
+        case Some(text) => {
+            text_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+            match slop_os.handle_duplicate(cast[slop_os.Handle](text), text_rights) {
+                case Ok(copy) => grants.command_line = cast[slop_os.Memory](copy)
+                case Error(error) => {}
+            }
+        }
+        case None => {}
     }
     match os.launch(
         supervisor.manager,

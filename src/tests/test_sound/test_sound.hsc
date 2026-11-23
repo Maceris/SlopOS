@@ -1,9 +1,10 @@
 /**
- * test_sound (decisions/0196, 17c and 17d): two streams played at once through the audio service, a second each: a
+ * test_sound (decisions/0196, 17c to 17e): two streams played at once through the audio service, a second each: a
  * 1 kHz tone at 48 kHz stereo floats, and a 1.5 kHz tone at 44.1 kHz mono 16-bit integers, each at a quarter of full
  * scale, every period of their rings kept given. The service mixes them, the second converted, remixed and resampled;
  * boot.py's --audio-tone reads what QEMU played. Started by the supervisor with test_sound on the kernel's command
- * line.
+ * line; with test_sound_load too, three seconds each, while test_spinner keeps every CPU busy in the background
+ * band, for the soft real-time goal: every period mixed in time, and none run out.
  */
 package test_sound
 
@@ -13,6 +14,7 @@ import slop_os from "std:os/slop_os"
 import audio as pcm from "std:audio"
 import math from "std:math"
 import connector from "../../protocols/connector"
+import service_kit from "../../libraries/service_kit"
 import sound from "../../protocols/sound"
 
 /** Each tone's level: a quarter of full scale, so the two mixed stay under it. */
@@ -20,7 +22,7 @@ LEVEL : f64 : 0.25
 /** The most samples of a period here: 48 kHz's 240 frames of 2 channels. */
 MOST_SAMPLES : usize : 480
 
-/** A stream being played: its connection, format, ring, and how far through its second it is. */
+/** A stream being played: its connection, format, ring, and how far through its seconds it is. */
 Playing :: struct {
     end : slop_os.Channel,
     format : sound.Format,
@@ -32,7 +34,7 @@ Playing :: struct {
     /** Periods given and played. */
     given : u32,
     played : u32,
-    /** The periods it takes to play a second. */
+    /** The periods it takes to play its seconds. */
     periods : u32,
     underruns : u32,
 }
@@ -57,7 +59,7 @@ call :: fn(end : slop_os.Channel, port : slop_os.Port, out : ptr[mut os.Outgoing
  *
  * @return The stream; null if the connection, the Open or the ring failed.
  */
-open :: fn(dialing : slop_os.Channel, format : sound.Format, tone : f64) -> Playing? {
+open :: fn(dialing : slop_os.Channel, format : sound.Format, tone : f64, seconds : u32) -> Playing? {
     startup :: slop_os.startup_block()
     dial_port :: os.port_for(startup.budget, dialing) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](dial_port))
@@ -89,7 +91,7 @@ open :: fn(dialing : slop_os.Channel, format : sound.Format, tone : f64) -> Play
     if slop_os.memory_map(window, startup.space, cast[u64](ring), 0, bytes, read_write) is_error {
         return null
     }
-    periods :: (format.rate + opened.period_frames - 1) / opened.period_frames
+    periods :: (format.rate * seconds + opened.period_frames - 1) / opened.period_frames
     return Playing.{end = connection.end, format = format, tone = tone, opened = opened, ring = cast[u64](ring), periods = periods}
 }
 
@@ -155,17 +157,28 @@ take_answers :: fn(playing : ptr[mut Playing], port : slop_os.Port) -> bool {
 }
 
 /**
- * Play the two streams through the audio service.
+ * Play the two streams through the audio service, a second each, or three with test_sound_load on the command line.
  *
  * @param log The debug log it says what it played in.
  * @param sound_service A connector to the audio service.
+ * @param command_line The kernel's command line, for test_sound_load.
  * @return 0 once both have played; 2 without the service, 3 if a stream couldn't be opened, 4 if one failed.
  */
-main :: fn(log : slop_os.DebugLog?, sound_service : os.Channel[connector.Connector]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    sound_service : os.Channel[connector.Connector]?,
+    command_line : slop_os.Memory?
+) -> int {
     startup :: slop_os.startup_block()
     dialing :: sound_service or_return 2
-    first := open(dialing.end, sound.Format.{sample = 4, rate = 48000, channels = 2}, 1000.0) or_return 3
-    second := open(dialing.end, sound.Format.{sample = 1, rate = 44100, channels = 1}, 1500.0) or_return 3
+    loaded := false
+    match command_line {
+        case Some(memory) => loaded = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_sound_load")
+        case None => {}
+    }
+    seconds :: if loaded { cast[u32](3) } else { cast[u32](1) }
+    first := open(dialing.end, sound.Format.{sample = 4, rate = 48000, channels = 2}, 1000.0, seconds) or_return 3
+    second := open(dialing.end, sound.Format.{sample = 1, rate = 44100, channels = 1}, 1500.0, seconds) or_return 3
     port :: slop_os.port_create(startup.budget) or_return 2
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     slop_os.port_bind(port, cast[slop_os.Handle](first.end), signals, 1, .Persistent) or_return 2
@@ -190,7 +203,8 @@ main :: fn(log : slop_os.DebugLog?, sound_service : os.Channel[connector.Connect
         _ = slop_os.port_wait(port, packets, slop_os.NO_DEADLINE)
     }
     runtime.log_info(
-        "played a second of 1 kHz at 48 kHz stereo floats and of 1.5 kHz at 44.1 kHz mono 16-bit integers, % and % underruns",
+        "played % s of 1 kHz at 48 kHz stereo floats and of 1.5 kHz at 44.1 kHz mono 16-bit integers, % and % underruns",
+        seconds,
         first.underruns,
         second.underruns
     )

@@ -569,14 +569,15 @@ stop_mixing :: fn(service : ptr[mut Service]) {
     os.begin[audio.Request](&out)^ = .Stop
     _ = audio.send_request(service.driver, service.port, &out)
     runtime.log_info(
-        "mixed % periods, % of them missed, the latest % us late, each in at most % us, % us on average; the device ran out % times",
+        "mixed % periods, the latest % us late, each in at most % us, % us on average",
         service.mixed,
-        service.missed,
         service.worst_late / 1000,
         service.worst_mix / 1000,
-        if service.mixed > 0 { service.total_mix / service.mixed / 1000 } else { 0 },
-        service.device_underruns
+        if service.mixed > 0 { service.total_mix / service.mixed / 1000 } else { 0 }
     )
+    // Each on a line of its own, for a test to hold to (decisions/0196, 17e)
+    runtime.log_info("missed % of % periods mixed", service.missed, service.mixed)
+    runtime.log_info("the device ran out % times", service.device_underruns)
 }
 
 /**

@@ -2364,6 +2364,9 @@ def main() -> int:
                         "have played at least AUDIO_SECONDS of sound, a tone of this frequency in it at LEVEL of full "
                         "scale (half by default), its harmonics and gaps said; may be repeated, for a mix of tones "
                         "(decisions/0196, 17c, 17d)")
+    parser.add_argument("--audio-none", action="store_true",
+                        help="a virtio sound device on QEMU's none backend, which plays nothing at the right pace, for a "
+                        "machine where no file can be written, as --kvm's (decisions/0196, 17e)")
     parser.add_argument("--display", action="store_true",
                         help="a virtio GPU and a virtio tablet for test_display: once it shows its cursor, the tablet clicks in the "
                         "screen's middle, and once it says where, the screen is taken and checked for its scene, with --expect "
@@ -2503,7 +2506,10 @@ def main() -> int:
             extra += peers.qemu_arguments()
         # A sound device, what it plays written by QEMU to a WAV file in the run's folder (decisions/0196, 17c)
         played = folder / "played.wav"
-        if arguments.audio_tone:
+        if arguments.audio_none:
+            extra += ["-audiodev", "none,id=sound",
+                      "-device", "virtio-sound-pci,audiodev=sound,disable-legacy=on,iommu_platform=on"]
+        elif arguments.audio_tone:
             extra += ["-audiodev", f"wav,id=sound,path={played}",
                       "-device", "virtio-sound-pci,audiodev=sound,disable-legacy=on,iommu_platform=on"]
         console = None
