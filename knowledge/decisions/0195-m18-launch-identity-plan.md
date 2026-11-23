@@ -1,7 +1,6 @@
 # 0195: M18, Launch Identity, Planned
 
-Status: proposed (2026-11-22), planned with the project's owner as a milestone of its own; its stages proposed until it
-starts; not started
+Status: accepted (2026-11-23), planned with the project's owner as a milestone of its own; started 2026-11-23
 Date: 2026-11-22
 Related: `0193` (M16; 16b, the simpler fix this replaces), `0181` (the powerbox's names), `0183` (12a, the shell's
 crash reports through intercepts; 12d, profiling), `0185` (debugging and elevation)
@@ -47,6 +46,6 @@ runs, and working that through (2026-11-21) found three things it rests on:
   what a debugger's intercept does, so they take one on the user's say (18b), not a launcher's right of their own. The
   process manager makes a replay's process with the recording's seeds and layout, as `Load` takes seeds now. The
   session manager names a connection by launch only for a process the process manager says has no steering
-  intercept, the one rule covering debuggers, recordings and replays. A replay gets no fresh powerbox connection, as
-  what it was given while recorded can't be replayed anyway; or one shown as a replay's ("a replay of X"), which can't
-  pass for X asking.
+  intercept, the one rule covering debuggers, recordings and replays. A replay gets no powerbox connection, as what it
+  was given while recorded can't be replayed anyway: one that asks is refused, as a program without one is (settled
+  2026-11-23).
