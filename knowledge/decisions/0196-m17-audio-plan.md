@@ -158,3 +158,11 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
 - **Under TCG** the guest doesn't keep the host's pace with every CPU busy, so the plan's zero on both architectures
   isn't held there: 0 to 2 periods of about 1,500 missed, the device's underruns 0 to 185, the mix each at most 1.2 ms
   and 0.27 on average. The emulator's test plays under the load and says both counts; the KVM test holds them.
+
+## Chosen with the owner after 17e (2026-11-23)
+- **Zero missed, under KVM only.** The first answer's zero under TCG on both architectures isn't held with every CPU
+  busy, so it is replaced: the KVM test holds both the service's missed periods and the device's underruns to zero,
+  and the emulators' tests play under the load and say both counts.
+- **The KVM host has 4 cores**, so QEMU's own loop isn't starved by a guest keeping its two CPUs busy.
+- **The microphone's indicator** shows in the trusted layer and the console's status line in 17f. A mark on each
+  holding program's windows waits for M18, which knows which windows are whose.
