@@ -253,7 +253,34 @@ raise_watchers :: fn(
 }
 
 /**
- * Tell whether an object is owned within a process's subtree, up at most MAX_OWNER_DEPTH owners.
+ * Tell whether a process controls an object in its subtree: owns it, or owns what owns it, and so on, up at most
+ * MAX_OWNER_DEPTH owners, none of those between them sealed (Process.sealed, decisions/0195, 18e).
+ *
+ * @param object The object, as its address.
+ * @param process The Process, as its address.
+ * @return True if the process owns it, or owns an unsealed process that does, and so on; false for the process
+ *     itself, or past a sealed process, whose subtree only a handle to it, or to one in it, controls.
+ */
+controls :: fn(object : u64, process : u64) -> bool {
+    owner := cast[ptr[ObjectHeader]](object).owner
+    for depth in 0..<MAX_OWNER_DEPTH {
+        if owner == 0 {
+            return false
+        }
+        if owner == process {
+            return true
+        }
+        if intrinsics.atomic_load_u32_acquire(&cast[ptr[Process]](owner).sealed) != 0 {
+            return false
+        }
+        owner = cast[ptr[ObjectHeader]](owner).owner
+    }
+    return false
+}
+
+/**
+ * Tell whether an object is owned within a process's subtree, up at most MAX_OWNER_DEPTH owners, sealed or not: for
+ * where a handle may go, not for what a process controls (controls).
  *
  * @param object The object, as its address.
  * @param process The Process, as its address.
@@ -337,7 +364,7 @@ thread_in :: fn(kernel : ptr[mut Kernel], process : u64, id : u64) -> ptr[mut Th
         }
         thread :: cast[ptr[mut Thread]](address)
         if thread.id == id {
-            return if !is_dying(address) && in_subtree(address, process) { thread } else { null }
+            return if !is_dying(address) && controls(address, process) { thread } else { null }
         }
         address = thread.all_next
     }
@@ -365,7 +392,7 @@ threads_of :: fn(kernel : ptr[mut Kernel], process : u64, ids : ptr[mut u64[64]]
             break
         }
         thread :: cast[ptr[Thread]](address)
-        if !is_dying(address) && in_subtree(address, process) {
+        if !is_dying(address) && controls(address, process) {
             if count < capacity && cast[usize](count) < 64 {
                 ids^[cast[usize](count) % 64] = thread.id
             }

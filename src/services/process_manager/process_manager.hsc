@@ -30,7 +30,11 @@ Record :: struct {
     intercept : slop_os.Intercept,
     /** The executable it was loaded from, the Load's handle, kept (decisions/0195, 18d). */
     executable : slop_os.Memory,
-    /** Whether it's been steered (Steer). */
+    /**
+     * Whether it's been steered (Steer), or was launched with an intercept that stops it at its calls, more than its
+     * faults, as a debugger's, a recording's or a replay's launch is held at its first, to be steered on the user's
+     * say (decisions/0195, 18e): what it does may be its steerer's, not its executable's.
+     */
     steered : bool,
 }
 
@@ -420,7 +424,10 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
             space_given = true
             // Kept for Steer and Identify while it runs: the process and space, the intercept, and the executable
             executable :: cast[slop_os.Memory](copy_of(cast[slop_os.Handle](request.executable)))
-            keep(manager, process, kept_space, made.intercept, executable)
+            faults :: slop_os.STOP_FAULT | slop_os.STOP_FAULT_LIMITED
+            stops :: cast[slop_os.Handle](made.intercept) != slop_os.NO_HANDLE
+                && (request.intercept_calls != 0 || (request.intercept_points & ~faults) != 0)
+            keep(manager, process, kept_space, made.intercept, executable, stops)
             if cast[slop_os.Handle](made.intercept) != slop_os.NO_HANDLE {
                 made.intercept = cast[slop_os.Intercept](
                     slop_os.handle_duplicate(cast[slop_os.Handle](made.intercept), cast[slop_os.Rights](INTERCEPT_GIVEN))
@@ -533,13 +540,15 @@ copy_of :: fn(handle : slop_os.Handle) -> slop_os.Handle {
  * @param space A handle to its address space with every right, which the record keeps; NO_HANDLE for none.
  * @param intercept Its intercept's owning handle, which the record keeps; NO_HANDLE for none.
  * @param executable The executable it was loaded from, which the record keeps.
+ * @param stops Whether its intercept stops it at its calls, not only at its faults: it's taken as steered.
  */
 keep :: fn(
     manager : ptr[mut Manager],
     process : slop_os.Process,
     space : slop_os.Handle,
     intercept : slop_os.Intercept,
-    executable : slop_os.Memory
+    executable : slop_os.Memory,
+    stops : bool
 ) {
     prune(manager)
     made := Record.{
@@ -547,6 +556,7 @@ keep :: fn(
         space = cast[slop_os.AddressSpace](space),
         intercept = intercept,
         executable = executable,
+        steered = stops,
     }
     runtime.array_add(&manager.records, made)
 }
@@ -606,14 +616,16 @@ steer :: fn(manager : ptr[mut Manager], asked : protocol.Steer) -> protocol.Resp
         return .NotSteered(.NoProgram)
     }
     record :: &manager.records[found]
+    attached := cast[slop_os.Intercept](slop_os.NO_HANDLE)
     // Its stops to another port: the intercept it had detached, and a new one attached there
     if cast[slop_os.Handle](asked.port) != slop_os.NO_HANDLE {
         if cast[slop_os.Handle](record.intercept) != slop_os.NO_HANDLE {
             _ = slop_os.handle_close(cast[slop_os.Handle](record.intercept))
             record.intercept = cast[slop_os.Intercept](slop_os.NO_HANDLE)
         }
+        // The new one's owning handle is the steerer's: closed, the program runs on unintercepted
         match slop_os.intercept_attach(record.process, asked.port, asked.key, 0, slop_os.STOP_FAULT) {
-            case Ok(made) => record.intercept = made
+            case Ok(made) => attached = made
             case Error(error) => {
                 log_line.write(manager.log, "process manager: steering: no intercept: %", error)
                 return .NotSteered(.Failed)
@@ -634,7 +646,10 @@ steer :: fn(manager : ptr[mut Manager], asked : protocol.Steer) -> protocol.Resp
             return .NotSteered(.Failed)
         }
     }
-    if cast[slop_os.Handle](record.intercept) != slop_os.NO_HANDLE {
+    if cast[slop_os.Handle](attached) != slop_os.NO_HANDLE {
+        given.intercept = attached
+    }
+    else if cast[slop_os.Handle](record.intercept) != slop_os.NO_HANDLE {
         given.intercept = cast[slop_os.Intercept](
             slop_os.handle_duplicate(cast[slop_os.Handle](record.intercept), cast[slop_os.Rights](STEERING_INTERCEPT))
                 or_else slop_os.NO_HANDLE

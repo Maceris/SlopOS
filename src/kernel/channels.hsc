@@ -134,6 +134,41 @@ Channel :: struct #align(16) {
     side : u32,
     /** Batches in flight with it in, under its core's lock: it can't be mapped meanwhile. */
     sending : u32,
+    /**
+     * The process that's mapped it, written on it or sent handles on it, by address (decisions/0195, 18e); 0 if none
+     * has, USED_BY_MANY once a second has. Changed under its core's lock, read atomically: channel_peer_owned_by
+     * names a holder only if nothing it holds was written by another, as one that held it before.
+     */
+    used_by : u64,
+}
+
+/** What Channel.used_by is once more than one process has used the end. */
+USED_BY_MANY : u64 : 0xffff_ffff_ffff_ffff
+
+/**
+ * Record that a process has used an end, mapping it, writing on it or sending handles on it.
+ *
+ * @param end The end, live when it was looked up.
+ * @param process The using process, as an address; it becomes used_by, or USED_BY_MANY if another was.
+ */
+mark_used :: fn(end : ptr[mut Channel], process : u64) {
+    // Once it's this process's, as it is after the first use, nothing's locked
+    if intrinsics.atomic_load_u64_acquire(&end.used_by) == process {
+        return void
+    }
+    core :: core_of(end)
+    if cast[u64](core) == 0 {
+        return void
+    }
+    lock_at(&core.lock, .ChannelCore)
+    used :: intrinsics.atomic_load_u64(&end.used_by)
+    if used == 0 {
+        intrinsics.atomic_store_u64_release(&end.used_by, process)
+    }
+    else if used != process {
+        intrinsics.atomic_store_u64_release(&end.used_by, USED_BY_MANY)
+    }
+    unlock_at(&core.lock, .ChannelCore)
 }
 
 /** Handles in flight, from the kernel heap, charged to the end that sent them while it lives. */

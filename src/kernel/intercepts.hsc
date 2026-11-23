@@ -256,6 +256,10 @@ intercept_of :: fn(kernel : ptr[Kernel], thread : ptr[Thread]) -> u64 {
         if intercept != 0 {
             return intercept
         }
+        // Nothing above a sealed process intercepts its threads (decisions/0195, 18e)
+        if intrinsics.atomic_load_u32_acquire(&cast[ptr[Process]](process).sealed) != 0 {
+            return 0
+        }
         process = cast[ptr[ObjectHeader]](process).owner
     }
     return 0

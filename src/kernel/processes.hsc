@@ -35,6 +35,13 @@ Process :: struct #align(16) {
     /** What its threads trap on, slop_os.TRAP_ bits (process_set_traps); 0 at first. Read and written atomically. */
     traps : u32,
     /**
+     * 1 once its owning handle's had rights dropped (handle_restrict, decisions/0195, 18e): what's above it in the
+     * tree, its owner's owner and on up, then controls nothing in its subtree, nor do their intercepts stop its
+     * threads, so moving it under a process of one's own gives back no right its owning handle lost. Never 0 again.
+     * Read and written atomically.
+     */
+    sealed : u32,
+    /**
      * Its breakpoints and watchpoints (process_set_debug), which every thread of its loads returning to user mode
      * unless it's single-stepping; guarded by debug_lock. None at first.
      */

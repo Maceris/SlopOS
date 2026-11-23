@@ -322,11 +322,16 @@ sys_handle_restrict :: fn(
     rights : slop_os.Rights
 ) -> Result[void, slop_os.HandleError] {
     process :: process_of(thread)
-    _ = lookup(&process.table, handle)?
+    found :: lookup(&process.table, handle)?
     match restrict(&process.table, handle, rights) {
         case Some(error) => return .Error(error)
-        case None => return .Ok
+        case None => {}
     }
+    // A process's owning handle restricted seals it: nothing above it controls it more than the handle does
+    if found.owning && found.kind == slop_os.ObjectKind.Process {
+        intrinsics.atomic_store_u32_release(&cast[ptr[mut Process]](found.object).sealed, 1)
+    }
+    return .Ok
 }
 
 /**
@@ -359,7 +364,9 @@ sys_channel_peer_owned_by :: fn(
     owned := false
     if other != 0 && !is_dying(other) {
         owner :: intrinsics.atomic_load_u64(&cast[ptr[mut ObjectHeader]](other).owner)
-        owned = owner == cast[u64](target)
+        // Nothing on it another wrote, as one that held it before: it's the holder's alone (decisions/0195, 18e)
+        used :: intrinsics.atomic_load_u64(&cast[ptr[mut Channel]](other).used_by)
+        owned = owner == cast[u64](target) && (used == 0 || used == cast[u64](target))
     }
     unlock_at(&core.lock, .ChannelCore)
     return .Ok(owned)
@@ -1136,6 +1143,7 @@ sys_channel_map :: fn(
     address : u64
 ) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, slop_os.RIGHT_CHANNEL_MAP)?
+    mark_used(found, cast[u64](process_of(thread)))
     target :: object_of[slop_os.ChannelError](
         process_of(thread),
         cast[slop_os.Handle](space),
@@ -1209,6 +1217,7 @@ sys_channel_write :: fn(
     batch : u32
 ) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    mark_used(found, cast[u64](process_of(thread)))
     return channel_done(
         channel_write(
             per_cpu().kernel,
@@ -1311,6 +1320,7 @@ sys_channel_send_handles :: fn(
     batch : u32
 ) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
+    mark_used(found, cast[u64](process_of(thread)))
     return channel_done(
         channel_send_handles(
             per_cpu().kernel,
@@ -2800,7 +2810,7 @@ subtree_space :: fn(
         slop_os.ObjectKind.AddressSpace,
         cast[slop_os.Rights](0)
     )?
-    if !in_subtree(object, cast[u64](target)) {
+    if !controls(object, cast[u64](target)) {
         return .Error(.BadAddress)
     }
     return .Ok(cast[ptr[mut AddressSpace]](object))
@@ -3222,7 +3232,7 @@ sys_thread_create_in :: fn(
         slop_os.ObjectKind.AddressSpace,
         slop_os.RIGHT_SPACE_THREADS
     )?
-    if !in_subtree(found, cast[u64](target)) {
+    if !controls(found, cast[u64](target)) {
         return .Error(.BadAddress)
     }
     start :: arch_interface.UserStart.{

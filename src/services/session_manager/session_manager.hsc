@@ -72,6 +72,11 @@ PENDING_KEY : u64 : 3000
 MAX_PENDING : usize : 16
 /** How long the main loop waits, in nanoseconds, before it looks again at pending powerbox connections. */
 PENDING_POLL : u64 : 5_000_000
+/**
+ * How long a pending powerbox connection waits to be named, in nanoseconds, before it's let go: its end never reached
+ * a program the process manager loaded, kept by its launcher, or given on to another.
+ */
+PENDING_LIMIT : u64 : 30_000_000_000
 /** The most executables Find gave that are kept, to name programs by; past it, the oldest goes. */
 MAX_HANDED : usize : 64
 /** The port key the session manager's budget's pressure is bound under. */
@@ -347,6 +352,8 @@ Pending :: struct {
     end : slop_os.Channel,
     /** When it was made, by the count of PendingPowerbox, so the oldest can be let go. */
     made : u64,
+    /** When it was made, by the monotonic clock, in nanoseconds: one unnamed PENDING_LIMIT after is let go. */
+    since : u64,
 }
 
 /** A session: whether it's one now, and its user's name, empty for a boot with no accounts. */
@@ -2395,6 +2402,16 @@ powerbox_for :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> 
  * @param name The name it was found by.
  */
 hand_out :: fn(sessions : ptr[mut Manager], executable : slop_os.Memory, name : u8[]) {
+    for &handed in sessions.handed {
+        if cast[slop_os.Handle](handed.executable) != slop_os.NO_HANDLE
+            && handed.count == name.count
+            && handed.count <= handed.name.count
+            && same_bytes(handed.name[0..<handed.count], name)
+            && (slop_os.handle_same(cast[slop_os.Handle](handed.executable), cast[slop_os.Handle](executable))
+                or_else false) {
+            return void
+        }
+    }
     copy :: slop_os.handle_duplicate(cast[slop_os.Handle](executable), slop_os.RIGHT_MEMORY_READ) or_return void
     at :: sessions.handed_next % MAX_HANDED
     sessions.handed_next += 1
@@ -2462,7 +2479,13 @@ pending_powerbox :: fn(sessions : ptr[mut Manager], number : u32) -> programs.Re
     _ = slop_os.handle_restrict(cast[slop_os.Handle](pair.b), kept)
     if at < sessions.pending.count {
         sessions.pending_made += 1
-        sessions.pending[at] = Pending.{in_use = true, session = number, end = pair.a, made = sessions.pending_made}
+        sessions.pending[at] = Pending.{
+            in_use = true,
+            session = number,
+            end = pair.a,
+            made = sessions.pending_made,
+            since = slop_os.clock_monotonic() or_else 0,
+        }
     }
     return .PowerboxGiven(os.Channel[powerbox.Powerbox].{end = pair.b})
 }
@@ -2512,6 +2535,11 @@ pending_closed :: fn(sessions : ptr[mut Manager], packets : slop_os.Packet[], ta
 name_pending :: fn(sessions : ptr[mut Manager]) {
     for i in 0..<sessions.pending.count {
         if !sessions.pending[i].in_use {
+            continue
+        }
+        if (slop_os.clock_monotonic() or_else 0) - sessions.pending[i].since > PENDING_LIMIT {
+            runtime.log_info("a powerbox connection no program was found holding isn't named")
+            drop_pending(sessions, i)
             continue
         }
         identified :: process_manager.identify(sessions.steering_end, sessions.steering_port, sessions.pending[i].end)

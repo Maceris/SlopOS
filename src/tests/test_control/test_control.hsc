@@ -485,8 +485,31 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
     kept :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "a channel D keeps both ends of")?
     testing.expect_eq(t, slop_os.channel_peer_owned_by(kept.a, target) or_else true, false,
         "T doesn't own the other end of a channel it was never given")
+    /*
+     * An end written on by D, then given to T, isn't T's alone (decisions/0195, 18e): what D wrote would be read as
+     * T's
+     */
+    written :: u8.[1, 2, 3, 4]
+    testing.expect_ok(t, slop_os.channel_write(kept.b, written, 0), "D writes on an end it keeps")
+    given_end : slop_os.Handle[1]
+    testing.require_ok(
+        t,
+        slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](kept.b)], given_end),
+        "D gives T the end it wrote on"
+    )?
+    testing.expect_eq(t, slop_os.channel_peer_owned_by(kept.a, target) or_else true, false,
+        "T doesn't own alone an end D wrote on before giving it")
     _ = slop_os.handle_close(cast[slop_os.Handle](kept.a))
-    _ = slop_os.handle_close(cast[slop_os.Handle](kept.b))
+    other :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "another channel, its end given unused")?
+    unused_end : slop_os.Handle[1]
+    testing.require_ok(
+        t,
+        slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](other.b)], unused_end),
+        "D gives T an end it never used"
+    )?
+    testing.expect_eq(t, slop_os.channel_peer_owned_by(other.a, target) or_else false, true,
+        "T owns the other end it was given unused")
+    _ = slop_os.handle_close(cast[slop_os.Handle](other.a))
     // Where T's things are, and its space
     found := TargetReport.{}
     space_handles : slop_os.Handle[1]
@@ -804,6 +827,23 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
     info :: testing.require_ok(t, slop_os.handle_info(cast[slop_os.Handle](copy.launched.process)), "F's handle described")?
     testing.expect_eq(t, cast[u32](info.rights) & cast[u32](slop_os.RIGHT_PROCESS_THREADS), 0,
         "a launcher can't start threads in F")
+    /*
+     * F moved under a process of the launcher's own is still sealed (decisions/0195, 18e): nothing above it reaches
+     * its threads, which its handle can't change
+     */
+    above :: testing.require_ok(t, slop_os.process_create(block.budget), "a process the launcher makes")?
+    defer slop_os.handle_close(cast[slop_os.Handle](above))
+    under : slop_os.Handle[1]
+    testing.require_ok(
+        t,
+        slop_os.process_give_handles(above, slop_os.Handle.[cast[slop_os.Handle](copy.launched.process)], under),
+        "F's owning handle moved into a process the launcher made"
+    )?
+    ids : u64[4]
+    testing.expect_eq(t, slop_os.process_threads(above, ids) or_else 99, 0,
+        "a process F's moved under lists none of F's threads")
+    testing.expect_error(t, slop_os.thread_write_registers(above, stop.thread, registers),
+        slop_os.ControlError.NoSuchThread, "nor changes them")
     // Not let go: F ends within the limit, as if nothing intercepted it
     deadline :: (slop_os.clock_monotonic() or_else 0) + FAULTING_END_NANOSECONDS
     ended := false

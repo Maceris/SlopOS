@@ -1,4 +1,4 @@
-# 0195: M18, Launch Identity, Planned
+# 0195: M18, Launch Identity, Built
 
 Status: accepted (2026-11-23), planned with the project's owner as a milestone of its own; started 2026-11-23
 Date: 2026-11-22
@@ -126,3 +126,35 @@ Built as proposed, except in how the holder is found:
 - Found on the way: when the shell's answer to `PendingPowerbox` hadn't been sent yet, the session manager found the
   end in its own table and closed it as unknown, and only under load, where the keys and kept-grant tests failed
   when they shared the machine with other runs.
+
+## As Built: 18e, scripts, the limits, and the review
+- **A script's asks are its own.** A shell running a script makes the script's shell's connection to the session
+  with `ConnectScript` and the script's file name; every `Powerbox` on it, and on a connection it makes with
+  `Connect`, is served under that name, which the powerbox shows as "steer.shell, a script". No installation's name
+  has a dot, so none passes for a script.
+- **The limits** were keyed by a connection's name already; with names proved by launch, a program asks only as
+  itself. The session-wide limit stays, as a program can start others, each asking as itself, and a shell runs
+  scripts under names of their own.
+- **The band** needed nothing: only the session manager starts GUI programs, and it names their compositor
+  connections itself.
+- **A security review** of 18a to 18e found, and these fixed:
+  - A launcher could move its child's owning handle into a process of its own and, through it, control the child's
+    subtree: threads, memory, and an intercept attached above the child. A process whose owning handle has had
+    rights dropped is now sealed: nothing above it controls it more than that handle does, nor do intercepts above it
+    stop its threads (`Process.sealed`, `controls`).
+  - A launcher could write powerbox requests into a pending end before moving it to a child, which the powerbox would
+    read as the child's. The kernel keeps who's used each end, mapping it, writing on it or sending handles on it;
+    `channel_peer_owned_by` names a holder only if no other process has.
+  - The shell's `debug`, `record` and `replay` launch a program held at its first call, and the session manager
+    could name its connection while the user was still being asked. The process manager takes a program launched
+    with an intercept that stops it at its calls as steered, so its connection is closed.
+  - A steering intercept's owning handle stayed the process manager's, so a debugger that let a program go left it
+    to stop for good at its next fault. The steerer has it now.
+  - `Connect` on a script's connection lost the script's name; `Find` over and over could flush the executables
+    handed out (each name and executable is kept once now); and a pending end that never reached a program kept the
+    session manager's loop waking every 5 ms (let go after 30 seconds).
+- **Left as they are:** the steering prompt shows the program by the name the asker gives, which only misleads about
+  a program the asker launched itself, whose powerbox connection a steered program loses anyway; a debugger the user
+  allows to attach to a running program acts with that program's grants, as it could before; the process manager
+  lets go of a gone program's handles only when it's next asked something; and two installations of one executable
+  can't be told apart by it.

@@ -691,9 +691,18 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
-                    // Naming passes on, from a shell's to its script's shell's
+                    // Naming passes on, from a shell's to its script's shell's, and a script's name with it
                     names :: sessions.finders[i].names
-                    _ = add_finder(sessions, sessions.finders[i].session, connection.end, names = names)
+                    script :: sessions.finders[i].script
+                    script_count :: sessions.finders[i].script_count
+                    if add_finder(sessions, sessions.finders[i].session, connection.end, names = names) {
+                        for &finder in sessions.finders {
+                            if finder.in_use && finder.end == connection.end {
+                                finder.script = script
+                                finder.script_count = script_count
+                            }
+                        }
+                    }
                     continue
                 }
                 case ConnectScript(asked) => {

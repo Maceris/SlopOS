@@ -250,14 +250,15 @@ rings (`RING_BYTES`):
 - `Connect`: a `Channel[ProcessManager]`, which becomes another client; one sent on a steering connection is one too.
 - `Steer` (`0195`, 18b), answered only on the connections of the manager's steering listener, whose other end the
   root task gives the supervisor, which gives the session manager one: given a launcher's handle to a program the
-  manager loaded, the program's intercept with `RIGHT_INTERCEPT_STEER`, attached afresh on a port given, and its
-  process with the right to change its threads. The session manager asks once the user's allowed a debugger, a
+  manager loaded, the program's intercept with `RIGHT_INTERCEPT_STEER`, attached afresh on a port given, its owning
+  handle the steerer's, so letting it go detaches it (18e), and its process with the right to change its threads. The session manager asks once the user's allowed a debugger, a
   recording or a replay through the powerbox (`RequestDebug`, and `RequestSteer` for a program the asker launched,
   which the shell's `debug`, `record` and `replay` start held at their first call); the supervisor and the session
   manager for their own test crashes.
 - `Identify` (`0195`, 18d), on a steering connection only: given an end of a channel, which program the manager
   loaded holds the other end itself (`channel_peer_owned_by`), as `Identified`: its process, to inspect, the
-  executable it was loaded from, to read, and whether it's been steered; or `NotSteered(NoProgram)`. The session
+  executable it was loaded from, to read, and whether it's been steered, or was launched with an intercept that stops
+  it at its calls, as a debugger's, recording's or replay's is held (18e); or `NotSteered(NoProgram)`. The session
   manager names a program's powerbox connection so: a launcher asks its session for one (`PendingPowerbox`) and gives
   it to the program, the end it's given can't be copied, and once the end's moved to a program the session manager
   serves it under the name of the installation whose executable it handed out (`Find`). An end still the session

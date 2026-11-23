@@ -51,8 +51,10 @@ each object is its owning one (`0008`).
   reports faults and samples, and lets a thread go on only from a fault, or kills it); `RIGHT_PROCESS_INSPECT`,
   `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT`,
   `_KILL` and `_THREADS` (starting threads in it and giving it handles, `0067`) for a process, over its whole
-  subtree (`0017`); `RIGHT_DEBUG_LOG_WRITE` for a debug log. An owning
-  handle has every right.
+  subtree (`0017`), but for what's beneath a sealed process: one whose owning handle's had rights dropped
+  (`handle_restrict`, `0195`, 18e), which only a handle to it, or to one beneath it, controls, nor do intercepts above
+  it stop its threads, so moving it under a process of one's own gives back nothing; `RIGHT_DEBUG_LOG_WRITE` for a
+  debug log. An owning handle has every right.
   Duplicating keeps or drops rights, never adds them.
 
 Object kinds (`slop_os.ObjectKind`, `0034`): `MemoryBudget`, `CpuBudget`, `Memory`, `AddressSpace`,
@@ -115,7 +117,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 47 | `thread_create_in` | process, budget, address space, entry, stack pointer, argument | the new thread's ID: a thread owned by the process, started as `thread_create` starts one, in an address space in the process's subtree. Needs `RIGHT_PROCESS_THREADS` and `RIGHT_SPACE_THREADS` (`0067`) |
 | 48 | `process_give_handles` | process, handles (a slice), given (a slice) | nothing: the handles (up to 64), moved out of the caller's table into the process's, the value each has there written at given. An owning handle's object becomes the process's, charged to its budget, for all of them or none. Each needs `RIGHT_TRANSFER`; an owning handle to the process or one above it can't go, nor a channel end whose rings are mapped. One closed meanwhile comes out as `NO_HANDLE`. Needs `RIGHT_PROCESS_THREADS` (`0067`) |
 | 49 | `memory_size` | memory | its size in bytes (`0067`) |
-| 50 | `channel_tag` | end | the tag its channel was made with (`0071`); `channel_peer_owned_by`, appended to the calls (`0195`, 18d), says whether a process given, with `RIGHT_PROCESS_INSPECT`, holds the other end's owning handle itself, so a server whose end has moved to it learns which program it's speaking with, and nothing else of either |
+| 50 | `channel_tag` | end | the tag its channel was made with (`0071`); `channel_peer_owned_by`, appended to the calls (`0195`, 18d), says whether a process given, with `RIGHT_PROCESS_INSPECT`, holds the other end's owning handle itself, and no other process has mapped it, written on it or sent handles on it (18e), so a server whose end has moved to it learns which program it's speaking with, and that nothing on it is an earlier holder's; nothing else of either is said |
 | 51 | `device_create` | platform, budget, address, MSI source, configuration space | an owning handle to a Device: the PCIe function at address (`slop_os.device_address`: segment, bus, device, function), whose MSIs the interrupt controller knows as the MSI source (on AArch64, the ITS's device ID, from the device tree's `msi-map`; unused on x86-64), and whose 4 KiB of configuration space is at the physical address given, page-aligned and not RAM (`BadAddress` otherwise). Destroying it clears the function's Bus Master Enable first, so a driver that ends leaves no DMA running into memory that went with it. No other device may have the address, nor on AArch64 the source (`0073`) |
 | 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to. The first device attached binds the domain to the IOMMU it's behind, or to none; a device behind another is refused (`WrongIommu`) |
 | 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to `MAX_DEVICE_MSIS` (32), routed to a CPU the kernel picks |
