@@ -532,11 +532,13 @@ TESTS = [
     # and which a key closes once it's done; a second, of check boxes, makes a typed file, which the viewer, found by
     # name, shows by its path, before Escape closes it; a third's powerbox asks for a file, chosen in the prompt the
     # greeter draws in the trusted layer; then the terminal's found and started, which starts the shell on a terminal
-    # it serves, where keys lists the user's keys, adduser has bob's account made, and shut-down asks the administrator, in the prompt, to shut down.
+    # it serves, where keys lists the user's keys, capture is allowed the microphone, shown held in the trusted layer and
+    # taken back with a click (17f), adduser has bob's account made, and shut-down asks the administrator, in the prompt,
+    # to shut down.
     # Argon2id under emulation: a long settle, cut short by the shutdown
     ("logs in on the GUI to a session whose launcher starts a terminal", 7,
      with_before_qemu([argument.replace("test_services", "test_services gui test_settle=400").replace("--timeout=120", "--timeout=600")
-                       for argument in BOOT_DISK_BASE], ["--gui-login", "admin", "correct horse battery staple",
+                       for argument in BOOT_DISK_BASE], ["--gui-login", "admin", "correct horse battery staple", "--audio-none",
         "--console-input=\\wadmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--expect-line=[user] terminal: first-boot setup ended",
@@ -572,6 +574,13 @@ TESTS = [
         # The GUI's elevation (decisions/0193, 16e): the keys listed at once; a shutdown the administrator allows in the
         # prompt, a wrong password refused first; and the system shuts itself down
         "--expect-line=[user] greeter: asked by keys for your public keys",
+        # The microphone (decisions/0196, 17f): allowed in the prompt, shown held in the trusted layer, and taken back
+        "--expect-line=[user] greeter: asked by capture for the microphone",
+        "--expect-line=[user] greeter: allowed capture the microphone",
+        "--expect-line=[user] greeter: microphone: capture holds it",
+        "--expect-line=[user] greeter: microphone: the user took it back from capture",
+        "--expect-line=[user] audio: took back grant 1",
+        "--expect-line=[user] greeter: microphone: capture no longer holds it",
         "--expect-line=[user] greeter: asked by shell for a new account",
         "--expect-line=[user] greeter: made the account bob",
         "--expect-line=[user] greeter: answered shell with the account bob",

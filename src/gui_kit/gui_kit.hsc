@@ -176,6 +176,8 @@ no_font :: fn(name : string) -> ptr[mut Window]? {
  * @param height Its height, in pixels.
  * @param activation The activation token for the user's gesture that asked for it, as the program was given it, which
  *     it presents to take focus when it's first shown; 0 for none, when it takes focus only if nothing has it.
+ * @param passive Whether it's an indicator in the trusted layer, never focused (WindowSpec's passive); only a trusted
+ *     connection's window can be.
  * @return The window, on the heap, its first frame due; null if anything failed, as when the program wasn't given
  *     the fonts (gui_programs.FONTS), which is logged.
  */
@@ -184,7 +186,8 @@ open_on :: fn(
     title : string,
     width : u32,
     height : u32,
-    activation : u64 = 0
+    activation : u64 = 0,
+    passive : bool = false
 ) -> ptr[mut Window]? {
     startup :: slop_os.startup_block()
     // The typefaces it's drawn with, the program's grants, shared with every GUI program's (decisions/0193, 16f)
@@ -208,6 +211,7 @@ open_on :: fn(
             color = .Srgb,
             title = os.append(&out, string_bytes(title)),
             activation = activation,
+            passive = passive,
         }
     )
     match ask(window, &out) {

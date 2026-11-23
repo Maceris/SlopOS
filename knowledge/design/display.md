@@ -92,7 +92,9 @@ Each is asked for through the powerbox and granted by the user on the trusted pa
 - **The trusted layer**: the powerbox's dialogs (the file chooser, permission prompts), login and the lock screen
   are drawn in a layer above every client's, by those services' own surfaces, and the secure attention key brings it
   forward.
-- Prompts for capture and the microphone stay visible in the trusted layer while the capability is held.
+- While the microphone is held, a passive window of the trusted layer says who holds it, in the screen's corner,
+  never taking the keyboard, with a button that takes it back (`0196`, 17f); a mark on each holding program's
+  windows waits for M18.
 
 ## 6. Text and the UI Library
 

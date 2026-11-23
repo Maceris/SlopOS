@@ -21,8 +21,9 @@ import surface from "../../protocols/surface"
  *   chooses the one it's in; for a file to write, a name typed first, the program's suggestion to start, and "New
  *   file" or Enter in it chooses a new file of that name in it.
  *   An Ask that may be kept offers "Keep for next time".
- * - Debugging one of the session's own programs, or a network connection allowing more than the session's: Allow or
- *   Refuse, with no password, as on the console (decisions/0185, 0188).
+ * - Debugging one of the session's own programs, a network connection allowing more than the session's, or the
+ *   microphone: Allow or Refuse, with no password, as on the console (decisions/0185, 0188, 0196); the microphone
+ *   allowed is shown held until it's gone (microphone.hsc).
  * - What needs the administrator's password (an account, a shutdown or restart, another's program debugged, a trace,
  *   the system's log) or the account service (a public key added or removed, the keys listed): elevation.hsc's.
  *
@@ -161,6 +162,7 @@ take_prompts :: fn(greeter : ptr[mut Greeter]) {
         || asked.kind == .Directory
         || asked.kind == .Debug
         || asked.kind == .Network
+        || asked.kind == .Microphone
         || is_elevation(asked.kind)
     if !shown || asked.kind == .AddKey && greeter.asking.key_line.count == 0 {
         runtime.log_info("the GUI can't ask for %", what_of(&greeter.asking))
@@ -276,6 +278,7 @@ what_of :: fn(asking : ptr[Asking]) -> string {
         case .Trace => "the whole system traced"
         case .SystemLog => "the system's log"
         case .Network => "more of the network"
+        case .Microphone => "the microphone"
         case .AddKey => "a public key added to your account"
         case .RemoveKey => "a public key removed from your account"
         case .ListKeys => "your public keys"
@@ -312,6 +315,9 @@ prompt_frame :: fn(greeter : ptr[mut Greeter]) {
     }
     if asking.kind == .Network && asking.typed.count > 0 {
         _ = gui_kit.label_of(u, string.["Where it would reach: ", text(&asking.typed)], ui.TextStyle.{size = 14})
+    }
+    if asking.kind == .Microphone {
+        _ = ui.label(u, "It could hear what's said here until you take it back.", ui.TextStyle.{size = 14})
     }
     chosen := false
     chosen_path : u8[..]
@@ -407,6 +413,9 @@ prompt_frame :: fn(greeter : ptr[mut Greeter]) {
     }
     if chosen {
         answer(greeter, ui.contents(&chosen_path), new)
+    }
+    else if allowed && asking.kind == .Microphone {
+        answer_microphone(greeter)
     }
     else if allowed {
         answer_allowed(greeter)

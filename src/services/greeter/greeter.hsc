@@ -64,6 +64,8 @@ Greeter :: struct {
      * connections, once the administrator's allowed them; null without one.
      */
     power : os.Channel[power_protocol.Power]?,
+    /** The microphone: the connection grants are made on, who holds them, and the window that says so. */
+    microphone : Microphone,
 }
 
 /**
@@ -90,6 +92,8 @@ main :: fn(
     greeter.power = power
     greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
     greeter.prompts_port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    greeter.microphone.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
+    greeter.microphone.port = cast[slop_os.Port](slop_os.NO_HANDLE)
     accounts_dialer :: accounts_service or_return 2
     dial_port :: os.port_for(startup.budget, accounts_dialer.end) or_return 3
     greeter.accounts_end = (connector.dial[accounts.Accounts](accounts_dialer.end, dial_port) or_return 3).end
@@ -115,6 +119,7 @@ main :: fn(
             }
             case None => {}
         }
+        take_microphone(greeter)
         if greeter.session is_some {
             // Its login window's hidden while the session runs: drawn whole when it's shown again, not before
             greeter.window.due = false

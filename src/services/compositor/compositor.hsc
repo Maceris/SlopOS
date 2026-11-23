@@ -36,6 +36,8 @@ SANS :: #file_data("../../../assets/fonts/NotoSans-Regular.ttf")
 
 /** The identity band's height above each window, in pixels. */
 BAND :: 28
+/** How far a passive window, an indicator, is from the screen's top and right edges, in pixels. */
+PASSIVE_MARGIN : i32 : 16
 /** The band's text's size, in pixels to the em. */
 BAND_TEXT : f32 : 14
 /** The close box's side, at the band's right. */
@@ -170,6 +172,11 @@ Window :: struct {
     submitted : bool,
     /** Whether it's in the trusted layer, above every other client's, without a band. */
     trusted : bool,
+    /**
+     * Whether it's a trusted window that's passive, an indicator: never focused, and not keeping other windows from
+     * input while it's shown (WindowSpec's passive).
+     */
+    passive : bool,
     /**
      * Whether it's been shown before, so showing it again doesn't take focus: hidden and shown again, a client's
      * window could otherwise take the keyboard, and what the user types elsewhere, whenever it liked.
@@ -832,9 +839,15 @@ create_window :: fn(
         width = spec.width,
         height = spec.height,
         trusted = state.trusted,
+        passive = state.trusted && spec.passive,
         activated_at = took_token(compositor, spec.activation),
     }
-    if made.trusted {
+    if made.passive {
+        // In the top right corner, out of the way, above everything
+        made.x = cast[i32](compositor.info.width) - cast[i32](spec.width) - PASSIVE_MARGIN
+        made.y = PASSIVE_MARGIN
+    }
+    else if made.trusted {
         // Centred, above everything
         made.x = (cast[i32](compositor.info.width) - cast[i32](spec.width)) / 2
         made.y = (cast[i32](compositor.info.height) - cast[i32](spec.height)) / 2
@@ -1048,7 +1061,10 @@ submit :: fn(compositor : ptr[mut Compositor], client : usize, submission : surf
             || compositor.windows[compositor.focus].buffer == 0
         now :: slop_os.clock_monotonic() or_else 0
         activated :: window.activated_at != 0 && now - window.activated_at <= TOKEN_LIFE
-        if window.trusted || (!window.shown_before && (activated || nothing_focused)) {
+        if window.passive {
+            // An indicator: shown, never focused
+        }
+        else if window.trusted || (!window.shown_before && (activated || nothing_focused)) {
             focus_window(compositor, index)
         }
         else if !window.shown_before {
@@ -1072,7 +1088,10 @@ focus_top_shown :: fn(compositor : ptr[mut Compositor]) {
             continue
         }
         candidate :: compositor.order[at]
-        if candidate < MAX_WINDOWS && compositor.windows[candidate].used && compositor.windows[candidate].buffer != 0 {
+        if candidate < MAX_WINDOWS
+            && compositor.windows[candidate].used
+            && compositor.windows[candidate].buffer != 0
+            && !compositor.windows[candidate].passive {
             focus_window(compositor, candidate)
             return void
         }
@@ -1172,7 +1191,7 @@ frame_of :: fn(window : ptr[Window]) -> canvas.Rect {
     return if canvas.is_empty(band) { content_of(window) } else { canvas.union_of(band, content_of(window)) }
 }
 
-/** The trusted layer's topmost window shown, or NO_WINDOW when it shows none. */
+/** The trusted layer's topmost window shown that isn't passive, or NO_WINDOW when it shows none. */
 trusted_top :: fn(compositor : ptr[Compositor]) -> usize {
     found := NO_WINDOW
     for i in cast[usize](0)..<MAX_WINDOWS {
@@ -1181,6 +1200,7 @@ trusted_top :: fn(compositor : ptr[Compositor]) -> usize {
             if index < MAX_WINDOWS
                 && compositor.windows[index].used
                 && compositor.windows[index].trusted
+                && !compositor.windows[index].passive
                 && compositor.windows[index].buffer != 0 {
                 found = index
             }
@@ -1435,7 +1455,10 @@ press :: fn(compositor : ptr[mut Compositor], button : u16, pressed : bool) {
     if index >= MAX_WINDOWS {
         return void
     }
-    focus_window(compositor, index)
+    // A passive window takes the click, but not the focus, which stays where the user's typing
+    if !compositor.windows[index].passive {
+        focus_window(compositor, index)
+    }
     window :: &compositor.windows[index]
     if inside(close_of(window), compositor.pointer_x, compositor.pointer_y) {
         queue(compositor, window.client, surface.event_of(.CloseRequested, window.surface), "")

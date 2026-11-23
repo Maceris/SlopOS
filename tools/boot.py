@@ -1203,7 +1203,8 @@ class GuiLoginTest(CompositorTest):
     launcher's find field, and its form (15g) filled in and run, in a terminal window closed by a key once it's done;
     another, test_file_tree, makes a typed file with a check box, which the viewer shows by its path before Escape
     closes it; test_kept_grant's powerbox asks for a new file, chosen in the greeter's prompt in the trusted layer;
-    then the terminal is found the same way and started, keys run in it, which lists the user's keys at once, and
+    then the terminal is found the same way and started, keys run in it, which lists the user's keys at once; capture,
+    allowed the microphone in the prompt, which the microphone window's Take it back, clicked, takes back (17f); and
     shut-down, which the administrator allows in the prompt, a wrong password refused first (16e): the system shuts
     itself down.
 
@@ -1215,6 +1216,9 @@ class GuiLoginTest(CompositorTest):
     SHOWN = "[user] greeter: showing the login window"
     SET_UP = "[user] terminal: first-boot setup ended"
     LISTED = "[user] launcher: lists "
+    # The greeter's microphone window's width, and how far the compositor puts it from the top and right edges
+    MICROPHONE_WIDTH = 300
+    PASSIVE_MARGIN = 16
 
     def __init__(self, serial: Path, screenshot: Path, name: str, password: str):
         super().__init__(serial, screenshot)
@@ -1350,6 +1354,30 @@ class GuiLoginTest(CompositorTest):
             since = self.mark()
             self.type_line("keys")
             if not self.after(since, "[user] greeter: asked by keys for your public keys", "listing the keys"):
+                return
+            # The microphone (decisions/0196, 17f): capture asks for it, Allow in the prompt; the microphone window, in the
+            # trusted layer's top right corner and never focused, says who holds it, and a click on its Take it back,
+            # its first button, takes it back
+            since = self.mark()
+            self.type_line("capture 30 note.wav")
+            if not self.after(since, "[user] greeter: asked by capture for the microphone", "asking for the microphone") \
+                    or not self.after(since, "[user] compositor: focused 'Asked'", "the prompt's window focused") \
+                    or not self.after(since, "[user] greeter: the prompt takes input", "the prompt taking input"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.press("ret")
+            if not self.after(since, "[user] greeter: allowed capture the microphone", "allowing the microphone") \
+                    or not self.after(since, "[user] compositor: window 'Microphone' shown", "showing who holds it") \
+                    or not self.after(since, "[user] audio: recording", "recording"):
+                return
+            since = self.mark()
+            self.point(1280 - self.MICROPHONE_WIDTH - self.PASSIVE_MARGIN + 30, self.PASSIVE_MARGIN + 22)
+            self.button(True)
+            self.button(False)
+            if not self.after(since, "[user] greeter: microphone: the user took it back from capture", "taking it back") \
+                    or not self.after(since, "[user] greeter: microphone: capture no longer holds it", "its grant gone") \
+                    or not self.after(since, "[user] audio: recorded ", "the recording stopped"):
                 return
             # An account, which the administrator allows in the prompt (16e): its recovery code shown, then Done
             since = self.mark()

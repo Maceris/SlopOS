@@ -134,6 +134,12 @@ WindowSpec :: struct {
      * wanting attention, until the user chooses it (decisions/0193, 16d).
      */
     activation : u64,
+    /**
+     * For a trusted client's window only, as an indicator's (decisions/0196, 17f): drawn in the trusted layer, in the
+     * screen's top right corner, but never focused, and not keeping other windows from the keyboard and pointer as
+     * the trusted layer's windows do; a click on it still goes to it. Ignored for any other client's window.
+     */
+    passive : bool,
 }
 
 /** A new subsurface: a surface drawn over its parent, at an offset, moving with it. */

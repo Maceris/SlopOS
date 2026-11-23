@@ -1,0 +1,341 @@
+package greeter
+
+import runtime from "base:runtime"
+import os from "std:os"
+import slop_os from "std:os/slop_os"
+import text_buffer from "std:text_buffer"
+import ui from "std:ui"
+import gui_kit from "../../gui_kit"
+import microphone as microphone_protocol from "../../protocols/microphone"
+import power as power_protocol from "../../protocols/power"
+import prompt from "../../protocols/prompt"
+import sound from "../../protocols/sound"
+import surface from "../../protocols/surface"
+
+/*
+ * The microphone in the GUI's trusted layer (decisions/0196, 17f): once the user allows a program the microphone in
+ * the prompt, the greeter has the audio service make a grant, through a microphone connection the supervisor makes for
+ * it (power's MicrophoneConnection), and answers with the grant's sound connection. While any grant's held, a passive
+ * window of the trusted layer, in the screen's top right corner, says who holds it, never taking the keyboard, and its
+ * "Take it back" takes every grant back, the audio service closing each one's connection. A grant's gone once the
+ * program lets it go, or it's taken back, which the audio service says (WaitReleased). A mark on each holding
+ * program's windows waits for M18, which knows whose windows are whose.
+ */
+
+/** The microphone window's width, in pixels. */
+MICROPHONE_WIDTH : u32 : 300
+/** Its height. */
+MICROPHONE_HEIGHT : u32 : 84
+/** The most grants held at once; another's refused. */
+MAX_HOLDERS :: 4
+/** The most bytes of a holder's name kept. */
+HOLDER_NAME_BYTES :: 32
+
+/** A grant of the microphone, held by a program. */
+Holder :: struct {
+    /** The grant's id, as the audio service gave it. */
+    id : u32,
+    /** The program's name, as its powerbox gave it, the first count bytes; cut at HOLDER_NAME_BYTES. */
+    name : u8[HOLDER_NAME_BYTES],
+    count : usize,
+}
+
+/** The microphone's state in the GUI. */
+Microphone :: struct {
+    /** The microphone connection to the audio service; NO_HANDLE until it's first needed. */
+    end : slop_os.Channel,
+    /** A port bound to end, waited on for its answers. */
+    port : slop_os.Port,
+    /** The grants held, the first count of them. */
+    holders : Holder[MAX_HOLDERS],
+    count : usize,
+    /** The window that says who holds it, passive, in the trusted layer; null until it's first needed. */
+    window : ptr[mut gui_kit.Window]?,
+}
+
+/**
+ * The microphone connection, asked of the supervisor the first time, and again once it's gone.
+ *
+ * @param greeter The greeter, whose power connection is asked; the connection's kept in its microphone state.
+ * @return Its end; null without a power connection or an audio service.
+ */
+microphone_end :: fn(greeter : ptr[mut Greeter]) -> slop_os.Channel? {
+    state :: &greeter.microphone
+    if cast[slop_os.Handle](state.end) != slop_os.NO_HANDLE {
+        return state.end
+    }
+    connection :: greeter.power or_return null
+    port :: os.port_for(slop_os.startup_block().budget, connection.end) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    os.begin[power_protocol.Request](&out)^ = .MicrophoneConnection
+    if power_protocol.send_request(connection.end, port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    match power_protocol.receive_response(connection.end, port, &into, true) {
+        case Received => {}
+        case _ => return null
+    }
+    given :: match os.message_of[power_protocol.Response](&into)^ {
+        case MicrophoneConnection(made) => made
+        case _ => return null
+    }
+    made_port :: os.port_for(slop_os.startup_block().budget, given.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    if cast[slop_os.Handle](made_port) == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
+        return null
+    }
+    state.end = given.end
+    state.port = made_port
+    return given.end
+}
+
+/**
+ * The user allowed the microphone in the prompt: have the audio service make a grant, answer with its connection, or
+ * Refused if it couldn't be made, and let go of what was asked.
+ *
+ * @param greeter The greeter, the microphone asked for.
+ */
+answer_microphone :: fn(greeter : ptr[mut Greeter]) {
+    out := os.Outgoing.{}
+    response :: os.begin[prompt.Response](&out)
+    match grant_microphone(greeter, ui.contents(&greeter.asking.requester)) {
+        case Some(connection) => {
+            response^ = .MicrophoneGranted(connection)
+            runtime.log_info("allowed % the microphone", text(&greeter.asking.requester))
+        }
+        case None => {
+            response^ = .Refused
+            runtime.log_info("couldn't give % the microphone", text(&greeter.asking.requester))
+        }
+    }
+    _ = prompt.send_response(greeter.prompts, greeter.prompts_port, &out)
+    drop_asking(greeter)
+}
+
+/**
+ * Have the audio service make a grant of the microphone, waiting for the answer, and show it held.
+ *
+ * @param greeter The greeter; the grant's kept among its holders, and a WaitReleased sent for it.
+ * @param requester The program's name, as its powerbox gave it.
+ * @return The grant's sound connection, for the program; null without a microphone connection, with MAX_HOLDERS held,
+ *     or if the audio service refused.
+ */
+grant_microphone :: fn(greeter : ptr[mut Greeter], requester : u8[]) -> os.Channel[sound.Sound]? {
+    state :: &greeter.microphone
+    if state.count >= MAX_HOLDERS {
+        return null
+    }
+    end :: microphone_end(greeter) or_return null
+    out := os.Outgoing.{}
+    os.begin[microphone_protocol.Request](&out)^ = .Grant
+    if microphone_protocol.send_request(end, state.port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    found : microphone_protocol.Granted? = null
+    loop {
+        match microphone_protocol.receive_response(end, state.port, &into, true) {
+            case Received => {}
+            case _ => {
+                microphone_gone(greeter)
+                return null
+            }
+        }
+        // A grant let go meanwhile is said first
+        match os.message_of[microphone_protocol.Response](&into)^ {
+            case Granted(made) => found = made
+            case Released(id) => released(greeter, id)
+            case Revoked => {}
+            case _ => return null
+        }
+    }
+    while found is_none
+    granted :: found or_return null
+    holder := Holder.{id = granted.id}
+    for byte, i in requester {
+        if i < holder.name.count {
+            holder.name[i] = byte
+            holder.count = i + 1
+        }
+    }
+    if state.count < state.holders.count {
+        state.holders[state.count] = holder
+        state.count += 1
+    }
+    watching := os.Outgoing.{}
+    os.begin[microphone_protocol.Request](&watching)^ = .WaitReleased(granted.id)
+    _ = microphone_protocol.send_request(end, state.port, &watching)
+    runtime.log_info("microphone: % holds it", name_text(&holder))
+    show_microphone(greeter)
+    return granted.end
+}
+
+/**
+ * Take what the audio service has said on the microphone connection: each grant gone is shown gone. If the connection's
+ * gone, so is every grant, closed with it.
+ *
+ * @param greeter The greeter, from its loop.
+ */
+take_microphone :: fn(greeter : ptr[mut Greeter]) {
+    state :: &greeter.microphone
+    if cast[slop_os.Handle](state.end) == slop_os.NO_HANDLE {
+        return void
+    }
+    into := os.Incoming.{}
+    loop {
+        match microphone_protocol.receive_response(state.end, state.port, &into, false) {
+            case Received => {}
+            case Empty => break
+            case _ => {
+                microphone_gone(greeter)
+                break
+            }
+        }
+        match os.message_of[microphone_protocol.Response](&into)^ {
+            case Released(id) => released(greeter, id)
+            case _ => {}
+        }
+    }
+    match state.window {
+        case Some(window) => {
+            _ = gui_kit.take(window)
+            if state.count > 0 && window.due {
+                microphone_frame(greeter, window)
+            }
+        }
+        case None => {}
+    }
+}
+
+/**
+ * The microphone connection's gone: closed, and every grant shown gone, as the audio service closes them with it.
+ *
+ * @param greeter The greeter.
+ */
+microphone_gone :: fn(greeter : ptr[mut Greeter]) {
+    state :: &greeter.microphone
+    if cast[slop_os.Handle](state.end) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](state.port))
+        _ = slop_os.handle_close(cast[slop_os.Handle](state.end))
+        state.end = cast[slop_os.Channel](slop_os.NO_HANDLE)
+        state.port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    }
+    if state.count > 0 {
+        state.count = 0
+        runtime.log_info("microphone: the audio service is gone, and every grant with it")
+        show_microphone(greeter)
+    }
+}
+
+/**
+ * A grant's gone: no longer shown held.
+ *
+ * @param greeter The greeter.
+ * @param id The grant's id.
+ */
+released :: fn(greeter : ptr[mut Greeter], id : u32) {
+    state :: &greeter.microphone
+    for i in 0..<state.count {
+        if i >= state.holders.count || state.holders[i].id != id {
+            continue
+        }
+        runtime.log_info("microphone: % no longer holds it", name_text(&state.holders[i]))
+        for k in i..<state.count {
+            next :: k + 1
+            if next < state.count && k < state.holders.count && next < state.holders.count {
+                state.holders[k] = state.holders[next]
+            }
+        }
+        state.count -= 1
+        show_microphone(greeter)
+        return void
+    }
+}
+
+/**
+ * Show the microphone window while a grant's held, made the first time, its next frame due; hide it once none is.
+ *
+ * @param greeter The greeter.
+ */
+show_microphone :: fn(greeter : ptr[mut Greeter]) {
+    state :: &greeter.microphone
+    if state.count == 0 {
+        match state.window {
+            case Some(window) => gui_kit.hide(window)
+            case None => {}
+        }
+        return void
+    }
+    if state.window == null {
+        budget :: slop_os.startup_block().budget
+        // Its own connection, made from the trusted one, so it's in the trusted layer too
+        match surface.connect(greeter.window.end, greeter.window.port, budget) {
+            case Some(given) => state.window = gui_kit.open_on(given, "Microphone", MICROPHONE_WIDTH, MICROPHONE_HEIGHT,
+                passive = true)
+            case None => {}
+        }
+    }
+    match state.window {
+        case Some(window) => window.due = true
+        case None => runtime.log_info("microphone: its window couldn't be made")
+    }
+}
+
+/**
+ * A frame of the microphone window: "Take it back" first, then who holds it; a click on it takes every grant back.
+ *
+ * @param greeter The greeter, a grant held.
+ * @param window The microphone window.
+ */
+microphone_frame :: fn(greeter : ptr[mut Greeter], window : ptr[mut gui_kit.Window]) {
+    state :: &greeter.microphone
+    u :: gui_kit.begin(window)
+    _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 10, padding_y = 10, gap = 6})
+    taken :: ui.button(u, "Take it back")
+    storage : u8[200]
+    line := text_buffer.make(storage)
+    text_buffer.append(&line, "The microphone: ")
+    for &holder, i in state.holders {
+        if i >= state.count {
+            break
+        }
+        if i > 0 {
+            text_buffer.append(&line, ", ")
+        }
+        text_buffer.append(&line, name_text(holder))
+    }
+    _ = ui.label(u, text_buffer.as_string(&line), ui.TextStyle.{size = 14})
+    ui.close(u)
+    _ = gui_kit.finish(window)
+    if taken {
+        take_back_microphone(greeter)
+    }
+}
+
+/**
+ * Take every grant back: the audio service closes each one's connection, and says each gone (take_microphone).
+ *
+ * @param greeter The greeter.
+ */
+take_back_microphone :: fn(greeter : ptr[mut Greeter]) {
+    state :: &greeter.microphone
+    if cast[slop_os.Handle](state.end) == slop_os.NO_HANDLE {
+        return void
+    }
+    for &holder, i in state.holders {
+        if i >= state.count {
+            break
+        }
+        runtime.log_info("microphone: the user took it back from %", name_text(holder))
+        out := os.Outgoing.{}
+        os.begin[microphone_protocol.Request](&out)^ = .Revoke(holder.id)
+        _ = microphone_protocol.send_request(state.end, state.port, &out)
+    }
+}
+
+/** A holder's name as text. */
+name_text :: fn(holder : ptr[Holder]) -> string {
+    return if holder.count > 0 && holder.count <= holder.name.count { string_of(&holder.name[0], holder.count) } else { "" }
+}
