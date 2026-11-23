@@ -528,6 +528,61 @@ text_from :: fn(bytes : u8[]) -> string {
 // ---- Finding connections (programs.Request.Connect)
 
 /**
+ * Run test_finders (decisions/0193, 16b): a finding connection made for a GUI program, which can't name a powerbox's
+ * connection, asks for one under another program's name, and is refused. Logs what it found.
+ *
+ * @param sessions The session manager, whose finders the connection's end joins, and are served once.
+ * @param number The session it's for, which has a powerbox.
+ * @param into Where requests are received, reused.
+ */
+check_finders :: fn(sessions : ptr[mut Manager], number : u32, into : ptr[mut os.Incoming]) {
+    asking :: match finding_connection(sessions, number) {
+        case Some(made) => made
+        case None => {
+            runtime.log_info("test_finders: no finding connection could be made")
+            return void
+        }
+    }
+    defer slop_os.handle_close(cast[slop_os.Handle](asking.end))
+    port :: os.port_for(slop_os.startup_block().budget, asking.end) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Powerbox(os.append(&out, string_bytes("files")))
+    if programs.send_request(asking.end, port, &out) is_some {
+        runtime.log_info("test_finders: the request couldn't be sent")
+        return void
+    }
+    serve_finders(sessions, into)
+    answer := os.Incoming.{}
+    // Answered as serve_finders served it, so it's there now
+    match programs.receive_response(asking.end, port, &answer, false) {
+        case Received => {}
+        case Empty => {
+            runtime.log_info("test_finders: no answer came")
+            return void
+        }
+        case _ => {
+            runtime.log_info("test_finders: the answer couldn't be taken")
+            return void
+        }
+    }
+    match os.message_of[programs.Response](&answer)^ {
+        case Refused(why) => if why == .NotAllowed {
+            runtime.log_info("test_finders: a GUI program's finding connection was refused a powerbox's connection as files")
+        }
+        else {
+            runtime.log_info("test_finders: refused, but not as not allowed")
+        }
+        case PowerboxGiven(given) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
+            runtime.log_info("test_finders: a GUI program's finding connection was given a powerbox's connection as files")
+        }
+        case _ => runtime.log_info("test_finders: another answer came")
+    }
+}
+
+/**
  * Take another connection to a session that only finds programs, bound to the session manager's port.
  *
  * @param sessions The session manager, whose finders take it.
@@ -535,6 +590,8 @@ text_from :: fn(bytes : u8[]) -> string {
  * @param end The connection's end, which moves to the session manager; closed if there's no room, or it can't be bound.
  * @param powerbox Whether it's the session's powerbox's, which Attach and Locate are taken on.
  * @param shell Whether it's a GUI session's shell's, which answers what the session's own does of its session.
+ * @param names Whether it may have the powerbox serve a connection under a name it gives: a shell's, or one made for a
+ *     script's shell by a connection that may (Finder.names).
  * @return Whether it was taken; end's closed if not, as when its session has FINDERS_PER_SESSION already.
  */
 add_finder :: fn(
@@ -542,7 +599,8 @@ add_finder :: fn(
     number : u32,
     end : slop_os.Channel,
     powerbox : bool = false,
-    shell : bool = false
+    shell : bool = false,
+    names : bool = false
 ) -> bool {
     /*
      * A session's programs can't take every place, each Connect making another, and leave the other sessions' shells
@@ -572,7 +630,7 @@ add_finder :: fn(
         ) is_error {
             break
         }
-        finder^ = Finder.{in_use = true, session = number, end = end, powerbox = powerbox, shell = shell}
+        finder^ = Finder.{in_use = true, session = number, end = end, powerbox = powerbox, shell = shell, names = names}
         return true
     }
     _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -631,7 +689,9 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
-                    _ = add_finder(sessions, sessions.finders[i].session, connection.end)
+                    // Naming passes on, from a shell's to its script's shell's
+                    names :: sessions.finders[i].names
+                    _ = add_finder(sessions, sessions.finders[i].session, connection.end, names = names)
                     continue
                 }
                 // Only the session's own connection starts programs; the home that came is closed
@@ -639,9 +699,17 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     _ = slop_os.handle_close(cast[slop_os.Handle](starting.home.end))
                     response^ = .Refused(.NotAllowed)
                 }
-                case Powerbox(
-                    name
-                ) => response^ = powerbox_answer(sessions, sessions.finders[i].session, text_from(os.items(into, name)))
+                // Only a shell's names a powerbox's connection (decisions/0193, 16b)
+                case Powerbox(name) => {
+                    asked :: text_from(os.items(into, name))
+                    if sessions.finders[i].names {
+                        response^ = powerbox_answer(sessions, sessions.finders[i].session, asked)
+                    }
+                    else {
+                        runtime.log_info("refused a powerbox's connection named % to a connection that can't name one", asked)
+                        response^ = .Refused(.NotAllowed)
+                    }
+                }
                 case Locate(
                     name
                 ) => response^ = if sessions.finders[i].powerbox {

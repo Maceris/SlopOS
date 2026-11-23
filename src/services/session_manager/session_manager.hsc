@@ -385,6 +385,12 @@ Finder :: struct {
      * (own_session_answer), but doesn't start programs.
      */
     shell : bool,
+    /**
+     * Whether it may have the powerbox serve a connection under a name it gives (Powerbox, decisions/0193, 16b): a
+     * shell's, or one a shell made for a script's shell, Connect on one that may passing it on. A GUI program's may
+     * not: it could otherwise ask as any program, under name after name.
+     */
+    names : bool,
 }
 
 /** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
@@ -431,6 +437,10 @@ Manager :: struct {
     list_port : slop_os.Port,
     /** Whether test_installations is still to come, in the first session with a user. */
     test_installations : bool,
+    /** Whether test_finders is still to come, in the first session with a user (decisions/0193, 16b). */
+    test_finders : bool,
+    /** The session test_finders checks in once it's been answered for, or NOWHERE. */
+    checking_finders : usize,
     /** The session test_installations checks once it's been answered for, or NOWHERE. */
     checking : usize,
     /** The session the console shows, or session.NO_SESSION. */
@@ -568,6 +578,7 @@ main :: fn(
     sessions.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
     sessions.echo_module = echo_module
     sessions.checking = NOWHERE
+    sessions.checking_finders = NOWHERE
     sessions.events_end = NONE
     sessions.shown = session.NO_SESSION
     sessions.ballast = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
@@ -614,6 +625,7 @@ main :: fn(
         case Some(memory) => {
             text :: service_kit.text_of(block, memory) or_else ""
             sessions.test_installations = service_kit.has_word(text, "test_installations")
+            sessions.test_finders = service_kit.has_word(text, "test_finders")
             sessions.test_pressure = service_kit.has_word(text, "test_pressure")
             sessions.test_session_cpu = service_kit.has_word(text, "test_session_cpu")
             sessions.use_echo = service_kit.has_word(text, "use_echo")
@@ -659,6 +671,12 @@ main :: fn(
         if sessions.checking != NOWHERE {
             check_installations(sessions, cast[u32](sessions.checking))
             sessions.checking = NOWHERE
+            continue
+        }
+        // test_finders, once the session it's for has been answered for
+        if sessions.checking_finders != NOWHERE {
+            check_finders(sessions, cast[u32](sessions.checking_finders), &into)
+            sessions.checking_finders = NOWHERE
             continue
         }
         // Asked to stop, as the system shuts down (decisions/0182): what it was doing is done
@@ -1267,6 +1285,10 @@ started :: fn(sessions : ptr[mut Manager], number : usize, user : u8[]) -> sessi
         sessions.test_installations = false
         sessions.checking = number
     }
+    if sessions.test_finders && user.count > 0 {
+        sessions.test_finders = false
+        sessions.checking_finders = number
+    }
     return .Started(number_of(sessions, number))
 }
 
@@ -1750,7 +1772,7 @@ launch_shell :: fn(
  */
 shell_connection :: fn(sessions : ptr[mut Manager], number : u32) -> os.Channel[programs.Programs]? {
     pair :: os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) or_return null
-    if !add_finder(sessions, number, pair.a, shell = true) {
+    if !add_finder(sessions, number, pair.a, shell = true, names = true) {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return null
     }
@@ -1848,7 +1870,8 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
                 case Connect(connection) => {
-                    _ = add_finder(sessions, cast[u32](number), connection.end)
+                    // For a script's shell, as the shell's own connection's: it names its programs' powerbox connections
+                    _ = add_finder(sessions, cast[u32](number), connection.end, names = true)
                     continue
                 }
                 case Start(starting) => response^ = start_program(sessions, cast[u32](number), starting, into)

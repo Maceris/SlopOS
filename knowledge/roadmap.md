@@ -164,7 +164,7 @@ proposed in each milestone's design note. Each stage gets an "as built" record a
                                               │                                              │
                                      B bootloader (boot counting)       P power ◄────────────┤
                                                                                              ▼
-                  M17 audio ◄─ M16 GUI trust ◄─ M15 GUI ◄─ M14 remote ◄─ M13 network ◄─ M12 debugging
+  M18 launch identity ◄─ M17 audio ◄─ M16 GUI trust ◄─ M15 GUI ◄─ M14 remote ◄─ M13 network ◄─ M12 debugging
                                                                                          H hardening
 ```
 
@@ -583,6 +583,17 @@ Planned 2026-11-21 (`decisions/0193`), with the owner, after M15 and before audi
 - The soft real-time goal (`design/scheduling.md`) measured: no underruns with the CPUs saturated by other budgets.
 - The microphone as a powerbox capability, with an indicator on the trusted path.
 
+## M18 — Launch Identity (L3, L6)
+
+- The process manager makes a launched program's process; a launcher can watch and end it, not steer it.
+- Intercepts of a child on the user's say: crash reports and profiles that can't change it, a debugger through the
+  powerbox.
+- Handles that only move, and a powerbox connection named by what its holder runs, proved after the load.
+- The powerbox's limits and the identity band by that name; a security review.
+
+Planned 2026-11-22 (`decisions/0195`), with the owner, when M16's 16b found naming by launch needs the launcher not to
+control what it starts; M16 trusts shells meanwhile.
+
 ## Later
 
 - **RISC-V**, the third architecture (`decisions/0022`), after LLVM is rebuilt with its backend.
@@ -627,5 +638,6 @@ Planned 2026-11-21 (`decisions/0193`), with the owner, after M15 and before audi
 | Linear Algebra | decided 2026-11-10 (`decisions/0189`), scheduled 2026-11-11 between M13's 13c and 13e: L1 to L4; done 2026-11-11: float intrinsics, std/math and correctly rounded parsing (L1), arrays as vectors with swizzles (L2), matrices (L3), std/linear_algebra (L4); L5, f32's own, vector and fast float math (`decisions/0190`), 2026-11-11 |
 | M14 | built 2026-11-13 (`decisions/0191`), 14a to 14g: SHA-3, ML-KEM-768 and OpenSSH's ChaCha20-Poly1305; `std/ssh`, tested against OpenSSH; accounts' public keys and `keys`; the SSH service, its sessions' terminals served from `remote_terminal`; SFTP and scp; `ssh` and `ssh_keygen`; a security review, its high finding fixed. Its full suites passed 2026-11-13; what the review left, and three changes from the plan, for the owner (0191's As Built) |
 | M15 | built 2026-11-21 (`decisions/0192`), 15a to 15h: std/canvas, std/fonts and std/ui (immediate mode, a tree each frame); virtio-gpu and the firmware framebuffer as displays; the compositor with floating windows, the identity band and the trusted layer; the greeter, the powerbox's prompts in the trusted layer; the terminal window, launcher, typed-data viewer and forms from manifests; an input-to-photon latency test; a security review, its high findings fixed. Its full suites passed 2026-11-21; what the review left for the owner (0192's As Built: 15h) |
-| M16 | built 2026-11-21 (`decisions/0193`), 16a to 16g, but for 16b's powerbox names, which wait on the owner's choice: Hemera's saturating casts, branches typed together and `-O0` builds; the identity band naming the program; the session manager and the powerbox no longer waiting on each other; the compositor's places capped and kept for the trusted, and activation tokens; prompts that ignore input at first and are rate-limited, per program and per session; the administrator asked in the GUI; shared fonts and typed paste; a security review, nothing high. Its full suites passed 2026-11-21, the session's ask credit fixed on the way |
+| M16 | built 2026-11-22 (`decisions/0193`), 16a to 16g: Hemera's saturating casts, branches typed together and `-O0` builds; the identity band naming the program; the session manager and the powerbox no longer waiting on each other; the compositor's places capped and kept for the trusted, and activation tokens; prompts that ignore input at first and are rate-limited, per program and per session; the administrator asked in the GUI; shared fonts and typed paste; a security review, nothing high. only shells naming a powerbox's connections, the kernel's handle_same; its full suites passed 2026-11-21, the session's ask credit fixed on the way; naming by launch is M18 |
 | M17 | audio, planned 2026-10-24 as M16 (*After M7*, above; `decisions/0072`), renumbered when M16 was planned; its stages proposed until it starts; not started |
+| M18 | launch identity, planned 2026-11-22 (`decisions/0195`), with the owner, from 16b: the process manager making launched processes, intercepts on the user's say, move-only handles and powerbox connections named by what their holder runs; its stages proposed until it starts; not started |

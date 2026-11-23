@@ -1,7 +1,7 @@
 # 0193: M16, Trust in the GUI, Planned
 
-Status: accepted, chosen with the project's owner (2026-11-21); built 2026-11-21 but for 16b's powerbox names, which
-wait on the owner's choice
+Status: accepted, chosen with the project's owner (2026-11-21); built 2026-11-22, 16b as the simpler fix, its full fix
+M18 (`0195`)
 Date: 2026-11-21
 Related: `0192` (M15, its security review and *Settled after M15*), `0181` (the powerbox's names), `0185` (debugging
 and elevation), `0191` (the SSH service's asynchronous requests), `0186` (H, the fuzzers), `../design/display.md`
@@ -120,6 +120,22 @@ end.
   programs (`Start`), or the kernel identifies objects and the process manager says what it loaded where. The owner
   chose the second (2026-11-21): a system call saying whether two handles are one object, and the process manager
   recording what it loaded into each process; the rate limit to be keyed by it too.
+
+## As Built: 16b, the powerbox's names
+- **`handle_same`**, the kernel's: whether two handles in the caller's table are to one object, any kinds, no right
+  needed (std's `slop_os.handle_same`, appended to the system calls). `test_memory` checks it.
+- **Working the owner's choice through found it doesn't hold alone** (2026-11-21): a name settled after the load needs
+  proof the child alone holds its connection, as a launcher could copy the handle first, and the launcher keeps the
+  child's process with every right, so it can intercept and steer the child named for what it runs. With the owner
+  (2026-11-22): the full fix is a milestone of its own, M18 (`0195`), and 16b does the simpler one now.
+- **Only shells name a powerbox's connections.** The session's own connection, a GUI shell's (`Finder.shell`), and the
+  finding connections they make for their scripts' shells (`Connect`, passing on `Finder.names`) may ask `Powerbox`
+  under a name; a GUI program's finding connection, the launcher's, a terminal window's, the viewer's, is refused,
+  and it's logged. So each program has the one connection it was started with, named by the shell from the program
+  it found, and can't ask under name after name, which the powerbox's limits, per name and the session's (16e, 16g),
+  now count honestly; shells are trusted, as they control what they start.
+- **Tests**: `test_finders`, in the installations' boot test, has a GUI program's kind of finding connection ask for a
+  connection as files, which is refused. The scripts', chooser's, grants' and GUI login's tests pass as they did.
 
 ## As Built so far: 16c
 - **The session manager and the powerbox stop waiting on each other**: the session manager sends `Serve` and gives the

@@ -1549,8 +1549,9 @@ TESTS = [
     # Installations run in sessions (decisions/0153): the administrator's, once they've logged in, runs the counter
     # with its data in their home and its settings theirs, and the session manager updates it, uninstalls it and
     # installs it again, then makes it crash, which it reports (decisions/0183)
+    # And test_finders (decisions/0193, 16b): a GUI program's finding connection can't name a powerbox's connection
     ("runs installations in a session with their data and settings, updates one keeping its data, uninstalls it, and reports its crash", 7,
-     with_before_qemu([argument.replace("test_services", "test_services test_installations test_settle=30") for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
+     with_before_qemu([argument.replace("test_services", "test_services test_installations test_finders test_settle=30") for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in",
@@ -1561,7 +1562,9 @@ TESTS = [
         "--expect-line=[user] sessions: test_installations: an update to list's bundle refused, updated to counter_next and run, "
         "uninstalled whole, installed again and run",
         "--expect-line=[user] sessions: counter crashed: execute fault",
-        "--expect-line=[user] sessions: test_installations: the counter crashed and ended"])),
+        "--expect-line=[user] sessions: test_installations: the counter crashed and ended",
+        "--expect-line=[user] sessions: refused a powerbox's connection named files to a connection that can't name one",
+        "--expect-line=[user] sessions: test_finders: a GUI program's finding connection was refused a powerbox's connection as files"])),
     # SlopOS's own bootloader (roadmap B2, decisions/0133), which starts the other CPUs
     ("boots a disk through SlopOS's own bootloader, every CPU started", 7, with_before_qemu(BOOT_DISK_BASE, [
         "--expect-line=[info] bootloader: booting generation 1",
