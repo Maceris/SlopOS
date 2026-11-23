@@ -253,5 +253,5 @@ completes test_shell_; then 310 of 310, and 309 of 310), HemeraTest (301 passed)
   as a fault of the boot before's rather than as it expects. Not M17's.
 - **The sealed slopfs fuzz target** ran past its time among the others, its encrypted inputs slow to start, and passed
   alone in its 60 s, finding nothing.
-- Left: the KVM host's floor, until the VM's third core is on (it reports 2 still; a core added in VMware needs the VM
-  powered off and on to take).
+- **The KVM host's floor, gone**: with the VM given 4 cores (rebooted 2026-11-23), the KVM test passed 5 runs of 5
+  alone and its first boot among the others in a fourth full run (309 of 310, the stuck-CPU test again the one).
