@@ -24,6 +24,7 @@ import programs from "../../protocols/programs"
 import surface from "../../protocols/surface"
 import safe_text from "../../safe_text"
 import screen from "../../screen"
+import sound as sound_protocol from "../../protocols/sound"
 
 /** The text's size, in pixels to the em. */
 TEXT_SIZE : f32 : 15
@@ -105,6 +106,7 @@ Term :: struct {
  *     once the shell's ended. Null for a shell that reads lines.
  * @param terminal The terminal it serves, whose other end its shell has.
  * @param activation The token for the gesture that started it, which its window presents to take focus.
+ * @param sound Not used: it plays nothing, and closes it.
  * @return 0 once the shell's ended (or, for a command line, once the window's closed after) or the window's closed; 2
  *     without a compositor or a terminal, or when the window can't be made.
  */
@@ -115,8 +117,14 @@ main :: fn(
     programs : os.Channel[programs.Programs]?,
     open : string?,
     terminal : os.Channel[terminal.Terminal]?,
-    activation : u64?
+    activation : u64?,
+    sound : os.Channel[sound_protocol.Sound]?
 ) -> int {
+    // It plays nothing: its sound connection's let go at once, the audio service's place for it freed
+    match sound {
+        case Some(given) => _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
+        case None => {}
+    }
     term :: runtime.new(Term)
     term.cursor_shown = true
     term.log = log

@@ -9,6 +9,13 @@ import os from "std:os"
 import dir from "std:os/slop_os/dir"
 import schema from "std:schema"
 import strings from "std:strings"
+import audio as pcm from "std:audio"
+import math from "std:math"
+
+/** tone.wav's rate, in frames a second. */
+TONE_RATE : u32 : 16000
+/** tone.wav's frames: half a second. */
+TONE_FRAMES :: 8000
 
 /** A script it makes: its name and its text. */
 Script :: struct {
@@ -59,8 +66,9 @@ TreeError :: union {
  * @param here The shell's directory, given without asking, which they're made beneath.
  * @param reading Whether reading is made too: long.txt, of 60 lines, "line 1" to "line 60"; todo.txt, of three, the
  *     second "TODO: water the plants"; bytes.bin, the 32 bytes 0 to 31; made.value, a typed file of this program's
- *     Made, of 3 files and 1 directory; and Café.txt, its é one code point, for "did you mean" to find from a name
- *     typed in capitals with a combining accent.
+ *     Made, of 3 files and 1 directory; Café.txt, its é one code point, for "did you mean" to find from a name typed
+ *     in capitals with a combining accent; and tone.wav, half a second of 440 Hz at a quarter of full scale, 16 kHz
+ *     mono 16-bit integers, for the viewer to play.
  * @param scripts Whether three scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern
  *     and
  *     a count, says them, lists here and searches it; into.shell, which takes here and into, two directories, and lists
@@ -93,7 +101,7 @@ main :: fn(here : os.Channel[dir.Dir], reading : bool, scripts : bool) -> Result
         if !make_reading(directory) {
             return .Error(.Unwritable(problem))
         }
-        made.files += 5
+        made.files += 6
         made.directories += 1
     }
     if scripts {
@@ -105,6 +113,30 @@ main :: fn(here : os.Channel[dir.Dir], reading : bool, scripts : bool) -> Result
         made.files += cast[u64](SCRIPTS.count)
     }
     return .Ok(made)
+}
+
+/**
+ * Make reading/tone.wav, as main says.
+ *
+ * @param directory The shell's directory.
+ * @return Whether it was written.
+ */
+make_tone :: fn(directory : os.Directory) -> bool {
+    format :: pcm.Format.{sample = .S16, rate = TONE_RATE, channels = 1}
+    samples : f32[TONE_FRAMES]
+    for i in 0..<TONE_FRAMES {
+        samples[i] = cast[f32](0.25 * math.sin(2.0 * math.PI * 440.0 * cast[f64](i) / cast[f64](TONE_RATE)))
+    }
+    data : u8[TONE_FRAMES * 2]
+    if pcm.encode(samples[0..<samples.count], .S16, data[0..<data.count]) != TONE_FRAMES {
+        return false
+    }
+    file : u8[TONE_FRAMES * 2 + pcm.WAV_HEADER_BYTES]
+    written :: pcm.write_wav(format, data[0..<data.count], file[0..<file.count]) or_return false
+    if written == 0 || written > file.count {
+        return false
+    }
+    return os.write_entire_file_in(directory, "reading/tone.wav", string_of(&file[0], written)) is_none
 }
 
 /**
@@ -142,6 +174,9 @@ make_reading :: fn(directory : os.Directory) -> bool {
         bytes[i] = cast[u8](i)
     }
     if os.write_entire_file_in(directory, "reading/bytes.bin", string_of(&bytes[0], bytes.count)) is_some {
+        return false
+    }
+    if !make_tone(directory) {
         return false
     }
     value :: Made.{files = 3, directories = 1}

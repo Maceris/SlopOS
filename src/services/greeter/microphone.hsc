@@ -9,23 +9,31 @@ import gui_kit from "../../gui_kit"
 import microphone as microphone_protocol from "../../protocols/microphone"
 import power as power_protocol from "../../protocols/power"
 import prompt from "../../protocols/prompt"
+import session from "../../protocols/session"
 import sound from "../../protocols/sound"
 import surface from "../../protocols/surface"
 
 /*
- * The microphone in the GUI's trusted layer (decisions/0196, 17f): once the user allows a program the microphone in
- * the prompt, the greeter has the audio service make a grant, through a microphone connection the supervisor makes for
- * it (power's MicrophoneConnection), and answers with the grant's sound connection. While any grant's held, a passive
- * window of the trusted layer, in the screen's top right corner, says who holds it, never taking the keyboard, and its
- * "Take it back" takes every grant back, the audio service closing each one's connection. A grant's gone once the
- * program lets it go, or it's taken back, which the audio service says (WaitReleased). A mark on each holding
- * program's windows waits for M18, which knows whose windows are whose.
+ * Sound in the GUI's trusted layer (decisions/0196, 17f and 17g): the sound window, passive, in the screen's top right
+ * corner, never taking the keyboard, shown while the GUI session runs or the microphone's held.
+ *
+ * The microphone: once the user allows a program it in the prompt, the greeter has the audio service make a grant,
+ * through a microphone connection the supervisor makes for it (power's MicrophoneConnection), and answers with the
+ * grant's sound connection. While any grant's held, the sound window says who holds it, below the volume, and its "Take
+ * it back" takes every grant back, the audio service closing each one's connection. A grant's gone once the program lets it go,
+ * or it's taken back, which the audio service says (WaitReleased). A mark on each holding program's windows waits for
+ * M18, which knows whose windows are whose.
+ *
+ * The session's volume: the sound window's - and + turn it down and up a tenth, the session manager setting it on the
+ * session's sound (session's SetVolume).
  */
 
-/** The microphone window's width, in pixels. */
-MICROPHONE_WIDTH : u32 : 300
-/** Its height. */
-MICROPHONE_HEIGHT : u32 : 84
+/** The sound window's width, in pixels. */
+SOUND_WIDTH : u32 : 300
+/** Its height: the microphone's row and the volume's. */
+SOUND_HEIGHT : u32 : 110
+/** How much - and + change the session's volume by: a tenth of full. */
+VOLUME_STEP : u16 : 100
 /** The most grants held at once; another's refused. */
 MAX_HOLDERS :: 4
 /** The most bytes of a holder's name kept. */
@@ -49,8 +57,10 @@ Microphone :: struct {
     /** The grants held, the first count of them. */
     holders : Holder[MAX_HOLDERS],
     count : usize,
-    /** The window that says who holds it, passive, in the trusted layer; null until it's first needed. */
+    /** The sound window, passive, in the trusted layer; null until it's first needed. */
     window : ptr[mut gui_kit.Window]?,
+    /** The GUI session's volume, as last set: 0 to sound.FULL_VOLUME, full when the session starts. */
+    volume : u16,
 }
 
 /**
@@ -201,7 +211,7 @@ take_microphone :: fn(greeter : ptr[mut Greeter]) {
     match state.window {
         case Some(window) => {
             _ = gui_kit.take(window)
-            if state.count > 0 && window.due {
+            if (state.count > 0 || greeter.session is_some) && window.due {
                 microphone_frame(greeter, window)
             }
         }
@@ -255,13 +265,14 @@ released :: fn(greeter : ptr[mut Greeter], id : u32) {
 }
 
 /**
- * Show the microphone window while a grant's held, made the first time, its next frame due; hide it once none is.
+ * Show the sound window while the GUI session runs or a grant's held, made the first time, its next frame due; hide it
+ * otherwise.
  *
  * @param greeter The greeter.
  */
 show_microphone :: fn(greeter : ptr[mut Greeter]) {
     state :: &greeter.microphone
-    if state.count == 0 {
+    if state.count == 0 && greeter.session is_none {
         match state.window {
             case Some(window) => gui_kit.hide(window)
             case None => {}
@@ -272,28 +283,99 @@ show_microphone :: fn(greeter : ptr[mut Greeter]) {
         budget :: slop_os.startup_block().budget
         // Its own connection, made from the trusted one, so it's in the trusted layer too
         match surface.connect(greeter.window.end, greeter.window.port, budget) {
-            case Some(given) => state.window = gui_kit.open_on(given, "Microphone", MICROPHONE_WIDTH, MICROPHONE_HEIGHT,
-                passive = true)
+            case Some(given) => state.window = gui_kit.open_on(given, "Sound", SOUND_WIDTH, SOUND_HEIGHT, passive = true)
             case None => {}
         }
     }
     match state.window {
         case Some(window) => window.due = true
-        case None => runtime.log_info("microphone: its window couldn't be made")
+        case None => runtime.log_info("the sound window couldn't be made")
     }
 }
 
 /**
- * A frame of the microphone window: "Take it back" first, then who holds it; a click on it takes every grant back.
+ * A frame of the sound window: while the session runs, - and + and its volume, first, so they stay put; then, while a
+ * grant's held, "Take it back" and who holds it, a click on it taking every grant back.
  *
- * @param greeter The greeter, a grant held.
- * @param window The microphone window.
+ * @param greeter The greeter.
+ * @param window The sound window.
  */
 microphone_frame :: fn(greeter : ptr[mut Greeter], window : ptr[mut gui_kit.Window]) {
     state :: &greeter.microphone
     u :: gui_kit.begin(window)
     _ = ui.open(u, "body", ui.Box.{width = ui.grow(), height = ui.grow(), padding_x = 10, padding_y = 10, gap = 6})
-    taken :: ui.button(u, "Take it back")
+    quieter := false
+    louder := false
+    if greeter.session is_some {
+        _ = ui.open(u, "volume", ui.Box.{direction = .Row, gap = 6})
+        quieter = ui.button(u, "-")
+        louder = ui.button(u, "+")
+        storage : u8[40]
+        line := text_buffer.make(storage)
+        text_buffer.append(&line, "Volume: ")
+        text_buffer.append_unsigned(&line, cast[u64](state.volume / 10))
+        text_buffer.append(&line, "%")
+        _ = ui.label(u, text_buffer.as_string(&line), ui.TextStyle.{size = 14})
+        ui.close(u)
+    }
+    taken := false
+    if state.count > 0 {
+        taken = ui.button(u, "Take it back")
+        holders_label(greeter, u)
+    }
+    ui.close(u)
+    _ = gui_kit.finish(window)
+    if taken {
+        take_back_microphone(greeter)
+    }
+    if quieter || louder {
+        change_volume(greeter, louder)
+        window.due = true
+    }
+}
+
+/**
+ * Turn the GUI session's volume up or down a step: the session manager sets it on the session's sound.
+ *
+ * @param greeter The greeter, its session running.
+ * @param up Whether it's turned up, rather than down.
+ */
+change_volume :: fn(greeter : ptr[mut Greeter], up : bool) {
+    state :: &greeter.microphone
+    number :: greeter.session or_return void
+    volume :: if up {
+        if state.volume + VOLUME_STEP > sound.FULL_VOLUME { sound.FULL_VOLUME } else { state.volume + VOLUME_STEP }
+    }
+    else {
+        if state.volume < VOLUME_STEP { cast[u16](0) } else { state.volume - VOLUME_STEP }
+    }
+    out := os.Outgoing.{}
+    os.begin[session.Request](&out)^ = .SetVolume(session.SessionVolume.{session = number, volume = volume})
+    if session.send_request(greeter.sessions_end, greeter.sessions_port, &out) is_some {
+        return void
+    }
+    into := os.Incoming.{}
+    match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, true) {
+        case Received => {}
+        case _ => return void
+    }
+    match os.message_of[session.Response](&into)^ {
+        case Noted => {
+            state.volume = volume
+            runtime.log_info("the session's volume set to % percent", volume / 10)
+        }
+        case _ => runtime.log_info("the session's volume couldn't be set")
+    }
+}
+
+/**
+ * Say who holds the microphone, in the sound window.
+ *
+ * @param greeter The greeter, a grant held.
+ * @param u The sound window's frame.
+ */
+holders_label :: fn(greeter : ptr[mut Greeter], u : ptr[mut ui.Ui]) {
+    state :: &greeter.microphone
     storage : u8[200]
     line := text_buffer.make(storage)
     text_buffer.append(&line, "The microphone: ")
@@ -307,11 +389,6 @@ microphone_frame :: fn(greeter : ptr[mut Greeter], window : ptr[mut gui_kit.Wind
         text_buffer.append(&line, name_text(holder))
     }
     _ = ui.label(u, text_buffer.as_string(&line), ui.TextStyle.{size = 14})
-    ui.close(u)
-    _ = gui_kit.finish(window)
-    if taken {
-        take_back_microphone(greeter)
-    }
 }
 
 /**

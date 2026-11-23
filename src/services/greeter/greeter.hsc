@@ -20,6 +20,7 @@ import connector from "../../protocols/connector"
 import power as power_protocol from "../../protocols/power"
 import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
+import sound from "../../protocols/sound"
 import surface from "../../protocols/surface"
 
 /** The login window's width, in pixels. */
@@ -264,6 +265,9 @@ start_session :: fn(greeter : ptr[mut Greeter], home : os.Channel[dir.Dir]) {
             runtime.log_info("started a GUI session for %", string_of_bytes(greeter.name[0..<greeter.name.count]))
             say(greeter, "")
             gui_kit.hide(greeter.window)
+            // The sound window, its volume full, while the session runs (decisions/0196, 17g)
+            greeter.microphone.volume = sound.FULL_VOLUME
+            show_microphone(greeter)
             // Its end waited for
             waiting := os.Outgoing.{}
             wait :: os.begin[session.Request](&waiting)
@@ -329,6 +333,7 @@ wait_for_session :: fn(greeter : ptr[mut Greeter]) {
                 case None => {}
             }
             greeter.session = null
+            show_microphone(greeter)
             forget_editing(greeter)
             // What it asked, refused: its powerbox has gone with it
             if greeter.asking.active {

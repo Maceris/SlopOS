@@ -21,6 +21,7 @@ import gui_kit from "../../gui_kit"
 import gui_programs from "../../gui_programs"
 import programs from "../../protocols/programs"
 import surface from "../../protocols/surface"
+import sound as sound_protocol from "../../protocols/sound"
 
 /** The most programs and commands it lists, together. */
 MAX_LISTED :: 128
@@ -76,6 +77,7 @@ Launcher :: struct {
  * @param open Not used: it's asked to open nothing.
  * @param terminal Not used: it serves no terminal.
  * @param activation Not used: its window is the session's first, with nothing else to take focus from.
+ * @param sound Not used: it plays nothing, and closes it.
  * @return 0 once its window's closed; 2 without a compositor or a programs connection, or when its window can't be
  *     made.
  */
@@ -86,8 +88,14 @@ main :: fn(
     programs : os.Channel[programs.Programs]?,
     open : string?,
     terminal : os.Channel[terminal.Terminal]?,
-    activation : u64?
+    activation : u64?,
+    sound : os.Channel[sound_protocol.Sound]?
 ) -> int {
+    // It plays nothing: its sound connection's let go at once, the audio service's place for it freed
+    match sound {
+        case Some(given) => _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
+        case None => {}
+    }
     startup :: slop_os.startup_block()
     launcher :: runtime.new(Launcher)
     launcher.programs = programs or_return 2

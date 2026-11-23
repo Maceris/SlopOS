@@ -1166,6 +1166,8 @@ launch_gui :: fn(
     grants.surface = dialed
     prepared :: prepare(sessions, number, name) or_return .Refused(.Failed)
     grants.log = duplicate_log(sessions.log)
+    // A sound connection in the session's group (decisions/0196, 17g)
+    grants.sound = session_sound(sessions, number)
     grants.programs = if first { programs_connection(sessions, number) } else { finding_connection(sessions, number) }
     if open.count > 0 {
         // A view of the caller's bytes: the launch copies values to the program's arguments
@@ -1260,6 +1262,10 @@ close_gui_grants :: fn(grants : gui_programs.GuiGrants) {
         case None => {}
     }
     match grants.terminal {
+        case Some(end) => _ = slop_os.handle_close(cast[slop_os.Handle](end.end))
+        case None => {}
+    }
+    match grants.sound {
         case Some(end) => _ = slop_os.handle_close(cast[slop_os.Handle](end.end))
         case None => {}
     }

@@ -5,9 +5,11 @@
  * writes values, a record's fields and a table's rows; a text file's text; any other file's bytes in hexadecimal.
  * What's shown is a list of lines, only those on screen made each frame, so a long one costs no more than a short one.
  * Asked to open a path (GuiGrants' open), it shows that file first; a path typed in its path field, and Enter, shows
- * that one. Escape goes back from a file to the folder, and from the folder closes it. It says what it does in its
+ * that one. Escape goes back from a file to the folder, and from the folder closes it. A sound, a WAV file of a format
+ * the audio service takes (decisions/0196, 17g), is said to be one, its format and length, and Play plays it through
+ * the session's sound, at the session's volume; Stop, Back or another file stops it. It says what it does in its
  * debug log: "showing its window" once it's first drawn, "showing <path>" with what's said of it (its type, or why it
- * couldn't be read), "back to the folder", and "closed by Escape".
+ * couldn't be read), "playing <path>" and "played <ms> ms of <path>", "back to the folder", and "closed by Escape".
  */
 package viewer
 
@@ -21,7 +23,9 @@ import strings from "std:strings"
 import text_buffer from "std:text_buffer"
 import ui from "std:ui"
 import gui_kit from "../../gui_kit"
+import audio as pcm from "std:audio"
 import programs from "../../protocols/programs"
+import sound as sound_protocol from "../../protocols/sound"
 import surface from "../../protocols/surface"
 import shell_language as language from "../../shell_language"
 
@@ -41,6 +45,27 @@ PATH_BYTES :: 1024
 LINE_HEIGHT : f32 : 18
 /** The most programs whose manifests are looked through for a type. */
 MAX_PROGRAMS : u32 : 256
+/** How often it looks at the sound played while it plays, in nanoseconds: every 10 ms, under a period's two. */
+PLAY_POLL_NS : u64 : 10_000_000
+
+/** A sound being played: its stream's connection, ring and how far it's got. */
+Playing :: struct {
+    /** Whether one is. */
+    active : bool,
+    /** Its stream's connection, made from the viewer's, and a port bound to it. */
+    end : slop_os.Channel,
+    port : slop_os.Port,
+    /** Its ring's layout, and where it's mapped. */
+    opened : sound_protocol.Opened,
+    ring : u64,
+    ring_bytes : u64,
+    /** Its periods: all of them, given, and played. */
+    periods : usize,
+    given : usize,
+    played : usize,
+    /** How many periods the service ran out of it for. */
+    underruns : u32,
+}
 
 /** The viewer's state, on the heap. */
 Viewer :: struct {
@@ -79,6 +104,16 @@ Viewer :: struct {
     shown_hash : u8[32],
     /** The typed value's bytes, in its schema's encoding; empty when what's shown isn't one. */
     shown_data : u8[..],
+    /** Its sound connection, which each sound played gets a connection from; null without one. */
+    sound : os.Channel[sound_protocol.Sound]?,
+    /** A port bound to sound, waited on while its ring is full. */
+    sound_port : slop_os.Port,
+    /** For a sound shown: its format, how long it is, and its frames' bytes; data empty when what's shown isn't one. */
+    sound_format : sound_protocol.Format,
+    sound_ms : u64,
+    sound_data : u8[..],
+    /** The sound being played. */
+    playing : Playing,
 }
 
 /**
@@ -92,6 +127,8 @@ Viewer :: struct {
  * @param open A file's path beneath home, shown first; null to start with home's listing.
  * @param terminal Not used: it serves no terminal.
  * @param activation The token for the gesture that started it, which its window presents to take focus.
+ * @param sound A sound connection of the session's, which a sound shown is played through; without it, a sound's
+ *     shown but can't be played.
  * @return 0 once its window's closed; 2 without a compositor, or when its window can't be made.
  */
 main :: fn(
@@ -101,11 +138,22 @@ main :: fn(
     programs : os.Channel[programs.Programs]?,
     open : string?,
     terminal : os.Channel[terminal.Terminal]?,
-    activation : u64?
+    activation : u64?,
+    sound : os.Channel[sound_protocol.Sound]?
 ) -> int {
     startup :: slop_os.startup_block()
     viewer :: runtime.new(Viewer)
     viewer.log = log
+    match sound {
+        case Some(given) => match os.port_for(startup.budget, given.end) {
+            case Some(port) => {
+                viewer.sound = given
+                viewer.sound_port = port
+            }
+            case None => _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
+        }
+        case None => {}
+    }
     viewer.programs_port = cast[slop_os.Port](slop_os.NO_HANDLE)
     match programs {
         case Some(given) => {
@@ -155,7 +203,14 @@ main :: fn(
         if viewer.window.closing {
             return 0
         }
-        gui_kit.wait(viewer.window)
+        // While it plays, the sound's answers are looked at often enough that its ring stays full
+        if viewer.playing.active {
+            keep_playing(viewer)
+            gui_kit.wait(viewer.window, (slop_os.clock_monotonic() or_else 0) + PLAY_POLL_NS)
+        }
+        else {
+            gui_kit.wait(viewer.window)
+        }
     }
 }
 
@@ -259,6 +314,11 @@ file_frame :: fn(viewer : ptr[mut Viewer], u : ptr[mut ui.Ui]) {
     if viewer.note.count > 0 {
         _ = ui.label(u, text_of(ui.contents(&viewer.note)), ui.TextStyle.{size = 13})
     }
+    // A sound's Play first, so Tab reaches it first
+    played := false
+    if viewer.sound_data.count > 0 && viewer.sound is_some {
+        played = ui.button(u, if viewer.playing.active { "Stop" } else { "Play" })
+    }
     back :: ui.button(u, "Back")
     // Ctrl+C copies a typed value, typed, with its text for what doesn't know its type
     if ui.key_pressed(u, .Copy) && viewer.shown_data.count > 0 {
@@ -278,10 +338,192 @@ file_frame :: fn(viewer : ptr[mut Viewer], u : ptr[mut ui.Ui]) {
         ui.close(u)
     }
     ui.end_list(u, range, count, LINE_HEIGHT)
+    if played {
+        if viewer.playing.active {
+            stop_playing(viewer)
+        }
+        else {
+            start_playing(viewer)
+        }
+        viewer.window.due = true
+    }
     if back {
+        stop_playing(viewer)
         viewer.viewing = false
         viewer.window.due = true
     }
+}
+
+/**
+ * Start playing the sound shown: a stream on a new connection of the viewer's, opened in its format, its ring mapped,
+ * and its first periods given; keep_playing gives the rest as they're played.
+ *
+ * @param viewer The viewer, a sound shown, and its sound connection.
+ */
+start_playing :: fn(viewer : ptr[mut Viewer]) {
+    stop_playing(viewer)
+    given :: viewer.sound or_return void
+    startup :: slop_os.startup_block()
+    made :: sound_protocol.connect(given.end, viewer.sound_port, startup.budget) or_return void
+    port :: os.port_for(startup.budget, made.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+    playing :: &viewer.playing
+    playing^ = Playing.{end = made.end, port = port}
+    if cast[slop_os.Handle](port) == slop_os.NO_HANDLE || !open_stream(viewer) {
+        gui_kit.log_to(viewer.log, "viewer: couldn't play %", text_of(ui.contents(&viewer.shown_path)))
+        stop_playing(viewer)
+        return void
+    }
+    period_bytes :: cast[usize](playing.opened.period_bytes)
+    playing.periods = (viewer.sound_data.count + period_bytes - 1) / period_bytes
+    playing.active = true
+    for period in 0..<playing.opened.periods {
+        if playing.given >= playing.periods {
+            break
+        }
+        if !give_period(viewer, period) {
+            stop_playing(viewer)
+            return void
+        }
+    }
+    gui_kit.log_to(viewer.log, "viewer: playing %", text_of(ui.contents(&viewer.shown_path)))
+}
+
+/**
+ * Open the stream being played in the sound's format, and map its ring.
+ *
+ * @param viewer The viewer, its stream's connection made.
+ * @return Whether it's open and mapped.
+ */
+open_stream :: fn(viewer : ptr[mut Viewer]) -> bool {
+    playing :: &viewer.playing
+    into := os.Incoming.{}
+    out := os.Outgoing.{}
+    os.begin[sound_protocol.Request](&out)^ = .Open(viewer.sound_format)
+    if !call_sound(playing, &out, &into) {
+        return false
+    }
+    match os.message_of[sound_protocol.Response](&into)^ {
+        case Opened(layout) => playing.opened = layout
+        case _ => return false
+    }
+    os.begin[sound_protocol.Request](&out)^ = .GetBuffer
+    if !call_sound(playing, &out, &into) {
+        return false
+    }
+    window :: match os.message_of[sound_protocol.Response](&into)^ {
+        case Buffer(memory) => memory
+        case _ => return false
+    }
+    bytes :: (cast[u64](playing.opened.periods) * cast[u64](playing.opened.period_bytes) + 4095) / 4096 * 4096
+    startup :: slop_os.startup_block()
+    ring :: runtime.reserve_addresses(cast[usize](bytes)) or_return false
+    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
+    if slop_os.memory_map(window, startup.space, cast[u64](ring), 0, bytes, read_write) is_error {
+        return false
+    }
+    playing.ring = cast[u64](ring)
+    playing.ring_bytes = bytes
+    return true
+}
+
+/** Send a request on the stream being played's connection, and wait for its answer, in into; whether it came. */
+call_sound :: fn(playing : ptr[mut Playing], out : ptr[mut os.Outgoing], into : ptr[mut os.Incoming]) -> bool {
+    if sound_protocol.send_request(playing.end, playing.port, out) is_some {
+        return false
+    }
+    return match sound_protocol.receive_response(playing.end, playing.port, into, true) {
+        case Received => true
+        case _ => false
+    }
+}
+
+/**
+ * Copy the sound's next period into a place in the ring, padded with silence past its end, and give it.
+ *
+ * @param viewer The viewer, playing.
+ * @param period The place in the ring.
+ * @return Whether it was given.
+ */
+give_period :: fn(viewer : ptr[mut Viewer], period : u32) -> bool {
+    playing :: &viewer.playing
+    period_bytes :: cast[usize](playing.opened.period_bytes)
+    into :: view_of(cast[ptr[mut u8]](playing.ring + cast[u64](period) * cast[u64](period_bytes)), period_bytes)
+    start :: playing.given * period_bytes
+    for &byte, i in into {
+        at :: start + i
+        byte^ = if at < viewer.sound_data.count { viewer.sound_data[at] } else { 0 }
+    }
+    out := os.Outgoing.{}
+    os.begin[sound_protocol.Request](&out)^ = .Play(period)
+    if sound_protocol.send_request(playing.end, playing.port, &out) is_some {
+        return false
+    }
+    playing.given += 1
+    return true
+}
+
+/**
+ * Take the answers of the sound being played that have come: each period played given again with the next, until
+ * it's all played, when it's said and stopped.
+ *
+ * @param viewer The viewer, playing.
+ */
+keep_playing :: fn(viewer : ptr[mut Viewer]) {
+    playing :: &viewer.playing
+    into := os.Incoming.{}
+    loop {
+        match sound_protocol.receive_response(playing.end, playing.port, &into, false) {
+            case Received => {}
+            case Empty => return void
+            case _ => {
+                stop_playing(viewer)
+                return void
+            }
+        }
+        done :: match os.message_of[sound_protocol.Response](&into)^ {
+            case Played(answer) => answer
+            case _ => {
+                stop_playing(viewer)
+                return void
+            }
+        }
+        playing.played += 1
+        playing.underruns = done.underruns
+        if playing.given < playing.periods && !give_period(viewer, done.period) {
+            stop_playing(viewer)
+            return void
+        }
+        if playing.played >= playing.periods {
+            gui_kit.log_to(
+                viewer.log,
+                "viewer: played % ms of %, % underruns",
+                viewer.sound_ms,
+                text_of(ui.contents(&viewer.shown_path)),
+                playing.underruns
+            )
+            stop_playing(viewer)
+            viewer.window.due = true
+            return void
+        }
+    }
+}
+
+/**
+ * Stop the sound being played, if one is: its connection closed, which drops what's given, and its ring unmapped.
+ *
+ * @param viewer The viewer.
+ */
+stop_playing :: fn(viewer : ptr[mut Viewer]) {
+    playing :: &viewer.playing
+    if playing.ring != 0 {
+        _ = slop_os.memory_unmap(slop_os.startup_block().space, playing.ring)
+    }
+    for each in slop_os.Handle.[cast[slop_os.Handle](playing.port), cast[slop_os.Handle](playing.end)] {
+        if each != slop_os.NO_HANDLE && each != cast[slop_os.Handle](0) {
+            _ = slop_os.handle_close(each)
+        }
+    }
+    playing^ = Playing.{end = cast[slop_os.Channel](slop_os.NO_HANDLE), port = cast[slop_os.Port](slop_os.NO_HANDLE)}
 }
 
 /** A line of what's shown, without its line break; "" past them. */
@@ -358,6 +600,8 @@ comes_before :: fn(a : os.DirectoryEntry, b : os.DirectoryEntry) -> bool {
  * @param path Its path beneath home, copied.
  */
 show_file :: fn(viewer : ptr[mut Viewer], path : string) {
+    stop_playing(viewer)
+    runtime.array_reset(&viewer.sound_data)
     runtime.array_reset(&viewer.shown_path)
     add_bytes(&viewer.shown_path, string_bytes(path))
     runtime.array_reset(&viewer.note)
@@ -381,6 +625,8 @@ show_file :: fn(viewer : ptr[mut Viewer], path : string) {
  * @param pasted The paste's typed data, copied; another program's, decoded as a stranger's (language.decode).
  */
 show_pasted :: fn(viewer : ptr[mut Viewer], pasted : gui_kit.TypedPaste) {
+    stop_playing(viewer)
+    runtime.array_reset(&viewer.sound_data)
     runtime.array_reset(&viewer.shown_path)
     add_bytes(&viewer.shown_path, string_bytes("What was pasted"))
     runtime.array_reset(&viewer.note)
@@ -444,6 +690,15 @@ written :: fn(viewer : ptr[mut Viewer], path : string) -> string {
         }
         return typed_text(viewer, hash, held)
     }
+    // A sound, read whole: said to be one, and played with Play
+    if cast[u64](filled) == size {
+        match pcm.read_wav(held) {
+            case Ok(wav) => if wav.format.rate >= sound_protocol.MIN_RATE && wav.format.rate <= sound_protocol.MAX_RATE {
+                return sound_text(viewer, wav)
+            }
+            case Error(_) => {}
+        }
+    }
     unread :: size - cast[u64](filled)
     tail :: if unread > 0 { language.message("\n(% more bytes not read)", unread) } else { "" }
     if is_text(held) {
@@ -451,6 +706,32 @@ written :: fn(viewer : ptr[mut Viewer], path : string) -> string {
     }
     add_bytes(&viewer.note, string_bytes(language.message("% bytes, not text, in hexadecimal", size)))
     return hex_of(held)
+}
+
+/**
+ * Keep a WAV file's sound to play, and say what it is.
+ *
+ * @param viewer The viewer, whose sound's kept and note set.
+ * @param wav The file, read.
+ * @return What's shown of it, on the heap: its format and length, and how to play it.
+ */
+sound_text :: fn(viewer : ptr[mut Viewer], wav : pcm.Wav) -> string {
+    viewer.sound_format = sound_protocol.Format.{
+        sample = cast[u8](wav.format.sample),
+        rate = wav.format.rate,
+        channels = wav.format.channels,
+    }
+    viewer.sound_ms = cast[u64](wav.frames) * 1000 / cast[u64](wav.format.rate)
+    add_bytes(&viewer.sound_data, wav.data)
+    add_bytes(&viewer.note, string_bytes(language.message("a sound, % ms", viewer.sound_ms)))
+    return language.message(
+        "% Hz, % channels, % bits a sample, % ms.\n%",
+        wav.format.rate,
+        wav.format.channels,
+        pcm.sample_bytes(wav.format.sample) * 8,
+        viewer.sound_ms,
+        if viewer.sound is_some { "Play plays it at the session's volume." } else { "There's no sound to play it on." }
+    )
 }
 
 /**

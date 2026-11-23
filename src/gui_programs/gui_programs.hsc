@@ -11,6 +11,7 @@ import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import terminal from "std:os/slop_os/terminal"
 import programs from "../protocols/programs"
+import sound as sound_protocol from "../protocols/sound"
 import surface from "../protocols/surface"
 
 /** What a GUI program is given; its handles move to it at its launch. */
@@ -38,6 +39,11 @@ GuiGrants :: struct {
      * (the surface protocol's WindowSpec.activation); null for none (decisions/0193, 16d).
      */
     activation : u64?,
+    /**
+     * A sound connection in its session's group (decisions/0196, 17g), played at the session's volume; null without an
+     * audio service. A program that plays nothing closes it.
+     */
+    sound : os.Channel[sound_protocol.Sound]?,
 }
 
 /**
@@ -50,6 +56,7 @@ GuiGrants :: struct {
  * @param open What it's asked to open (GuiGrants' open).
  * @param terminal The terminal it serves (GuiGrants' terminal).
  * @param activation Its activation token (GuiGrants' activation).
+ * @param sound Its sound connection (GuiGrants' sound).
  * @return Never run; 0.
  */
 shape :: fn(
@@ -59,7 +66,8 @@ shape :: fn(
     programs : os.Channel[programs.Programs]?,
     open : string?,
     terminal : os.Channel[terminal.Terminal]?,
-    activation : u64?
+    activation : u64?,
+    sound : os.Channel[sound_protocol.Sound]?
 ) -> int {
     return 0
 }

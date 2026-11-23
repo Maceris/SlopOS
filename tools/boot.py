@@ -1202,7 +1202,7 @@ class GuiLoginTest(CompositorTest):
     and Enter; then the launcher's window is waited for. A command, test_shell_calls, is found by typing its name in the
     launcher's find field, and its form (15g) filled in and run, in a terminal window closed by a key once it's done;
     another, test_file_tree, makes a typed file with a check box, which the viewer shows by its path before Escape
-    closes it; test_kept_grant's powerbox asks for a new file, chosen in the greeter's prompt in the trusted layer;
+    closes it, and plays a sound it made with Play (17g); test_kept_grant's powerbox asks for a new file, chosen in the greeter's prompt in the trusted layer;
     then the terminal is found the same way and started, keys run in it, which lists the user's keys at once; capture,
     allowed the microphone in the prompt, which the microphone window's Take it back, clicked, takes back (17f); and
     shut-down, which the administrator allows in the prompt, a wrong password refused first (16e): the system shuts
@@ -1216,9 +1216,12 @@ class GuiLoginTest(CompositorTest):
     SHOWN = "[user] greeter: showing the login window"
     SET_UP = "[user] terminal: first-boot setup ended"
     LISTED = "[user] launcher: lists "
-    # The greeter's microphone window's width, and how far the compositor puts it from the top and right edges
-    MICROPHONE_WIDTH = 300
+    # The greeter's sound window's width, and how far the compositor puts it from the top and right edges; and where in
+    # it its first row's first button, -, and its Take it back, below, are
+    SOUND_WIDTH = 300
     PASSIVE_MARGIN = 16
+    QUIETER_AT = (20, 25)
+    TAKE_BACK_AT = (40, 61)
 
     def __init__(self, serial: Path, screenshot: Path, name: str, password: str):
         super().__init__(serial, screenshot)
@@ -1322,6 +1325,22 @@ class GuiLoginTest(CompositorTest):
             self.press("esc")
             if not self.after(since, "[user] viewer: back to the folder", "back to the folder again"):
                 return
+            # A sound (decisions/0196, 17g): test_file_tree's tone, its path typed, and Play, its first button, played
+            since = self.mark()
+            self.press("tab")
+            self.type_line("reading/tone.wav")
+            if not self.after(since, "[user] viewer: showing reading/tone.wav, a sound, 500 ms", "showing the sound"):
+                return
+            since = self.mark()
+            self.press("tab")
+            self.press("ret")
+            if not self.after(since, "[user] viewer: playing reading/tone.wav", "playing the sound") \
+                    or not self.after(since, "[user] viewer: played 500 ms of reading/tone.wav", "the sound played"):
+                return
+            since = self.mark()
+            self.press("esc")
+            if not self.after(since, "[user] viewer: back to the folder", "back to the folder from the sound"):
+                return
             since = self.mark()
             self.press("esc")
             if not self.after(since, "[user] viewer: closed by Escape", "closing the viewer") \
@@ -1355,9 +1374,9 @@ class GuiLoginTest(CompositorTest):
             self.type_line("keys")
             if not self.after(since, "[user] greeter: asked by keys for your public keys", "listing the keys"):
                 return
-            # The microphone (decisions/0196, 17f): capture asks for it, Allow in the prompt; the microphone window, in the
-            # trusted layer's top right corner and never focused, says who holds it, and a click on its Take it back,
-            # its first button, takes it back
+            # The microphone (decisions/0196, 17f): capture asks for it, Allow in the prompt; the sound window, in the
+            # trusted layer's top right corner and never focused, says who holds it, and a click on its Take it back
+            # takes it back
             since = self.mark()
             self.type_line("capture 30 note.wav")
             if not self.after(since, "[user] greeter: asked by capture for the microphone", "asking for the microphone") \
@@ -1368,16 +1387,20 @@ class GuiLoginTest(CompositorTest):
             self.press("tab")
             self.press("ret")
             if not self.after(since, "[user] greeter: allowed capture the microphone", "allowing the microphone") \
-                    or not self.after(since, "[user] compositor: window 'Microphone' shown", "showing who holds it") \
+                    or not self.after(since, "[user] greeter: microphone: capture holds it", "showing who holds it") \
                     or not self.after(since, "[user] audio: recording", "recording"):
                 return
             since = self.mark()
-            self.point(1280 - self.MICROPHONE_WIDTH - self.PASSIVE_MARGIN + 30, self.PASSIVE_MARGIN + 22)
-            self.button(True)
-            self.button(False)
+            self.click_sound_window(self.TAKE_BACK_AT)
             if not self.after(since, "[user] greeter: microphone: the user took it back from capture", "taking it back") \
                     or not self.after(since, "[user] greeter: microphone: capture no longer holds it", "its grant gone") \
                     or not self.after(since, "[user] audio: recorded ", "the recording stopped"):
+                return
+            # The session's volume (17g), turned down a tenth with the sound window's -
+            since = self.mark()
+            self.click_sound_window(self.QUIETER_AT)
+            if not self.after(since, "[user] greeter: the session's volume set to 90 percent", "turning the volume down") \
+                    or not self.after(since, "[user] sessions: session ", "the session's volume set"):
                 return
             # An account, which the administrator allows in the prompt (16e): its recovery code shown, then Done
             since = self.mark()
@@ -1424,6 +1447,12 @@ class GuiLoginTest(CompositorTest):
             self.problem = None
         except OSError as error:
             self.problem = f"the machine protocol failed: {error}"
+
+    def click_sound_window(self, at: tuple[int, int]) -> None:
+        """A click at a place in the greeter's sound window, in the screen's top right corner."""
+        self.point(1280 - self.SOUND_WIDTH - self.PASSIVE_MARGIN + at[0], self.PASSIVE_MARGIN + at[1])
+        self.button(True)
+        self.button(False)
 
     def chord(self, keys: tuple[str, ...]) -> None:
         """Keys held down in order, then let go in the other order, as Ctrl+C is pressed."""
