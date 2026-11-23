@@ -1495,15 +1495,21 @@ TESTS = [
         "report.shell TODO --count 2\\r\\>"
         "into.shell reading\\r\\>"
         "escape.shell --here pictures\\r\\>"
+        "steer.shell\\r\\s{ asks }\\e[3;7~\\e\\S{secure attention}\\>"
         "report.shell\\r\\>"
         "help report.shell\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
-        "--expect-console-line=files: 12", "--expect-console-line=looking for TODO, 2 times",
+        "--expect-console-line=files: 13", "--expect-console-line=looking for TODO, 2 times",
         "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
         "--expect-console-line=made.value  File  16 B", "--expect-console-line=in here",
         "--expect-console-line=error: line 3: ../notes.txt: that's above your home",
         "--expect-console-line=error: escape.shell ended with 1",
+        # A script's asks are its own, shown as a script's, the shell vouching for its name (decisions/0195, 18e)
+        "--expect-line=[user] powerbox: steer.shell asks for a debugger",
+        "--expect-console-line=  steer.shell, a script asks to debug test_shell_calls, to debug it.",
+        "--expect-console-line=error: steer.shell ended with 1",
+        "--refuse-console-line=called with scripted, 5, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=error: report.shell needs its pattern",
         "--expect-console-line=report.shell is a script, run in a shell of its own with only what it's given. It takes:",
         "--expect-console-line=  --pattern (string)",

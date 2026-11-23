@@ -499,6 +499,13 @@ Finder :: struct {
      * not: it could otherwise ask as any program, under name after name.
      */
     names : bool,
+    /**
+     * For a script's shell's (ConnectScript, decisions/0195, 18e): the script's file name, which the powerbox
+     * connections asked for on it by hand are served under; script_count 0 for any other.
+     */
+    script : u8[programs.MAX_INSTALLATION_NAME],
+    /** How many bytes of script are its name. */
+    script_count : usize,
 }
 
 /** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
@@ -2049,6 +2056,10 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Connect(connection) => {
                     // For a script's shell, as the shell's own connection's: it names its programs' powerbox connections
                     _ = add_finder(sessions, cast[u32](number), connection.end, names = true)
+                    continue
+                }
+                case ConnectScript(asked) => {
+                    connect_script(sessions, cast[u32](number), true, os.items(into, asked.name), asked.end.end)
                     continue
                 }
                 case Start(starting) => response^ = start_program(sessions, cast[u32](number), starting, into)

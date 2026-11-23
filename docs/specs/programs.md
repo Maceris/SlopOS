@@ -258,11 +258,14 @@ rings (`RING_BYTES`):
 - `Identify` (`0195`, 18d), on a steering connection only: given an end of a channel, which program the manager
   loaded holds the other end itself (`channel_peer_owned_by`), as `Identified`: its process, to inspect, the
   executable it was loaded from, to read, and whether it's been steered; or `NotSteered(NoProgram)`. The session
-  manager names a program's powerbox connection so: a program asks its launcher's session for one
-  (`PendingPowerbox`), the end it's given can't be copied, and once the end's moved to a program the session manager
-  serves it under the name of the installation whose executable it handed out (`Find`). An end still held by one
-  of the session manager's own programs is waited on; one a steered program holds, or one whose executable it never
-  handed out, is closed. `Powerbox` with a name is left to the shell's own.
+  manager names a program's powerbox connection so: a launcher asks its session for one (`PendingPowerbox`) and gives
+  it to the program, the end it's given can't be copied, and once the end's moved to a program the session manager
+  serves it under the name of the installation whose executable it handed out (`Find`). An end still the session
+  manager's, or held by one of its own programs, is waited on; one a steered program holds, or one whose executable
+  it never handed out, is closed. `Powerbox` with a name is left to the shell's own asks; a shell running a script
+  gives the script's shell a connection to the session made with `ConnectScript` and the script's file name (18e),
+  on which every `Powerbox` is served under that name, which the powerbox shows the user as a script's
+  ("backup.shell, a script"), the shell vouching for it.
 
 ## Protocols
 

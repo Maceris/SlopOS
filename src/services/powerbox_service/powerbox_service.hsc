@@ -47,10 +47,14 @@ SESSIONS_KEY : u64 : 1002
 ASKS_PER_MINUTE : u64 : 3
 /**
  * The session asks at most this many times in a row, all its programs together, then about as many a minute
- * (decisions/0193, 16g), counted as ASKS_PER_MINUTE is. A program names its own powerbox connection, and can make
- * more, so it could ask under name after name; this bounds them all, so the user can't be kept answering.
+ * (decisions/0193, 16g), counted as ASKS_PER_MINUTE is. A connection's name is proved by the launch of the program
+ * that holds it (decisions/0195, 18d), so a program asks only as itself; but it can start other programs, each asking
+ * as itself, and a shell runs scripts under names of their own. This bounds them all, so the user can't be kept
+ * answering.
  */
 SESSION_ASKS_PER_MINUTE : u64 : 6
+/** What follows a script's name where the user's shown it, as "backup.shell, a script". */
+SCRIPT_SHOWN :: ", a script"
 /** The programs whose asks are counted at once; the one heard from longest ago is forgotten for another. */
 MAX_ASKERS :: 16
 /** The most bytes of a kept grant's link's path, grants/<program>/<key>; a longer one is cut. */
@@ -502,11 +506,28 @@ ask :: fn(
         case Narrowed(narrowed) => narrowed
         case _ => return .Refused
     }
+    // A script's shown as one, the shell that runs it vouching for its name (decisions/0195, 18e)
+    shown : u8[programs.MAX_INSTALLATION_NAME + 16]
+    shown_count := cast[usize](0)
+    for byte in name_of(box, index) {
+        if shown_count < shown.count {
+            shown[shown_count] = byte
+            shown_count += 1
+        }
+    }
+    if programs.script_name(name_of(box, index)) {
+        for byte in string_bytes(SCRIPT_SHOWN) {
+            if shown_count < shown.count {
+                shown[shown_count] = byte
+                shown_count += 1
+            }
+        }
+    }
     out := os.Outgoing.{}
     request :: os.begin[prompt.Request](&out)
     request^ = .Ask(
         prompt.Ask.{
-            requester = os.append(&out, name_of(box, index)),
+            requester = os.append(&out, shown[0..<shown_count]),
             purpose = os.append(&out, purpose),
             suggested = os.append(&out, suggested),
             kind = kind,

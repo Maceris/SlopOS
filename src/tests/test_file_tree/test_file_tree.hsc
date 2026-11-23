@@ -35,7 +35,8 @@ SCRIPTS :: Script.[
     Script.{
         name = "escape.shell",
         text = "param here: Dir\nprint \"in here\"\nview ../notes.txt\nprint \"not reached\"\n",
-    }
+    },
+    Script.{name = "steer.shell", text = "param here: Dir\ndebug test_shell_calls 5 scripted\n"}
 ]
 
 /** What it made. */
@@ -69,10 +70,10 @@ TreeError :: union {
  *     Made, of 3 files and 1 directory; Café.txt, its é one code point, for "did you mean" to find from a name typed
  *     in capitals with a combining accent; and tone.wav, half a second of 440 Hz at a quarter of full scale, 16 kHz
  *     mono 16-bit integers, for the viewer to play.
- * @param scripts Whether three scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern
- *     and
- *     a count, says them, lists here and searches it; into.shell, which takes here and into, two directories, and lists
- *     into; and escape.shell, which takes here and tries to view ../notes.txt, beyond it.
+ * @param scripts Whether four scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern
+ *     and a count, says them, lists here and searches it; into.shell, which takes here and into, two directories, and
+ *     lists into; escape.shell, which takes here and tries to view ../notes.txt, beyond it; and steer.shell, which
+ *     debugs a program, which the powerbox asks the user to allow as the script's (decisions/0195, 18e).
  * @return How many files and directories it made.
  * @error Unwritable Something couldn't be written there.
  */

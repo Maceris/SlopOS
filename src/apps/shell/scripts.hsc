@@ -126,7 +126,8 @@ prepare_script_call :: fn(
         }
         case None => {}
     }
-    match finding_connection(shell) {
+    // Its powerbox asks are the script's, shown as a script's, the shell vouching for it (decisions/0195, 18e)
+    match script_connection(shell, file_name_of(tree.text)) {
         case Some(
             made
         ) => runtime.array_add(&call.grants, os.NamedGrant.{label = "programs", handle = cast[slop_os.Handle](made)})
@@ -395,21 +396,46 @@ another_connection :: fn(
 }
 
 /**
- * Make a connection to the shell's session that only finds programs, for a script's shell.
+ * Make another connection to the shell's session for a script's shell, its powerbox asks served under the script's
+ * name (ConnectScript).
  *
- * @param shell The shell, whose programs connection is asked to Connect another.
- * @return The new connection's end, the caller's; null without a programs connection, or if it couldn't be made.
+ * @param shell The shell, whose programs connection asks.
+ * @param name The script's file name, without its directory.
+ * @return The new connection's end, the caller's to give; null without a programs connection, or if it couldn't be made
+ *     or sent. The session manager closes its end if the name isn't a script's, or this shell can't name one.
  */
-finding_connection :: fn(shell : ptr[mut Shell]) -> slop_os.Channel? {
+script_connection :: fn(shell : ptr[mut Shell], name : string) -> slop_os.Channel? {
     connection :: shell.programs or_return null
     pair :: os.channel_for[programs.Programs](slop_os.startup_block().budget, 0) or_return null
     out := os.Outgoing.{}
-    os.begin[programs.Request](&out)^ = .Connect(os.Channel[programs.Programs].{end = pair.a})
+    request :: os.begin[programs.Request](&out)
+    request^ = .ConnectScript(
+        programs.ScriptConnection.{
+            name = os.append(&out, string_bytes(name)),
+            end = os.Channel[programs.Programs].{end = pair.a},
+        }
+    )
     if programs.send_request(connection.end, shell.programs_port, &out) is_some {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return null
     }
     return pair.b
+}
+
+/**
+ * A path's last part, its file name: what follows its last /, or all of it without one.
+ *
+ * @param path The path.
+ * @return A view of path.
+ */
+file_name_of :: fn(path : string) -> string {
+    start := cast[usize](0)
+    for byte, i in string_bytes(path) {
+        if byte == cast[u8]('/') {
+            start = i + 1
+        }
+    }
+    return language.slice(path, start, path.count)
 }
 
 /**

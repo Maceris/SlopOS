@@ -122,6 +122,15 @@ Request :: union {
      */
     PendingPowerbox,
     /**
+     * From a connection that names powerbox connections, a shell's or a script's shell's (decisions/0195, 18e): serve
+     * another connection to this session, as Connect does, for the shell that runs a script, on the end given, which
+     * moves to it. The powerbox connections asked for on it by hand (Powerbox, whatever the name asked) are served
+     * under the script's file name, which the powerbox shows as a script's, the shell running it vouching for it; the
+     * programs it starts are named by their launch, as any shell's are. The end's closed for a name that isn't
+     * script_name's, from a connection that can't name, or if there's no room for another. Answered with nothing.
+     */
+    ConnectScript(ScriptConnection),
+    /**
      * Ask for a program's debug file (decisions/0185, 12e), by its name's bytes, 1 to MAX_NAME of them: the program
      * linked with its DWARF and its debug table, for the debugger and crash reports' lines. Answered with DebugFile, or
      * Missing, as for Find, and for a program whose bundle has none. A finding connection may ask too.
@@ -271,6 +280,51 @@ Installing :: struct {
     program : slop_os.Relative[u8],
 }
 
+/** A script's shell's connection to its session, as ConnectScript asks for it. */
+ScriptConnection :: struct {
+    /** The script's file name, without its directory: script_name's. */
+    name : slop_os.Relative[u8],
+    /** The session manager's end of the new connection, which moves to it. */
+    end : os.Channel[Programs],
+}
+
+/**
+ * Tell whether a name is a script's file name alone, as ConnectScript takes and the powerbox shows as a script's: 1
+ * to MAX_INSTALLATION_NAME ASCII letters, digits, _, - and ., not starting with a dot, ending in SCRIPT_SUFFIX with
+ * something before it. No installation's name has a dot, so none is a script's.
+ *
+ * @param name The name's bytes.
+ * @return True if it's such a name.
+ */
+script_name :: fn(name : u8[]) -> bool {
+    suffix :: SCRIPT_SUFFIX
+    if name.count <= suffix.count || name.count > MAX_INSTALLATION_NAME || name[0] == cast[u8]('.') {
+        return false
+    }
+    for byte, i in name {
+        letter :: (byte >= cast[u8]('a') && byte <= cast[u8]('z')) || (byte >= cast[u8]('A') && byte <= cast[u8]('Z'))
+        digit :: byte >= cast[u8]('0') && byte <= cast[u8]('9')
+        if !letter && !digit && byte != cast[u8]('_') && byte != cast[u8]('-') && byte != cast[u8]('.') {
+            return false
+        }
+    }
+    expected :: string_bytes(suffix)
+    tail :: name.count - suffix.count
+    for byte, i in name {
+        if i < tail {
+            continue
+        }
+        k :: i - tail
+        if k < expected.count && byte != expected[k] {
+            return false
+        }
+    }
+    return true
+}
+
+/** What a script's file name ends with. */
+SCRIPT_SUFFIX :: ".shell"
+
 /** An installation, as Installation lists it. */
 Installed :: struct {
     /** Its name. */
@@ -374,6 +428,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Uninstall(_) => false
         case Powerbox(_) => false
         case Start(_) => false
+        case ConnectScript(_) => false
         case _ => true
     }
 }

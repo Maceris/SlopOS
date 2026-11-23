@@ -696,6 +696,12 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     _ = add_finder(sessions, sessions.finders[i].session, connection.end, names = names)
                     continue
                 }
+                case ConnectScript(asked) => {
+                    names :: sessions.finders[i].names
+                    session :: sessions.finders[i].session
+                    connect_script(sessions, session, names, os.items(into, asked.name), asked.end.end)
+                    continue
+                }
                 // Only the session's own connection starts programs; the home that came is closed
                 case Start(starting) => {
                     _ = slop_os.handle_close(cast[slop_os.Handle](starting.home.end))
@@ -704,7 +710,16 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 // Only a shell's names a powerbox's connection (decisions/0193, 16b)
                 case Powerbox(name) => {
                     asked :: text_from(os.items(into, name))
-                    if sessions.finders[i].names {
+                    finder :: &sessions.finders[i]
+                    // A script's shell's asks are the script's, whatever it names (decisions/0195, 18e)
+                    if finder.names && finder.script_count > 0 && finder.script_count <= finder.script.count {
+                        script :: text_from(finder.script[0..<finder.script_count])
+                        match powerbox_for(sessions, finder.session, script) {
+                            case Some(made) => response^ = .PowerboxGiven(made)
+                            case None => response^ = .Refused(.Failed)
+                        }
+                    }
+                    else if sessions.finders[i].names {
                         response^ = powerbox_answer(sessions, sessions.finders[i].session, asked)
                     }
                     else {
@@ -847,6 +862,38 @@ powerbox_answer :: fn(sessions : ptr[mut Manager], number : u32, name : string) 
     return match powerbox_for(sessions, number, name) {
         case Some(made) => programs.Response.PowerboxGiven(made)
         case None => programs.Response.Refused(.Failed)
+    }
+}
+
+/**
+ * Serve another connection to a session for the shell that runs a script, its powerbox connections asked for by hand
+ * served under the script's name (ConnectScript, decisions/0195, 18e).
+ *
+ * @param sessions The session manager, which adds it among its finders.
+ * @param number The session's number.
+ * @param names Whether the connection asking may name powerbox connections; if not, end's closed.
+ * @param name The script's file name; one that isn't programs.script_name's has end closed.
+ * @param end The new connection's end, which the session manager owns from here.
+ */
+connect_script :: fn(sessions : ptr[mut Manager], number : u32, names : bool, name : u8[], end : slop_os.Channel) {
+    if !names || !programs.script_name(name) {
+        runtime.log_info("refused a script's connection named % by a connection that can't name one", text_from(name))
+        _ = slop_os.handle_close(cast[slop_os.Handle](end))
+        return void
+    }
+    if !add_finder(sessions, number, end, names = true) {
+        return void
+    }
+    // add_finder takes the first free place, which is the one just taken: the newest with this end
+    for &finder in sessions.finders {
+        if finder.in_use && finder.end == end {
+            for byte, i in name {
+                if i < finder.script.count {
+                    finder.script[i] = byte
+                    finder.script_count = i + 1
+                }
+            }
+        }
     }
 }
 
