@@ -8,6 +8,7 @@ import network from "std:os/slop_os/network"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
 import events from "../events"
+import sound from "../sound"
 import trace from "../trace"
 
 /**
@@ -236,6 +237,12 @@ Request :: union {
      */
     RequestKeys(KeysRequest),
     /**
+     * Ask for the microphone (decisions/0196, 17f), which the user allows on the trusted path, with why, as UTF-8, up
+     * to PURPOSE_BYTES. Answered with MicrophoneGranted, or Refused; at once with Busy. The user can take it back on the
+     * trusted path, which closes the connection's other end.
+     */
+    RequestMicrophone(slop_os.Relative[u8]),
+    /**
      * The session manager's, on its own connection only: serve another program on its end, under its name. Answered
      * with Done, or Refused when there's no room or it isn't the session manager's, the end then closed.
      */
@@ -272,6 +279,8 @@ Response :: union {
     KeysListed(slop_os.Relative[u8]),
     /** RequestNetwork's answer: a network connection allowing what was asked, which moves to the program. */
     NetworkGranted(os.Channel[network.Network]),
+    /** RequestMicrophone's answer: a sound connection that records, which moves to the program. */
+    MicrophoneGranted(os.Channel[sound.Sound]),
     /** The answer to a request the powerbox doesn't know, as from a newer program; every protocol has it. */
     Unsupported,
 }
@@ -296,6 +305,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case RequestSystemLog(_) => false
         case RequestNetwork(_) => false
         case RequestKeys(_) => false
+        case RequestMicrophone(_) => false
         case Serve(_) => false
     }
 }

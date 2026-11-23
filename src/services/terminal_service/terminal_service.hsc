@@ -351,6 +351,8 @@ Service :: struct {
     share_name : u8[account_records.MAX_NAME_BYTES],
     /** How many bytes of share_name are used. */
     share_name_count : usize,
+    /** The microphone: the connection grants are made on, and who holds them (microphone_grants.hsc). */
+    microphone : Microphone,
 }
 
 /**
@@ -480,6 +482,7 @@ main :: fn(
     service.session_end = NONE
     service.accounts_connector = NONE
     service.accounts_end = NONE
+    service.microphone.end = NONE
     match programs {
         case Some(found) => {
             service.session_end = found.end
@@ -554,6 +557,7 @@ main :: fn(
         take_seat(service, &into)
         take_accounts(service, &into)
         take_prompts(service, &into)
+        take_microphone(service, &into)
         deliver(service, connected)
         /*
          * Keys that waited for room, decoded now that a delivery's made some, and the serial line read again if it
@@ -1440,6 +1444,8 @@ update_status :: fn(service : ptr[mut Service]) {
     else if service.panic_count > 0 && !service.panic_seen {
         text_buffer.append(&status, " │ the boot before stopped: Ctrl+Alt+Delete")
     }
+    // Who holds the microphone, always, whatever else is said
+    append_microphone(service, &status)
     screen.set_status(&view(service).screen, text_buffer.as_string(&status))
     draw_status(service)
 }
@@ -1626,6 +1632,7 @@ draw_panel :: fn(service : ptr[mut Service]) {
         }
         case None => {}
     }
+    draw_microphone(service, help + 5)
     redraw(service)
 }
 
@@ -2128,6 +2135,9 @@ screen_keys :: fn(service : ptr[mut Service], first : usize) {
         }
         else if event.code == USAGE_R && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
             shut_down(service, true)
+        }
+        else if event.code == USAGE_M && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            take_back_microphone(service)
         }
         else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
             // A session's key: the screen it brought up takes what comes after
@@ -3137,6 +3147,9 @@ setup_enter :: fn(service : ptr[mut Service]) {
                     "elevation: the user allowed %",
                     if view(service).ask.kind == .Network {
                         "a network connection"
+                    }
+                    else if view(service).ask.kind == .Microphone {
+                        "the microphone"
                     }
                     else if view(service).ask.kind == .AddKey {
                         "a key added"

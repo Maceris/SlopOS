@@ -234,8 +234,8 @@ record :: fn(control : os.Channel[microphone.Microphone]) -> int {
     }
     bytes :: (cast[u64](opened.periods) * cast[u64](opened.period_bytes) + 4095) / 4096 * 4096
     ring :: runtime.reserve_addresses(cast[usize](bytes)) or_return 6
-    read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
-    if slop_os.memory_map(window, startup.space, cast[u64](ring), 0, bytes, read_write) is_error {
+    // A recording stream's ring is the client's to read only
+    if slop_os.memory_map(window, startup.space, cast[u64](ring), 0, bytes, slop_os.PROTECTION_READ) is_error {
         return 6
     }
     for period in 0..<opened.periods {

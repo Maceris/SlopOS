@@ -254,6 +254,9 @@ append_asking :: fn(status : ptr[mut text_buffer.TextBuffer], asked : ptr[Asked]
         else if asked.kind == .Network {
             " asks to reach the network"
         }
+        else if asked.kind == .Microphone {
+            " asks for the microphone"
+        }
         else if asked.kind == .AddKey {
             " asks to add a key that logs in as you"
         }

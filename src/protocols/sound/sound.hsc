@@ -16,7 +16,9 @@ import slop_os from "std:os/slop_os"
  * A connection the microphone's control made (the microphone protocol, 17f), which the trusted path gives a program the
  * user has let record, records instead: its client gives an empty period with Record, answered with Recorded once the
  * service has filled it with what the device heard, converted to the stream's format. What's heard while the client
- * has no period given is dropped, its own overrun. Play is refused on it, and Record on any other connection.
+ * has no period given is dropped, its own overrun. Play is refused on it, and Record on any other connection. Its
+ * GetBuffer gives the ring itself, read only, not a window: once the grant's taken back, what was answered stays the
+ * client's to read, as closing the ring would unmap a window under it.
  */
 
 /**
@@ -116,7 +118,10 @@ PlayRefused :: struct {
 Request :: union {
     /** Open the connection's stream in a format. Answered with Opened, or Refused; a second Open is refused. */
     Open(Format),
-    /** Make the stream's ring and give a window onto it. Answered with Buffer, or Refused. */
+    /**
+     * Make the stream's ring and give a window onto it, or on a connection that records, the ring, read only. Answered
+     * with Buffer, or Refused.
+     */
     GetBuffer,
     /** Give a period, its frames written. Answered with Played once it's mixed in, or with PlayRefused. */
     Play(u32),
@@ -143,7 +148,7 @@ Request :: union {
 Response :: union {
     /** Open's answer. */
     Opened(Opened),
-    /** GetBuffer's answer: a window onto the stream's ring, which moves to the client. */
+    /** GetBuffer's answer: a window onto the stream's ring, or the ring, read only, which moves to the client. */
     Buffer(slop_os.Memory),
     /** Play's answer once the period's mixed in. */
     Played(Played),

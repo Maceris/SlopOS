@@ -67,6 +67,9 @@ enter_elevation :: fn(service : ptr[mut Service]) {
         else if kind == .Network {
             "to reach the network"
         }
+        else if kind == .Microphone {
+            "for the microphone"
+        }
         else if kind == .AddKey {
             "to add a key"
         }
@@ -76,9 +79,19 @@ enter_elevation :: fn(service : ptr[mut Service]) {
     // The user's own program needs only their say; anything else, the administrator's
     setup_step(
         service,
-        if kind == .Debug || kind == .Network || is_keys(kind) { SetupStep.Confirm } else { SetupStep.AdminName }
+        if is_confirmed(kind) { SetupStep.Confirm } else { SetupStep.AdminName }
     )
     update_status(service)
+}
+
+/**
+ * Tell whether a request's kind needs only the user's say, Enter on the elevation screen, as it's their own program's.
+ *
+ * @param kind The kind.
+ * @return True for debugging their own program, the network, the microphone and their keys.
+ */
+is_confirmed :: fn(kind : prompt.Kind) -> bool {
+    return kind == .Debug || kind == .Network || kind == .Microphone || is_keys(kind)
 }
 
 /**
@@ -94,6 +107,7 @@ is_elevation :: fn(kind : prompt.Kind) -> bool {
         || kind == .Trace
         || kind == .SystemLog
         || kind == .Network
+        || kind == .Microphone
         || is_keys(kind)
 }
 
@@ -273,6 +287,14 @@ end_elevation :: fn(service : ptr[mut Service], made : bool) {
     else if made && is_keys(shown.ask.kind) {
         response^ = if change_key(service) { prompt.Response.Allowed } else { prompt.Response.Refused }
     }
+    else if made && shown.ask.kind == .Microphone {
+        // A grant the audio service makes, which the user can take back here
+        requester :: first_of(shown.ask.requester[0..<shown.ask.requester.count], shown.ask.requester_count)
+        match grant_microphone(service, requester) {
+            case Some(connection) => response^ = .MicrophoneGranted(connection)
+            case None => response^ = .Refused
+        }
+    }
     else if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind) || shown.ask.kind == .Network) {
         response^ = .Allowed
     }
@@ -395,6 +417,9 @@ draw_power_elevation :: fn(service : ptr[mut Service], whole : bool, restart : b
         else if asked.kind == .Network {
             "Reach the network"
         }
+        else if asked.kind == .Microphone {
+            "Use the microphone"
+        }
         else if asked.kind == .AddKey {
             "Let a key log in as you"
         }
@@ -440,6 +465,9 @@ draw_power_elevation :: fn(service : ptr[mut Service], whole : bool, restart : b
         )
         text_buffer.append(&line, " logging in as you, ")
     }
+    else if asked.kind == .Microphone {
+        text_buffer.append(&line, " asks to record from the microphone, ")
+    }
     else if asked.kind == .Network {
         // What it would reach, beyond the session's own
         text_buffer.append(&line, " asks to reach ")
@@ -458,7 +486,7 @@ draw_power_elevation :: fn(service : ptr[mut Service], whole : bool, restart : b
     text_buffer.append(&line, bytes_text(first_of(asked.purpose[0..<asked.purpose.count], asked.purpose_count)))
     text_buffer.append(&line, ".")
     screen.write_at(panel, 3, 2, text_buffer.as_string(&line), plain)
-    if asked.kind == .Debug || asked.kind == .Network || is_keys(asked.kind) {
+    if is_confirmed(asked.kind) {
         screen.write_at(
             panel,
             4,
@@ -471,6 +499,9 @@ draw_power_elevation :: fn(service : ptr[mut Service], whole : bool, restart : b
             }
             else if asked.kind == .RemoveKey {
                 "Enter allows it, Esc refuses."
+            }
+            else if asked.kind == .Microphone {
+                "It could hear what's said here until you take it back, with M. Enter allows it, Esc refuses."
             }
             else {
                 "It could send what the program has there. Enter allows it, Esc refuses."
@@ -558,6 +589,7 @@ draw_elevation :: fn(service : ptr[mut Service], whole : bool) {
         || asked.kind == .Trace
         || asked.kind == .SystemLog
         || asked.kind == .Network
+        || asked.kind == .Microphone
         || is_keys(asked.kind) {
         draw_power_elevation(service, whole, asked.kind == .Restart)
         return void

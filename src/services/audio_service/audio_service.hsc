@@ -566,11 +566,13 @@ open_stream :: fn(service : ptr[mut Service], index : usize, format : sound.Form
 }
 
 /**
- * Give a client a window onto its stream's ring, made the first time.
+ * Give a client a window onto its stream's ring, made the first time; or for a recording stream, the ring itself, read
+ * only, which outlives the grant, so a client reading a period it was answered isn't faulted by the grant's being
+ * taken back.
  *
  * @param service The service.
  * @param index The client's index.
- * @return Buffer with the window; Refused NotOpen or NoMemory.
+ * @return Buffer with the window or the ring; Refused NotOpen or NoMemory.
  */
 buffer_for :: fn(service : ptr[mut Service], index : usize) -> sound.Response {
     stream :: stream_of(service, index) or_return sound.Response.Refused(.NotOpen)
@@ -585,6 +587,12 @@ buffer_for :: fn(service : ptr[mut Service], index : usize) -> sound.Response {
         }
         stream.ring = memory
         stream.ring_at = cast[u64](at)
+    }
+    if stream.records {
+        read_only :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+        copy :: slop_os.handle_duplicate(cast[slop_os.Handle](stream.ring), read_only)
+            or_return sound.Response.Refused(.NoMemory)
+        return sound.Response.Buffer(cast[slop_os.Memory](copy))
     }
     window :: slop_os.memory_create_window(stream.ring, startup.budget, 0, stream.ring_bytes)
         or_return sound.Response.Refused(.NoMemory)
@@ -764,7 +772,8 @@ drop_queued :: fn(service : ptr[mut Service], index : usize, why : sound.Refused
 }
 
 /**
- * Close a client's stream, as its connection's gone: its ring and resampler freed.
+ * Close a client's stream, as its connection's gone: its ring unmapped and closed, which destroys a player's window
+ * onto it, and its resampler freed.
  *
  * @param service The service.
  * @param index The client's index.
@@ -772,6 +781,7 @@ drop_queued :: fn(service : ptr[mut Service], index : usize, why : sound.Refused
 close_stream :: fn(service : ptr[mut Service], index : usize) {
     stream :: stream_of(service, index) or_return void
     if cast[slop_os.Handle](stream.ring) != slop_os.NO_HANDLE {
+        _ = slop_os.memory_unmap(slop_os.startup_block().space, stream.ring_at)
         _ = slop_os.handle_close(cast[slop_os.Handle](stream.ring))
     }
     match stream.resampler {

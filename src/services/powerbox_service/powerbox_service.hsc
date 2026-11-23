@@ -365,6 +365,12 @@ serve :: fn(box : ptr[mut Box], index : usize, into : ptr[mut os.Incoming]) {
                     case None => continue
                 }
             }
+            case RequestMicrophone(purpose) => {
+                match ask(box, index, .Microphone, false, os.items(into, purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
             case RequestTrace(purpose) => {
                 match ask(box, index, .Trace, false, os.items(into, purpose), u8.[], u8.[]) {
                     case Some(answer) => response^ = answer
@@ -534,6 +540,9 @@ ask :: fn(
         else if kind == .Network {
             "network connection"
         }
+        else if kind == .Microphone {
+            "microphone"
+        }
         else if kind == .AddKey {
             "key added"
         }
@@ -679,6 +688,11 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
         case TraceGranted(given) => {
             runtime.log_info("the administrator allowed a trace")
             answer(box, .TraceGranted(given))
+        }
+        case MicrophoneGranted(given) => {
+            who :: name_of(box, box.waiting.client)
+            runtime.log_info("gave % the microphone", as_text(who))
+            answer(box, .MicrophoneGranted(given))
         }
         case KeysListed(listed) => answer_listed(box, os.items(into, listed))
         case AccountMade(made) => {

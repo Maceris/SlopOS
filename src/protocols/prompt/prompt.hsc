@@ -4,6 +4,7 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import events from "../events"
+import sound from "../sound"
 import trace from "../trace"
 
 /**
@@ -21,6 +22,10 @@ import trace from "../trace"
  * An account's public keys (decisions/0191, 14c): an Ask to add a key (its line as suggested) or remove one (its
  * fingerprint as suggested) is confirmed on the trusted path's own screen, which has the account service do it for the
  * session's user, answered Allowed once it's done; an Ask to list them is answered at once, with KeysListed.
+ *
+ * The microphone (decisions/0196, 17f): an Ask for it is confirmed on the trusted path's own screen, answered with a
+ * grant, a sound connection that records, which the trusted path made and can take back; it shows the microphone held
+ * until it's gone.
  */
 Prompt :: struct {}
 
@@ -64,6 +69,11 @@ Kind :: enum #backed_by(u32) {
     RemoveKey = 12,
     /** The session's user's public keys listed, answered at once with KeysListed, without asking the user. */
     ListKeys = 13,
+    /**
+     * The microphone (decisions/0196, 17f): the user allows it, with no password, as it's their own program. Answered
+     * MicrophoneGranted, or Refused.
+     */
+    Microphone = 14,
 }
 
 /** A request of one of the session's programs, for the user to answer. */
@@ -125,6 +135,11 @@ Response :: union {
     LogGranted(os.Channel[events.Events]),
     /** Ask's answer for ListKeys: the session's user's keys, a line each, each ended by a line break. */
     KeysListed(slop_os.Relative[u8]),
+    /**
+     * Ask's answer for the microphone: the user allowed it, and this is a sound connection that records, a grant the
+     * trusted path can take back, which moves to the program.
+     */
+    MicrophoneGranted(os.Channel[sound.Sound]),
     /** The answer to a request the trusted path doesn't know, as from a newer powerbox; every protocol has it. */
     Unsupported,
 }
