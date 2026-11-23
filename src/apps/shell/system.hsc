@@ -676,6 +676,26 @@ powerbox_connection :: fn(shell : ptr[mut Shell], program : string) -> slop_os.C
 }
 
 /**
+ * Ask the session manager for a powerbox connection for a program the shell starts, named once the program holds it
+ * by what it was loaded from, not by the shell (decisions/0195, 18d).
+ *
+ * @param shell The shell, whose session is asked.
+ * @return The connection's end, which can only be moved, to the program; null without a powerbox, or if it's refused.
+ */
+pending_powerbox :: fn(shell : ptr[mut Shell]) -> slop_os.Channel? {
+    out := os.Outgoing.{}
+    os.begin[programs.Request](&out)^ = .PendingPowerbox
+    into := os.Incoming.{}
+    if !ask_session(shell, &out, &into) {
+        return null
+    }
+    return match os.message_of[programs.Response](&into)^ {
+        case PowerboxGiven(given) => given.end
+        case _ => null
+    }
+}
+
+/**
  * Trace the whole system for some seconds, once an administrator allows it (decisions/0185, 12g): the session's
  * powerbox asks on the trusted path, where the secure attention key brings up a screen for the administrator's name
  * and password; once they're right, the shell's given a trace connection to the supervisor, which traces for that long

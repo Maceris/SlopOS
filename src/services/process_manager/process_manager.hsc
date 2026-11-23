@@ -28,6 +28,10 @@ Record :: struct {
     space : slop_os.AddressSpace,
     /** Its intercept's owning handle, the manager's; NO_HANDLE without one. */
     intercept : slop_os.Intercept,
+    /** The executable it was loaded from, the Load's handle, kept (decisions/0195, 18d). */
+    executable : slop_os.Memory,
+    /** Whether it's been steered (Steer). */
+    steered : bool,
 }
 
 /** The manager's state, all of it main's, kept for its life. */
@@ -208,6 +212,21 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
                         manager.steering[at] = steers
                     }
                     case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                }
+            }
+            case Identify(channel) => {
+                out := os.Outgoing.{}
+                response :: os.begin[protocol.Response](&out)
+                response^ = if steers { identify(manager, channel) } else { protocol.Response.NotSteered(.NotAllowed) }
+                _ = slop_os.handle_close(cast[slop_os.Handle](channel))
+                if protocol.send_response(end, manager.port, &out) is_some {
+                    match response^ {
+                        case Identified(found) => {
+                            _ = slop_os.handle_close(cast[slop_os.Handle](found.process))
+                            _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
+                        }
+                        case _ => {}
+                    }
                 }
             }
             case Steer(asked) => {
@@ -399,8 +418,9 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
     ) {
         case Ok(built) => {
             space_given = true
-            // Kept for Steer while it runs: the process and space with every right, and the intercept's owning handle
-            keep(manager, process, kept_space, made.intercept)
+            // Kept for Steer and Identify while it runs: the process and space, the intercept, and the executable
+            executable :: cast[slop_os.Memory](copy_of(cast[slop_os.Handle](request.executable)))
+            keep(manager, process, kept_space, made.intercept, executable)
             if cast[slop_os.Handle](made.intercept) != slop_os.NO_HANDLE {
                 made.intercept = cast[slop_os.Intercept](
                     slop_os.handle_duplicate(cast[slop_os.Handle](made.intercept), cast[slop_os.Rights](INTERCEPT_GIVEN))
@@ -457,6 +477,44 @@ close_steering :: fn(given : protocol.Steering) {
 }
 
 /**
+ * Say which program the manager loaded holds the other end of a channel, on a steering connection's request
+ * (decisions/0195, 18d).
+ *
+ * @param manager The manager, whose records are looked through.
+ * @param channel The requester's end, or a duplicate of it; only read.
+ * @return Identified with the program's process and executable, read only, and whether it's been steered; NotSteered
+ *     NoProgram if none holds it, Failed if a handle couldn't be made.
+ */
+identify :: fn(manager : ptr[mut Manager], channel : slop_os.Channel) -> protocol.Response {
+    prune(manager)
+    for record in manager.records {
+        if !(slop_os.channel_peer_owned_by(channel, record.process) or_else false) {
+            continue
+        }
+        process :: slop_os.handle_duplicate(
+            cast[slop_os.Handle](record.process),
+            cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT) | cast[u32](slop_os.RIGHT_TRANSFER))
+        ) or_return protocol.Response.NotSteered(.Failed)
+        executable :: slop_os.handle_duplicate(
+            cast[slop_os.Handle](record.executable),
+            cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+        ) or_else slop_os.NO_HANDLE
+        if executable == slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(process)
+            return .NotSteered(.Failed)
+        }
+        return .Identified(
+            protocol.Identity.{
+                process = cast[slop_os.Process](process),
+                executable = cast[slop_os.Memory](executable),
+                steered = record.steered,
+            }
+        )
+    }
+    return .NotSteered(.NoProgram)
+}
+
+/**
  * Duplicate a handle with every right it has.
  *
  * @param handle The handle, which stays the caller's.
@@ -474,13 +532,21 @@ copy_of :: fn(handle : slop_os.Handle) -> slop_os.Handle {
  * @param process Its process's owning handle, still the manager's, duplicated with every right.
  * @param space A handle to its address space with every right, which the record keeps; NO_HANDLE for none.
  * @param intercept Its intercept's owning handle, which the record keeps; NO_HANDLE for none.
+ * @param executable The executable it was loaded from, which the record keeps.
  */
-keep :: fn(manager : ptr[mut Manager], process : slop_os.Process, space : slop_os.Handle, intercept : slop_os.Intercept) {
+keep :: fn(
+    manager : ptr[mut Manager],
+    process : slop_os.Process,
+    space : slop_os.Handle,
+    intercept : slop_os.Intercept,
+    executable : slop_os.Memory
+) {
     prune(manager)
     made := Record.{
         process = cast[slop_os.Process](copy_of(cast[slop_os.Handle](process))),
         space = cast[slop_os.AddressSpace](space),
         intercept = intercept,
+        executable = executable,
     }
     runtime.array_add(&manager.records, made)
 }
@@ -504,7 +570,8 @@ prune :: fn(manager : ptr[mut Manager]) {
         for handle in slop_os.Handle.[
             cast[slop_os.Handle](record.process),
             cast[slop_os.Handle](record.space),
-            cast[slop_os.Handle](record.intercept)
+            cast[slop_os.Handle](record.intercept),
+            cast[slop_os.Handle](record.executable)
         ] {
             if handle != slop_os.NO_HANDLE {
                 _ = slop_os.handle_close(handle)
@@ -573,6 +640,7 @@ steer :: fn(manager : ptr[mut Manager], asked : protocol.Steer) -> protocol.Resp
                 or_else slop_os.NO_HANDLE
         )
     }
+    record.steered = true
     log_line.write(manager.log, "process manager: a program steered, on the user's say")
     return .Steered(given)
 }

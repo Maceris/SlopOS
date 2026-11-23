@@ -330,6 +330,42 @@ sys_handle_restrict :: fn(
 }
 
 /**
+ * Tell whether a process owns the other end of a channel the caller holds an end of (decisions/0195, 18d): the process
+ * itself, not one in its subtree, so a launcher isn't taken for the child it gave the end to.
+ *
+ * @param thread The calling thread, whose table both handles are in.
+ * @param end The caller's end, of any rights.
+ * @param process The process, which needs RIGHT_PROCESS_INSPECT.
+ * @return Whether the other end's owner is the process; false for one closed, the kernel's, in flight, owned by no
+ *     process, or another's, its child's among them.
+ * @error InvalidHandle Either isn't a handle in the caller's table.
+ * @error ObjectGone Either's object was destroyed.
+ * @error WrongKind end isn't a channel's, or process isn't a process's.
+ * @error MissingRight process lacks RIGHT_PROCESS_INSPECT.
+ */
+sys_channel_peer_owned_by :: fn(
+    thread : ptr[mut Thread],
+    end : slop_os.Channel,
+    process : slop_os.Process
+) -> Result[bool, slop_os.ControlError] {
+    found :: cast[ptr[mut Channel]](
+        object_of[slop_os.ControlError](process_of(thread), cast[slop_os.Handle](end), slop_os.ObjectKind.Channel,
+            cast[slop_os.Rights](0))?
+    )
+    target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INSPECT)?
+    core :: core_of(found)
+    lock_at(&core.lock, .ChannelCore)
+    other :: side_of(core, 1 - found.side).end
+    owned := false
+    if other != 0 && !is_dying(other) {
+        owner :: intrinsics.atomic_load_u64(&cast[ptr[mut ObjectHeader]](other).owner)
+        owned = owner == cast[u64](target)
+    }
+    unlock_at(&core.lock, .ChannelCore)
+    return .Ok(owned)
+}
+
+/**
  * Find the object a handle in process's table refers to, if it's of kind and has every right in rights, with its error
  * as the call's: they share HandleError's tags.
  *

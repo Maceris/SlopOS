@@ -181,6 +181,7 @@ own_session_answer :: fn(
         case Uninstall(name) => uninstall_users(sessions, number, text_from(os.items(into, name)))
         case Installation(index) => installation_at(sessions, number, index, out)
         case Powerbox(name) => powerbox_answer(sessions, number, text_from(os.items(into, name)))
+        case PendingPowerbox => pending_powerbox(sessions, number)
         case _ => programs.Response.Unsupported
     }
 }
@@ -711,6 +712,12 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                         response^ = .Refused(.NotAllowed)
                     }
                 }
+                case PendingPowerbox => response^ = if sessions.finders[i].names {
+                    pending_powerbox(sessions, sessions.finders[i].session)
+                }
+                else {
+                    programs.Response.Refused(.NotAllowed)
+                }
                 case Locate(
                     name
                 ) => response^ = if sessions.finders[i].powerbox {
@@ -830,6 +837,11 @@ powerbox_answer :: fn(sessions : ptr[mut Manager], number : u32, name : string) 
      * a program's or a script's name alone, so it can't reach past its own folder there or say something else
      */
     if !plain_name(string_bytes(name)) {
+        return programs.Response.Refused(.NotAllowed)
+    }
+    // A shell names only itself by hand; the programs it starts are named by their launch (decisions/0195, 18d)
+    if name != "shell" {
+        runtime.log_info("refused a powerbox's connection named % by hand: only a shell names itself", name)
         return programs.Response.Refused(.NotAllowed)
     }
     return match powerbox_for(sessions, number, name) {

@@ -66,6 +66,14 @@ PROGRAM_KEY : u64 : 1000
  * stops come as packets of kind Stop.
  */
 CRASH_KEY : u64 : 2000
+/** The port key a pending powerbox connection's end is bound under, plus its place (decisions/0195, 18d). */
+PENDING_KEY : u64 : 3000
+/** The most powerbox connections pending at once; past it, the oldest's let go. */
+MAX_PENDING : usize : 16
+/** How long the main loop waits, in nanoseconds, before it looks again at pending powerbox connections. */
+PENDING_POLL : u64 : 5_000_000
+/** The most executables Find gave that are kept, to name programs by; past it, the oldest goes. */
+MAX_HANDED : usize : 64
 /** The port key the session manager's budget's pressure is bound under. */
 PRESSURE_KEY : u64 : 900
 /** The port key a session's shell's programs connection is bound under, plus the session's number. */
@@ -320,6 +328,27 @@ PowerboxGrants :: struct {
     network : os.Channel[network.Network]?,
 }
 
+/** An executable Find gave, kept to name the programs loaded from it (decisions/0195, 18d). */
+Handed :: struct {
+    /** The executable, read only; NO_HANDLE for a place not in use. */
+    executable : slop_os.Memory,
+    /** The name it was found by, the first count bytes. */
+    name : u8[programs.MAX_NAME],
+    count : usize,
+}
+
+/** A powerbox connection given for a program not yet named (decisions/0195, 18d). */
+Pending :: struct {
+    /** Whether the place is in use. */
+    in_use : bool,
+    /** The session's number. */
+    session : u32,
+    /** The powerbox's end, the session manager's until the program holding the other is named. */
+    end : slop_os.Channel,
+    /** When it was made, by the count of PendingPowerbox, so the oldest can be let go. */
+    made : u64,
+}
+
 /** A session: whether it's one now, and its user's name, empty for a boot with no accounts. */
 Session :: struct {
     /** Whether this place holds a session now. */
@@ -553,6 +582,12 @@ Manager :: struct {
     sound_connector : slop_os.Channel,
     /** Its steering connection to the process manager (decisions/0195, 18b); NONE without one. */
     steering_end : slop_os.Channel,
+    /** The executables Find gave, kept to name programs by (decisions/0195, 18d), and where the next goes. */
+    handed : Handed[MAX_HANDED],
+    handed_next : usize,
+    /** The powerbox connections given for programs not yet named, and how many PendingPowerbox has made. */
+    pending : Pending[MAX_PENDING],
+    pending_made : u64,
     /** A port bound to steering_end, waited on for its answers. */
     steering_port : slop_os.Port,
     /** The sessions, by number. */
@@ -777,6 +812,7 @@ main :: fn(
         while i < connected.count
         serve_programs(sessions, &into)
         serve_finders(sessions, &into)
+        name_pending(sessions)
         // test_installations, once the session it's for has been answered for
         if sessions.checking != NOWHERE {
             check_installations(sessions, cast[u32](sessions.checking))
@@ -802,8 +838,18 @@ main :: fn(
             continue
         }
         packets : slop_os.Packet[8]
-        taken :: slop_os.port_wait(sessions.port, packets, slop_os.NO_DEADLINE) or_else 0
+        /*
+         * Nothing says when a pending powerbox connection's end has moved to the program launched with it: while one
+         * waits, the wait's short, so it's named soon after (decisions/0195, 18d)
+         */
+        until :: if any_pending(sessions) {
+            (slop_os.clock_monotonic() or_else 0) + PENDING_POLL
+        } else {
+            slop_os.NO_DEADLINE
+        }
+        taken :: slop_os.port_wait(sessions.port, packets, until) or_else 0
         ended_in(sessions, packets, cast[usize](taken))
+        pending_closed(sessions, packets, cast[usize](taken))
         for packet, i in packets {
             if i < cast[usize](taken) && packet.key == PRESSURE_KEY {
                 relieve(sessions)
@@ -2051,11 +2097,13 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
         case _ => return .Missing
     }
     match store_request(sessions, .Get(referred[0])) {
-        case Got(
-            object
-        ) => return .Found(
-            programs.Program.{executable = object.memory, manifest = manifest.memory, manifest_size = manifest.size}
-        )
+        case Got(object) => {
+            // Kept, to name the programs loaded from it (decisions/0195, 18d)
+            hand_out(sessions, object.memory, name)
+            return .Found(
+                programs.Program.{executable = object.memory, manifest = manifest.memory, manifest_size = manifest.size}
+            )
+        }
         case _ => {
             _ = slop_os.handle_close(cast[slop_os.Handle](manifest.memory))
             return .Missing
@@ -2325,6 +2373,246 @@ powerbox_for :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> 
         return null
     }
     return os.Channel[powerbox.Powerbox].{end = pair.b}
+}
+
+/**
+ * Keep an executable Find gave, read only, with the name it was found by: the place of the oldest if they're all in
+ * use (decisions/0195, 18d).
+ *
+ * @param sessions The session manager.
+ * @param executable The executable, which stays the caller's.
+ * @param name The name it was found by.
+ */
+hand_out :: fn(sessions : ptr[mut Manager], executable : slop_os.Memory, name : u8[]) {
+    copy :: slop_os.handle_duplicate(cast[slop_os.Handle](executable), slop_os.RIGHT_MEMORY_READ) or_return void
+    at :: sessions.handed_next % MAX_HANDED
+    sessions.handed_next += 1
+    if at >= sessions.handed.count {
+        _ = slop_os.handle_close(copy)
+        return void
+    }
+    place :: &sessions.handed[at]
+    if cast[slop_os.Handle](place.executable) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](place.executable))
+    }
+    place^ = Handed.{executable = cast[slop_os.Memory](copy)}
+    for byte, i in name {
+        if i < place.name.count {
+            place.name[i] = byte
+            place.count = i + 1
+        }
+    }
+}
+
+/**
+ * Give a connection to a session's powerbox for a program the asker launches, named once the program holding it is
+ * known (decisions/0195, 18d): the powerbox's end kept and watched, the other given without RIGHT_DUPLICATE, so it can
+ * only be moved, to the program.
+ *
+ * @param sessions The session manager, which keeps the powerbox's end among its pending; the oldest's let go if
+ *     MAX_PENDING are.
+ * @param number The session's number.
+ * @return PowerboxGiven with the end; Refused(Failed) without a powerbox or the process manager's steering, or if
+ *     the channel couldn't be made.
+ */
+pending_powerbox :: fn(sessions : ptr[mut Manager], number : u32) -> programs.Response {
+    if cast[usize](number) >= sessions.sessions.count
+        || sessions.sessions[cast[usize](number)].powerbox_end == NONE
+        || sessions.steering_end == NONE {
+        return .Refused(.Failed)
+    }
+    at := MAX_PENDING
+    oldest := cast[usize](0)
+    for place, i in sessions.pending {
+        if !place.in_use && at == MAX_PENDING {
+            at = i
+        }
+        if place.made < sessions.pending[oldest].made {
+            oldest = i
+        }
+    }
+    if at >= MAX_PENDING {
+        runtime.log_info("let go of a powerbox connection never named, to make room")
+        drop_pending(sessions, oldest)
+        at = oldest
+    }
+    pair :: os.channel_for[powerbox.Powerbox](slop_os.startup_block().budget, 0)
+        or_return programs.Response.Refused(.Failed)
+    signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+    if slop_os.port_bind(sessions.port, cast[slop_os.Handle](pair.a), signals, PENDING_KEY + cast[u64](at), .Persistent)
+        is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        return .Refused(.Failed)
+    }
+    // Moved, never copied: no one keeps a copy to speak as the program
+    info :: slop_os.handle_info(cast[slop_os.Handle](pair.b)) or_else slop_os.HandleInfo.{}
+    kept :: cast[slop_os.Rights](cast[u32](info.rights) & ~cast[u32](slop_os.RIGHT_DUPLICATE))
+    _ = slop_os.handle_restrict(cast[slop_os.Handle](pair.b), kept)
+    if at < sessions.pending.count {
+        sessions.pending_made += 1
+        sessions.pending[at] = Pending.{in_use = true, session = number, end = pair.a, made = sessions.pending_made}
+    }
+    return .PowerboxGiven(os.Channel[powerbox.Powerbox].{end = pair.b})
+}
+
+/**
+ * Let go of a pending powerbox connection: its end closed, which the program holding the other sees.
+ *
+ * @param sessions The session manager.
+ * @param at Its place.
+ */
+drop_pending :: fn(sessions : ptr[mut Manager], at : usize) {
+    if at >= sessions.pending.count || !sessions.pending[at].in_use {
+        return void
+    }
+    _ = slop_os.port_unbind(sessions.port, PENDING_KEY + cast[u64](at))
+    _ = slop_os.handle_close(cast[slop_os.Handle](sessions.pending[at].end))
+    sessions.pending[at] = Pending.{}
+}
+
+/**
+ * Let go of the pending powerbox connections whose other ends closed, as a launch that failed leaves them.
+ *
+ * @param sessions The session manager.
+ * @param packets The packets the port gave.
+ * @param taken How many of them there are.
+ */
+pending_closed :: fn(sessions : ptr[mut Manager], packets : slop_os.Packet[], taken : usize) {
+    for packet, i in packets {
+        if i >= taken || packet.kind != .Signal || packet.key < PENDING_KEY
+            || packet.key >= PENDING_KEY + cast[u64](MAX_PENDING) {
+            continue
+        }
+        if packet.data[0] & cast[u64](slop_os.SIGNAL_PEER_CLOSED) != 0 {
+            drop_pending(sessions, cast[usize](packet.key - PENDING_KEY))
+        }
+    }
+}
+
+/**
+ * Name the pending powerbox connections whose programs hold them now (decisions/0195, 18d): the process manager says
+ * which program it loaded holds each's other end, and from which executable; one still held by a program the session
+ * manager started itself, as the shell that asked for it, waits; one held by a program loaded from an executable Find
+ * gave is served by the powerbox under the name it was found by; any other, or a steered one's, is let go.
+ *
+ * @param sessions The session manager.
+ */
+name_pending :: fn(sessions : ptr[mut Manager]) {
+    for i in 0..<sessions.pending.count {
+        if !sessions.pending[i].in_use {
+            continue
+        }
+        identified :: process_manager.identify(sessions.steering_end, sessions.steering_port, sessions.pending[i].end)
+        identity :: match identified {
+            case Ok(found) => found
+            // Not yet held by a program the process manager loaded: the launch is still on its way
+            case Error(why) => continue
+        }
+        defer {
+            _ = slop_os.handle_close(cast[slop_os.Handle](identity.process))
+            _ = slop_os.handle_close(cast[slop_os.Handle](identity.executable))
+        }
+        /*
+         * Still the session manager's own, the answer that gives it not sent yet, or the asker's, a program it started:
+         * not moved to the program yet
+         */
+        if started_here(sessions, identity.process) {
+            continue
+        }
+        if identity.steered {
+            runtime.log_info("a steered program's powerbox connection isn't named by its launch")
+            drop_pending(sessions, i)
+            continue
+        }
+        name := sessions.handed[0].name[0..<0]
+        for &handed in sessions.handed {
+            same :: cast[slop_os.Handle](handed.executable) != slop_os.NO_HANDLE
+                && (slop_os.handle_same(
+                    cast[slop_os.Handle](handed.executable),
+                    cast[slop_os.Handle](identity.executable)
+                )
+                    or_else false)
+            if same && handed.count <= handed.name.count {
+                name = handed.name[0..<handed.count]
+            }
+        }
+        if name.count == 0 {
+            runtime.log_info("a powerbox connection held by a program from no executable Find gave isn't named")
+            drop_pending(sessions, i)
+            continue
+        }
+        serve_pending(sessions, i, name)
+    }
+}
+
+/**
+ * Tell whether any powerbox connection is pending, waiting to be named.
+ *
+ * @param sessions The session manager.
+ * @return Whether one of its pending places is in use.
+ */
+any_pending :: fn(sessions : ptr[Manager]) -> bool {
+    for place in sessions.pending {
+        if place.in_use {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * Tell whether a process is the session manager's own, or one it started itself, as a shell.
+ *
+ * @param sessions The session manager.
+ * @param process A handle to the process.
+ * @return Whether it's the session manager's, or one of its programs' processes.
+ */
+started_here :: fn(sessions : ptr[mut Manager], process : slop_os.Process) -> bool {
+    own :: cast[slop_os.Handle](slop_os.startup_block().process)
+    if slop_os.handle_same(own, cast[slop_os.Handle](process)) or_else false {
+        return true
+    }
+    for program, i in sessions.programs {
+        if i < sessions.count && program.running
+            && (slop_os.handle_same(cast[slop_os.Handle](program.process), cast[slop_os.Handle](process))
+                or_else false) {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * Have the powerbox serve a pending connection under the name of the program that holds its other end.
+ *
+ * @param sessions The session manager, whose pending place is freed.
+ * @param at Its place.
+ * @param name The program's name.
+ */
+serve_pending :: fn(sessions : ptr[mut Manager], at : usize, name : u8[]) {
+    if at >= sessions.pending.count {
+        return void
+    }
+    pending :: sessions.pending[at]
+    _ = slop_os.port_unbind(sessions.port, PENDING_KEY + cast[u64](at))
+    sessions.pending[at] = Pending.{}
+    number :: cast[usize](pending.session)
+    if number >= sessions.sessions.count || sessions.sessions[number].powerbox_end == NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pending.end))
+        return void
+    }
+    made :: &sessions.sessions[number]
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .Serve(
+        powerbox.Served.{name = os.append(&out, name), end = os.Channel[powerbox.Powerbox].{end = pending.end}}
+    )
+    if powerbox.send_request(made.powerbox_end, made.powerbox_port, &out) != null {
+        return void
+    }
+    named :: if name.count > 0 { string_of(&name[0], name.count) } else { "" }
+    runtime.log_info("named a powerbox connection by its program's launch: %", named)
 }
 
 /**

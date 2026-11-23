@@ -870,7 +870,8 @@ grant_for :: fn(
         }
     }
     if parameter.giving == .Powerbox {
-        match powerbox_connection(shell, tree.text) {
+        // Named by the program's launch, not by the shell (decisions/0195, 18d)
+        match pending_powerbox(shell) {
             case Some(made) => return .Ok(cast[slop_os.Handle](made))
             case None => {
                 if parameter.optional {

@@ -114,6 +114,14 @@ Request :: union {
      */
     Powerbox(slop_os.Relative[u8]),
     /**
+     * Ask for a connection to the session's powerbox for a program the asker launches (decisions/0195, 18d), named by
+     * what it runs, not by the asker: the end given can only be moved, never copied, and once the program that holds
+     * it, loaded from an executable Find gave, has it, the session manager has the powerbox serve it under that
+     * program's name. Answered with PowerboxGiven, or Refused(Failed) for a session without a powerbox, or without the
+     * process manager's steering.
+     */
+    PendingPowerbox,
+    /**
      * Ask for a program's debug file (decisions/0185, 12e), by its name's bytes, 1 to MAX_NAME of them: the program
      * linked with its DWARF and its debug table, for the debugger and crash reports' lines. Answered with DebugFile, or
      * Missing, as for Find, and for a program whose bundle has none. A finding connection may ask too.

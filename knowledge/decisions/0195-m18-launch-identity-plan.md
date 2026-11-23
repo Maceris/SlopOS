@@ -100,3 +100,29 @@ As designed above, with these besides:
   stack elsewhere, which hid it; and building a message as `os.begin(&out)^ = .X(os.append(&out, ...))` writes the
   items first, which the message's start then overwrites, which Hemera warns of (W4003), and the protocol's check
   refused.
+
+## As Built: 18c, handles that only move
+`handle_restrict` came with 18a, which needed it. 18d uses it for what 18c was for: the end of a pending powerbox
+connection the session manager gives a launcher loses `RIGHT_DUPLICATE`, so the launcher can move it to the program
+and keep no copy. test_memory checks rights dropped in place, on owning handles and others.
+
+## As Built: 18d, names from the launch
+Built as proposed, except in how the holder is found:
+- **The kernel says who holds a channel's other end** (`channel_peer_owned_by`): whether a process, given with
+  `RIGHT_PROCESS_INSPECT`, holds the other end's owning handle itself, not in its subtree. The process manager doesn't
+  keep the grant labelled `powerbox` to compare. `Identify`, on a steering connection, asks this of each program it
+  loaded and answers with that program's process, its executable (read only) and whether it's been steered. Checking
+  the subtree too named the shell, which launched the child, before the child.
+- **The session manager names a connection** each time round its loop, while any is pending, and waits about 5 ms
+  between passes then, as nothing says when an end has moved. While the end is still its own (the answer that gives
+  it not sent yet) or the asker's, it waits. If a steered program holds it, or one whose executable it never handed
+  out (`Find`), it closes the end. Otherwise it has the powerbox serve it under the installation's name. A pending end
+  that closes, or the oldest of 16, is let go.
+- **`PendingPowerbox`** is how a shell gets a connection for every program it starts. `Powerbox` with a name is
+  answered only for `"shell"`, for the shell's own asks; scripts run in the shell ask as it does, and showing a
+  script's name as a script's is left to 18e.
+- **A debugged, recorded or replayed program has no powerbox connection**: it's steered by the time it runs, so its
+  pending end is closed, as the owner settled for replays.
+- Found on the way: when the shell's answer to `PendingPowerbox` hadn't been sent yet, the session manager found the
+  end in its own table and closed it as unknown, and only under load, where the keys and kept-grant tests failed
+  when they shared the machine with other runs.

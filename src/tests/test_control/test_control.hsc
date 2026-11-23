@@ -479,6 +479,14 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(t, build_copy(given.log, program, ROLE_TARGET), "T is built and told its role")?
     target :: copy.launched.process
+    // Who holds a channel's other end (decisions/0195, 18d): T owns its end of the peer channel, and not one D keeps
+    testing.expect_eq(t, slop_os.channel_peer_owned_by(copy.end, target) or_else false, true,
+        "T owns the other end of the channel D built it with")
+    kept :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "a channel D keeps both ends of")?
+    testing.expect_eq(t, slop_os.channel_peer_owned_by(kept.a, target) or_else true, false,
+        "T doesn't own the other end of a channel it was never given")
+    _ = slop_os.handle_close(cast[slop_os.Handle](kept.a))
+    _ = slop_os.handle_close(cast[slop_os.Handle](kept.b))
     // Where T's things are, and its space
     found := TargetReport.{}
     space_handles : slop_os.Handle[1]
