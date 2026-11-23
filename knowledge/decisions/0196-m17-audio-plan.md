@@ -1,6 +1,6 @@
 # 0196: M17, Audio, Planned
 
-Status: accepted, chosen with the project's owner (2026-11-22); not started
+Status: accepted, chosen with the project's owner (2026-11-22); built 2026-11-23
 Date: 2026-11-22
 Related: `0072` (audio after display), `0037` (budgets, lending), `../design/scheduling.md` (soft real-time, latency),
 `../design/display.md` §7 (audio), `0192` (M15), `0193` (M16), `0195` (M18, after this)
@@ -222,3 +222,36 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
   heard by the audio service (`group 1 at volume 500`), and runs `crashes`, which finds none; `test_file_tree`'s
   `reading` has `tone.wav`, half a second of 440 Hz, which the GUI login test plays in the viewer, and the sound
   window's - turns the GUI session's volume down. Both architectures.
+
+## As Built: 17h, the review
+A review of M17's changes, by a reader who hadn't written them, found one high, two medium and four low; all are
+fixed, and test_sound's `test_sound_limits` boot test holds the first and the places:
+- **A client that doesn't read its answers stalled the audio service** (high): its answers were sent waiting while the
+  client's ring was full, so a program sending SetVolume and reading nothing stopped every session's mix, then the
+  session manager waiting on its root for a volume, and the trusted path waiting on the session manager. The service
+  answers without waiting now, and lets go of a client whose ring is full. The trusted path's waits on the audio
+  service and the session manager have no deadline still; nothing in them waits on a program now.
+- **Floats past full scale escaped the session's volume** (medium): a stream of huge or infinite samples, scaled, was
+  still past full scale, and an infinite one made every stream's sum infinite. Decoded samples are clipped first.
+- **The service's places and memory** (medium): a program could take every place by Connect, leaving none for other
+  sessions or the trusted path's microphone, and make a 240 KiB ring and windows without end of the service's memory.
+  Three places are kept for the trusted path and the microphone's grants, a group has at most 6 connections, a stream
+  one buffer, and every ring together 1 MiB.
+- **The GUI's indicator failed open** (low): a grant was given if the sound window couldn't be made. It's refused.
+- **A Revoke's late NoGrant taken for Grant's answer** (low): it's passed over now.
+- **The driver's capture lengths and stops** (low): only what the device says it wrote of a capture period is decoded,
+  silence past it; and a period the device hasn't returned when recording stops stays given, rather than lost with
+  its descriptors.
+
+## As Built: 17h, the full suites
+Run 2026-11-23: the boot suite three times (304 of 308 before the review's fixes: the root task's grants, 105 now, and
+completion's summaries, which test_ no longer has as it names more programs than summaries are asked for, so the test
+completes test_shell_; then 310 of 310, and 309 of 310), HemeraTest (301 passed), the Linux tests (83 of 83 on x86-64,
+81 of 81 on AArch64), the unit tests (25 of 25) and every fuzz target for 60 s (26, the WAV reader's new).
+- **The KVM test** needed booting again alone once in the second run, the KVM host's floor (17e).
+- **AArch64's stuck-CPU test** failed once among the others in the third run and passed alone: the lockup was reported
+  as a fault of the boot before's rather than as it expects. Not M17's.
+- **The sealed slopfs fuzz target** ran past its time among the others, its encrypted inputs slow to start, and passed
+  alone in its 60 s, finding nothing.
+- Left: the KVM host's floor, until the VM's third core is on (it reports 2 still; a core added in VMware needs the VM
+  powered off and on to take).
