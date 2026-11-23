@@ -196,3 +196,29 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
   Play is refused, records a second of QEMU's `none` input, silence, and takes the grant back, heard released and its
   connection gone; the console's test has `capture` allowed, shown held, taken back with M and its status line clear
   again; the GUI login test does the same through the prompt and the microphone window, clicked. Both architectures.
+
+## As Built: 17g, programs
+- **Each session's sound, at its own volume**: the audio service groups sound connections. One made through its
+  listener is a group's root, and those made by a Connect on one of the group are in it, a group's volume scaling
+  every stream of it as well as each stream's own. Only the root sets it (`SetSessionVolume`). The supervisor gives
+  the session manager a connector to the audio service; it dials a root for each session when its first program that
+  plays starts, and gives its shell and its GUI programs connections of the group; it sets the group's volume as the
+  trusted path asks (session's `SetVolume`, the trusted path's protocol alone).
+- **The shell** gives a program that takes a `Sound` a connection of its own, made from the shell's (`Giving.Sound`),
+  as it gives the network. **`play`** plays a WAV file beneath the shell's directory through it, 16, 24 or 32-bit
+  integers or floats, 1 to 8 channels, 8 to 192 kHz. The plan's `record` is **`capture`** (17f), as the shell's
+  `record` runs a program for replay.
+- **The viewer** says a WAV file is a sound, its format and length; its Play plays it at the session's volume, and
+  Stop, Back or another file stops it. A sound typed by a schema of its own wasn't made: WAV files are what `capture`
+  writes and `play` plays.
+- **The session's volume on the trusted path**: on the console, - and + on the secure attention key's screen, a tenth
+  at a time, said there; in the GUI, the greeter's sound window, passive in the trusted layer's corner (17f), shown
+  while the session runs, with - and + and the volume, and the microphone's holders below while it's held. GUI
+  programs that play nothing, the launcher and the terminal window, close their sound connection at once.
+- **A recording stream's ring is kept a second after its grant's taken back** (`RETIRED_NS`): the service's handle
+  owns it, and closing it unmapped it under `capture` still reading a period it was answered, which faulted now and
+  then (17f's read-only handle didn't keep it alive; a duplicate doesn't own the memory).
+- **Tests**: the console's microphone test plays what `capture` recorded and turns the session's volume down to half,
+  heard by the audio service (`group 1 at volume 500`), and runs `crashes`, which finds none; `test_file_tree`'s
+  `reading` has `tone.wav`, half a second of 440 Hz, which the GUI login test plays in the viewer, and the sound
+  window's - turns the GUI session's volume down. Both architectures.
