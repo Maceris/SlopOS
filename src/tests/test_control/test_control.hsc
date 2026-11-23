@@ -28,6 +28,8 @@ import slop_os from "std:os/slop_os"
 import process_manager from "std:os/slop_os/process_manager"
 import testing from "std:testing"
 import crash_reports from "../../crash_reports"
+import process_builder from "../../process_builder"
+import random_stream from "../../random_stream"
 import test_kit from "../../test_kit"
 
 #if TARGET_ARCH == .x86_64 {
@@ -340,6 +342,11 @@ launch_copy :: fn(
 ) -> Copy? {
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
+    // Its tests attach intercepts to the copy, read its memory and change its threads themselves
+    given := options
+    given.process_rights = cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INTERCEPT)
+        | cast[u32](slop_os.RIGHT_PROCESS_READ_MEMORY)
+        | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE))
     log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
         | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -353,9 +360,58 @@ launch_copy :: fn(
         4 << 20,
         type_of(main),
         CopyGrants.{log = log_copy, peer = pair.b},
-        options
+        given
     )
         or_return null
+    copy.port = os.port_for(block.budget, pair.a) or_return null
+    told := role
+    none : slop_os.Handle[1]
+    match os.send(pair.a, copy.port, os.bytes_of(&told), view_of(&none[0], 0)) {
+        case Some(error) => return null
+        case None => return copy
+    }
+}
+
+/**
+ * Build a copy of the test with the process builder, as launch_copy launches one, but in a process D made and owns with
+ * every right: the process manager gives a launcher none to start threads in what it launches (decisions/0195, 18a),
+ * and the debugger's test starts one in T, as a debugger may in its subtree.
+ *
+ * @param log The test's debug log, duplicated for the copy.
+ * @param program The test's own module, which the copy runs.
+ * @param role ROLE_TARGET, ROLE_EXITING or ROLE_FAULTING, sent on the peer channel.
+ * @return The copy, its launched the process D owns and its budget; null if any step failed.
+ */
+build_copy :: fn(log : slop_os.DebugLog, program : slop_os.Memory, role : u64) -> Copy? {
+    block :: slop_os.startup_block()
+    budget :: slop_os.memory_budget_create(block.budget, (4 << 20) + slop_os.shadow_stacks_budget(1)) or_return null
+    process :: slop_os.process_create(budget) or_return null
+    space :: slop_os.address_space_create(budget) or_return null
+    pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
+    log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
+        | cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
+    log_copy :: slop_os.handle_duplicate(cast[slop_os.Handle](log), log_rights) or_return null
+    size :: slop_os.memory_size(program) or_return null
+    address :: runtime.reserve_addresses(cast[usize](size)) or_return null
+    if slop_os.memory_map(program, block.space, address, 0, size, slop_os.PROTECTION_READ) is_error {
+        return null
+    }
+    defer slop_os.memory_unmap(block.space, address)
+    file :: view_of(cast[ptr[u8]](address), cast[usize](size))
+    stream := random_stream.make(block.seed)
+    seed : u8[32]
+    random_stream.fill(&stream, seed)
+    grants :: process_builder.Grant.[
+        process_builder.grant("log", log_copy),
+        process_builder.grant("peer", cast[slop_os.Handle](pair.b)),
+    ]
+    target :: process_builder.Target.{process = process, space = space, budget = budget}
+    built :: process_builder.build(target, file, grants[0..<grants.count], seed, &stream, slop_os.ABI_VERSION) or_return null
+    copy := Copy.{
+        end = pair.a,
+        launched = os.Launched.{process = process, budget = budget, thread = built.thread, image = built.image},
+    }
     copy.port = os.port_for(block.budget, pair.a) or_return null
     told := role
     none : slop_os.Handle[1]
@@ -423,11 +479,7 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
     )?
     // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
-    copy :: testing.require_some(
-        t,
-        launch_copy(given.log, manager, manager_port, program, "test_control T", ROLE_TARGET),
-        "T is launched and told its role"
-    )?
+    copy :: testing.require_some(t, build_copy(given.log, program, ROLE_TARGET), "T is built and told its role")?
     target :: copy.launched.process
     // Where T's things are, and its space
     found := TargetReport.{}

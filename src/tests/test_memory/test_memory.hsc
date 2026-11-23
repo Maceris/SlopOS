@@ -669,6 +669,27 @@ page_tables_touching :: fn(block : ptr[slop_os.StartupBlock]) -> TableCosts? {
     return TableCosts.{aligned = costs[0], unaligned = costs[1]}
 }
 
+// handle_restrict (decisions/0195, 18c): rights dropped in place, an owning handle's too, never added back
+handles_drop_rights_in_place #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    block :: slop_os.startup_block()
+    owned :: testing.require_ok(t, slop_os.memory_create(block.budget, 4096), "a memory object")?
+    defer slop_os.handle_close(cast[slop_os.Handle](owned))
+    keep :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    testing.require_ok(t, slop_os.handle_restrict(cast[slop_os.Handle](owned), keep), "its owning handle restricted")?
+    info :: testing.require_ok(t, slop_os.handle_info(cast[slop_os.Handle](owned)), "its handle described")?
+    testing.expect_eq(t, cast[u32](info.rights), cast[u32](keep), "it has only the rights kept")
+    testing.expect_error(t, slop_os.handle_duplicate(cast[slop_os.Handle](owned), slop_os.RIGHT_MEMORY_READ),
+        slop_os.HandleError.MissingRight, "without RIGHT_DUPLICATE, it can't be copied")
+    // Asking for more keeps what it has, and adds nothing
+    all :: cast[slop_os.Rights](0xffffffff)
+    testing.require_ok(t, slop_os.handle_restrict(cast[slop_os.Handle](owned), all), "restricted to every right")?
+    again :: testing.require_ok(t, slop_os.handle_info(cast[slop_os.Handle](owned)), "described again")?
+    testing.expect_eq(t, cast[u32](again.rights), cast[u32](keep), "a right it hasn't isn't added")
+    testing.expect_error(t, slop_os.handle_restrict(cast[slop_os.Handle](0x7ffff0), keep),
+        slop_os.HandleError.InvalidHandle, "a handle that isn't the caller's is refused")
+    return .Ok
+}
+
 // handle_same (decisions/0193, 16b): a handle and its duplicate are to one object, two objects' handles aren't
 handles_say_whether_they_are_to_one_object #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     block :: slop_os.startup_block()

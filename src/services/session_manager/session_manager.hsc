@@ -2343,6 +2343,8 @@ prepare :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> Prepa
     prepared.options = os.LaunchOptions.{
         watch = os.LaunchWatch.{port = sessions.port, key = PROGRAM_KEY + cast[u64](index)},
         faults = os.LaunchFaults.{port = sessions.port, key = CRASH_KEY + cast[u64](index)},
+        // A debugger attached on the user's say (decisions/0185) needs the intercept; 18b has the process manager do it
+        process_rights = cast[slop_os.Rights](slop_os.RIGHT_PROCESS_INTERCEPT),
     }
     prepared.options.lifecycle = ends.b
     if cast[usize](number) < sessions.sessions.count {

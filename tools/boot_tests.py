@@ -1795,7 +1795,7 @@ TESTS = [
     program_test("waits on ports, wakes them and sets their timers, and refuses a wait with no room", "test_ports", 4),
     program_test("passes handles and messages over channels", "test_channels", 3),
     # And counts who holds a memory object, and says when no one does (decisions/0178)
-    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 7),
+    program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 8),
     program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets", 2),
     # 17a (decisions/0196): a thread on a 2 ms high-priority budget wakes for its deadlines, idle and with every CPU busy
     program_test("wakes a high-priority thread for its deadlines, with the CPUs idle and with every one busy", "test_latency", 2),

@@ -219,6 +219,33 @@ remove :: fn(table : ptr[mut HandleTable], handle : slop_os.Handle) -> Result[Re
 }
 
 /**
+ * Drop rights from a handle in place, owning or not (decisions/0195, 18c): what it allows from now on is only those of
+ * its rights in keep, so a handle moved on without RIGHT_DUPLICATE can't be copied on the way.
+ *
+ * Takes the table's lock, at rank HandleTable.
+ *
+ * @param table The table, closed or not.
+ * @param handle The handle, as the process gave it.
+ * @param keep The rights it may keep; one it hasn't isn't added.
+ * @return Null once it's restricted; InvalidHandle if it isn't one of the table's: index 0, a page not there, a free
+ *     entry, or one already closed.
+ */
+restrict :: fn(table : ptr[mut HandleTable], handle : slop_os.Handle, keep : slop_os.Rights) -> slop_os.HandleError? {
+    index :: cast[u32](handle) & 0xffff
+    wanted :: cast[u64](cast[u32](handle) >> 16)
+    lock_at(&table.lock, .HandleTable)
+    defer unlock_at(&table.lock, .HandleTable)
+    if index == 0 {
+        return .InvalidHandle
+    }
+    entry :: entry_at(table, index) or_return slop_os.HandleError.InvalidHandle
+    if !handle_entries.restrict(entry, wanted, cast[u32](keep)) {
+        return .InvalidHandle
+    }
+    return null
+}
+
+/**
  * Find the entry at an index, without the table's lock.
  *
  * @param table The table, read with acquire loads, so it may be another CPU's to change meanwhile.

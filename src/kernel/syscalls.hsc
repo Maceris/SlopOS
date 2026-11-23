@@ -307,6 +307,29 @@ sys_handle_same :: fn(
 }
 
 /**
+ * Drop rights from a handle in the caller's table, in place, owning or not (decisions/0195, 18c); no right is needed.
+ *
+ * @param thread The calling thread, whose process's table it's in.
+ * @param handle The handle, of any kind.
+ * @param rights The rights it keeps: those it had and these both; one it hadn't isn't added.
+ * @return Nothing, once it's restricted.
+ * @error InvalidHandle Not a handle in the caller's table, or one already closed.
+ * @error ObjectGone The object was destroyed.
+ */
+sys_handle_restrict :: fn(
+    thread : ptr[mut Thread],
+    handle : slop_os.Handle,
+    rights : slop_os.Rights
+) -> Result[void, slop_os.HandleError] {
+    process :: process_of(thread)
+    _ = lookup(&process.table, handle)?
+    match restrict(&process.table, handle, rights) {
+        case Some(error) => return .Error(error)
+        case None => return .Ok
+    }
+}
+
+/**
  * Find the object a handle in process's table refers to, if it's of kind and has every right in rights, with its error
  * as the call's: they share HandleError's tags.
  *

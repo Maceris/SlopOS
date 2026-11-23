@@ -64,7 +64,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | Number | Call | Arguments | Gives |
 |---|---|---|---|
 | 0 | `handle_close` | handle | nothing; the object is destroyed if it was the owning handle |
-| 1 | `handle_duplicate` | handle, rights | a non-owning handle with those rights; needs `RIGHT_DUPLICATE`, and every right asked for |
+| 1 | `handle_duplicate` | handle, rights | a non-owning handle with those rights; needs `RIGHT_DUPLICATE`, and every right asked for; `handle_restrict`, appended to the calls (`0195`, 18c), drops rights from a handle in place instead, owning or not, so one can be moved on without what its new holder isn't to have |
 | 2 | `handle_info` | handle | the object's kind, and the handle's rights |
 | 3 | `thread_exit` | | never returns: the calling thread is destroyed |
 | 4 | `thread_create` | budget, address space, entry, stack pointer, argument | an owning handle to a new thread, started; needs `RIGHT_SPACE_THREADS`. The thread starts at entry with the argument in the first argument register and every other register zero (`0026`) |

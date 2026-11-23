@@ -140,7 +140,7 @@ of its own with a memory budget split off its starter's, which owns it:
 | Service | Started by | Entry | |
 |---|---|---|---|
 | `entropy` | the root task, with its own loader | `log`, `clients: Listener[Entropy]` | Random bytes from a ChaCha20 stream seeded from its startup block, for each connection |
-| `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Connector]`, `clients: Listener[ProcessManager]` | Loads programs for requesters (below), drawing each one's seed, and the randomness that places its parts, from `entropy` |
+| `process_manager` | the root task, with its own loader | `log`, `entropy: Channel[Connector]`, `clients: Listener[ProcessManager]` | Makes a process for each program requesters load (below), giving them its handle without the right to start threads in it, and draws each one's seed, and the randomness that places its parts, from `entropy` |
 | `platform` | the root task, through the manager | `log`, `platform`, `firmware`, `clients: Listener[Platform]`, `command_line?` | Finds the PCIe host bridge in the firmware tables, numbers its buses and places its BARs where firmware didn't, and gives each device to the supervisor once (below) |
 | `supervisor` | the root task, through the manager | `log`, `manager: Channel[Connector]`, `root: Channel[Supervision]`, `hello_module`, `platform_service: Channel[Connector]?`, `entropy_service: Channel[Connector]?`, `scheduler: Channel[Connector]?`, each driver's module, `command_line?` | Starts the services `system_config` gives it with `os.launch`, and a driver for each device it claims from the platform service, owns them, serves the connectors they're reached through, restarts a driver that crashes or is killed (below), and tells the root task as each starts and ends, and once all have; for an administrator the terminal service has allowed, a trace connection (`trace`) and a connection to the events service (`0185`) |
 | `input` | the supervisor, through the manager, once the drivers have started | `log`, `keyboard0` to `keyboard3: Channel[Connector]?`, `clients: Listener[Seat]`, `command_line?` | The seat's keyboards: what they type, through a keymap, for the terminal service, the secure attention key first, and a new keyboard only once its code is typed (below, `0138`) |
@@ -230,15 +230,20 @@ program it launches one.
 
 **The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 4 KiB
 rings (`RING_BYTES`):
-- `Load`: the program's name; the process (with `RIGHT_PROCESS_THREADS`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`),
-  its address space (owning), its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`) and the
-  executable (with `RIGHT_MEMORY_READ`), which the image is copied from, none of it mapped, so a bundle store that
-  ends takes no process's code with it (`0186`); and up to 32 grants (16
-  before version 2, 24 before 9c3), each with its label. The requester makes the process,
-  its space and its budget, so the result is never the manager's. The answer is `Loaded` with the first thread's
-  ID, where the image was loaded and the seeds it was built with (`Started`), or `NotLoaded` with a `LoadStatus`; a
-  `Load` may give the seeds, its own and its layout's, for a replay (`0183`), or leave them to the manager to draw.
-  Either way the manager keeps none of the handles.
+- `Load` (version 4, `0195`'s 18a): the program's name; its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE`
+  and `RIGHT_TRANSFER`) and the executable (with `RIGHT_MEMORY_READ`), which the image is copied from, none of it
+  mapped, so a bundle store that ends takes no process's code with it (`0186`); up to 48 grants, each with its
+  label; and what's to be done before the program's first instruction: the CPU budget it runs on, a port and key its
+  end is reported on, and a port, key, calls and stops for an intercept of it. The manager makes the process and its
+  address space from the budget, so they're charged to the requester, and does those things before it starts the
+  first thread. The answer is `Loaded` (`Started`): the process's owning handle, which moves to the requester, so the
+  program is the requester's and outlives the manager, but with only `RIGHT_PROCESS_KILL`, `RIGHT_PROCESS_INSPECT`,
+  `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`, and those of the `Load`'s `rights` it may ask for, reading its memory,
+  changing its threads' state and intercepting it (`handle_restrict`), never `RIGHT_PROCESS_THREADS`; the intercept
+  and the address space (to move on only) if one was asked for; the first thread's ID, where the image was loaded
+  and the seeds it was built with. A program that ended before it's answered has no process left to give. Or the
+  answer is `NotLoaded` with a `LoadStatus`. A `Load` may give the seeds, its own and its layout's, for a replay
+  (`0183`), or leave them to the manager to draw. The manager keeps none of the handles.
 - `Connect`: a `Channel[ProcessManager]`, which becomes another client.
 
 ## Protocols

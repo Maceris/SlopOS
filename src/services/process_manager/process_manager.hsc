@@ -1,7 +1,8 @@
 /**
- * The process manager (decisions/0012, 0058, 0067, 0071): loads programs into processes their requesters
- * made, which stay theirs and are paid for by them, and keeps nothing of what it builds, so a program
- * outlives it. Its protocol is std's (std/os/slop_os/process_manager). It serves clients, the listener the
+ * The process manager (decisions/0012, 0058, 0067, 0071, 0195): makes a process for each program it loads, paid for by
+ * the requester's budget, and gives the requester its owning handle, so a program is the requester's and outlives the
+ * manager; but with the rights to watch it and end it, and to read it only where the Load asks, never to start
+ * threads in it or give it handles, which only the manager does, as it builds it (18a). Its protocol is std's (std/os/slop_os/process_manager). It serves clients, the listener the
  * root task connects through, and each connection a client sends it in a Connect; each Load gets a Response.
  * The entropy service gives each program its seed, and the randomness that places its parts; it's reached through a
  * connector the root task serves, and dialed again if it's started again (decisions/0140).
@@ -49,11 +50,11 @@ Manager :: struct {
 }
 
 /**
- * Load programs into processes other programs make, for the root task, the supervisor and whoever else is given it.
+ * Load programs into processes it makes, for the root task, the supervisor and whoever else is given it.
  *
- * The program runs until the system stops. A requester makes the process, its address space and its budget, and
- * hands them over with the executable and the program's grants in a Load; the manager builds the program in, starts
- * its first thread, and keeps none of it, so the program is the requester's and outlives the manager.
+ * The program runs until the system stops. A requester hands over its budget, the executable and the program's grants
+ * in a Load; the manager makes its process and address space from the budget, builds the program in, starts its first
+ * thread, and gives the requester the process's owning handle, its rights cut to what a launcher may have.
  *
  * @param log The debug log it writes its lines to: that it's serving, and each program started or not. Without one,
  *     it writes nothing.
@@ -148,7 +149,26 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
                 response^ = load(manager, &loading)
-                _ = protocol.send_response(end, manager.port, &out)
+                /*
+                 * Not sent, the program's handles are still the manager's: closed, which ends the program. A program
+                 * that's ended already can't have its handles moved, so it's answered again without them: its end was
+                 * reported on its watch
+                 */
+                if protocol.send_response(end, manager.port, &out) is_some {
+                    match response^ {
+                        case Loaded(started) => {
+                            close_started(started)
+                            ended := started
+                            ended.process = cast[slop_os.Process](slop_os.NO_HANDLE)
+                            ended.intercept = cast[slop_os.Intercept](slop_os.NO_HANDLE)
+                            ended.space = cast[slop_os.AddressSpace](slop_os.NO_HANDLE)
+                            again := os.Outgoing.{}
+                            os.begin[protocol.Response](&again)^ = .Loaded(ended)
+                            _ = protocol.send_response(end, manager.port, &again)
+                        }
+                        case _ => {}
+                    }
+                }
             }
             case Connect(connection) => {
                 if !service_kit.add_client(&manager.clients, manager.port, connection.end) {
@@ -163,21 +183,53 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
 MAX_EXECUTABLE : u64 : 4 << 20
 
 /**
- * Build a Load's program into the requester's process and start its first thread.
+ * Close what Loaded would have given a requester it couldn't be sent to: the process, which ends it, and its intercept
+ * and address space.
+ *
+ * @param started What Loaded says; its handles, still the manager's, are closed.
+ */
+close_started :: fn(started : protocol.Started) {
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](started.intercept),
+        cast[slop_os.Handle](started.space),
+        cast[slop_os.Handle](started.process)
+    ] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
+}
+
+/** The rights a requester's handle to its program's process has, whatever its Load asks. */
+GIVEN_RIGHTS :: cast[u32](slop_os.RIGHT_PROCESS_KILL)
+    | cast[u32](slop_os.RIGHT_PROCESS_INSPECT)
+    | cast[u32](slop_os.RIGHT_DUPLICATE)
+    | cast[u32](slop_os.RIGHT_TRANSFER)
+/** The rights a Load may ask for beside them; never RIGHT_PROCESS_THREADS. */
+ASKABLE_RIGHTS :: cast[u32](slop_os.RIGHT_PROCESS_READ_MEMORY)
+    | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE)
+    | cast[u32](slop_os.RIGHT_PROCESS_INTERCEPT)
+
+/**
+ * Build a Load's program into a new process and start its first thread.
  *
  * 64 bytes are drawn from the entropy service: the first 32 the program's seed, for its startup block, the rest the
  * seed of the stream that places its parts. The executable is copied to the manager's heap, through memory_read, to
- * be built from, and freed after; only the new process maps it. Whatever happens, the request's handles leave this
- * process: to the program, or closed; when it fails, the
- * process, space and budget are the requester's to destroy.
+ * be built from, and freed after; only the new process maps it. The process and its address space are made from the
+ * Load's budget; before its first thread starts, it's put on the Load's CPU budget, its end watched and its intercept
+ * attached, as the Load asks; once it's started, the owning handle's rights are cut to GIVEN_RIGHTS and those of the
+ * Load's rights that are ASKABLE_RIGHTS. Whatever happens, the request's handles leave this process: to the program,
+ * or closed; and when it fails, what was made for it is destroyed.
  *
  * @param manager The manager, whose entropy connection may be dialed again.
  * @param request The Load, whose handles are all gone from this process when it returns.
- * @return Loaded with the first thread's ID, the image's address and the seeds; or NotLoaded with BadRequest for
+ * @return Loaded with the process, the intercept and its address space if asked, the first thread's ID, the image's
+ *     address and the seeds, the handles the manager's until it's sent; or NotLoaded with BadRequest for
  *     more than MAX_GRANTS grants or an executable that's empty, larger than MAX_EXECUTABLE, or can't be read (its
  *     memory gone), NoRandom when the entropy service, asked when the Load gives no seeds, doesn't answer even when
- *     dialed again, NoMemory when the heap can't hold its copy or the build ran out, NotAProgram when it isn't an
- *     executable the loader takes, and Failed for any other failure building it.
+ *     dialed again, NoMemory when the heap can't hold its copy, the budget its process, or the build ran out,
+ *     NotAProgram when it isn't an executable the loader takes, NoCpuBudget when the CPU budget couldn't be put on,
+ *     NoWatch when the watch or the intercept couldn't be made, and Failed for any other failure building it.
  */
 load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol.Response {
     defer close_all(request)
@@ -225,7 +277,48 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
             grants[i] = process_builder.Grant.{label = request.labels[i], handle = request.grants[i]}
         }
     }
-    target :: process_builder.Target.{process = request.process, space = request.space, budget = request.budget}
+    // The process and its space, the manager's until Loaded moves the process to the requester
+    process :: slop_os.process_create(request.budget) or_return .NotLoaded(.NoMemory)
+    started := false
+    made := protocol.Started.{
+        process = process,
+        intercept = cast[slop_os.Intercept](slop_os.NO_HANDLE),
+        space = cast[slop_os.AddressSpace](slop_os.NO_HANDLE),
+    }
+    defer {
+        if !started {
+            close_started(made)
+        }
+    }
+    space :: slop_os.address_space_create(request.budget) or_return .NotLoaded(.NoMemory)
+    // Given to the process by build; closed here if build doesn't get that far
+    space_given := false
+    defer {
+        if !space_given {
+            _ = slop_os.handle_close(cast[slop_os.Handle](space))
+        }
+    }
+    if cast[slop_os.Handle](request.cpu_budget) != slop_os.NO_HANDLE
+        && (slop_os.process_set_cpu_budget(process, request.cpu_budget) is_error) {
+        return .NotLoaded(.NoCpuBudget)
+    }
+    if cast[slop_os.Handle](request.watch_port) != slop_os.NO_HANDLE
+        && (slop_os.port_bind(request.watch_port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED,
+            request.watch_key, .Once) is_error) {
+        return .NotLoaded(.NoWatch)
+    }
+    if cast[slop_os.Handle](request.intercept_port) != slop_os.NO_HANDLE {
+        made.intercept = slop_os.intercept_attach(
+            process,
+            request.intercept_port,
+            request.intercept_key,
+            request.intercept_calls,
+            request.intercept_points
+        ) or_return .NotLoaded(.NoWatch)
+        made.space = cast[slop_os.AddressSpace](slop_os.handle_duplicate(cast[slop_os.Handle](space), slop_os.RIGHT_TRANSFER)
+            or_return .NotLoaded(.NoMemory))
+    }
+    target :: process_builder.Target.{process = process, space = space, budget = request.budget}
     match process_builder.build(
         target,
         file,
@@ -236,11 +329,23 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
         &manager.staging
     ) {
         case Ok(built) => {
+            space_given = true
+            // The requester's from now on, to watch, end and read as it asked, never to start threads in
+            kept :: cast[slop_os.Rights](GIVEN_RIGHTS | (cast[u32](request.rights) & ASKABLE_RIGHTS))
+            // One that's ended already has nothing to restrict: answered without it, its end reported on its watch
+            if slop_os.handle_restrict(cast[slop_os.Handle](process), kept) is_error {
+                _ = slop_os.handle_close(cast[slop_os.Handle](process))
+                made.process = cast[slop_os.Process](slop_os.NO_HANDLE)
+            }
+            started = true
+            made.thread = built.thread
+            made.image = built.image
+            made.seeds = seeds
             log_line.write(manager.log, "process manager: started %", name)
             if manager.profile {
                 log_line.write(manager.log, "process manager: profile: % at %", name, built.image)
             }
-            return .Loaded(protocol.Started.{thread = built.thread, image = built.image, seeds = seeds})
+            return .Loaded(made)
         }
         case Error(error) => {
             log_line.write(manager.log, "process manager: % didn't start: %", name, error)
@@ -329,16 +434,23 @@ draw_once :: fn(manager : ptr[mut Manager], bytes : mut u8[]) -> bool {
 }
 
 /**
- * Close the request's handles still in this process's table: its process, space, budget, executable and grants.
+ * Close the request's handles still in this process's table: its budgets, ports, executable and grants.
  *
  * One that went to the program is gone from the table already, so closing it fails, harmlessly.
  *
  * @param request The Load, whose handle fields are left as they were, naming nothing of this process's now.
  */
 close_all :: fn(request : ptr[protocol.Load]) {
-    _ = slop_os.handle_close(cast[slop_os.Handle](request.process))
-    _ = slop_os.handle_close(cast[slop_os.Handle](request.space))
-    _ = slop_os.handle_close(cast[slop_os.Handle](request.budget))
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](request.budget),
+        cast[slop_os.Handle](request.cpu_budget),
+        cast[slop_os.Handle](request.watch_port),
+        cast[slop_os.Handle](request.intercept_port)
+    ] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
     _ = slop_os.handle_close(cast[slop_os.Handle](request.executable))
     for handle in request.grants {
         _ = slop_os.handle_close(handle)

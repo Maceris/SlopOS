@@ -151,6 +151,25 @@ empty :: fn(entry : ptr[mut HandleEntry], wanted : u64, next : ptr[mut u64]) -> 
 }
 
 /**
+ * Drop rights from a filled entry in place, by whoever holds its table's lock: its handle, owning or not, has only
+ * those of its rights in keep from now on. A read racing it sees the rights before or after, never more than before.
+ *
+ * @param entry The entry.
+ * @param wanted The generation of the handle being restricted, 0 to 0xffff.
+ * @param keep The rights it may keep, as the kernel's rights bits; those it hasn't aren't added.
+ * @return Whether it was restricted; false if it's empty, or its generation isn't wanted, as the handle was closed.
+ */
+restrict :: fn(entry : ptr[mut HandleEntry], wanted : u64, keep : u32) -> bool {
+    tag :: intrinsics.atomic_load_u64_no_fence(&entry.tag)
+    if tag & TAG_VALID == 0 || tag >> TAG_GENERATION_SHIFT != wanted {
+        return false
+    }
+    rights :: cast[u64](cast[u32](tag) & keep)
+    intrinsics.atomic_store_u64_release(&entry.tag, (tag & ~cast[u64](0xffffffff)) | rights)
+    return true
+}
+
+/**
  * Read a filled entry's tag, object and generation by whoever holds its table's lock, or once nothing changes it.
  *
  * @param entry The entry.
