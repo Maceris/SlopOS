@@ -74,6 +74,8 @@ import test_libraries from "../tests/test_libraries"
 import test_memory from "../tests/test_memory"
 import test_msi_dma from "../tests/test_msi_dma"
 import test_network from "../tests/test_network"
+import test_sound from "../tests/test_sound"
+import virtio_sound from "../drivers/virtio_sound"
 import test_pager from "../tests/test_pager"
 import test_perf from "../tests/test_perf"
 import test_ports from "../tests/test_ports"
@@ -117,7 +119,7 @@ CpuShare :: struct {
  * An os.Channel[P] a service takes is required, and an optional one optional. What isn't late, and is started, has to
  * be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is degraded.
  */
-LATE :: string.["edu_dma", "virtio_input", "disk_check", "ssh"]
+LATE :: string.["edu_dma", "virtio_input", "virtio_sound", "disk_check", "ssh"]
 
 /**
  * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its
@@ -473,6 +475,16 @@ SERVICES :: Service.[
         entry = type_of(test_network.main),
         not_restarted = true,
     },
+    // The sound device's test client (decisions/0196, 17c), started only with test_sound on the kernel's command line
+    Service.{
+        name = "test_sound",
+        module = "test_sound.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 2 * MIB,
+        entry = type_of(test_sound.main),
+        not_restarted = true,
+    },
     // Objects by their hashes, on the system volume, paged into whoever reads them (decisions/0094)
     Service.{
         name = "bundle_store",
@@ -589,6 +601,17 @@ SERVICES :: Service.[
         budget = 2 * MIB,
         entry = type_of(i6300esb.main),
         devices = platform_protocol.DeviceMatch.{vendor = 0x8086, device = 0x25ab, class = platform_protocol.ANY_CLASS},
+    },
+    // A virtio sound device (virtio's device ID 25, decisions/0196): its rings in its own memory, the device's in DMA
+    Service.{
+        name = "virtio_sound",
+        module = "virtio_sound.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 2 * MIB,
+        entry = type_of(virtio_sound.main),
+        devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1059, class = platform_protocol.ANY_CLASS},
+        trusted_with_dma = true,
     },
     Service.{
         name = "virtio_rng",

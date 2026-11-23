@@ -38,6 +38,7 @@ Tools are found from the environment, then the PATH:
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -2358,6 +2359,10 @@ def main() -> int:
     parser.add_argument("--compositor", action="store_true",
                         help="a virtio GPU, tablet and keyboard for the compositor and test_compositor: its windows typed into, "
                         "clicked, dragged and pasted into, and the screen checked, with --expect (decisions/0192, 15c)")
+    parser.add_argument("--audio-tone", type=float, metavar="HZ",
+                        help="a virtio sound device, what it plays written by QEMU's wav backend; with --expect, it has to "
+                        "have played at least AUDIO_SECONDS of a tone of this frequency at half of full scale, its "
+                        "harmonics and gaps said (decisions/0196, 17c)")
     parser.add_argument("--display", action="store_true",
                         help="a virtio GPU and a virtio tablet for test_display: once it shows its cursor, the tablet clicks in the "
                         "screen's middle, and once it says where, the screen is taken and checked for its scene, with --expect "
@@ -2495,6 +2500,11 @@ def main() -> int:
         extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         if peers is not None:
             extra += peers.qemu_arguments()
+        # A sound device, what it plays written by QEMU to a WAV file in the run's folder (decisions/0196, 17c)
+        played = folder / "played.wav"
+        if arguments.audio_tone is not None:
+            extra += ["-audiodev", f"wav,id=sound,path={played}",
+                      "-device", "virtio-sound-pci,audiodev=sound,disable-legacy=on,iommu_platform=on"]
         console = None
         disk = folder / "disk.img"
         # How long each phase takes, said at the end, to see where a test's time goes
@@ -2585,6 +2595,7 @@ def main() -> int:
                 again = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot))
             phases.append((f"boot {boot}", time.monotonic() - booting_started))
             later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
+        audio_wrong = tone_played(played, arguments.audio_tone) if arguments.audio_tone is not None else None
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
         image_bytes = disk.read_bytes() if disk.exists() and (arguments.expect_disk_text or arguments.refuse_disk_text) else b""
         unwritten += [f"text {text}" for text in arguments.expect_disk_text if text.encode() not in image_bytes]
@@ -2665,6 +2676,9 @@ def main() -> int:
         if display_test is not None and display_test.problem is not None:
             print(f"boot.py: the display: {display_test.problem}", file=sys.stderr)
             missing_shown.append(display_test.problem)
+        if audio_wrong is not None:
+            print(f"boot.py: the sound played: {audio_wrong}", file=sys.stderr)
+            missing_shown.append(audio_wrong)
         for expected in unwritten:
             print(f"boot.py: the disk has no block {expected!r}", file=sys.stderr)
         for text in leaked:
@@ -2713,6 +2727,76 @@ def run_done(arguments: argparse.Namespace, serial: Path, console: "ConsoleLink 
         and all(any(line.startswith(start) for line in shown) for start in arguments.expect_console_start) \
         and all(any(line.endswith(end) for line in shown) for end in arguments.expect_console_end) \
         and all(any(part in line for line in shown) for part in arguments.expect_console_contains)
+
+
+# How much of a tone --audio-tone wants played, in seconds; how far its level may be from half of full scale; how strong
+# its harmonics may be, as a fraction of it; and how long a stretch of silence counts as a gap, in seconds
+AUDIO_SECONDS = 0.9
+AUDIO_LEVEL_TOLERANCE = 0.05
+AUDIO_HARMONICS = 0.04
+AUDIO_GAP = 0.002
+
+
+def tone_strength(samples: list, frequency: float, rate: float) -> float:
+    """How strong a frequency is in samples, by the Goertzel algorithm: the amplitude a sine of it would have."""
+    if not samples:
+        return 0.0
+    coefficient = 2.0 * math.cos(2.0 * math.pi * frequency / rate)
+    previous = before = 0.0
+    for sample in samples:
+        previous, before = sample + coefficient * previous - before, previous
+    power = previous * previous + before * before - coefficient * previous * before
+    return 2.0 * math.sqrt(max(power, 0.0)) / len(samples)
+
+
+def tone_played(played: Path, frequency: float) -> str | None:
+    """
+    Check what QEMU's wav backend wrote: at least AUDIO_SECONDS of sound, its middle a tone of frequency at half of
+    full scale, its harmonics under AUDIO_HARMONICS of it. Says how much it played, and its gaps, stretches of silence
+    of AUDIO_GAP or more inside the sound, which only fail it if there's too little sound. None if it's right.
+    """
+    if not played.exists():
+        return "QEMU wrote no WAV file"
+    # As QEMU writes it, its sizes filled in only as it closes, which a run ended through the exit device doesn't do: the
+    # format from its fmt chunk, its data from its data chunk's header to the file's end
+    data = played.read_bytes()
+    fmt = data.find(b"fmt ")
+    samples = data.find(b"data")
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE" or fmt < 0 or samples < 0 or fmt + 24 > len(data):
+        return f"QEMU's WAV file, {len(data)} bytes, isn't one: it starts {data[:48]!r}"
+    channels, rate = struct.unpack_from("<HI", data, fmt + 10)
+    width = struct.unpack_from("<H", data, fmt + 22)[0] // 8
+    raw = data[samples + 8:]
+    if width != 2 or channels < 1:
+        return f"QEMU's WAV file has {width}-byte samples and {channels} channels, not 16-bit ones"
+    count = len(raw) // (2 * channels)
+    left = [int.from_bytes(raw[i * 2 * channels:i * 2 * channels + 2], "little", signed=True) / 32768.0 for i in range(count)]
+    sound = [i for i, sample in enumerate(left) if abs(sample) > 0.1]
+    if not sound:
+        return f"no sound in {count / rate:.2f} s of QEMU's WAV file"
+    first, last = sound[0], sound[-1]
+    seconds = (last - first) / rate
+    # Silence inside the sound: a tone at half of full scale crosses 0.1 twice a cycle, so a run under it longer than
+    # a gap's is the device having nothing to play
+    gaps = 0
+    quiet = 0
+    for sample in left[first:last]:
+        quiet = quiet + 1 if abs(sample) < 0.01 else 0
+        if quiet == int(AUDIO_GAP * rate):
+            gaps += 1
+    middle = (first + last) // 2
+    window = left[middle - rate // 4:middle + rate // 4]
+    level = tone_strength(window, frequency, rate)
+    harmonic = max(tone_strength(window, frequency * 2, rate), tone_strength(window, frequency * 3, rate))
+    print(f"boot.py: the sound played: {seconds:.2f} s, its tone at {level:.3f} of full scale, harmonics at {harmonic:.4f}, "
+          f"{gaps} gaps", file=sys.stderr)
+    if seconds < AUDIO_SECONDS:
+        return f"only {seconds:.2f} s of sound, not {AUDIO_SECONDS}"
+    if abs(level - 0.5) > AUDIO_LEVEL_TOLERANCE:
+        return f"its tone at {level:.3f} of full scale, not 0.5"
+    if harmonic > AUDIO_HARMONICS * level:
+        return f"its harmonics at {harmonic:.4f}, past {AUDIO_HARMONICS} of the tone"
+    return None
 
 
 # What the firmware's console writes besides text: ANSI escape sequences (CSI and the like), and carriage returns

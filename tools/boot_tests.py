@@ -265,6 +265,15 @@ TESTS = [
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on,iommu_platform=on"]),
+    # virtio-sound (decisions/0196, 17c): the driver serving the device's output stream, and test_sound playing a second of
+    # a 1 kHz tone at half of full scale through it, which QEMU's wav backend writes and boot.py checks
+    ("plays a tone through a virtio sound device", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_sound test_settle=60", "--audio-tone=1000",
+        "--expect-line=[user] root task: the supervisor started virtio_sound",
+        "--expect-line-start=[user] virtio_sound: serving stream ",
+        "--expect-line-start=[user] test_sound: played 200 periods of a 1 kHz tone",
+        "--expect-line=[user] supervisor: test_sound ended",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # virtio-net and the network layer (decisions/0188, 13a and 13b): the driver serving QEMU's MAC, the network service
     # taking the interface, a lease from QEMU's user-mode DHCP, a link-local address and one from its router's prefix
     # (each stable, so only their prefixes are known), and a ping to the router over each family answered. Both families

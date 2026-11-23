@@ -109,6 +109,9 @@ import system_records from "../../system_records"
 import test_compositor from "../../tests/test_compositor"
 import test_display from "../../tests/test_display"
 import test_network from "../../tests/test_network"
+import test_sound from "../../tests/test_sound"
+import virtio_sound from "../../drivers/virtio_sound"
+import audio from "../../protocols/audio"
 import account_service from "../account_service"
 import acpi_service from "../acpi_service"
 import bundle_store_service from "../bundle_store_service"
@@ -257,6 +260,8 @@ Speaks :: enum {
     Storage,
     /** The account service: the accounts protocol. */
     Accounts,
+    /** A sound device's driver: the audio protocol. */
+    Audio,
 }
 
 /**
@@ -444,6 +449,14 @@ TestDisplayGrants :: struct {
     input2 : os.Channel[connector.Connector]?,
     /** A connector to the fourth input device's driver. */
     input3 : os.Channel[connector.Connector]?,
+}
+
+/** What test_sound's client is given (test_sound.main); its handles move to it at its launch. */
+TestSoundGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the first sound device's driver. */
+    sound : os.Channel[connector.Connector]?,
 }
 
 /** What test_network's client is given (test_network.main); its handles move to it at its launch. */
@@ -759,6 +772,10 @@ Modules :: struct {
     network : slop_os.Memory?,
     /** test_network's client's module. */
     test_network : slop_os.Memory?,
+    /** The virtio sound driver's module. */
+    virtio_sound : slop_os.Memory?,
+    /** test_sound's client's module. */
+    test_sound : slop_os.Memory?,
     /** test_display's client's module. */
     test_display : slop_os.Memory?,
     /** test_compositor's client's module. */
@@ -1059,6 +1076,8 @@ Supervisor :: struct {
     first_keyboard : usize,
     /** The first NIC's driver, by index in started; NOWHERE without one. */
     first_nic : usize,
+    /** The first sound device's driver, by index in started; NOWHERE without one. */
+    first_audio : usize,
     /** The first display's driver, by index in started; NOWHERE without one. */
     first_display : usize,
     /** The compositor, by index in started; NOWHERE until it's started. */
@@ -1256,6 +1275,8 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param framebuffer_display_module The framebuffer display's program.
  * @param network_module The network service's program.
  * @param test_network_module test_network's client's program.
+ * @param virtio_sound_module The virtio sound driver's program.
+ * @param test_sound_module test_sound's client's program.
  * @param test_display_module test_display's client's program.
  * @param test_compositor_module test_compositor's client's program.
  * @param test_gui_module test_gui's client's program.
@@ -1305,6 +1326,8 @@ main :: fn(
     framebuffer_display_module : slop_os.Memory?,
     network_module : slop_os.Memory?,
     test_network_module : slop_os.Memory?,
+    virtio_sound_module : slop_os.Memory?,
+    test_sound_module : slop_os.Memory?,
     test_display_module : slop_os.Memory?,
     test_compositor_module : slop_os.Memory?,
     test_gui_module : slop_os.Memory?,
@@ -1363,6 +1386,7 @@ main :: fn(
         first_disk = NOWHERE,
         first_keyboard = NOWHERE,
         first_nic = NOWHERE,
+        first_audio = NOWHERE,
         first_display = NOWHERE,
         compositor = NOWHERE,
         trusted_surface = NONE,
@@ -1415,6 +1439,8 @@ main :: fn(
         framebuffer_display = framebuffer_display_module,
         network = network_module,
         test_network = test_network_module,
+        virtio_sound = virtio_sound_module,
+        test_sound = test_sound_module,
         test_display = test_display_module,
         test_compositor = test_compositor_module,
         test_gui = test_gui_module,
@@ -1468,6 +1494,8 @@ main :: fn(
     no_disk_check := false
     // The network's test client (decisions/0188, 13c)
     test_network_client := false
+    // The sound device's test client (decisions/0196, 17c)
+    test_sound_client := false
     // The display's test client (decisions/0192, 15b)
     test_display_client := false
     // The compositor (decisions/0192, 15c), with gui; its test client with test_compositor
@@ -1482,6 +1510,7 @@ main :: fn(
             text :: service_kit.text_of(startup, memory) or_else ""
             test_restart = service_kit.has_word(text, "test_restart")
             test_network_client = service_kit.has_word(text, "test_network")
+            test_sound_client = service_kit.has_word(text, "test_sound")
             test_display_client = service_kit.has_word(text, "test_display")
             test_compositor_client = service_kit.has_word(text, "test_compositor")
             test_gui_client = service_kit.has_word(text, "test_gui")
@@ -1591,6 +1620,9 @@ main :: fn(
         }
         if test_display_client {
             start_test_display(&supervisor)
+        }
+        if test_sound_client {
+            start_test_sound(&supervisor)
         }
         if test_compositor_client {
             start_test_client(&supervisor, "test_compositor")
@@ -2811,6 +2843,13 @@ start_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, device : pla
         listener = pair.b
         launched = launch_serving[net.Net](supervisor, service, device, pair.a, type_of(virtio_net.main))
     }
+    else if service.name == "virtio_sound" {
+        name = "virtio_sound"
+        speaks = .Audio
+        pair :: listener_for[audio.Audio](supervisor, &device) or_return void
+        listener = pair.b
+        launched = launch_serving[audio.Audio](supervisor, service, device, pair.a, type_of(virtio_sound.main))
+    }
     else if service.name == "i6300esb" {
         name = "i6300esb"
         pair :: listener_for[watchdog.Watchdog](supervisor, &device) or_return void
@@ -2886,6 +2925,9 @@ start_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, device : pla
     }
     if speaks == .Net && supervisor.first_nic == NOWHERE {
         supervisor.first_nic = slot
+    }
+    if speaks == .Audio && supervisor.first_audio == NOWHERE {
+        supervisor.first_audio = slot
     }
     if speaks == .Display && supervisor.first_display == NOWHERE {
         supervisor.first_display = slot
@@ -4979,6 +5021,12 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "network" {
         modules.network
     }
+    else if name == "virtio_sound" {
+        modules.virtio_sound
+    }
+    else if name == "test_sound" {
+        modules.test_sound
+    }
     else if name == "test_network" {
         modules.test_network
     }
@@ -5795,6 +5843,34 @@ start_test_display :: fn(supervisor : ptr[mut Supervisor]) {
         options_for(supervisor, service.name)
     ) {
         case Ok(launched) => _ = place(supervisor, "test_display", kept(supervisor, launched), NOWHERE)
+        case Error(error) => failed(supervisor, service.name, error)
+    }
+}
+
+/**
+ * Start test_sound's client (decisions/0196, 17c), with a connector to the first sound device's driver; only with
+ * test_sound on the kernel's command line, and a sound device.
+ *
+ * @param supervisor The supervisor.
+ */
+start_test_sound :: fn(supervisor : ptr[mut Supervisor]) {
+    if supervisor.first_audio == NOWHERE {
+        log_line.write(supervisor.log, "supervisor: test_sound: no sound device")
+        return void
+    }
+    service :: service_named(supervisor, "test_sound") or_return void
+    grants := TestSoundGrants.{log = duplicate_log(supervisor), sound = connector_to(supervisor, supervisor.first_audio)}
+    match os.launch(
+        supervisor.manager,
+        supervisor.manager_port,
+        service.name,
+        module_of(supervisor, "test_sound"),
+        service.budget,
+        type_of(test_sound.main),
+        grants,
+        options_for(supervisor, service.name)
+    ) {
+        case Ok(launched) => _ = place(supervisor, "test_sound", kept(supervisor, launched), NOWHERE)
         case Error(error) => failed(supervisor, service.name, error)
     }
 }
@@ -6758,6 +6834,7 @@ dial :: fn(supervisor : ptr[mut Supervisor], target : usize) -> slop_os.Channel?
         case .Seat => (seat.connect(entry.listener, port, budget) or_return null).end
         case .Storage => (storage.connect(entry.listener, port, budget) or_return null).end
         case .Accounts => (accounts.connect(entry.listener, port, budget) or_return null).end
+        case .Audio => (audio.connect(entry.listener, port, budget) or_return null).end
         case .Nothing => null
     }
 }

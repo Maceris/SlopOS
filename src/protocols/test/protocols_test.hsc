@@ -18,6 +18,7 @@ import tcp_listener from "std:os/slop_os/tcp_listener"
 import tcp_stream from "std:os/slop_os/tcp_stream"
 import testing from "std:testing"
 import accounts from "../accounts"
+import audio from "../audio"
 import block from "../block"
 import bundle_store from "../bundle_store"
 import clock_setting from "../clock_setting"
@@ -60,7 +61,7 @@ Judged :: struct {
 }
 
 /** How many protocols there are. */
-PROTOCOL_COUNT :: 35
+PROTOCOL_COUNT :: 36
 /** The most bytes a case's message has: a case reads at most testing.MAX_CASE_BYTES, its other draws among them. */
 MOST_MESSAGE_BYTES :: 1000
 
@@ -72,6 +73,7 @@ MOST_MESSAGE_BYTES :: 1000
 protocols :: fn() -> Judged[PROTOCOL_COUNT] {
     return Judged.[
         Judged.{name = "accounts", request = accounts.validate_request, response = accounts.validate_response},
+        Judged.{name = "audio", request = audio.validate_request, response = audio.validate_response},
         Judged.{name = "block", request = block.validate_request, response = block.validate_response},
         Judged.{
             name = "bundle_store",

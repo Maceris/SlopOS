@@ -93,3 +93,23 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
 - **WAV**: `read_wav` from anyone's bytes (PCM 16, 24 and 32 bits, float 32, either as WAVE_FORMAT_EXTENSIBLE; other
   chunks skipped, odd ones padded; a data chunk past the file taken as far as it goes), `write_wav`. Fuzzed:
   `tools/fuzz.py wav`, 2.5 million inputs in 30 s, nothing found.
+
+## As Built: 17c, virtio-sound and the audio protocol
+- **The `audio` protocol** (`src/protocols/audio`): a stream in the system's format, 48 kHz stereo 32-bit floats,
+  through a ring of 8 periods of 240 frames (5 ms each, 40 ms in all) in memory the client reaches through a window
+  (`GetBuffer`), 16 KiB as windows are whole pages. `Play(period)` is answered with `Played` once the device has taken
+  it, with the device's latency and the underruns so far; `Stop`. One client plays at a time, the latest to ask for
+  the ring. It's among the protocols whose messages are fuzzed.
+- **`virtio_sound`** (virtio's device 25, PCI 0x1059): the control, event and transmit queues on one MSI-X vector; the
+  first output stream that takes 48 kHz stereo, as floats if it can (QEMU's does) or else 16-bit integers; each period
+  encoded from the ring into the device's memory with std/audio, clipped and NaN silent, the ring itself never the
+  device's to see; `PCM_START` once half the ring is given; running dry while playing, or the device's xrun event,
+  counted as an underrun. Started by the supervisor for each such device, as `Speaks.Audio`, the first `first_audio`.
+- **`test_sound`**, started with `test_sound` on the command line, plays a second of a 1 kHz tone at half scale,
+  every period kept given. `boot.py --audio-tone=HZ` adds the device with QEMU's `wav` backend writing into the run's
+  folder, read as it was left, its sizes still 0 since a run ends through the exit device before QEMU closes it, and
+  checks at least 0.9 s of the tone at half scale within 0.05, harmonics under 4% of it; gaps of 2 ms or more are said.
+  Measured on both architectures: 200 periods played, 0.99 s at 0.499 of full scale, no harmonics, no gaps, the device
+  at most 35 ms behind; the one underrun counted is the ring running out at the end.
+- **Found on the way**: windows are whole pages; `give` is a Hemera keyword; and once, the compiler crashed in
+  `get_base_type` laying a struct out, then built the same sources three times cleanly, a race left to look into.
