@@ -3053,6 +3053,18 @@ intercept_of_handle :: fn(
 }
 
 /**
+ * Tell whether an intercept's handle may steer (RIGHT_INTERCEPT_STEER, decisions/0195, 18b).
+ *
+ * @param thread The calling thread, whose table the handle is in.
+ * @param intercept The handle, found already as an intercept's.
+ * @return Whether it has the right; false if it's gone meanwhile.
+ */
+steers :: fn(thread : ptr[mut Thread], intercept : slop_os.Intercept) -> bool {
+    found :: lookup(&process_of(thread).table, cast[slop_os.Handle](intercept)) or_else Resolved.{}
+    return cast[u32](found.rights) & cast[u32](slop_os.RIGHT_INTERCEPT_STEER) != 0
+}
+
+/**
  * Take the next stop an intercept hasn't reported yet.
  *
  * @param thread The calling thread, into whose memory the stop is written.
@@ -3078,7 +3090,7 @@ sys_intercept_next :: fn(
  *
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
  *     where the handles are looked up.
- * @param intercept The intercept; no right is needed.
+ * @param intercept The intercept; RIGHT_INTERCEPT_STEER for Continue other than from a fault, and for Skip.
  * @param id The stopped thread's ID, as intercept_next gave it.
  * @param action What it does: Continue, Skip (only at a system call's entry), or Kill.
  * @error InvalidHandle Not a handle in the caller's table.
@@ -3087,6 +3099,7 @@ sys_intercept_next :: fn(
  * @error NoSuchThread No thread with that ID the intercept stopped.
  * @error NotStopped The thread isn't stopped, Skip somewhere other than a system call's entry, or an action that isn't
  *     one.
+ * @error MissingRight Continue other than from a fault, or Skip, without RIGHT_INTERCEPT_STEER.
  */
 sys_intercept_resume :: fn(
     thread : ptr[mut Thread],
@@ -3098,7 +3111,8 @@ sys_intercept_resume :: fn(
     if action != .Continue && action != .Skip && action != .Kill {
         return .Error(.NotStopped)
     }
-    return control_done(intercept_resume(per_cpu().kernel, found, id, action))
+    steering :: steers(thread, intercept)
+    return control_done(intercept_resume(per_cpu().kernel, found, id, action, steering))
 }
 
 /**
@@ -3746,12 +3760,13 @@ sys_process_set_debug :: fn(
  * Change where an intercept stops threads; those stopped already stay so.
  *
  * @param thread The calling thread, whose handle table the intercept is looked up in.
- * @param intercept The intercept; no right is needed.
+ * @param intercept The intercept, which needs RIGHT_INTERCEPT_STEER.
  * @param calls The system calls it stops at from now, a bit per call number below 64.
  * @param points slop_os.STOP_ bits: where it stops threads from now.
  * @error InvalidHandle The intercept isn't a handle in the caller's table.
  * @error ObjectGone The intercept was destroyed.
  * @error WrongKind Not an intercept's handle.
+ * @error MissingRight The handle lacks RIGHT_INTERCEPT_STEER.
  */
 sys_intercept_set :: fn(
     thread : ptr[mut Thread],
@@ -3760,6 +3775,9 @@ sys_intercept_set :: fn(
     points : u32
 ) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
+    if !steers(thread, intercept) {
+        return .Error(.MissingRight)
+    }
     set_intercept(found, calls, points)
     return .Ok
 }

@@ -79,3 +79,24 @@ runs, and working that through (2026-11-21) found three things it rests on:
   asker launched, with its handle), and the supervisor and session manager for their own test crashes.
 - **The shell's `debug`, `record` and `replay`** ask the powerbox once they've launched the program, held: allowed,
   they go on as now with the steering handles; refused, the program's ended and the shell says it wasn't allowed.
+
+## As Built: 18b, intercepts on the user's say
+As designed above, with these besides:
+- **The process manager keeps** each process's handle with every right, its address space's, and its intercept's
+  owning handle, the launcher's a copy without the right to steer; it lets them go once the process is gone, before
+  each `Load` too, as a kept intercept holds its port's key, which a program started again is watched under.
+- **`Steer`'s port moves with the request**: the debugger's port the powerbox hands on hasn't the right to be copied.
+- **The shell's `debug`, `record` and `replay`** ask the powerbox (`RequestSteer`) once they've started the program,
+  held; allowed, the call's process is the steering handle and its owning one is kept apart; refused, the program's
+  ended and the shell says it wasn't allowed. Their boot tests allow each on the secure attention key's screen, and
+  the debugger's refuses one, which never runs.
+- **test_control** builds every copy it steers itself (`build_copy`), as a debugger of its own subtree; its launch
+  of a faulting copy checks that the launch's intercept can't change where it stops, nor its launcher its threads.
+- **`Load` carries 56 grants**, up from 48, on 8 KiB rings: the supervisor's steering connection was its 49th, and
+  booted with its programs as modules it didn't start (`BadGrants`).
+- **The supervisor's and the session manager's steering connections** don't come back if the process manager's
+  started again; their debuggers and test crashes are refused until the system is.
+- Found on the way: an undeclared name in one function of the shell gave 64 errors of pointers escaping into the
+  stack elsewhere, which hid it; and building a message as `os.begin(&out)^ = .X(os.append(&out, ...))` writes the
+  items first, which the message's start then overwrites, which Hemera warns of (W4003), and the protocol's check
+  refused.

@@ -612,6 +612,8 @@ SessionGrants :: struct {
     compositor : os.Channel[connector.Connector]?,
     /** A connector to the audio service (decisions/0196, 17g), each session's sound; null without one. */
     sound : os.Channel[connector.Connector]?,
+    /** A steering connection to the process manager (decisions/0195, 18b), for what the user allows; null without. */
+    steering : os.Channel[process_manager.ProcessManager]?,
 }
 
 /** What the disk check is given (disk_check.main); its handles move to it at its launch. */
@@ -955,6 +957,8 @@ Supervisor :: struct {
     platform_port : slop_os.Port,
     /** The root task's connector to the process manager (decisions/0140), through which manager is dialed again. */
     manager_connector : slop_os.Channel,
+    /** Its steering connection to the process manager (decisions/0195, 18b); NONE without one. */
+    steering : slop_os.Channel,
     /** The root task's connector to the platform service, through which platform_end is dialed; NONE without one. */
     platform_connector : slop_os.Channel,
     /** The root task's connector to the scheduler service, through which scheduler_end is dialed; NONE without one. */
@@ -1343,6 +1347,8 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param last_panic The boot before's panic record, given on to the terminal service to show; null if there's none.
  * @param acpi_module The ACPI service's program.
  * @param power_button_module The GPIO power button's driver's program.
+ * @param steering A steering connection to the process manager (decisions/0195, 18b), for its own test crashes and to
+ *     give the session manager one, for what the user allows steered; without it, neither is.
  * @return Only if it can't start: 10 if the system configuration doesn't check, 99 if it can't be copied, 2 if no port
  *     can be made for root, 3 if the supervisor's port can't be made, and 1 if the process manager can't be dialed.
  *     Otherwise it never returns.
@@ -1392,7 +1398,8 @@ main :: fn(
     update_module : slop_os.Memory?,
     last_panic : slop_os.Memory?,
     acpi_module : slop_os.Memory?,
-    power_button_module : slop_os.Memory?
+    power_button_module : slop_os.Memory?,
+    steering : os.Channel[process_manager.ProcessManager]?
 ) -> int {
     startup :: slop_os.startup_block()
     // The system configuration, which the root task checked, checked again
@@ -1422,6 +1429,10 @@ main :: fn(
         overrides_end = NONE,
         substitutions_end = NONE,
         manager_connector = manager.end,
+        steering = match steering {
+            case Some(given) => given.end
+            case None => NONE
+        },
         root = root.end,
         platform_end = NONE,
         platform_connector = NONE,
@@ -5994,6 +6005,21 @@ start_audio :: fn(supervisor : ptr[mut Supervisor], again : usize) {
 }
 
 /**
+ * Make another steering connection to the process manager from the supervisor's (decisions/0195, 18b).
+ *
+ * @param supervisor The supervisor, whose steering connection carries the Connect, waiting without handling its port.
+ * @return The connection, which moves to who it's given to; null without the supervisor's, or if it couldn't be made.
+ */
+steering_connection :: fn(supervisor : ptr[mut Supervisor]) -> os.Channel[process_manager.ProcessManager]? {
+    if supervisor.steering == NONE {
+        return null
+    }
+    port :: os.port_for(supervisor.block.budget, supervisor.steering) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    return process_manager.connect(supervisor.steering, port, supervisor.block.budget)
+}
+
+/**
  * Make a connection to the audio service's microphone control, for the trusted path (power's MicrophoneConnection).
  *
  * @param supervisor The supervisor, whose end of the microphone listener is dialed, waiting without handling its port.
@@ -6525,6 +6551,7 @@ start_sessions :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         manager = manager,
         echo_module = echo_module,
         network = connector_to(supervisor, supervisor.network),
+        steering = steering_connection(supervisor),
         sound = if supervisor.audio_service != NOWHERE {
             connector_to(supervisor, supervisor.audio_service)
         }

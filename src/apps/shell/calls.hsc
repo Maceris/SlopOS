@@ -173,8 +173,13 @@ Call :: struct {
     fault : u32,
     /** Once it's started: the key its end's watched under on the shell's port. */
     key : u64,
-    /** Once it's started: its process and budget, the call's handles, closed by end_call. */
+    /**
+     * Once it's started: its process and budget, the call's handles, closed by end_call. Once it's steered
+     * (steer_started), its process is the steering handle, and the owning one is owner.
+     */
     launched : os.Launched,
+    /** Once it's steered: its process's owning handle, the launch's, closed by end_call; NO_HANDLE before. */
+    owner : slop_os.Process,
     /** Once it's started: the shell's end of its lifecycle channel, closed by end_call. */
     lifecycle : slop_os.Channel,
     /** The newest progress it's said on its lifecycle channel, in thousandths, once reporting. */
@@ -230,10 +235,13 @@ end_call :: fn(call : ptr[mut Call]) {
     else {
         for handle in slop_os.Handle.[
             cast[slop_os.Handle](call.launched.process),
+            cast[slop_os.Handle](call.owner),
             cast[slop_os.Handle](call.launched.budget),
             cast[slop_os.Handle](call.lifecycle)
         ] {
-            _ = slop_os.handle_close(handle)
+            if handle != slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(handle)
+            }
         }
         match call.launched.faults {
             case Some(faults) => {

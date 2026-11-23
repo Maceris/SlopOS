@@ -194,6 +194,22 @@ handles_are_each_named_once #test :: fn(t : ptr[mut testing.T]) -> testing.Outco
     return .Ok
 }
 
+/** A request to steer a program its launcher started names its one handle, the process (decisions/0195, 18b). */
+a_steer_request_is_valid #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    out := os.Outgoing.{}
+    request :: os.begin[powerbox.Request](&out)
+    request^ = .RequestSteer(
+        powerbox.SteerRequest.{
+            name = os.append(&out, string_bytes("test_shell_calls")),
+            purpose = os.append(&out, string_bytes("to debug it")),
+            process = cast[slop_os.Process](0),
+        }
+    )
+    message :: bytes_of(&out)
+    testing.expect(t, powerbox.validate_request(message, cast[u32](message.count), 1) == .Valid, "one handle, named")
+    return .Ok
+}
+
 /** A message being built, as the bytes it'd be sent as. */
 bytes_of :: fn(out : ptr[os.Outgoing]) -> u8[] {
     return bit_cast[u8[]](usize.[cast[usize](out.used), cast[usize](cast[uintptr](&out.words[0]))])

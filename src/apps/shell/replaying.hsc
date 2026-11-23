@@ -48,6 +48,11 @@ record_program :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Resu
         case Some(error) => return .Error(error)
         case None => {}
     }
+    // Held at its first call until the user allows it to be recorded (decisions/0195, 18b)
+    match steer_started(shell, call, "to record it") {
+        case Some(error) => return .Error(error)
+        case None => {}
+    }
     program :: program_of(call, port) or_return error_at(tree.at, "it started without its intercept")
     made :: recording.record(program, shapes_of(shell), call.launched.seeds)
     shell.recording = made
@@ -354,6 +359,10 @@ replay_with :: fn(
         or_return error_at(tree.at, "there's no memory to replay it")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     match start_recorded(shell, call, port, kept.seeds) {
+        case Some(error) => return .Error(error)
+        case None => {}
+    }
+    match steer_started(shell, call, "to replay it") {
         case Some(error) => return .Error(error)
         case None => {}
     }

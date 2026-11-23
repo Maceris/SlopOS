@@ -3,6 +3,7 @@ package session_manager
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
 import dir from "std:os/slop_os/dir"
 import bundle from "../../bundle"
 import config from "../../protocols/config"
@@ -732,6 +733,7 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     attaching.elevated,
                     &out
                 )
+                case SteerOwn(process) => response^ = steer_own(sessions, sessions.finders[i].powerbox, process)
                 // A GUI session's shell's asks of its session as the console shell's own connection does
                 case _ => response^ = if sessions.finders[i].shell {
                     own_session_answer(
@@ -916,33 +918,30 @@ attach_program :: fn(
         )
     }
     program :: &sessions.programs[index]
-    // Its faults' intercept let go, so the debugger's can be attached
-    space := cast[slop_os.AddressSpace](slop_os.NO_HANDLE)
+    /*
+     * The process manager steers it, the user having allowed it (decisions/0195, 18b): its intercept replaced by one
+     * stopping at faults on the debugger's port, and its process given with the right to change its threads
+     */
+    steered :: match process_manager.steer(sessions.steering_end, sessions.steering_port, program.process, port, key) {
+        case Ok(given) => given
+        // The port went with the request
+        case Error(why) => {
+            runtime.log_info("couldn't attach a debugger to %: %", name, why)
+            return .Refused(.Failed)
+        }
+    }
+    // Its crash reports' intercept is gone with the one replaced; its stops are the debugger's now
     match program.faults {
         case Some(faults) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
-            space = faults.space
+            _ = slop_os.handle_close(cast[slop_os.Handle](faults.space))
             program.faults = null
         }
         case None => {}
     }
-    intercept :: match slop_os.intercept_attach(program.process, port, key, 0, slop_os.STOP_FAULT) {
-        case Ok(made) => made
-        case Error(error) => {
-            runtime.log_info("couldn't attach a debugger to %: %", name, error)
-            _ = slop_os.handle_close(cast[slop_os.Handle](port))
-            if cast[slop_os.Handle](space) != slop_os.NO_HANDLE {
-                _ = slop_os.handle_close(cast[slop_os.Handle](space))
-            }
-            return .Refused(.Failed)
-        }
-    }
-    // The port's bound by the intercept now, so the session manager's handle to it can go
-    _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT)
-        | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE)
-        | cast[u32](slop_os.RIGHT_TRANSFER))
-    process :: slop_os.handle_duplicate(cast[slop_os.Handle](program.process), rights) or_else slop_os.NO_HANDLE
+    intercept :: steered.intercept
+    space :: steered.space
+    process :: cast[slop_os.Handle](steered.process)
     runtime.log_info("attached a debugger to %", name)
     program_name :: if cast[usize](program.program_bytes) <= program.program_name.count && program.program_bytes > 0 {
         program.program_name[0..<cast[usize](program.program_bytes)]
@@ -959,6 +958,33 @@ attach_program :: fn(
             program = os.append(out, program_name),
         }
     )
+}
+
+/**
+ * Steer a program its launcher asked to, the user having allowed it through the powerbox (decisions/0195, 18b): the
+ * process manager gives its steering handles, by the launcher's handle to it.
+ *
+ * @param sessions The session manager, whose steering connection asks.
+ * @param from_powerbox Whether it's asked on a session's powerbox's connection, the only one it's answered on.
+ * @param process The launcher's handle to the program's process, which is closed here.
+ * @return Steered with the handles, which move to the powerbox; Refused NotAllowed on another connection or without a
+ *     steering connection, NotRunning if the process manager didn't load it, or it's gone.
+ */
+steer_own :: fn(sessions : ptr[mut Manager], from_powerbox : bool, process : slop_os.Process) -> programs.Response {
+    defer slop_os.handle_close(cast[slop_os.Handle](process))
+    if !from_powerbox || sessions.steering_end == NONE {
+        return .Refused(.NotAllowed)
+    }
+    match process_manager.steer(sessions.steering_end, sessions.steering_port, process, null, 0) {
+        case Ok(given) => {
+            runtime.log_info("steered a program its launcher asked to, on the user's say")
+            return .Steered(given)
+        }
+        case Error(why) => {
+            runtime.log_info("couldn't steer a program: %", why)
+            return .Refused(if why == .NoProgram { programs.InstallProblem.NotRunning } else { programs.InstallProblem.NotAllowed })
+        }
+    }
 }
 
 /**

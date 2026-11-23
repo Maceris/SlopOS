@@ -47,7 +47,9 @@ each object is its owning one (`0008`).
   kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
   `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
   budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
-  `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_PROCESS_INSPECT`, `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT`,
+  `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_INTERCEPT_STEER` for an intercept (`0195`, 18b: without it, its holder
+  reports faults and samples, and lets a thread go on only from a fault, or kills it); `RIGHT_PROCESS_INSPECT`,
+  `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT`,
   `_KILL` and `_THREADS` (starting threads in it and giving it handles, `0067`) for a process, over its whole
   subtree (`0017`); `RIGHT_DEBUG_LOG_WRITE` for a debug log. An owning
   handle has every right.
@@ -106,7 +108,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 40 | `thread_write_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's registers, set from registers. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 41 | `intercept_attach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, or every call with `STOP_ALL_CALLS`, at faults (`STOP_FAULT`), and at a new thread's start (`STOP_THREAD_START`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
 | 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
-| 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill` |
+| 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill`; but for `Continue` from a fault, and `Kill`, it needs `RIGHT_INTERCEPT_STEER` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
 | 45 | `process_exit` | code (u32) | never returns: the calling process is destroyed, with its subtree, and its end gives code (`0059`) |
 | 46 | `debug_log` | log, text (a slice) | nothing: a line in the kernel's log, `[user] ` then text's first `DEBUG_LOG_LINE` (200) bytes, each not printable ASCII as `?`. Needs `RIGHT_DEBUG_LOG_WRITE` (`0060`) |
@@ -146,7 +148,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 80 | `power_end_with` | platform, action | nothing: what the kernel does once the root task ends, a `PowerAction`: `Halt`, `Off` or `Restart`, done after every other CPU has stopped and the objects left are logged; under `test_exit`, only with `test_power` too (`0182`) |
 | 81 | `controller_set_source` | platform, controller, source | nothing: the requester ID, with its segment, a controller's interrupts come from, as the IOMMU that remaps them sees it; once an IOMMU remaps, a controller's lines are routed through it with one, and `irq_create` refuses them without (`NoController`) (`0182`) |
 | 82 | `thread_set_debug` | process, thread ID, debug (a pointer) | nothing: a parked thread's debugging state, a `ThreadDebug`: whether it single-steps, and up to `DEBUG_SLOTS` hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes), each a fault stop when hit (`FAULT_SINGLE_STEP`, `FAULT_BREAKPOINT`, `FAULT_WATCHPOINT`). Needs `RIGHT_PROCESS_WRITE_STATE`; `BadRegisters` for a slot the CPU can't set (`0183`) |
-| 83 | `intercept_set` | intercept, calls, points | nothing: where the intercept stops threads from now, as `intercept_attach`'s calls and points; threads stopped already stay so (`0183`) |
+| 83 | `intercept_set` | intercept, calls, points | nothing: where the intercept stops threads from now, as `intercept_attach`'s calls and points; threads stopped already stay so (`0183`); needs `RIGHT_INTERCEPT_STEER` |
 | 84 | `process_set_traps` | process, traps | nothing: what the process's threads trap on from their next return from the kernel: `TRAP_COUNTER` for user mode's counter reads, which the kernel runs and then reports as a fault stop, `FAULT_COUNTER`, the value in the instruction's register. Needs `RIGHT_PROCESS_WRITE_STATE` (`0183`) |
 | 85 | `trace_set` | log, on | nothing: the kernel's trace on or off: each CPU's ring of its last `TRACE_EVENTS` scheduler events, a switch or a wake (`TraceEvent`); needs the debug log with `RIGHT_DEBUG_LOG_TRACE`, which the root task gives the supervisor alone (`0183`) |
 | 86 | `trace_read` | log, events (a slice) | how many of the trace's events not yet taken were written, each CPU's in turn; needs `RIGHT_DEBUG_LOG_TRACE` |

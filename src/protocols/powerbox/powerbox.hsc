@@ -5,6 +5,7 @@ import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import file from "std:os/slop_os/file"
 import network from "std:os/slop_os/network"
+import process_manager from "std:os/slop_os/process_manager"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
 import events from "../events"
@@ -156,6 +157,20 @@ DebugRequest :: struct {
     key : u64,
 }
 
+/** A program its launcher asks to steer (decisions/0195, 18b), as RequestSteer asks. */
+SteerRequest :: struct {
+    /** The program's name, shown to the user, as UTF-8, up to NAME_BYTES. */
+    name : slop_os.Relative[u8],
+    /** Why it's to be steered, in the asker's words, as UTF-8, up to PURPOSE_BYTES, shown to the user. */
+    purpose : slop_os.Relative[u8],
+    /**
+     * The asker's handle to the program's process, a duplicate with RIGHT_PROCESS_KILL, RIGHT_DUPLICATE and
+     * RIGHT_TRANSFER, as the
+     * launcher has: it moves to the powerbox, and on to the process manager, which finds the program by it.
+     */
+    process : slop_os.Process,
+}
+
 /** A program attached to a debugger: what the debugger controls it with. Every handle moves to the debugger. */
 Attached :: struct {
     /**
@@ -214,6 +229,12 @@ Request :: union {
      */
     RequestDebug(DebugRequest),
     /**
+     * Ask to steer a program the asker launched (decisions/0195, 18b), as a debugger, a recorder or a replay does: the
+     * user allows it, with no password, as it's their own program's. Answered with Steered once it's allowed; or
+     * Refused, the process handle closed; at once with Busy.
+     */
+    RequestSteer(SteerRequest),
+    /**
      * Ask to trace the whole system, which the administrator allows on the trusted path (decisions/0185, 12g), with
      * why,
      * as UTF-8, up to PURPOSE_BYTES. Answered with TraceGranted, or Refused; at once with Busy.
@@ -271,6 +292,8 @@ Response :: union {
     Allowed,
     /** RequestDebug's answer: the program, attached to the debugger's port. */
     Attached(Attached),
+    /** RequestSteer's answer: the program's steering handles, which move to the asker. */
+    Steered(process_manager.Steering),
     /** RequestTrace's answer: a trace connection to the supervisor, which moves to the program. */
     TraceGranted(os.Channel[trace.Trace]),
     /** RequestSystemLog's answer: a connection to the events service, which moves to the program. */
@@ -301,6 +324,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case RequestAccount(_) => false
         case RequestPower(_) => false
         case RequestDebug(_) => false
+        case RequestSteer(_) => false
         case RequestTrace(_) => false
         case RequestSystemLog(_) => false
         case RequestNetwork(_) => false

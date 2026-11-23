@@ -228,23 +228,31 @@ doing, and `Stop` with `Stopping`, after which `lifecycle.stop_requested()` is t
 `lifecycle.on_stop` gets a `User` packet. Messages are 8 bytes, a kind and a sequence. The supervisor gives every
 program it launches one.
 
-**The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 4 KiB
+**The process manager's protocol** (`std/os/slop_os/process_manager`), generated (`0071`), on channels with 8 KiB
 rings (`RING_BYTES`):
 - `Load` (version 4, `0195`'s 18a): the program's name; its budget (with `RIGHT_BUDGET_CHARGE`, `RIGHT_DUPLICATE`
   and `RIGHT_TRANSFER`) and the executable (with `RIGHT_MEMORY_READ`), which the image is copied from, none of it
-  mapped, so a bundle store that ends takes no process's code with it (`0186`); up to 48 grants, each with its
+  mapped, so a bundle store that ends takes no process's code with it (`0186`); up to 56 grants, each with its
   label; and what's to be done before the program's first instruction: the CPU budget it runs on, a port and key its
   end is reported on, and a port, key, calls and stops for an intercept of it. The manager makes the process and its
   address space from the budget, so they're charged to the requester, and does those things before it starts the
   first thread. The answer is `Loaded` (`Started`): the process's owning handle, which moves to the requester, so the
   program is the requester's and outlives the manager, but with only `RIGHT_PROCESS_KILL`, `RIGHT_PROCESS_INSPECT`,
-  `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`, and those of the `Load`'s `rights` it may ask for, reading its memory,
-  changing its threads' state and intercepting it (`handle_restrict`), never `RIGHT_PROCESS_THREADS`; the intercept
-  and the address space (to move on only) if one was asked for; the first thread's ID, where the image was loaded
+  `RIGHT_DUPLICATE` and `RIGHT_TRANSFER`, and reading its memory if the `Load` asks (`handle_restrict`), never
+  changing its threads or starting them; the intercept, without `RIGHT_INTERCEPT_STEER`, so it reports and can't steer,
+  the manager keeping its owning handle while the program runs, and the address space (to move on only), if one was
+  asked for; the first thread's ID, where the image was loaded
   and the seeds it was built with. A program that ended before it's answered has no process left to give. Or the
   answer is `NotLoaded` with a `LoadStatus`. A `Load` may give the seeds, its own and its layout's, for a replay
   (`0183`), or leave them to the manager to draw. The manager keeps none of the handles.
-- `Connect`: a `Channel[ProcessManager]`, which becomes another client.
+- `Connect`: a `Channel[ProcessManager]`, which becomes another client; one sent on a steering connection is one too.
+- `Steer` (`0195`, 18b), answered only on the connections of the manager's steering listener, whose other end the
+  root task gives the supervisor, which gives the session manager one: given a launcher's handle to a program the
+  manager loaded, the program's intercept with `RIGHT_INTERCEPT_STEER`, attached afresh on a port given, and its
+  process with the right to change its threads. The session manager asks once the user's allowed a debugger, a
+  recording or a replay through the powerbox (`RequestDebug`, and `RequestSteer` for a program the asker launched,
+  which the shell's `debug`, `record` and `replay` start held at their first call); the supervisor and the session
+  manager for their own test crashes.
 
 ## Protocols
 

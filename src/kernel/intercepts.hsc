@@ -476,14 +476,18 @@ intercept_next :: fn(
  * @param id A thread ID as user mode gave it, unchecked: it's looked for only among the threads this intercept stopped,
  *     and any other gives NoSuchThread.
  * @param action Continue, Skip (only at a call's entry) or Kill.
+ * @param steering Whether the caller may steer (RIGHT_INTERCEPT_STEER): without it, only Continue from a fault, and
+ *     Kill.
  * @return Null once it's let go; NoSuchThread if the intercept stopped no thread with that ID; NotStopped for Skip
- *     at a point other than a call's entry, when the thread stays stopped.
+ *     at a point other than a call's entry, and MissingRight for what only steering may do, when the thread stays
+ *     stopped.
  */
 intercept_resume :: fn(
     kernel : ptr[mut Kernel],
     intercept : ptr[mut Intercept],
     id : u64,
-    action : slop_os.InterceptAction
+    action : slop_os.InterceptAction,
+    steering : bool
 ) -> slop_os.ControlError? {
     lock_at(&intercept.lock, .Intercept)
     found := cast[ptr[mut Thread]](0)
@@ -508,6 +512,11 @@ intercept_resume :: fn(
     if action == .Skip && found.stop_point != cast[u32](slop_os.StopPoint.SyscallEntry) {
         unlock_at(&intercept.lock, .Intercept)
         return slop_os.ControlError.NotStopped
+    }
+    // Reporting alone: a fault retried, or a thread ended, never a call let through or skipped (decisions/0195, 18b)
+    if !steering && action != .Kill && found.stop_point != cast[u32](slop_os.StopPoint.Fault) {
+        unlock_at(&intercept.lock, .Intercept)
+        return slop_os.ControlError.MissingRight
     }
     unlink_stopped(intercept, found)
     unlock_at(&intercept.lock, .Intercept)

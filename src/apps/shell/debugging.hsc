@@ -100,6 +100,11 @@ debug_program :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Resul
         case Some(error) => return .Error(error)
         case None => {}
     }
+    // Held at its first call until the user allows it to be debugged (decisions/0195, 18b)
+    match steer_started(shell, call, "to debug it") {
+        case Some(error) => return .Error(error)
+        case None => {}
+    }
     faults :: call.launched.faults or_return error_at(tree.at, "it started without its intercept")
     session := Debugging.{shell = shell, call = call, port = port, faults = faults}
     file := DebugFile.{}

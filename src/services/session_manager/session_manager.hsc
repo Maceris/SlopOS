@@ -551,6 +551,10 @@ Manager :: struct {
     network_port : slop_os.Port,
     /** The audio service's connector (decisions/0196, 17g), dialed for each session's sound group; NONE without one. */
     sound_connector : slop_os.Channel,
+    /** Its steering connection to the process manager (decisions/0195, 18b); NONE without one. */
+    steering_end : slop_os.Channel,
+    /** A port bound to steering_end, waited on for its answers. */
+    steering_port : slop_os.Port,
     /** The sessions, by number. */
     sessions : Session[MAX_SESSIONS],
     /** Each session place's generation, counted up each time it's taken, kept in its sessions' numbers (number_of). */
@@ -627,6 +631,8 @@ MAX_KNOWN_REFERS :: 256
  *     StartGui is refused.
  * @param sound A connector to the audio service (decisions/0196, 17g), dialed for each session's sound group, whose
  *     connections its shells give programs that take one. Without it, there's no sound, and SetVolume is refused.
+ * @param steering A steering connection to the process manager (decisions/0195, 18b): a program the user allows
+ *     debugged or recorded is steered through it, and its own test crashes made. Without it, neither is.
  * @return 1 if its port couldn't be made or bound to its budget's pressure; 2 if the process manager couldn't be
  *     dialed; 3 if the clients' listener couldn't be bound. It doesn't return otherwise.
  */
@@ -644,12 +650,24 @@ main :: fn(
     cpu_budget : slop_os.CpuBudget?,
     network : os.Channel[connector.Connector]?,
     compositor : os.Channel[connector.Connector]?,
-    sound : os.Channel[connector.Connector]?
+    sound : os.Channel[connector.Connector]?,
+    steering : os.Channel[process_manager.ProcessManager]?
 ) -> int {
     block :: slop_os.startup_block()
     sessions := runtime.new(Manager)
     sessions.network_end = NONE
     sessions.sound_connector = NONE
+    sessions.steering_end = NONE
+    match steering {
+        case Some(given) => match os.port_for(block.budget, given.end) {
+            case Some(port) => {
+                sessions.steering_end = given.end
+                sessions.steering_port = port
+            }
+            case None => {}
+        }
+        case None => {}
+    }
     match sound {
         case Some(given) => sessions.sound_connector = given.end
         case None => {}
@@ -2343,8 +2361,6 @@ prepare :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> Prepa
     prepared.options = os.LaunchOptions.{
         watch = os.LaunchWatch.{port = sessions.port, key = PROGRAM_KEY + cast[u64](index)},
         faults = os.LaunchFaults.{port = sessions.port, key = CRASH_KEY + cast[u64](index)},
-        // A debugger attached on the user's say (decisions/0185) needs the intercept; 18b has the process manager do it
-        process_rights = cast[slop_os.Rights](slop_os.RIGHT_PROCESS_INTERCEPT),
     }
     prepared.options.lifecycle = ends.b
     if cast[usize](number) < sessions.sessions.count {
@@ -3593,7 +3609,20 @@ crash_installation :: fn(sessions : ptr[mut Manager], number : u32, name : strin
     if index >= sessions.programs.count {
         return false
     }
-    if !(crash_reports.make_crash(sessions.programs[index].process, sessions.programs[index].lifecycle) is_ok) {
+    // Its threads changed: the process manager steers it for the test (decisions/0195, 18b)
+    steered :: process_manager.steer(sessions.steering_end, sessions.steering_port, sessions.programs[index].process,
+        null, 0) or_return false
+    crashed :: crash_reports.make_crash(steered.process, sessions.programs[index].lifecycle)
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](steered.process),
+        cast[slop_os.Handle](steered.intercept),
+        cast[slop_os.Handle](steered.space)
+    ] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
+    if !(crashed is_ok) {
         return false
     }
     deadline :: (slop_os.clock_monotonic() or_else 0) + STOP_GRACE

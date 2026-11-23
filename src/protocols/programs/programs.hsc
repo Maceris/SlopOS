@@ -3,6 +3,7 @@ package programs
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import process_manager from "std:os/slop_os/process_manager"
 import powerbox from "../powerbox"
 
 /*
@@ -125,6 +126,13 @@ Request :: union {
      * unless elevated, NotAllowed from any other connection. The port is closed when it's refused.
      */
     Attach(Attaching),
+    /**
+     * The session's powerbox's only (decisions/0195, 18b): steer a program, by a handle with RIGHT_PROCESS_KILL to its
+     * process that moves with the request, the user having allowed it. Answered with Steered, or Refused: NotAllowed
+     * from any other connection or without the process manager's steering, NotRunning if it's no program the process
+     * manager loaded.
+     */
+    SteerOwn(slop_os.Process),
     /**
      * The session's powerbox's only: where a program runs, by name, so it knows whom to ask before Attach. Answered
      * with Located, or Refused(NotAllowed) from any other connection.
@@ -320,6 +328,8 @@ Response :: union {
     DebugFile(ProgramDocumentation),
     /** The answer to Attach: the program, attached, every handle moving to the powerbox. */
     Attached(powerbox.Attached),
+    /** SteerOwn's answer: the program's steering handles, which move to the powerbox. */
+    Steered(process_manager.Steering),
     /** The answer to Locate. */
     Located(Location),
     /** The answer to Running: the session's programs, at most MAX_RUNNING. */

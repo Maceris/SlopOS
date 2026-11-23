@@ -42,7 +42,7 @@ USER_LOW : u64 : 0x10000
 /** One past the highest user address a part is placed at: a page below 2^47. */
 USER_HIGH : u64 : 0x00007ffffffff000
 /** The most grants a process starts with, from this; build refuses more with TooManyGrants. */
-MAX_GRANTS :: 48
+MAX_GRANTS :: 56
 /** Handles that go to the process besides its grants: its space, itself, its budget, its image, stack and block. */
 OWN_HANDLES :: 6
 

@@ -904,14 +904,15 @@ TESTS = [
         # Its frames named by the symbols program: the trap in main, called from the entry Hemera made for it
         "--expect-console-start=  #0 test_shell_calls.main+0x", "--expect-console-start=  #1 hemera_entry+0x",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
-    # The debugger (decisions/0183, 12b): debug runs a program stopped before it begins; a breakpoint on main, found
-    # through the symbols program, stops it there; a step, its stack, and with the breakpoint deleted it runs to its end
+    # The debugger (decisions/0183, 12b): debug runs a program stopped before it begins, which the user allows debugged
+    # on the trusted path (0195, 18b); a breakpoint on main, found through the symbols program, stops it there; a step,
+    # its stack, and with the breakpoint deleted it runs to its end
     ("debugs a program from the shell: a breakpoint by function, a step and its stack", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\w\\>debug test_shell_calls 2 debugged\\r\\>break test_shell_calls.main\\r\\>continue\\r\\>step\\r\\>where\\r\\>"
-        "delete 1\\r\\>continue\\r\\>test_shell_calls 3 after\\r",
+        "\\w\\>debug test_shell_calls 2 debugged\\r\\s{ asks }\\e[3;7~\\r\\>break test_shell_calls.main\\r\\>continue\\r\\>step\\r\\>where\\r\\>"
+        "delete 1\\r\\>continue\\r\\>debug test_shell_calls 4 refused\\r\\s{ asks }\\e[3;7~\\e\\S{secure attention}\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-line=[user] shell: reading commands",
@@ -923,6 +924,9 @@ TESTS = [
         "--expect-console-line=deleted 1",
         "--expect-console-line=called with debugged, 2, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=test_shell_calls ended with 0",
+        # Refused on the trusted path, it's ended, never run (decisions/0195, 18b)
+        "--expect-console-line=error: test_shell_calls wasn't allowed",
+        "--refuse-console-line=called with refused, 4, loud false, speed none, wait none, tags none, place none",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # The debugger with debug files (decisions/0185, 12e): a breakpoint by file and line in test_debug, its stack with
     # lines, and its locals shown as Hemera values through their schemas: a struct, an optional, a union and a view
@@ -930,7 +934,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        f"\\w\\>debug test_debug\\r\\>break test_debug.hsc:{TEST_DEBUG_BREAK_LINE}\\r\\>continue\\r\\>where\\r\\>"
+        f"\\w\\>debug test_debug\\r\\s{{ asks }}\\e[3;7~\\r\\>break test_debug.hsc:{TEST_DEBUG_BREAK_LINE}\\r\\>continue\\r\\>where\\r\\>"
         "print point\\r\\>print maybe\\r\\>print shape\\r\\>print view\\r\\>print nothing\\r\\>"
         "delete 1\\r\\>continue\\r\\>test_debug 1\\r\\>crashes\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
@@ -955,7 +959,7 @@ TESTS = [
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in WITH_DEBUG_FILES], ["--shut-down-when-done", "--debug-files",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\w\\>debug test_debug 2\\r\\>break test_debug.in_fiber\\r\\>continue\\r\\>threads\\r\\>fibers\\r\\>"
+        "\\w\\>debug test_debug 2\\r\\s{ asks }\\e[3;7~\\r\\>break test_debug.in_fiber\\r\\>continue\\r\\>threads\\r\\>fibers\\r\\>"
         "delete 1\\r\\>continue\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
@@ -1100,14 +1104,15 @@ TESTS = [
         "--expect-console-start=update: execute fault", "--expect-console-start=  #0 ",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # Record and replay (decisions/0183, 12c): test_replay's threads, recorded one at a time, replayed exactly from
-    # the recording with its seeds; and replayed with another count, which diverges, where it's said
+    # the recording with its seeds; and replayed with another count, which diverges, where it's said. Each recording
+    # and replay the user allows on the trusted path, as they're steered (0195, 18b)
     ("records a program of several threads and replays it exactly, and says where a changed one diverges", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\w\\>record test_replay 20\\r\\>replay test_replay 20\\r\\>replay test_replay 21\\r\\>"
+        "\\w\\>record test_replay 20\\r\\s{ asks }\\e[3;7~\\r\\>replay test_replay 20\\r\\s{ asks }\\e[3;7~\\r\\>replay test_replay 21\\r\\s{ asks }\\e[3;7~\\r\\>"
         # A channel end passed and used, recorded to a file and replayed from it (decisions/0185, 12g)
-        "record test_replay 5 1 to passed.recording\\r\\>replay from passed.recording\\r\\>"
+        "record test_replay 5 1 to passed.recording\\r\\s{ asks }\\e[3;7~\\r\\>replay from passed.recording\\r\\s{ asks }\\e[3;7~\\r\\>"
         "replay from nothing.recording\\r\\>test_shell_calls 3 after\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",

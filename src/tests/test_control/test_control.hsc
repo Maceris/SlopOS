@@ -342,11 +342,9 @@ launch_copy :: fn(
 ) -> Copy? {
     block :: slop_os.startup_block()
     pair :: slop_os.channel_create(block.budget, 0, 0) or_return null
-    // Its tests attach intercepts to the copy, read its memory and change its threads themselves
+    // Read what its faults' intercept stops; a test that changes the copy builds it itself (build_copy)
     given := options
-    given.process_rights = cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INTERCEPT)
-        | cast[u32](slop_os.RIGHT_PROCESS_READ_MEMORY)
-        | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE))
+    given.process_rights = slop_os.RIGHT_PROCESS_READ_MEMORY
     log_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DEBUG_LOG_WRITE)
         | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -708,8 +706,8 @@ a_process_ending_itself_gives_its_code #test :: fn(t : ptr[mut testing.T]) -> te
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(
         t,
-        launch_copy(given.log, manager, manager_port, program, "test_control E", ROLE_EXITING),
-        "E is launched and told its role"
+        build_copy(given.log, program, ROLE_EXITING),
+        "E is built and told its role"
     )?
     exiting :: copy.launched.process
     exiting_found := TargetReport.{}
@@ -789,6 +787,15 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
     report :: crash_reports.make(copy.launched.process, faults.space, copy.launched.image, "test_control F", stop)
     testing.expect(t, report.frame_count >= 2, "a report of the fault has its faulting frame and its caller's")
     testing.expect(t, report.frames[0] >= copy.launched.image, "the faulting instruction is in F's image")
+    // A launch's intercept reports, and can't steer: where F stops isn't its to change, nor F's threads (0195, 18b)
+    testing.expect_error(t, slop_os.intercept_set(faults.intercept, 0, slop_os.STOP_SYSCALL_ENTRY),
+        slop_os.ControlError.MissingRight, "a launch's intercept can't change where F stops")
+    registers : u64[slop_os.THREAD_REGISTERS]
+    testing.expect_error(t, slop_os.thread_write_registers(copy.launched.process, stop.thread, registers),
+        slop_os.ControlError.MissingRight, "a launcher can't change F's threads")
+    info :: testing.require_ok(t, slop_os.handle_info(cast[slop_os.Handle](copy.launched.process)), "F's handle described")?
+    testing.expect_eq(t, cast[u32](info.rights) & cast[u32](slop_os.RIGHT_PROCESS_THREADS), 0,
+        "a launcher can't start threads in F")
     // Not let go: F ends within the limit, as if nothing intercepted it
     deadline :: (slop_os.clock_monotonic() or_else 0) + FAULTING_END_NANOSECONDS
     ended := false
@@ -1016,8 +1023,8 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(
         t,
-        launch_copy(given.log, manager, manager_port, program, "test_control E", ROLE_EXITING),
-        "E is launched and told its role"
+        build_copy(given.log, program, ROLE_EXITING),
+        "E is built and told its role"
     )?
     target :: copy.launched.process
     found := TargetReport.{}
@@ -1148,8 +1155,8 @@ a_recorder_traps_counter_reads #test :: fn(t : ptr[mut testing.T]) -> testing.Ou
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
     copy :: testing.require_some(
         t,
-        launch_copy(given.log, manager, manager_port, program, "test_control C", ROLE_COUNTING),
-        "C is launched and told its role"
+        build_copy(given.log, program, ROLE_COUNTING),
+        "C is built and told its role"
     )?
     target :: copy.launched.process
     found := TargetReport.{}

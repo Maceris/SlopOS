@@ -24,6 +24,7 @@ import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
 import lifecycle from "std:os/slop_os/lifecycle"
 import network from "std:os/slop_os/network"
+import process_manager from "std:os/slop_os/process_manager"
 import text_buffer from "std:text_buffer"
 import service_kit from "../../libraries/service_kit"
 import powerbox from "../../protocols/powerbox"
@@ -89,6 +90,8 @@ Waiting :: struct {
     purpose_count : usize,
     /** For a network connection: what it would allow. */
     policy : network.Policy,
+    /** For a program its launcher asks to steer: the launcher's handle to its process; NO_HANDLE for anything else. */
+    steering : slop_os.Process,
 }
 
 /** A program's credit for asking the user, by its name (ASKS_PER_MINUTE). */
@@ -110,6 +113,8 @@ SessionAsk :: enum {
     Locate,
     /** To attach the debugger the user allowed (Attach). */
     Attach,
+    /** To steer the program its launcher asked to, which the user allowed (SteerOwn). */
+    Steer,
 }
 
 /** The powerbox's state: its connections, its clients, and the request waiting for the user. */
@@ -373,6 +378,12 @@ serve :: fn(box : ptr[mut Box], index : usize, into : ptr[mut os.Incoming]) {
             }
             case RequestTrace(purpose) => {
                 match ask(box, index, .Trace, false, os.items(into, purpose), u8.[], u8.[]) {
+                    case Some(answer) => response^ = answer
+                    case None => continue
+                }
+            }
+            case RequestSteer(asked) => {
+                match ask_steer(box, index, os.items(into, asked.name), os.items(into, asked.purpose), asked.process) {
                     case Some(answer) => response^ = answer
                     case None => continue
                 }
@@ -662,6 +673,10 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
     }
     match os.message_of[prompt.Response](into)^ {
         case Allowed => {
+            if box.waiting.kind == .Debug && cast[slop_os.Handle](box.waiting.steering) != slop_os.NO_HANDLE {
+                steer_allowed(box)
+                return void
+            }
             if box.waiting.kind == .Debug || box.waiting.kind == .DebugOther {
                 attach_allowed(box, into)
                 return void
@@ -963,6 +978,16 @@ take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
     if box.waiting.name_count <= box.waiting.name.count {
         name = box.waiting.name[0..<box.waiting.name_count]
     }
+    if asked == .Steer {
+        match os.message_of[programs.Response](into)^ {
+            case Steered(given) => {
+                runtime.log_info("let % steer a program it launched", as_text(name))
+                answer_steered(box, given)
+            }
+            case _ => answer(box, .Refused)
+        }
+        return void
+    }
     if asked == .Attach {
         match os.message_of[programs.Response](into)^ {
             case Attached(attached) => {
@@ -1029,6 +1054,80 @@ take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
 }
 
 /**
+ * Ask the user whether a program may steer one it launched (decisions/0195, 18b), as debugging their own program is
+ * asked: the program shown by the name it gives, which its launcher's handle to it backs.
+ *
+ * @param box The powerbox.
+ * @param index The asking client's index.
+ * @param name The program's name, shown to the user.
+ * @param purpose Why it asks.
+ * @param process The launcher's handle to the program's process, which the powerbox now holds; closed if it's refused.
+ * @return An answer now, Busy or Refused, the handle closed; null once it's asked, answered when the user has.
+ */
+ask_steer :: fn(
+    box : ptr[mut Box],
+    index : usize,
+    name : u8[],
+    purpose : u8[],
+    process : slop_os.Process
+) -> powerbox.Response? {
+    if box.programs_end == NONE || name.count == 0 || name.count > powerbox.NAME_BYTES {
+        _ = slop_os.handle_close(cast[slop_os.Handle](process))
+        return .Refused
+    }
+    asked :: ask(box, index, .Debug, false, purpose, name, u8.[])
+    match asked {
+        case Some(answer) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](process))
+            return answer
+        }
+        case None => box.waiting.steering = process
+    }
+    return null
+}
+
+/**
+ * The user allowed a program to steer one it launched: ask the session manager to have it steered, and answer with what
+ * it gives (take_sessions_answer).
+ *
+ * @param box The powerbox, whose waiting request is a steering one; its handle moves with the request.
+ */
+steer_allowed :: fn(box : ptr[mut Box]) {
+    out := os.Outgoing.{}
+    os.begin[programs.Request](&out)^ = .SteerOwn(box.waiting.steering)
+    box.waiting.steering = cast[slop_os.Process](slop_os.NO_HANDLE)
+    if programs.send_request(box.programs_end, box.programs_port, &out) != null {
+        answer(box, .Refused)
+        return void
+    }
+    box.asking_sessions = .Steer
+}
+
+/**
+ * Answer the waiting steering request with the program's steering handles, which move to the asker.
+ *
+ * @param box The powerbox.
+ * @param given What the session manager gave.
+ */
+answer_steered :: fn(box : ptr[mut Box], given : process_manager.Steering) {
+    box.has_waiting = false
+    index :: box.waiting.client
+    if index >= box.clients.ends.count || cast[slop_os.Handle](box.clients.ends[index]) == slop_os.NO_HANDLE {
+        for handle in slop_os.Handle.[
+            cast[slop_os.Handle](given.process),
+            cast[slop_os.Handle](given.intercept),
+            cast[slop_os.Handle](given.space)
+        ] {
+            _ = slop_os.handle_close(handle)
+        }
+        return void
+    }
+    out := os.Outgoing.{}
+    os.begin[powerbox.Response](&out)^ = .Steered(given)
+    _ = powerbox.send_response(box.clients.ends[index], box.port, &out)
+}
+
+/**
  * Answer the waiting debugger's request with the program attached; its handles move to the debugger.
  *
  * @param box The powerbox.
@@ -1072,6 +1171,11 @@ refuse_debug_port :: fn(box : ptr[mut Box]) {
         && cast[slop_os.Handle](box.waiting.port) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](box.waiting.port))
         box.waiting.port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    }
+    // A steering request's handle to its program, too
+    if cast[slop_os.Handle](box.waiting.steering) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](box.waiting.steering))
+        box.waiting.steering = cast[slop_os.Process](slop_os.NO_HANDLE)
     }
 }
 

@@ -80,6 +80,11 @@ SupervisorGrants :: struct {
     log : slop_os.DebugLog?,
     /** A connector to the process manager, served by the root task, which the supervisor launches services through. */
     manager : os.Channel[connector.Connector],
+    /**
+     * A steering connection to the process manager (decisions/0195, 18b), for what the user allows steered; None if
+     * it couldn't be made.
+     */
+    steering : os.Channel[process_manager.ProcessManager]?,
     /** The supervisor's end of the channel its reports go to the root task on: what started, ended and failed. */
     root : os.Channel[supervision.Supervision],
     /** The hello program's module. */
@@ -323,6 +328,11 @@ Root :: struct {
     manager : slop_os.Channel,
     /** A port bound to manager alone, waited on for its answers. */
     manager_port : slop_os.Port,
+    /**
+     * Its end of the process manager's steering listener (decisions/0195, 18b), which it connects the supervisor's
+     * steering connection through; NO_HANDLE before it's started, replaced each time it is. Held under manager_lock.
+     */
+    steering : slop_os.Channel,
     /** Its end of the supervisor's reports, bound to port; NO_HANDLE once the supervisor's end is gone. */
     supervision : slop_os.Channel,
     /**
@@ -551,6 +561,7 @@ main :: fn(
     grants := SupervisorGrants.{
         log = tracing_log(root),
         manager = connector_to(root, .ProcessManager) or_return 9,
+        steering = steering_connection(root),
         root = os.Channel[supervision.Supervision].{end = supervision_pair.b},
         hello_module = module_copy(root, "hello", program_rights),
         platform_service = if root.platform_end != NO_CHANNEL { connector_to(root, .Platform) } else { null },
@@ -1207,6 +1218,23 @@ start_platform :: fn(root : ptr[mut Root]) {
     }
 }
 
+/**
+ * Make a steering connection to the process manager, through its steering listener (decisions/0195, 18b).
+ *
+ * @param root The root task, whose end of the listener is used under manager_lock.
+ * @return The connection, which moves to who it's given to; null without a listener, or if it couldn't be made.
+ */
+steering_connection :: fn(root : ptr[mut Root]) -> os.Channel[process_manager.ProcessManager]? {
+    concurrency.lock(&root.manager_lock)
+    defer concurrency.unlock(&root.manager_lock)
+    if root.steering == NO_CHANNEL {
+        return null
+    }
+    port :: os.port_for(root.block.budget, root.steering) or_return null
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    return process_manager.connect(root.steering, port, root.block.budget)
+}
+
 /** A channel that's no channel, NO_HANDLE: what a Root field holds before, or without, what it's for. */
 NO_CHANNEL : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
@@ -1255,18 +1283,21 @@ start_manager :: fn(root : ptr[mut Root]) -> bool {
     block :: root.block
     pair :: os.channel_for[process_manager.ProcessManager](block.budget, process_manager.RING_BYTES) or_return false
     entropy_connector :: connector_to(root, .Entropy) or_return false
-    grants : process_builder.Grant[6]
+    // Its steering listener (decisions/0195, 18b), whose other end the root task keeps for the supervisor
+    steering :: os.channel_for[process_manager.ProcessManager](block.budget, process_manager.RING_BYTES) or_return false
+    grants : process_builder.Grant[7]
     grants[0] = process_builder.grant("log", cast[slop_os.Handle](duplicate_log(root) or_return false))
     grants[1] = process_builder.grant("entropy", cast[slop_os.Handle](entropy_connector.end))
     grants[2] = process_builder.grant("clients", cast[slop_os.Handle](pair.a))
-    given := cast[usize](3)
+    grants[3] = process_builder.grant("steering", cast[slop_os.Handle](steering.a))
+    given := cast[usize](4)
     // The command line, for profile_boot (decisions/0194)
     match slop_os.handle_duplicate(cast[slop_os.Handle](root.command_line), cast[slop_os.Rights](
         cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER)
     )) {
         case Ok(copy) => {
-            grants[3] = process_builder.grant("command_line", copy)
-            given = 4
+            grants[4] = process_builder.grant("command_line", copy)
+            given = 5
         }
         case Error(error) => {}
     }
@@ -1281,6 +1312,10 @@ start_manager :: fn(root : ptr[mut Root]) -> bool {
     }
     root.manager = pair.b
     root.manager_port = port
+    if root.steering != NO_CHANNEL {
+        _ = slop_os.handle_close(cast[slop_os.Handle](root.steering))
+    }
+    root.steering = steering.b
     concurrency.unlock(&root.manager_lock)
     return true
 }

@@ -20,6 +20,16 @@ import connector from "../../protocols/connector"
 import entropy from "../../protocols/entropy"
 import random_stream from "../../random_stream"
 
+/** A program the manager loaded, kept while it runs, for Steer (decisions/0195, 18b). */
+Record :: struct {
+    /** Its process, every right but none to own it: a duplicate of the owning handle its launcher has. */
+    process : slop_os.Process,
+    /** Its address space, every right. */
+    space : slop_os.AddressSpace,
+    /** Its intercept's owning handle, the manager's; NO_HANDLE without one. */
+    intercept : slop_os.Intercept,
+}
+
 /** The manager's state, all of it main's, kept for its life. */
 Manager :: struct {
     /** The process's startup block, for its budget and address space, which the manager's own work is paid from. */
@@ -30,6 +40,10 @@ Manager :: struct {
     port : slop_os.Port,
     /** The clients: the listener, and each connection a Connect brought. */
     clients : service_kit.Clients,
+    /** Whether each client, by index, is a steering connection, or the steering listener, which Steer is answered on. */
+    steering : bool[service_kit.MAX_CLIENTS],
+    /** The programs it loaded that may still run, each pruned once its process is gone. */
+    records : Record[..],
     /** The connection to the entropy service, the manager's own, or NO_HANDLE before the first dial. */
     entropy : slop_os.Channel,
     /** A port bound to entropy alone, waited on for its answers; replaced with entropy on each dial. */
@@ -62,6 +76,9 @@ Manager :: struct {
  *     drawn from it. It's dialed once at start, and again whenever the service has gone.
  * @param clients The listener new clients' connections arrive on, from the root task; it's served as a client, its
  *     Connects each adding a client, up to service_kit's MAX_CLIENTS at once.
+ * @param command_line The kernel's command line, for profile_boot.
+ * @param steering The listener steering connections arrive on (decisions/0195, 18b), whose other end the root task
+ *     keeps for the supervisor: Steer is answered on them alone. Without it, no Steer is.
  * @return 1 when the entropy service can't be reached at start, 2 when no port could be made, 3 when the listener
  *     couldn't be bound to it; it doesn't return otherwise.
  */
@@ -69,7 +86,8 @@ main :: fn(
     log : slop_os.DebugLog?,
     entropy : os.Channel[connector.Connector],
     clients : os.Listener[protocol.ProcessManager],
-    command_line : slop_os.Memory?
+    command_line : slop_os.Memory?,
+    steering : os.Listener[protocol.ProcessManager]?
 ) -> int {
     block :: slop_os.startup_block()
     manager := Manager.{
@@ -93,6 +111,16 @@ main :: fn(
     // The listener is a client like any, whose requests are connections or loads
     if !service_kit.add_client(&manager.clients, manager.port, clients.end) {
         return 3
+    }
+    // Steer's listener, the supervisor's to give on (decisions/0195, 18b)
+    match steering {
+        case Some(listener) => match service_kit.add_client_index(&manager.clients, manager.port, listener.end) {
+            case Some(at) => if at < manager.steering.count {
+                manager.steering[at] = true
+            }
+            case None => return 3
+        }
+        case None => {}
     }
     log_line.write(manager.log, "process manager: serving")
     into := os.Incoming.{}
@@ -140,9 +168,13 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
             }
             case _ => {
                 service_kit.drop_client(&manager.clients, index)
+                if index < manager.steering.count {
+                    manager.steering[index] = false
+                }
                 return void
             }
         }
+        steers :: index < manager.steering.count && manager.steering[index]
         match os.message_of[protocol.Request](into)^ {
             case Load(request) => {
                 loading := request
@@ -171,8 +203,27 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
                 }
             }
             case Connect(connection) => {
-                if !service_kit.add_client(&manager.clients, manager.port, connection.end) {
-                    _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                match service_kit.add_client_index(&manager.clients, manager.port, connection.end) {
+                    case Some(at) => if at < manager.steering.count {
+                        manager.steering[at] = steers
+                    }
+                    case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                }
+            }
+            case Steer(asked) => {
+                out := os.Outgoing.{}
+                response :: os.begin[protocol.Response](&out)
+                response^ = if steers { steer(manager, asked) } else { protocol.Response.NotSteered(.NotAllowed) }
+                for handle in slop_os.Handle.[cast[slop_os.Handle](asked.process), cast[slop_os.Handle](asked.port)] {
+                    if handle != slop_os.NO_HANDLE {
+                        _ = slop_os.handle_close(handle)
+                    }
+                }
+                if protocol.send_response(end, manager.port, &out) is_some {
+                    match response^ {
+                        case Steered(given) => close_steering(given)
+                        case _ => {}
+                    }
                 }
             }
         }
@@ -205,10 +256,21 @@ GIVEN_RIGHTS :: cast[u32](slop_os.RIGHT_PROCESS_KILL)
     | cast[u32](slop_os.RIGHT_PROCESS_INSPECT)
     | cast[u32](slop_os.RIGHT_DUPLICATE)
     | cast[u32](slop_os.RIGHT_TRANSFER)
-/** The rights a Load may ask for beside them; never RIGHT_PROCESS_THREADS. */
+/** The rights a Load may ask for beside them: reading, never steering or starting threads (decisions/0195, 18b). */
 ASKABLE_RIGHTS :: cast[u32](slop_os.RIGHT_PROCESS_READ_MEMORY)
+/** The rights a launcher's handle to its program's intercept has: never RIGHT_INTERCEPT_STEER. */
+INTERCEPT_GIVEN :: cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER)
+/** The rights Steer gives a process's handle: to read it, change its threads' state and end it. */
+STEERING_RIGHTS :: cast[u32](slop_os.RIGHT_PROCESS_INSPECT)
+    | cast[u32](slop_os.RIGHT_PROCESS_READ_MEMORY)
     | cast[u32](slop_os.RIGHT_PROCESS_WRITE_STATE)
-    | cast[u32](slop_os.RIGHT_PROCESS_INTERCEPT)
+    | cast[u32](slop_os.RIGHT_PROCESS_KILL)
+    | cast[u32](slop_os.RIGHT_DUPLICATE)
+    | cast[u32](slop_os.RIGHT_TRANSFER)
+/** The rights Steer gives an intercept's handle: to steer. */
+STEERING_INTERCEPT :: cast[u32](slop_os.RIGHT_INTERCEPT_STEER)
+    | cast[u32](slop_os.RIGHT_DUPLICATE)
+    | cast[u32](slop_os.RIGHT_TRANSFER)
 
 /**
  * Build a Load's program into a new process and start its first thread.
@@ -277,6 +339,11 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
             grants[i] = process_builder.Grant.{label = request.labels[i], handle = request.grants[i]}
         }
     }
+    /*
+     * Ended programs' intercepts let go first: one still kept holds its port's key, which a program started again may
+     * be watched under
+     */
+    prune(manager)
     // The process and its space, the manager's until Loaded moves the process to the requester
     process :: slop_os.process_create(request.budget) or_return .NotLoaded(.NoMemory)
     started := false
@@ -318,6 +385,8 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
         made.space = cast[slop_os.AddressSpace](slop_os.handle_duplicate(cast[slop_os.Handle](space), slop_os.RIGHT_TRANSFER)
             or_return .NotLoaded(.NoMemory))
     }
+    // The space's handle goes to the program as it's built: the manager's own, kept for Steer
+    kept_space :: copy_of(cast[slop_os.Handle](space))
     target :: process_builder.Target.{process = process, space = space, budget = request.budget}
     match process_builder.build(
         target,
@@ -330,6 +399,14 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
     ) {
         case Ok(built) => {
             space_given = true
+            // Kept for Steer while it runs: the process and space with every right, and the intercept's owning handle
+            keep(manager, process, kept_space, made.intercept)
+            if cast[slop_os.Handle](made.intercept) != slop_os.NO_HANDLE {
+                made.intercept = cast[slop_os.Intercept](
+                    slop_os.handle_duplicate(cast[slop_os.Handle](made.intercept), cast[slop_os.Rights](INTERCEPT_GIVEN))
+                        or_else slop_os.NO_HANDLE
+                )
+            }
             // The requester's from now on, to watch, end and read as it asked, never to start threads in
             kept :: cast[slop_os.Rights](GIVEN_RIGHTS | (cast[u32](request.rights) & ASKABLE_RIGHTS))
             // One that's ended already has nothing to restrict: answered without it, its end reported on its watch
@@ -348,6 +425,9 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
             return .Loaded(made)
         }
         case Error(error) => {
+            if kept_space != slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(kept_space)
+            }
             log_line.write(manager.log, "process manager: % didn't start: %", name, error)
             return .NotLoaded(
                 if error == .NotAProgram {
@@ -357,6 +437,144 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
             )
         }
     }
+}
+
+/**
+ * Close what Steered would have given a requester it couldn't be sent to.
+ *
+ * @param given What Steered says; its handles, still the manager's, are closed.
+ */
+close_steering :: fn(given : protocol.Steering) {
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](given.intercept),
+        cast[slop_os.Handle](given.process),
+        cast[slop_os.Handle](given.space)
+    ] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
+}
+
+/**
+ * Duplicate a handle with every right it has.
+ *
+ * @param handle The handle, which stays the caller's.
+ * @return The duplicate, not owning; NO_HANDLE if it couldn't be made.
+ */
+copy_of :: fn(handle : slop_os.Handle) -> slop_os.Handle {
+    info :: slop_os.handle_info(handle) or_return slop_os.NO_HANDLE
+    return slop_os.handle_duplicate(handle, info.rights) or_else slop_os.NO_HANDLE
+}
+
+/**
+ * Keep a program just loaded for Steer, those kept before whose processes are gone let go first.
+ *
+ * @param manager The manager, whose records it joins.
+ * @param process Its process's owning handle, still the manager's, duplicated with every right.
+ * @param space A handle to its address space with every right, which the record keeps; NO_HANDLE for none.
+ * @param intercept Its intercept's owning handle, which the record keeps; NO_HANDLE for none.
+ */
+keep :: fn(manager : ptr[mut Manager], process : slop_os.Process, space : slop_os.Handle, intercept : slop_os.Intercept) {
+    prune(manager)
+    made := Record.{
+        process = cast[slop_os.Process](copy_of(cast[slop_os.Handle](process))),
+        space = cast[slop_os.AddressSpace](space),
+        intercept = intercept,
+    }
+    runtime.array_add(&manager.records, made)
+}
+
+/**
+ * Let go of the records whose processes are gone: their handles closed, the intercept's owning one with them.
+ *
+ * @param manager The manager.
+ */
+prune :: fn(manager : ptr[mut Manager]) {
+    at := cast[usize](0)
+    loop {
+        if at >= manager.records.count {
+            break
+        }
+        record :: manager.records[at]
+        if slop_os.handle_info(cast[slop_os.Handle](record.process)) is_ok {
+            at += 1
+            continue
+        }
+        for handle in slop_os.Handle.[
+            cast[slop_os.Handle](record.process),
+            cast[slop_os.Handle](record.space),
+            cast[slop_os.Handle](record.intercept)
+        ] {
+            if handle != slop_os.NO_HANDLE {
+                _ = slop_os.handle_close(handle)
+            }
+        }
+        runtime.array_remove(&manager.records, at)
+    }
+}
+
+/**
+ * Steer a program the manager loaded, on a steering connection's request: the user's allowed it (decisions/0195, 18b).
+ *
+ * @param manager The manager, whose record of it gets the new intercept, if one's attached.
+ * @param asked The request; its handles stay where they are, the caller's to close.
+ * @return Steered with the intercept, with RIGHT_INTERCEPT_STEER, the process, with STEERING_RIGHTS, and the space;
+ *     NotSteered NoProgram for a handle without RIGHT_PROCESS_KILL, or to no program kept, Failed if the intercept or
+ *     a handle couldn't be made.
+ */
+steer :: fn(manager : ptr[mut Manager], asked : protocol.Steer) -> protocol.Response {
+    prune(manager)
+    info :: slop_os.handle_info(cast[slop_os.Handle](asked.process)) or_return protocol.Response.NotSteered(.NoProgram)
+    if cast[u32](info.rights) & cast[u32](slop_os.RIGHT_PROCESS_KILL) == 0 {
+        return .NotSteered(.NoProgram)
+    }
+    found := manager.records.count
+    for record, i in manager.records {
+        if slop_os.handle_same(cast[slop_os.Handle](record.process), cast[slop_os.Handle](asked.process)) or_else false {
+            found = i
+        }
+    }
+    if found >= manager.records.count {
+        return .NotSteered(.NoProgram)
+    }
+    record :: &manager.records[found]
+    // Its stops to another port: the intercept it had detached, and a new one attached there
+    if cast[slop_os.Handle](asked.port) != slop_os.NO_HANDLE {
+        if cast[slop_os.Handle](record.intercept) != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](record.intercept))
+            record.intercept = cast[slop_os.Intercept](slop_os.NO_HANDLE)
+        }
+        match slop_os.intercept_attach(record.process, asked.port, asked.key, 0, slop_os.STOP_FAULT) {
+            case Ok(made) => record.intercept = made
+            case Error(error) => {
+                log_line.write(manager.log, "process manager: steering: no intercept: %", error)
+                return .NotSteered(.Failed)
+            }
+        }
+    }
+    given := protocol.Steering.{
+        intercept = cast[slop_os.Intercept](slop_os.NO_HANDLE),
+        process = cast[slop_os.Process](slop_os.NO_HANDLE),
+        space = cast[slop_os.AddressSpace](
+            slop_os.handle_duplicate(cast[slop_os.Handle](record.space), slop_os.RIGHT_TRANSFER) or_else slop_os.NO_HANDLE
+        ),
+    }
+    match slop_os.handle_duplicate(cast[slop_os.Handle](record.process), cast[slop_os.Rights](STEERING_RIGHTS)) {
+        case Ok(copy) => given.process = cast[slop_os.Process](copy)
+        case Error(error) => {
+            log_line.write(manager.log, "process manager: steering: no process handle: %", error)
+            return .NotSteered(.Failed)
+        }
+    }
+    if cast[slop_os.Handle](record.intercept) != slop_os.NO_HANDLE {
+        given.intercept = cast[slop_os.Intercept](
+            slop_os.handle_duplicate(cast[slop_os.Handle](record.intercept), cast[slop_os.Rights](STEERING_INTERCEPT))
+                or_else slop_os.NO_HANDLE
+        )
+    }
+    log_line.write(manager.log, "process manager: a program steered, on the user's say")
+    return .Steered(given)
 }
 
 /**

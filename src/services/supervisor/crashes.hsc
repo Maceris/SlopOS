@@ -2,6 +2,7 @@ package supervisor
 
 import os from "std:os"
 import slop_os from "std:os/slop_os"
+import process_manager from "std:os/slop_os/process_manager"
 import text_buffer from "std:text_buffer"
 import crash_reports from "../../crash_reports"
 import log_line from "../../log_line"
@@ -127,7 +128,28 @@ crash_and_wait :: fn(supervisor : ptr[mut Supervisor], name : string) -> bool {
     else {
         null
     }
-    match crash_reports.make_crash(supervisor.started[index].process, ping) {
+    // Its threads changed: the process manager steers it for the test (decisions/0195, 18b)
+    port :: os.port_for(supervisor.block.budget, supervisor.steering) or_return false
+    steered :: process_manager.steer(supervisor.steering, port, supervisor.started[index].process, null, 0)
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    steering :: match steered {
+        case Ok(given) => given
+        case Error(why) => {
+            log_line.write(supervisor.log, "supervisor: test_crash: % couldn't be steered: %", name, why)
+            return false
+        }
+    }
+    crashed :: crash_reports.make_crash(steering.process, ping)
+    for handle in slop_os.Handle.[
+        cast[slop_os.Handle](steering.process),
+        cast[slop_os.Handle](steering.intercept),
+        cast[slop_os.Handle](steering.space)
+    ] {
+        if handle != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(handle)
+        }
+    }
+    match crashed {
         case Ok => {}
         case Error(error) => {
             log_line.write(supervisor.log, "supervisor: test_crash: % couldn't be made to crash: %", name, error)
