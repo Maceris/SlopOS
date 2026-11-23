@@ -77,3 +77,19 @@ powerbox capability, shown on the trusted path while held. What's there (2026-11
 - **So the test holds** what can fail: no wake early, and under load 999 wakes in 1000 within 5 ms, half a tick, which
   a wake that waited for a tick, its IPI missed, wouldn't make. The idle numbers are logged. The mixer's period and its
   buffer (17d) are chosen against these: at least 2 ms of slack beyond its period under TCG.
+
+## As Built: 17b, std/audio
+In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
+- **Formats**: `SampleFormat` (16-, 24- in 3 bytes, 32-bit integers, 32-bit floats, little-endian) and `Format`
+  (sample, rate, channels, at most 8); `decode` to floats at full scale 1, `encode` back, clipped, rounded to the
+  nearest, NaN as silence.
+- **Mixing**: `mix` adds with a gain and doesn't clip, so streams add in any order; `scale`; `clip` says how many it
+  clipped; `remix` between channel counts (one into each, several averaged into one, the others copied or silent).
+- **Resampling**: a `Resampler`, ~33 KiB of the caller's, a 64-tap Kaiser-windowed (beta 8) sinc of 128 phases
+  interpolated, cutting off at 0.9 of the lower rate's half; any two rates, a block at a time, 32 frames' delay.
+  Measured: a 1 kHz tone from 44.1 to 48 kHz keeps its level within 1% with no third harmonic or image above
+  1/1000; a 23 kHz tone from 48 to 44.1 kHz folds back under 1/1000; a 10 kHz one keeps its level; blocks of 7 frames
+  give what one block does.
+- **WAV**: `read_wav` from anyone's bytes (PCM 16, 24 and 32 bits, float 32, either as WAVE_FORMAT_EXTENSIBLE; other
+  chunks skipped, odd ones padded; a data chunk past the file taken as far as it goes), `write_wav`. Fuzzed:
+  `tools/fuzz.py wav`, 2.5 million inputs in 30 s, nothing found.

@@ -37,6 +37,10 @@ Known limits, each an error rather than wrong code. Severity: nice.
   or a variable of its own, as M16's greeter and powerbox kept needing. Chosen with the project's owner (2026-11-21):
   they bind tighter than `&&` and `||`, as a comparison does. Severity: friction. Done 2026-11-21 (Hemera 0454b7c):
   a level of their own between `&&` and the comparisons, in the parser and the formatter (`docs/operators.md`).
+- An escape a string doesn't know is the character after the backslash (`docs/types.md`), so `"\x00"` is `x00`, not a
+  zero byte, with nothing said: std/audio's test wrote a WAV file's bytes that way and read three characters. A warning
+  for an escape that isn't one of the table's (`\n`, `\t`, `\r`, `\0`, `\u{...}`, `\\`, `\"`) would catch it.
+  Severity: friction (2026-11-22).
 
 ### Targets and runtime
 

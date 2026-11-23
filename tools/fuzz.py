@@ -59,6 +59,8 @@ TARGETS = [
     # Anything drawn, under any transform and clip, the fast paths among it (decisions/0193, 16g)
     ("canvas_anything", "hemera:apps/compiler/test/back_end/scenarios/canvas", "draws_anything"),
     ("ui_input", "hemera:apps/compiler/test/back_end/scenarios/ui", "takes_any_input"),
+    # WAV files, which anyone may give a program to play (decisions/0196, 17b)
+    ("wav", "hemera:apps/compiler/test/back_end/scenarios/audio", "reads_any_bytes_as_a_wav"),
 ]
 
 # How much longer than its fuzzing a target may run, building aside, before it's taken as hung
