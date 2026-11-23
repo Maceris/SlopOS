@@ -14,6 +14,12 @@ import slop_os from "std:os/slop_os"
  * is the client's again. Answers come in the order periods were given. The device plays the first once a few are given
  * (START_PERIODS), and plays silence when it runs out, which the driver counts. A driver serves one client at a time; a
  * new connection's client takes over, the periods the last gave dropped.
+ *
+ * Capture (17f) is the same the other way, from the device's first input stream that takes the system's format, through
+ * a ring of its own (GetCaptureBuffer): the client gives a period to be filled with Record, answered with Recorded once
+ * the device has filled it, when its frames are in the ring and the period is the client's again. The device starts
+ * once START_PERIODS are given, and drops what it hears when it has none to fill, which the driver counts. One client
+ * records at a time, which needn't be the one that plays.
  */
 
 /**
@@ -52,9 +58,11 @@ RING_BYTES : u32 : 4096
 
 /** What the driver says of the device. */
 Info :: struct {
-    /** How the device stores samples, as virtio-sound's format numbers do: 19 floats, 5 16-bit integers. */
+    /** How the device stores samples it plays, as virtio-sound's format numbers do: 19 floats, 5 16-bit integers. */
     device_format : u8,
-    /** How many output streams the device has; the driver plays the first that takes the system's format. */
+    /** How it stores those it captures, the same way; 0 if it has no input stream that takes the system's format. */
+    capture_format : u8,
+    /** How many streams the device has, output and input; the driver uses the first of each that takes the format. */
     streams : u32,
 }
 
@@ -68,6 +76,8 @@ Refused :: enum #backed_by(u8) {
     DeviceFailed = 3,
     /** Another connection's client is the driver's now. */
     Replaced = 4,
+    /** The device has no input stream that takes the system's format: nothing to record from. */
+    NoInput = 5,
 }
 
 /** A period the device took: which, how far behind the device was playing, and how often it's run out so far. */
@@ -78,6 +88,14 @@ Played :: struct {
     latency_frames : u32,
     /** How many times the device has run out of periods since playing started, playing silence. */
     underruns : u32,
+}
+
+/** A period the device filled: which, and how often it's had none to fill so far. */
+Recorded :: struct {
+    /** The period's index in the capture ring. */
+    period : u32,
+    /** How many times the device has had no period to fill since recording started, what it heard dropped. */
+    overruns : u32,
 }
 
 /** What a sound device's driver is asked. */
@@ -97,6 +115,22 @@ Request :: union {
      */
     Stop,
     /**
+     * Make the capture ring, CAPTURE periods' worth as the playing ring is, if there's none, give a window onto it, and
+     * make the connection's client the one that records: another that did has its periods dropped. Answered with
+     * CaptureBuffer, or with Refused(NoInput) with period 0.
+     */
+    GetCaptureBuffer,
+    /**
+     * Give a period of the capture ring to be filled; the client leaves it alone until it's answered. Answered with
+     * Recorded once the device has filled it, or with Refused.
+     */
+    Record(u32),
+    /**
+     * Stop recording: the periods given and not yet filled are dropped, each answered with Refused(Replaced) first.
+     * Answered with RecordingStopped; a Record after it starts again.
+     */
+    StopRecording,
+    /**
      * Have the driver serve another client, on the end given, which moves to the driver; the client before, if any,
      * is closed. Sent on the listener, and answered with nothing.
      */
@@ -115,6 +149,12 @@ Response :: union {
     Refused(PlayRefused),
     /** Stop's answer. */
     Stopped,
+    /** GetCaptureBuffer's answer: a window onto the capture ring, BUFFER_BYTES of it, which moves to the client. */
+    CaptureBuffer(slop_os.Memory),
+    /** Record's answer: the device has filled the period. */
+    Recorded(Recorded),
+    /** StopRecording's answer. */
+    RecordingStopped,
     /** The answer to a request the driver doesn't know, as from a newer client; every protocol has it. */
     Unsupported,
 }
@@ -131,7 +171,7 @@ PlayRefused :: struct {
  * Tell whether a request may be sent again, after a reconnect, without doing more than sending it once did.
  *
  * @param request The request, which isn't changed.
- * @return False for Play, whose period would be played twice; true for the rest.
+ * @return False for Play and Record, whose period would be played or filled twice; true for the rest.
  */
 is_idempotent :: fn(request : ptr[Request]) -> bool {
     return match request^ {
@@ -139,6 +179,9 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case GetBuffer => true
         case Play(_) => false
         case Stop => true
+        case GetCaptureBuffer => true
+        case Record(_) => false
+        case StopRecording => true
         case Connect(_) => true
     }
 }
