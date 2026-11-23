@@ -14,6 +14,9 @@
  * records, the device's input is captured, the driver's capture ring given whole, and each period it fills is resampled,
  * remixed and encoded into every recording stream's format, filling the periods it gave. A grant's stream with none
  * given drops what's heard, its own overrun. The device's capture stops once none records.
+ *
+ * A session's volume (17g): a sound connection made through the listener is a group's root, a session's, and those made
+ * by a Connect on one of its group are in it too; the root's SetSessionVolume scales every stream of the group.
  */
 package audio_service
 
@@ -45,6 +48,8 @@ MIX_CHANNELS : usize : 2
 CARRY_FRAMES : usize : 2048
 /** The most samples of a stream's period: the highest rate's frames times the most channels. */
 MAX_PERIOD_SAMPLES : usize : 960 * 8
+/** The most recording streams' rings kept after their grants are gone (sound.RETIRED_NS); past it, the oldest goes. */
+MAX_RETIRED : usize : 8
 /** How many periods of the mix with nothing to mix before the device is stopped: 100 ms. */
 IDLE_PERIODS : u32 : 20
 
@@ -112,6 +117,21 @@ Slot :: struct {
     granted_by : usize,
     /** For a Recorder: how many WaitReleased for it are waiting, each answered Released once it's gone. */
     watches : u32,
+    /** For a Player: its group's number, and whether it's the group's root, made through the listener. */
+    group : u32,
+    root : bool,
+    /** For a Player: its group's volume, as a gain, which scales its stream's. */
+    session_gain : f32,
+}
+
+/** A recording stream's ring, kept a while after its grant's gone, so its client isn't faulted reading it. */
+Retired :: struct {
+    /** The ring, the service's own handle, which destroys it when it's closed. */
+    ring : slop_os.Memory,
+    /** Where it's mapped here. */
+    at : u64,
+    /** When it's destroyed, by the monotonic clock. */
+    until : u64,
 }
 
 /** Whether the device's input is captured. */
@@ -157,6 +177,11 @@ Service :: struct {
     capture_overruns : u32,
     /** The next grant's id. */
     next_grant : u32,
+    /** The next group's number, for the next connection made through the listener. */
+    next_group : u32,
+    /** Recording streams' rings kept after their grants are gone, the first retired_count of them, oldest first. */
+    retired : Retired[MAX_RETIRED],
+    retired_count : usize,
     /** Since mixing started: periods mixed, periods mixed late (missed), the worst lateness, the device's underruns. */
     mixed : u64,
     missed : u64,
@@ -212,6 +237,7 @@ main :: fn(
         case None => {}
     }
     service.next_grant = 1
+    service.next_group = 1
     if !add(service, clients.end, .Listener) {
         return 3
     }
@@ -234,11 +260,16 @@ main :: fn(
         while i < service.clients.count
         take_driver_answers(service, &into)
         mix_due(service)
+        let_go_retired(service, false)
         if service_kit.stopping() {
             return 0
         }
         packets : slop_os.Packet[8]
-        _ = slop_os.port_wait(service.port, packets, if service.mixing { service.due } else { slop_os.NO_DEADLINE })
+        deadline := if service.mixing { service.due } else { slop_os.NO_DEADLINE }
+        if service.retired_count > 0 && service.retired[0].until < deadline {
+            deadline = service.retired[0].until
+        }
+        _ = slop_os.port_wait(service.port, packets, deadline)
     }
 }
 
@@ -305,9 +336,29 @@ serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incomin
                 stop_capture_if_unused(service)
                 response^ = .Stopped
             }
+            case SetSessionVolume(volume) => {
+                response^ = if set_session_volume(service, index, volume) {
+                    sound.Response.VolumeSet
+                }
+                else {
+                    sound.Response.Refused(.NotAllowed)
+                }
+            }
             case Connect(connection) => {
-                if !add(service, connection.end, .Player) {
-                    _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                // Through the listener, a group's root; through another, in that one's group
+                match add_index(service, connection.end, .Player) {
+                    case Some(made) => if made < service.streams.count {
+                        if kind == .Listener {
+                            service.streams[made].group = service.next_group
+                            service.streams[made].root = true
+                            service.next_group += 1
+                        }
+                        else {
+                            service.streams[made].group = service.streams[index].group
+                            service.streams[made].session_gain = service.streams[index].session_gain
+                        }
+                    }
+                    case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
                 continue
             }
@@ -325,10 +376,46 @@ serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incomin
  * @return Whether it's added: false with no room for it.
  */
 add :: fn(service : ptr[mut Service], end : slop_os.Channel, kind : Kind) -> bool {
-    index :: service_kit.add_client_index(&service.clients, service.port, end) or_return false
+    return add_index(service, end, kind) is_some
+}
+
+/**
+ * Add a client, of a kind, as add does, giving where it went.
+ *
+ * @param service The service, whose clients and slots it's added to.
+ * @param end Its end, which the service keeps once it's added; not closed when it isn't.
+ * @param kind What it is.
+ * @return Its index; null with no room for it.
+ */
+add_index :: fn(service : ptr[mut Service], end : slop_os.Channel, kind : Kind) -> usize? {
+    index :: service_kit.add_client_index(&service.clients, service.port, end) or_return null
     if index < service.streams.count {
-        service.streams[index] = Slot.{stream = null, kind = kind}
+        service.streams[index] = Slot.{stream = null, kind = kind, session_gain = 1.0}
     }
+    return index
+}
+
+/**
+ * Set a group's volume, on its root's request.
+ *
+ * @param service The service.
+ * @param index The client asking: a group's root.
+ * @param volume The volume, 0 to sound.FULL_VOLUME; more is taken as FULL_VOLUME.
+ * @return Whether it's set: false for a client that isn't a group's root.
+ */
+set_session_volume :: fn(service : ptr[mut Service], index : usize, volume : u16) -> bool {
+    if index >= service.streams.count || service.streams[index].kind != .Player || !service.streams[index].root {
+        return false
+    }
+    group :: service.streams[index].group
+    kept :: if volume > sound.FULL_VOLUME { sound.FULL_VOLUME } else { volume }
+    gain :: cast[f32](kept) / 1000.0
+    for &slot in service.streams {
+        if slot.kind == .Player && slot.group == group {
+            slot.session_gain = gain
+        }
+    }
+    runtime.log_info("group % at volume %", group, kept)
     return true
 }
 
@@ -773,7 +860,7 @@ drop_queued :: fn(service : ptr[mut Service], index : usize, why : sound.Refused
 
 /**
  * Close a client's stream, as its connection's gone: its ring unmapped and closed, which destroys a player's window
- * onto it, and its resampler freed.
+ * onto it, or a recording stream's kept for RETIRED_NS first; and its resampler freed.
  *
  * @param service The service.
  * @param index The client's index.
@@ -781,8 +868,13 @@ drop_queued :: fn(service : ptr[mut Service], index : usize, why : sound.Refused
 close_stream :: fn(service : ptr[mut Service], index : usize) {
     stream :: stream_of(service, index) or_return void
     if cast[slop_os.Handle](stream.ring) != slop_os.NO_HANDLE {
-        _ = slop_os.memory_unmap(slop_os.startup_block().space, stream.ring_at)
-        _ = slop_os.handle_close(cast[slop_os.Handle](stream.ring))
+        if stream.records {
+            retire(service, stream.ring, stream.ring_at)
+        }
+        else {
+            _ = slop_os.memory_unmap(slop_os.startup_block().space, stream.ring_at)
+            _ = slop_os.handle_close(cast[slop_os.Handle](stream.ring))
+        }
     }
     match stream.resampler {
         case Some(resampler) => runtime.free(resampler)
@@ -791,6 +883,56 @@ close_stream :: fn(service : ptr[mut Service], index : usize) {
     runtime.free(stream)
     if index < service.streams.count {
         service.streams[index].stream = null
+    }
+}
+
+/**
+ * Keep a recording stream's ring for RETIRED_NS, its client maybe still reading a period it was answered: closing it
+ * would unmap it under the client. With MAX_RETIRED kept already, the oldest goes now.
+ *
+ * @param service The service, which keeps it.
+ * @param ring The ring, the service's owning handle.
+ * @param at Where it's mapped here.
+ */
+retire :: fn(service : ptr[mut Service], ring : slop_os.Memory, at : u64) {
+    if service.retired_count >= service.retired.count {
+        let_go_retired(service, true)
+    }
+    now :: slop_os.clock_monotonic() or_else 0
+    if service.retired_count < service.retired.count {
+        service.retired[service.retired_count] = Retired.{ring = ring, at = at, until = now + sound.RETIRED_NS}
+        service.retired_count += 1
+    }
+}
+
+/**
+ * Destroy the retired rings whose time is up, oldest first, each unmapped and closed.
+ *
+ * @param service The service.
+ * @param oldest Whether the oldest goes whatever its time, to make room.
+ */
+let_go_retired :: fn(service : ptr[mut Service], oldest : bool) {
+    now :: slop_os.clock_monotonic() or_else 0
+    loop {
+        if service.retired_count == 0 {
+            return void
+        }
+        first :: service.retired[0]
+        if first.until > now && !oldest {
+            return void
+        }
+        _ = slop_os.memory_unmap(slop_os.startup_block().space, first.at)
+        _ = slop_os.handle_close(cast[slop_os.Handle](first.ring))
+        for k in 0..<service.retired_count {
+            next :: k + 1
+            if next < service.retired_count && k < service.retired.count && next < service.retired.count {
+                service.retired[k] = service.retired[next]
+            }
+        }
+        service.retired_count -= 1
+        if oldest {
+            return void
+        }
     }
 }
 
@@ -1217,8 +1359,9 @@ mix_into_driver :: fn(service : ptr[mut Service]) -> bool {
                 }
                 if frames > 0 {
                     anything = true
+                    session_gain :: service.streams[i].session_gain
                     _ = pcm.mix(first(service.mix[0..<service.mix.count], frames * MIX_CHANNELS),
-                        first(stream.carry[0..<stream.carry.count], frames * MIX_CHANNELS), stream.gain)
+                        first(stream.carry[0..<stream.carry.count], frames * MIX_CHANNELS), stream.gain * session_gain)
                     // What's left moved to the front
                     rest :: (stream.carried - frames) * MIX_CHANNELS
                     taken :: frames * MIX_CHANNELS

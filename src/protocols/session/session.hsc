@@ -87,6 +87,14 @@ SftpStart :: struct {
     stream : os.Channel[pipe.Pipe],
 }
 
+/** A session's volume, as the trusted path sets it (decisions/0196, 17g). */
+SessionVolume :: struct {
+    /** The session, by its number. */
+    session : u32,
+    /** Its volume: 0 silent to 1000 as each of its programs plays. */
+    volume : u16,
+}
+
 /** The most bytes of a session's command: 4096. */
 COMMAND_BYTES :: 4096
 
@@ -147,6 +155,11 @@ Request :: union {
      * Refused, as without a compositor.
      */
     StartGui(GuiStart),
+    /**
+     * Set a session's volume, every sound its programs play scaled by it, on the trusted path's say (decisions/0196,
+     * 17g). Answered with Noted, or Refused for a session that isn't there, or without an audio service.
+     */
+    SetVolume(SessionVolume),
 }
 
 /** A GUI session to make: its user, home and layout as Start's, and its powerbox's prompts. */
@@ -201,6 +214,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Wait(_) => true
         case StartSftp(_) => false
         case StartGui(_) => false
+        case SetVolume(_) => true
     }
 }
 

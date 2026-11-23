@@ -17,8 +17,14 @@ import slop_os from "std:os/slop_os"
  * user has let record, records instead: its client gives an empty period with Record, answered with Recorded once the
  * service has filled it with what the device heard, converted to the stream's format. What's heard while the client
  * has no period given is dropped, its own overrun. Play is refused on it, and Record on any other connection. Its
- * GetBuffer gives the ring itself, read only, not a window: once the grant's taken back, what was answered stays the
- * client's to read, as closing the ring would unmap a window under it.
+ * GetBuffer gives the ring itself, read only. Once the grant's taken back, nothing more is recorded into it, but it's
+ * kept a second more (RETIRED_NS), so a client still reading a period it was answered isn't faulted; then it's gone,
+ * unmapped from the client too.
+ *
+ * A session's volume (17g): a connection made through the listener is a group's root, and every connection made by a
+ * Connect on it, or on one made so, is in its group. SetSessionVolume, on the root alone, scales every stream of the
+ * group, as well as each stream's own volume: the session manager dials a root for each session, gives its programs
+ * connections of its group, and sets its volume as the trusted path asks.
  */
 
 /**
@@ -45,6 +51,8 @@ MAX_RATE : u32 : 192000
 MAX_BUFFER_BYTES : u64 : (cast[u64](PERIODS) * ((cast[u64](MAX_RATE) + 199) / 200) * cast[u64](MAX_CHANNELS) * 4 + 4095) / 4096 * 4096
 /** The bytes of a connection's channel's ring: every period given and answered at once fits. */
 RING_BYTES : u32 : 4096
+/** How long a recording stream's ring is kept once its grant's taken back, in nanoseconds: a second. */
+RETIRED_NS : u64 : 1_000_000_000
 /** Full volume, as SetVolume takes it: a gain of 1. */
 FULL_VOLUME : u16 : 1000
 
@@ -133,6 +141,12 @@ Request :: union {
     /** Set the stream's volume, 0 silent to FULL_VOLUME as it is. Answered with VolumeSet. */
     SetVolume(u16),
     /**
+     * On a group's root, a connection made through the listener, set every stream of its group's volume, 0 silent to
+     * FULL_VOLUME as each is, the streams' own volumes too. Answered with VolumeSet, or Refused(NotAllowed) on any
+     * other connection.
+     */
+    SetSessionVolume(u16),
+    /**
      * Drop the periods given and not yet mixed in, or filled, each answered PlayRefused(Dropped) first. Answered with
      * Stopped.
      */
@@ -189,6 +203,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Play(_) => false
         case Record(_) => false
         case SetVolume(_) => true
+        case SetSessionVolume(_) => true
         case Stop => true
         case Connect(_) => true
     }

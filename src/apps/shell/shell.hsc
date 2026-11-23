@@ -10,6 +10,7 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import network from "std:os/slop_os/network"
+import sound from "../../protocols/sound"
 import process_manager from "std:os/slop_os/process_manager"
 import read_only_file from "std:os/slop_os/read_only_file"
 import terminal as protocol from "std:os/slop_os/terminal"
@@ -35,6 +36,13 @@ Shell :: struct {
     network : os.Channel[network.Network]?,
     /** A port bound to network, waited on for its answers. */
     network_port : slop_os.Port,
+    /**
+     * A sound connection in the session's group (decisions/0196, 17g), which more are made from for programs that take
+     * one; null without an audio service.
+     */
+    sound : os.Channel[sound.Sound]?,
+    /** A port bound to sound, waited on while its ring is full. */
+    sound_port : slop_os.Port,
     /** The scope names are bound in now: the shell's own, or a function's call's or a stage's item's while it runs. */
     scope : ptr[mut Scope],
     /** Whether exit has been run, so the shell ends before reading another line. */
@@ -115,6 +123,8 @@ Shell :: struct {
  *     (decisions/0187). Without it, they run on the shell's own.
  * @param command One line to run in place of reading lines, as SSH's exec asks (decisions/0191): its values shown on
  *     the terminal as a line's are, and then the shell ends. Without it, the shell reads lines.
+ * @param sound A sound connection in the session's group (decisions/0196, 17g), which programs that take one get
+ *     another of. Without it, they're refused, or go without one where it's optional.
  * @return 0 after exit, or when it's asked to stop on its lifecycle channel; 2 if the terminal couldn't be opened or
  *     a port couldn't be made; 3 when its terminal goes. For a script: 0 once it's run to its end, 1 for its error, 2
  *     if it couldn't be read. For a command: 0 if it ran without an error, 1 if it had one.
@@ -129,11 +139,17 @@ main :: fn(
     script : os.Channel[read_only_file.ReadOnlyFile]?,
     cpu_budget : slop_os.CpuBudget?,
     network : os.Channel[network.Network]?,
-    command : string?
+    command : string?,
+    sound : os.Channel[sound.Sound]?
 ) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
     shell.network = network
+    shell.sound = sound
+    match sound {
+        case Some(given) => shell.sound_port = os.port_for(block.budget, given.end) or_return 2
+        case None => {}
+    }
     match network {
         case Some(given) => shell.network_port = os.port_for(block.budget, given.end) or_return 2
         case None => {}

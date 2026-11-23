@@ -1013,17 +1013,21 @@ TESTS = [
         "--expect-console-line=  connect asks to reach TCP to 10.0.2.2, port {tcp_echo}, to send it a message.",
         "--expect-console-line=hello",
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
-    # The microphone (decisions/0196, 17f): capture asks the powerbox for it, the secure attention key shows what it asks,
-    # and Enter allows it; while capture holds it the status line says so, and M on the secure attention key's screen
-    # takes it back, the grant's connection closed, capture keeping what it had, and the status line no longer saying so
-    ("records once the user allows the microphone, shows it held, and takes it back", 7,
+    # The microphone (decisions/0196, 17f): capture asks the powerbox for it, the secure attention key shows what it
+    # asks, and Enter allows it; while capture holds it the status line says so, and M on the secure attention key's
+    # screen takes it back, the grant's connection closed, capture keeping what it had, and the status line no longer
+    # saying so.
+    # Then play plays it through the session's sound (17g), and - on the secure attention key's screen, five times,
+    # turns the session's volume down to half
+    ("records once the user allows the microphone, shows it held, takes it back, and plays it at the session's volume", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", "--audio-none",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\w\\>capture 30 note.wav\\r\\s{ asks }\\e[3;7~\\w\\r\\s{microphone: capture}\\e[3;7~\\wm\\S{microphone}\\e",
+        "\\w\\>capture 30 note.wav\\r\\s{ asks }\\e[3;7~\\w\\r\\s{microphone: capture}\\e[3;7~\\wm\\S{microphone}\\e\\S{secure attention}crashes\\r\\>play note.wav\\r\\>\\e[3;7~\\w-----\\e",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=  Use the microphone", "--console-input-after=  M takes the microphone back from capture.",
+        "--console-input-after=  - and + change this session's volume: 100%.",
         "--expect-line=[user] powerbox: capture asks for a microphone",
         "--expect-line=[user] terminal: elevation: the user allowed the microphone",
         "--expect-line=[user] audio: granted the microphone: grant 1",
@@ -1034,6 +1038,9 @@ TESTS = [
         "--expect-line=[user] audio: took back grant 1",
         "--expect-line=[user] terminal: microphone: capture no longer holds it",
         "--expect-console-line=file: \"note.wav\"", "--expect-console-line=taken_back: true",
+        "--expect-console-line=no crashes", "--expect-console-contains=underruns: ",
+        "--expect-line=[user] terminal: the session's volume set to 50 percent",
+        "--expect-line=[user] audio: group 1 at volume 500",
         "--expect-console-line=  capture asks to record from the microphone, to record into a file."])),
     # TLS (decisions/0188, 13f): test_network, given the boot disk's trust store, which holds tools/tls_peers' test root,
     # reaches boot.py's TLS peer by name over std/net's TLS, its RSA and P-256 chains checked and its echo whole, and

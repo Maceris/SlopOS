@@ -59,6 +59,7 @@ import screen as screen_protocol from "../../protocols/screen"
 import seat from "../../protocols/seat"
 import serial from "../../protocols/serial"
 import session from "../../protocols/session"
+import sound from "../../protocols/sound"
 import safe_text from "../../safe_text"
 import screen from "../../screen"
 import vt from "../../vt"
@@ -120,6 +121,12 @@ USAGE_S : u16 : 0x16
 USAGE_P : u16 : 0x13
 /** The USB HID usage of R, which restarts the system from the secure attention key's screen (decisions/0182). */
 USAGE_R : u16 : 0x15
+/** The USB HID usage of -, which turns the session's volume down on the secure attention key's screen. */
+USAGE_MINUS : u16 : 0x2d
+/** The USB HID usage of = and +, which turns it up. */
+USAGE_EQUAL : u16 : 0x2e
+/** How much - and + change the session's volume by: a tenth of full. */
+VOLUME_STEP : u16 : 100
 /** The USB HID usage of Enter. */
 USAGE_ENTER : u16 : 0x28
 /** The USB HID usage of Escape. */
@@ -423,6 +430,8 @@ View :: struct {
     ask : Asked,
     /** A connection of its own to the session's home, for the grants view and the share form; NONE without one. */
     home_end : slop_os.Channel,
+    /** Its session's volume, as last set on the secure attention key's screen: 0 to sound.FULL_VOLUME, full at first. */
+    volume : u16,
 }
 
 /**
@@ -1632,8 +1641,80 @@ draw_panel :: fn(service : ptr[mut Service]) {
         }
         case None => {}
     }
+    // The session's volume (decisions/0196, 17g), for a session that has one
+    if view(service).logged_in && service.session_end != NONE {
+        storage : u8[96]
+        line := text_buffer.make(storage)
+        text_buffer.append(&line, "- and + change this session's volume: ")
+        text_buffer.append_unsigned(&line, cast[u64](view(service).volume / 10))
+        text_buffer.append(&line, "%.")
+        screen.write_at(panel, help + 6, 2, text_buffer.as_string(&line), plain)
+    }
     draw_microphone(service, help + 5)
     redraw(service)
+}
+
+/**
+ * Tell whether a key turns the session's volume down or up: - by its key or its text, as the serial line gives only
+ * the text; = or + likewise.
+ *
+ * @param event The key.
+ * @param decoded The input it's in, for its text.
+ * @return -1 for down, 1 for up, 0 for neither.
+ */
+volume_key :: fn(event : terminal.Event, decoded : ptr[vt.Decoded]) -> i32 {
+    if event.code == USAGE_MINUS {
+        return -1
+    }
+    if event.code == USAGE_EQUAL {
+        return 1
+    }
+    start :: cast[usize](event.text_start)
+    end :: start + cast[usize](event.text_bytes)
+    if end != start + 1 || end > decoded.text_count || end > decoded.text.count {
+        return 0
+    }
+    typed :: decoded.text[start]
+    return if typed == cast[u8]('-') { -1 } else if typed == cast[u8]('+') || typed == cast[u8]('=') { 1 } else { 0 }
+}
+
+/**
+ * Turn the shown session's volume up or down a step, for + and - on the secure attention key's screen: the session
+ * manager sets it on the session's sound (decisions/0196, 17g), and the panel's drawn again.
+ *
+ * @param service The service, its panel up for a session.
+ * @param up Whether it's turned up, rather than down.
+ */
+change_volume :: fn(service : ptr[mut Service], up : bool) {
+    shown :: view(service)
+    if !shown.logged_in {
+        return void
+    }
+    volume :: if up {
+        if shown.volume + VOLUME_STEP > sound.FULL_VOLUME { sound.FULL_VOLUME } else { shown.volume + VOLUME_STEP }
+    }
+    else {
+        if shown.volume < VOLUME_STEP { cast[u16](0) } else { shown.volume - VOLUME_STEP }
+    }
+    set := false
+    match ask_session(service, .SetVolume(session.SessionVolume.{session = shown.session, volume = volume})) {
+        case Some(answer) => {
+            reply := answer
+            match os.message_of[session.Response](&reply)^ {
+                case Noted => set = true
+                case _ => {}
+            }
+        }
+        case None => {}
+    }
+    if set {
+        shown.volume = volume
+        runtime.log_info("the session's volume set to % percent", volume / 10)
+    }
+    else {
+        runtime.log_info("the session's volume couldn't be set")
+    }
+    draw_panel(service)
 }
 
 /**
@@ -2138,6 +2219,9 @@ screen_keys :: fn(service : ptr[mut Service], first : usize) {
         }
         else if event.code == USAGE_M && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
             take_back_microphone(service)
+        }
+        else if volume_key(event, decoded) != 0 && event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 {
+            change_volume(service, volume_key(event, decoded) > 0)
         }
         else if event.modifiers & (terminal.CONTROL | terminal.ALT) == 0 && session_key(service, event.code) {
             // A session's key: the screen it brought up takes what comes after
@@ -3643,7 +3727,7 @@ open_view :: fn(service : ptr[mut Service], index : usize) {
         return void
     }
     view :: &service.views[index]
-    view^ = View.{in_use = true}
+    view^ = View.{in_use = true, volume = sound.FULL_VOLUME}
     view.screen.lines.row = PROGRAM_ROWS - 1
     screen.set_status(&view.screen, STATUS)
     screen.mark_all(&view.screen.lines)

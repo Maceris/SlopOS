@@ -610,6 +610,8 @@ SessionGrants :: struct {
     cpu_budget : slop_os.CpuBudget?,
     /** A connector to the compositor (decisions/0192), for GUI sessions; null without one. */
     compositor : os.Channel[connector.Connector]?,
+    /** A connector to the audio service (decisions/0196, 17g), each session's sound; null without one. */
+    sound : os.Channel[connector.Connector]?,
 }
 
 /** What the disk check is given (disk_check.main); its handles move to it at its launch. */
@@ -6523,6 +6525,12 @@ start_sessions :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         manager = manager,
         echo_module = echo_module,
         network = connector_to(supervisor, supervisor.network),
+        sound = if supervisor.audio_service != NOWHERE {
+            connector_to(supervisor, supervisor.audio_service)
+        }
+        else {
+            cast[MaybeConnector](null)
+        },
         compositor = if supervisor.compositor != NOWHERE {
             connector_to(supervisor, supervisor.compositor)
         }

@@ -7,6 +7,7 @@ import dir from "std:os/slop_os/dir"
 import files from "std:os/slop_os/files"
 import lifecycle from "std:os/slop_os/lifecycle"
 import network from "std:os/slop_os/network"
+import sound from "../../protocols/sound"
 import process_manager from "std:os/slop_os/process_manager"
 import terminal as protocol from "std:os/slop_os/terminal"
 import schema from "std:schema"
@@ -839,6 +840,23 @@ grant_for :: fn(
                         message = message("% needs the network, which this session hasn't", tree.text),
                         at = tree.at,
                     }
+                )
+            }
+        }
+    }
+    if parameter.giving == .Sound {
+        given :: match shell.sound {
+            case Some(session) => sound.connect(session.end, shell.sound_port, budget)
+            case None => null
+        }
+        match given {
+            case Some(made) => return .Ok(cast[slop_os.Handle](made.end))
+            case None => {
+                if parameter.optional {
+                    return .Ok(null)
+                }
+                return .Error(
+                    EvalError.{message = message("% needs sound, which this session hasn't", tree.text), at = tree.at}
                 )
             }
         }

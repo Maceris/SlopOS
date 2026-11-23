@@ -39,6 +39,11 @@ Giving :: enum {
      * it does; more is the powerbox's to give.
      */
     Network,
+    /**
+     * A sound connection, without an argument (decisions/0196, 17g): one of the session's, played at its volume. The
+     * microphone is the powerbox's to give.
+     */
+    Sound,
     /** A grant the shell doesn't make: a parameter that's optional goes without it. */
     Other,
 }
@@ -126,6 +131,9 @@ giving_of :: fn(manifest : ptr[schema.Schema], place : usize) -> Giving {
         }
         if inner == "Network" {
             return .Network
+        }
+        if inner == "Sound" {
+            return .Sound
         }
     }
     return .Other

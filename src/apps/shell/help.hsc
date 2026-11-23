@@ -454,6 +454,7 @@ given_text :: fn(manifest : ptr[schema.Schema], parameter : Parameter) -> string
         case .Terminal => "the shell's terminal, given without asking"
         case .Powerbox => "the session's powerbox, given without asking: what it gives, you choose"
         case .Network => "the session's network, given without asking: public addresses only; more, you allow"
+        case .Sound => "the session's sound, given without asking, at the session's volume"
         case .Dir => message("a directory, by its path%", optional)
         case .Here => "the shell's directory, given without asking, or another by its path"
         case .File => message("a file to read and write, by its path%", optional)

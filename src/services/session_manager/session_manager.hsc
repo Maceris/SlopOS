@@ -52,6 +52,7 @@ import powerbox from "../../protocols/powerbox"
 import programs from "../../protocols/programs"
 import prompt from "../../protocols/prompt"
 import session from "../../protocols/session"
+import sound from "../../protocols/sound"
 import surface from "../../protocols/surface"
 import system_records from "../../system_records"
 import powerbox_service from "../powerbox_service"
@@ -164,6 +165,77 @@ ShellGrants :: struct {
     network : os.Channel[network.Network]?,
     /** One line to run in place of reading lines, as SSH's exec asks (decisions/0191); null to read lines. */
     command : string?,
+    /**
+     * A sound connection in its session's group (decisions/0196, 17g), which more are made from for programs that take
+     * one; null without an audio service.
+     */
+    sound : os.Channel[sound.Sound]?,
+}
+
+/**
+ * Make a sound connection in a session's group (decisions/0196, 17g): its root dialed through the audio service's
+ * connector the first time, and a connection made by a Connect on it.
+ *
+ * @param sessions The manager, whose session keeps its root.
+ * @param number The session's place.
+ * @return The connection, which moves to who it's for; null without an audio service, or if it couldn't be made.
+ */
+session_sound :: fn(sessions : ptr[mut Manager], number : u32) -> os.Channel[sound.Sound]? {
+    place :: cast[usize](number)
+    if sessions.sound_connector == NONE || place >= sessions.sessions.count {
+        return null
+    }
+    block :: slop_os.startup_block()
+    made :: &sessions.sessions[place]
+    if made.sound_end == NONE {
+        port :: os.port_for(block.budget, sessions.sound_connector) or_return null
+        defer slop_os.handle_close(cast[slop_os.Handle](port))
+        dialed :: connector.dial[sound.Sound](sessions.sound_connector, port) or_return null
+        made.sound_port = os.port_for(block.budget, dialed.end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+        if cast[slop_os.Handle](made.sound_port) == slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](dialed.end))
+            return null
+        }
+        made.sound_end = dialed.end
+    }
+    return sound.connect(made.sound_end, made.sound_port, block.budget)
+}
+
+/**
+ * Set a session's volume on its sound group's root, waiting for the audio service's answer.
+ *
+ * @param sessions The manager.
+ * @param number The session's place, as place_of gives it.
+ * @param volume Its volume, 0 to sound.FULL_VOLUME.
+ * @return Whether it's set: false for a session that isn't there, or has no sound group yet, as before its first
+ *     shell's started, or without an audio service.
+ */
+set_volume :: fn(sessions : ptr[mut Manager], number : u32, volume : u16) -> bool {
+    place :: cast[usize](number)
+    if place >= sessions.sessions.count || !sessions.sessions[place].in_use {
+        return false
+    }
+    made :: &sessions.sessions[place]
+    if made.sound_end == NONE {
+        return false
+    }
+    out := os.Outgoing.{}
+    os.begin[sound.Request](&out)^ = .SetSessionVolume(volume)
+    if sound.send_request(made.sound_end, made.sound_port, &out) is_some {
+        return false
+    }
+    into := os.Incoming.{}
+    match sound.receive_response(made.sound_end, made.sound_port, &into, true) {
+        case Received => {}
+        case _ => return false
+    }
+    return match os.message_of[sound.Response](&into)^ {
+        case VolumeSet => {
+            runtime.log_info("session % at volume %", number, volume)
+            true
+        }
+        case _ => false
+    }
 }
 
 /**
@@ -292,6 +364,13 @@ Session :: struct {
     gui : bool,
     /** The client waiting for its first program's end (Wait), its end the client's; NONE for none. */
     waiter : slop_os.Channel,
+    /**
+     * Its sound group's root (decisions/0196, 17g), dialed when its first shell starts, which its programs' sound
+     * connections are made from, and its volume set on; NONE for none.
+     */
+    sound_end : slop_os.Channel,
+    /** A port bound to sound_end, waited on for its answers; unset without one. */
+    sound_port : slop_os.Port,
 }
 
 /**
@@ -470,6 +549,8 @@ Manager :: struct {
     network_end : slop_os.Channel,
     /** A port bound to network_end, waited on for its answers. */
     network_port : slop_os.Port,
+    /** The audio service's connector (decisions/0196, 17g), dialed for each session's sound group; NONE without one. */
+    sound_connector : slop_os.Channel,
     /** The sessions, by number. */
     sessions : Session[MAX_SESSIONS],
     /** Each session place's generation, counted up each time it's taken, kept in its sessions' numbers (number_of). */
@@ -544,6 +625,8 @@ MAX_KNOWN_REFERS :: 256
  *     none.
  * @param compositor A connector to the compositor (decisions/0192), dialed for each GUI session's launcher. Without it,
  *     StartGui is refused.
+ * @param sound A connector to the audio service (decisions/0196, 17g), dialed for each session's sound group, whose
+ *     connections its shells give programs that take one. Without it, there's no sound, and SetVolume is refused.
  * @return 1 if its port couldn't be made or bound to its budget's pressure; 2 if the process manager couldn't be
  *     dialed; 3 if the clients' listener couldn't be bound. It doesn't return otherwise.
  */
@@ -560,11 +643,20 @@ main :: fn(
     clients : os.Listener[session.Session],
     cpu_budget : slop_os.CpuBudget?,
     network : os.Channel[connector.Connector]?,
-    compositor : os.Channel[connector.Connector]?
+    compositor : os.Channel[connector.Connector]?,
+    sound : os.Channel[connector.Connector]?
 ) -> int {
     block :: slop_os.startup_block()
     sessions := runtime.new(Manager)
     sessions.network_end = NONE
+    sessions.sound_connector = NONE
+    match sound {
+        case Some(given) => sessions.sound_connector = given.end
+        case None => {}
+    }
+    for &each in sessions.sessions {
+        each.sound_end = NONE
+    }
     sessions.compositor = NONE
     match compositor {
         case Some(given) => sessions.compositor = given.end
@@ -891,6 +983,14 @@ serve :: fn(
             case Shown(number) => {
                 shown(sessions, place_of(sessions, number))
                 response^ = .Noted
+            }
+            case SetVolume(asked) => {
+                response^ = if set_volume(sessions, place_of(sessions, asked.session), asked.volume) {
+                    session.Response.Noted
+                }
+                else {
+                    session.Response.Refused
+                }
             }
             case Connect(connection) => {
                 if !service_kit.add_client(connected, sessions.port, connection.end) {
@@ -1612,12 +1712,17 @@ close_session :: fn(sessions : ptr[mut Manager], number : u32) {
     if cast[slop_os.Handle](made.cpu_budget) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](made.cpu_budget))
     }
+    if made.sound_end != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.sound_port))
+        _ = slop_os.handle_close(cast[slop_os.Handle](made.sound_end))
+    }
     made^ = Session.{
         locale_page = cast[slop_os.Memory](slop_os.NO_HANDLE),
         apps = NONE,
         powerbox_end = NONE,
         programs_end = NONE,
         cpu_budget = cast[slop_os.CpuBudget](slop_os.NO_HANDLE),
+        sound_end = NONE,
     }
 }
 
@@ -1736,6 +1841,8 @@ launch_shell :: fn(
     grants.programs = if first { programs_connection(sessions, number) } else { shell_connection(sessions, number) }
     // The session's network: public addresses, any port, no listening (decisions/0188)
     grants.network = session_network(sessions, true)
+    // A sound connection in the session's group (decisions/0196, 17g)
+    grants.sound = session_sound(sessions, number)
     if cast[usize](number) < sessions.sessions.count && sessions.sessions[cast[usize](number)].apps != NONE {
         match opened_directory(sessions.sessions[cast[usize](number)].apps, SHELL_DATA, true) {
             case Some(end) => grants.data = installations.AppData.{end = end}
