@@ -265,13 +265,16 @@ TESTS = [
         "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
         "--expect-line=[user] entropy: reseeded from a hardware source, 32 bytes",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2", "-device", "virtio-rng-pci,disable-legacy=on,iommu_platform=on"]),
-    # virtio-sound (decisions/0196, 17c): the driver serving the device's output stream, and test_sound playing a second of
-    # a 1 kHz tone at half of full scale through it, which QEMU's wav backend writes and boot.py checks
-    ("plays a tone through a virtio sound device", 7, [WITH_PROGRAMS,
-        "--command-line=test_exit test_services test_sound test_settle=60", "--audio-tone=1000",
+    # virtio-sound and the audio service (decisions/0196, 17c, 17d): the driver serving the device's output stream, and
+    # test_sound playing two streams through the service, 1 kHz at 48 kHz stereo floats and 1.5 kHz at 44.1 kHz mono
+    # 16-bit integers, each at a quarter of full scale, mixed; QEMU's wav backend writes it, and boot.py checks both
+    ("mixes two streams in formats of their own and plays them through a virtio sound device", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_sound test_settle=60", "--audio-tone=1000:0.25", "--audio-tone=1500:0.25",
         "--expect-line=[user] root task: the supervisor started virtio_sound",
         "--expect-line-start=[user] virtio_sound: serving stream ",
-        "--expect-line-start=[user] test_sound: played 200 periods of a 1 kHz tone",
+        "--expect-line=[user] audio: serving",
+        "--expect-line-start=[user] test_sound: played a second of 1 kHz at 48 kHz stereo floats and of 1.5 kHz",
+        "--expect-line-start=[user] audio: mixed ",
         "--expect-line=[user] supervisor: test_sound ended",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # virtio-net and the network layer (decisions/0188, 13a and 13b): the driver serving QEMU's MAC, the network service

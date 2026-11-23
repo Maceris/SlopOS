@@ -112,6 +112,8 @@ import test_network from "../../tests/test_network"
 import test_sound from "../../tests/test_sound"
 import virtio_sound from "../../drivers/virtio_sound"
 import audio from "../../protocols/audio"
+import sound from "../../protocols/sound"
+import audio_service from "../audio_service"
 import account_service from "../account_service"
 import acpi_service from "../acpi_service"
 import bundle_store_service from "../bundle_store_service"
@@ -262,6 +264,8 @@ Speaks :: enum {
     Accounts,
     /** A sound device's driver: the audio protocol. */
     Audio,
+    /** The audio service: the sound protocol. */
+    Sound,
 }
 
 /**
@@ -455,8 +459,18 @@ TestDisplayGrants :: struct {
 TestSoundGrants :: struct {
     /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
     log : slop_os.DebugLog?,
+    /** A connector to the audio service. */
+    sound_service : os.Channel[connector.Connector]?,
+}
+
+/** What the audio service is given (audio_service.main); its handles move to it at its launch. */
+AudioGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
     /** A connector to the first sound device's driver. */
-    sound : os.Channel[connector.Connector]?,
+    device : os.Channel[connector.Connector]?,
+    /** The listener programs' connections arrive on; the supervisor keeps its other end, and dials it for connectors. */
+    clients : os.Listener[sound.Sound],
 }
 
 /** What test_network's client is given (test_network.main); its handles move to it at its launch. */
@@ -776,6 +790,8 @@ Modules :: struct {
     virtio_sound : slop_os.Memory?,
     /** test_sound's client's module. */
     test_sound : slop_os.Memory?,
+    /** The audio service's module. */
+    audio : slop_os.Memory?,
     /** test_display's client's module. */
     test_display : slop_os.Memory?,
     /** test_compositor's client's module. */
@@ -1095,6 +1111,8 @@ Supervisor :: struct {
     input : usize,
     /** The network service, by index in started; NOWHERE until it's started. */
     network : usize,
+    /** The audio service, by index in started; NOWHERE until it's started. */
+    audio_service : usize,
     /**
      * The account service, by index in started, for the terminal service's first-boot setup (decisions/0148); NOWHERE
      * until it's started.
@@ -1277,6 +1295,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param test_network_module test_network's client's program.
  * @param virtio_sound_module The virtio sound driver's program.
  * @param test_sound_module test_sound's client's program.
+ * @param audio_module The audio service's program.
  * @param test_display_module test_display's client's program.
  * @param test_compositor_module test_compositor's client's program.
  * @param test_gui_module test_gui's client's program.
@@ -1328,6 +1347,7 @@ main :: fn(
     test_network_module : slop_os.Memory?,
     virtio_sound_module : slop_os.Memory?,
     test_sound_module : slop_os.Memory?,
+    audio_module : slop_os.Memory?,
     test_display_module : slop_os.Memory?,
     test_compositor_module : slop_os.Memory?,
     test_gui_module : slop_os.Memory?,
@@ -1394,6 +1414,7 @@ main :: fn(
         terminal = NOWHERE,
         input = NOWHERE,
         network = NOWHERE,
+        audio_service = NOWHERE,
         accounts = NOWHERE,
         sessions = NOWHERE,
         config_users = NONE,
@@ -1441,6 +1462,7 @@ main :: fn(
         test_network = test_network_module,
         virtio_sound = virtio_sound_module,
         test_sound = test_sound_module,
+        audio = audio_module,
         test_display = test_display_module,
         test_compositor = test_compositor_module,
         test_gui = test_gui_module,
@@ -1602,6 +1624,7 @@ main :: fn(
     // The network service before the session manager, which holds the network for the sessions (decisions/0188)
     if !supervisor.recovery {
         start_network(&supervisor, NOWHERE)
+        start_audio(&supervisor, NOWHERE)
     }
     // The compositor before the session manager, which dials it for GUI sessions (decisions/0192)
     if gui && !supervisor.recovery {
@@ -2091,6 +2114,9 @@ restart_service :: fn(supervisor : ptr[mut Supervisor], index : usize) {
     }
     else if name == "network" {
         start_network(supervisor, index)
+    }
+    else if name == "audio" {
+        start_audio(supervisor, index)
     }
     else if name == "accounts" {
         start_accounts(supervisor, supervisor.storage_slot, index)
@@ -5027,6 +5053,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "test_sound" {
         modules.test_sound
     }
+    else if name == "audio" {
+        modules.audio
+    }
     else if name == "test_network" {
         modules.test_network
     }
@@ -5848,18 +5877,64 @@ start_test_display :: fn(supervisor : ptr[mut Supervisor]) {
 }
 
 /**
- * Start test_sound's client (decisions/0196, 17c), with a connector to the first sound device's driver; only with
- * test_sound on the kernel's command line, and a sound device.
+ * Start the audio service (decisions/0196, 17d), with a connector to the first sound device's driver; only when there's
+ * a sound device.
+ *
+ * @param supervisor The supervisor, which serves a new connector to the driver.
+ * @param again The entry it's started again into, or NOWHERE for a first start.
+ */
+start_audio :: fn(supervisor : ptr[mut Supervisor], again : usize) {
+    if supervisor.first_audio == NOWHERE {
+        return void
+    }
+    service :: service_named(supervisor, "audio") or_return void
+    pair :: os.channel_for[sound.Sound](supervisor.block.budget, sound.RING_BYTES) or_return void
+    grants := AudioGrants.{
+        log = duplicate_log(supervisor),
+        device = connector_to(supervisor, supervisor.first_audio),
+        clients = os.Listener[sound.Sound].{end = pair.a},
+    }
+    match os.launch(
+        supervisor.manager,
+        supervisor.manager_port,
+        service.name,
+        module_of(supervisor, "audio"),
+        service.budget,
+        type_of(audio_service.main),
+        grants,
+        options_for(supervisor, service.name)
+    ) {
+        case Ok(launched) => {
+            slot :: place(supervisor, "audio", kept(supervisor, launched), again)
+            if slot < supervisor.started.count {
+                supervisor.started[slot].listener = pair.b
+                supervisor.started[slot].speaks = .Sound
+                supervisor.audio_service = slot
+            }
+        }
+        case Error(error) => {
+            failed(supervisor, service.name, error)
+            _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+        }
+    }
+}
+
+/**
+ * Start test_sound's client (decisions/0196, 17c and 17d), with a connector to the audio service; only with
+ * test_sound on the kernel's command line, and an audio service.
  *
  * @param supervisor The supervisor.
  */
 start_test_sound :: fn(supervisor : ptr[mut Supervisor]) {
-    if supervisor.first_audio == NOWHERE {
-        log_line.write(supervisor.log, "supervisor: test_sound: no sound device")
+    if supervisor.audio_service == NOWHERE {
+        log_line.write(supervisor.log, "supervisor: test_sound: no audio service")
         return void
     }
     service :: service_named(supervisor, "test_sound") or_return void
-    grants := TestSoundGrants.{log = duplicate_log(supervisor), sound = connector_to(supervisor, supervisor.first_audio)}
+    grants := TestSoundGrants.{
+        log = duplicate_log(supervisor),
+        sound_service = connector_to(supervisor, supervisor.audio_service),
+    }
     match os.launch(
         supervisor.manager,
         supervisor.manager_port,
@@ -6835,6 +6910,7 @@ dial :: fn(supervisor : ptr[mut Supervisor], target : usize) -> slop_os.Channel?
         case .Storage => (storage.connect(entry.listener, port, budget) or_return null).end
         case .Accounts => (accounts.connect(entry.listener, port, budget) or_return null).end
         case .Audio => (audio.connect(entry.listener, port, budget) or_return null).end
+        case .Sound => (sound.connect(entry.listener, port, budget) or_return null).end
         case .Nothing => null
     }
 }

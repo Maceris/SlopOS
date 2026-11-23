@@ -2359,10 +2359,11 @@ def main() -> int:
     parser.add_argument("--compositor", action="store_true",
                         help="a virtio GPU, tablet and keyboard for the compositor and test_compositor: its windows typed into, "
                         "clicked, dragged and pasted into, and the screen checked, with --expect (decisions/0192, 15c)")
-    parser.add_argument("--audio-tone", type=float, metavar="HZ",
+    parser.add_argument("--audio-tone", action="append", default=[], metavar="HZ[:LEVEL]",
                         help="a virtio sound device, what it plays written by QEMU's wav backend; with --expect, it has to "
-                        "have played at least AUDIO_SECONDS of a tone of this frequency at half of full scale, its "
-                        "harmonics and gaps said (decisions/0196, 17c)")
+                        "have played at least AUDIO_SECONDS of sound, a tone of this frequency in it at LEVEL of full "
+                        "scale (half by default), its harmonics and gaps said; may be repeated, for a mix of tones "
+                        "(decisions/0196, 17c, 17d)")
     parser.add_argument("--display", action="store_true",
                         help="a virtio GPU and a virtio tablet for test_display: once it shows its cursor, the tablet clicks in the "
                         "screen's middle, and once it says where, the screen is taken and checked for its scene, with --expect "
@@ -2502,7 +2503,7 @@ def main() -> int:
             extra += peers.qemu_arguments()
         # A sound device, what it plays written by QEMU to a WAV file in the run's folder (decisions/0196, 17c)
         played = folder / "played.wav"
-        if arguments.audio_tone is not None:
+        if arguments.audio_tone:
             extra += ["-audiodev", f"wav,id=sound,path={played}",
                       "-device", "virtio-sound-pci,audiodev=sound,disable-legacy=on,iommu_platform=on"]
         console = None
@@ -2595,7 +2596,7 @@ def main() -> int:
                 again = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot))
             phases.append((f"boot {boot}", time.monotonic() - booting_started))
             later.append((boot, again, serial.read_text(errors="replace") if serial.exists() else ""))
-        audio_wrong = tone_played(played, arguments.audio_tone) if arguments.audio_tone is not None else None
+        audio_wrong = tones_played(played, arguments.audio_tone) if arguments.audio_tone else None
         unwritten = [expected for expected in arguments.expect_disk_block if not disk.exists() or not disk_block_starts(disk, expected)]
         image_bytes = disk.read_bytes() if disk.exists() and (arguments.expect_disk_text or arguments.refuse_disk_text) else b""
         unwritten += [f"text {text}" for text in arguments.expect_disk_text if text.encode() not in image_bytes]
@@ -2749,11 +2750,12 @@ def tone_strength(samples: list, frequency: float, rate: float) -> float:
     return 2.0 * math.sqrt(max(power, 0.0)) / len(samples)
 
 
-def tone_played(played: Path, frequency: float) -> str | None:
+def tones_played(played: Path, tones: list) -> str | None:
     """
-    Check what QEMU's wav backend wrote: at least AUDIO_SECONDS of sound, its middle a tone of frequency at half of
-    full scale, its harmonics under AUDIO_HARMONICS of it. Says how much it played, and its gaps, stretches of silence
-    of AUDIO_GAP or more inside the sound, which only fail it if there's too little sound. None if it's right.
+    Check what QEMU's wav backend wrote: at least AUDIO_SECONDS of sound, its middle each tone, HZ or HZ:LEVEL, at its
+    level of full scale (half by default), within AUDIO_LEVEL_TOLERANCE, its second and third harmonics under
+    AUDIO_HARMONICS of it. Says how much it played, and its gaps, stretches of silence of AUDIO_GAP or more inside the
+    sound, which only fail it if there's too little sound. None if it's right.
     """
     if not played.exists():
         return "QEMU wrote no WAV file"
@@ -2786,16 +2788,23 @@ def tone_played(played: Path, frequency: float) -> str | None:
             gaps += 1
     middle = (first + last) // 2
     window = left[middle - rate // 4:middle + rate // 4]
-    level = tone_strength(window, frequency, rate)
-    harmonic = max(tone_strength(window, frequency * 2, rate), tone_strength(window, frequency * 3, rate))
-    print(f"boot.py: the sound played: {seconds:.2f} s, its tone at {level:.3f} of full scale, harmonics at {harmonic:.4f}, "
-          f"{gaps} gaps", file=sys.stderr)
+    wanted = [(float(tone.split(":")[0]), float(tone.split(":")[1]) if ":" in tone else 0.5) for tone in tones]
+    found = []
+    for frequency, expected in wanted:
+        level = tone_strength(window, frequency, rate)
+        harmonic = max(tone_strength(window, frequency * 2, rate), tone_strength(window, frequency * 3, rate))
+        found.append((frequency, expected, level, harmonic))
+    said = ", ".join(f"{frequency:g} Hz at {level:.3f}, harmonics at {harmonic:.4f}" for frequency, _, level, harmonic in found)
+    print(f"boot.py: the sound played: {seconds:.2f} s, {said}, {gaps} gaps", file=sys.stderr)
     if seconds < AUDIO_SECONDS:
         return f"only {seconds:.2f} s of sound, not {AUDIO_SECONDS}"
-    if abs(level - 0.5) > AUDIO_LEVEL_TOLERANCE:
-        return f"its tone at {level:.3f} of full scale, not 0.5"
-    if harmonic > AUDIO_HARMONICS * level:
-        return f"its harmonics at {harmonic:.4f}, past {AUDIO_HARMONICS} of the tone"
+    for frequency, expected, level, harmonic in found:
+        if abs(level - expected) > AUDIO_LEVEL_TOLERANCE:
+            return f"its {frequency:g} Hz tone at {level:.3f} of full scale, not {expected}"
+        # The others' tones aren't this one's harmonics
+        others = [other for other, _, _, _ in found if other != frequency]
+        if harmonic > AUDIO_HARMONICS * level and not any(other in (frequency * 2, frequency * 3) for other in others):
+            return f"its {frequency:g} Hz tone's harmonics at {harmonic:.4f}, past {AUDIO_HARMONICS} of it"
     return None
 
 

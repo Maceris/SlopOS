@@ -113,3 +113,24 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
   at most 35 ms behind; the one underrun counted is the ring running out at the end.
 - **Found on the way**: windows are whole pages; `give` is a Hemera keyword; and once, the compiler crashed in
   `get_base_type` laying a struct out, then built the same sources three times cleanly, a race left to look into.
+
+## As Built: 17d, the audio service
+- **The `sound` protocol** (`src/protocols/sound`): a connection is a stream in a format of its own, a std/audio
+  sample format, 8 to 192 kHz, 1 to 8 channels (`Open`); a ring of 8 periods of about 5 ms each at its rate
+  (`period_frames`), reached through `GetBuffer`; `Play` answered `Played` once the period's mixed in, with the
+  stream's underruns; `SetVolume`, 0 to 1000; `Stop` drops what's queued.
+- **The service, `audio`** (`src/services/audio_service`): each period given is decoded, remixed to stereo and
+  resampled to 48 kHz into the stream's carry, which the mix takes 240 frames of a period; each stream scaled by its
+  volume, added, the sum clipped once and given to the driver. A period is due every 5 ms by the system's clock; one
+  mixed more than a period after it's due is missed; with the driver's ring full the mix waits, its time moved on,
+  uncounted, as the device is behind. A stream that's run out is silence, its own underrun. 100 ms of nothing to mix
+  stops the device, and what was mixed is said: periods, missed, the latest, each mix's worst and average time, and
+  the device's runs out. Started by the supervisor when there's a sound device (`Speaks.Sound`), on its own budget,
+  `AUDIO_CPU`: priority 240, 3 ms of every 5.
+- **The budget**: with 1 ms of every 5 it ran out under TCG on x86-64, where a period's mix takes 0.6 ms on average and
+  up to 2, so it missed 81 of 224 periods, 27 ms late, the device running out 132 times; with 3 ms, none in six runs on
+  either architecture, at most 3.8 ms late. 3 ms is an emulator's; on hardware a twentieth would do, and a budget's
+  share is checked against its parent's when it's split, so it leaves the rest that much less room (17e, 17h).
+- **The test**: `test_sound` plays two streams through the service, a second each: 1 kHz at 48 kHz stereo floats and
+  1.5 kHz at 44.1 kHz mono 16-bit integers, a quarter of full scale each. `boot.py --audio-tone=HZ:LEVEL`, repeated,
+  checks each: 1000 Hz at 0.250 and 1500 Hz at 0.249, harmonics 0, on both architectures.

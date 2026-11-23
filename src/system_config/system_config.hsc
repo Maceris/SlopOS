@@ -75,6 +75,7 @@ import test_memory from "../tests/test_memory"
 import test_msi_dma from "../tests/test_msi_dma"
 import test_network from "../tests/test_network"
 import test_sound from "../tests/test_sound"
+import audio_service from "../services/audio_service"
 import virtio_sound from "../drivers/virtio_sound"
 import test_pager from "../tests/test_pager"
 import test_perf from "../tests/test_perf"
@@ -119,7 +120,7 @@ CpuShare :: struct {
  * An os.Channel[P] a service takes is required, and an optional one optional. What isn't late, and is started, has to
  * be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is degraded.
  */
-LATE :: string.["edu_dma", "virtio_input", "virtio_sound", "disk_check", "ssh"]
+LATE :: string.["edu_dma", "virtio_input", "virtio_sound", "audio", "disk_check", "ssh"]
 
 /**
  * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its
@@ -161,6 +162,13 @@ INTERACTIVE_CPU :: CpuShare.{priority = 200, period_ns = 10_000_000, time_ns = 1
  * attention key always answers; a tenth of a CPU each of their own, which they lend to no server.
  */
 TRUSTED_PATH_CPU :: CpuShare.{priority = 250, period_ns = 10_000_000, time_ns = 1_000_000}
+/**
+ * The audio service (decisions/0196, 17d): soft real time, a period of the mix every 5 ms, so its budget's period is
+ * one, above everything people run and under the trusted path. Its time, 3 ms of the 5, is sized for an emulator, where
+ * a period's mix of two streams, one resampled, takes 0.6 ms on average and up to 2; with 1 ms it ran out of time and
+ * missed periods. On hardware it needs a twentieth of that.
+ */
+AUDIO_CPU :: CpuShare.{priority = 240, period_ns = 5_000_000, time_ns = 3_000_000}
 
 /** A service the system starts: what it is, who starts it, what it's given, and how it's run. */
 Service :: struct {
@@ -474,6 +482,16 @@ SERVICES :: Service.[
         budget = 8 * MIB,
         entry = type_of(test_network.main),
         not_restarted = true,
+    },
+    // The audio service (decisions/0196, 17d), which mixes programs' streams into the first sound device's
+    Service.{
+        name = "audio",
+        module = "audio_service.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 4 * MIB,
+        entry = type_of(audio_service.main),
+        cpu = AUDIO_CPU,
     },
     // The sound device's test client (decisions/0196, 17c), started only with test_sound on the kernel's command line
     Service.{
