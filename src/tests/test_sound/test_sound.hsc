@@ -9,6 +9,9 @@
  * With test_sound_record instead (17f), it records: given a microphone connection, as the trusted path is, it grants
  * itself the microphone, records a second at 16 kHz mono 16-bit integers, and takes the grant back, which closes the
  * grant's connection, heard as released first.
+ *
+ * With test_sound_limits instead (17h), it checks what's kept from a program: a group's connections past its most are
+ * closed, and a connection that doesn't read its answers is let go, the service answering the others still.
  */
 package test_sound
 
@@ -319,6 +322,83 @@ record :: fn(control : os.Channel[microphone.Microphone]) -> int {
 }
 
 /**
+ * Tell whether a sound connection answers: a SetVolume sent, and VolumeSet back.
+ *
+ * @param end The connection.
+ * @param port A port bound to it.
+ * @return Whether VolumeSet came; false once the service has closed its end.
+ */
+answers :: fn(end : slop_os.Channel, port : slop_os.Port) -> bool {
+    into := os.Incoming.{}
+    out := os.Outgoing.{}
+    os.begin[sound.Request](&out)^ = .SetVolume(sound.FULL_VOLUME)
+    if !call(end, port, &out, &into) {
+        return false
+    }
+    return match os.message_of[sound.Response](&into)^ {
+        case VolumeSet => true
+        case _ => false
+    }
+}
+
+/**
+ * Check the service's limits on a program, as main says for test_sound_limits.
+ *
+ * @param dialing A connector to the audio service, dialed for a group's root.
+ * @return 0 once both hold; 9 if the group took more than its most, or fewer; 10 if the connection that didn't read
+ *     wasn't let go, or the service stopped answering.
+ */
+limits :: fn(dialing : slop_os.Channel) -> int {
+    startup :: slop_os.startup_block()
+    dial_port :: os.port_for(startup.budget, dialing) or_return 9
+    root :: connector.dial[sound.Sound](dialing, dial_port) or_return 9
+    root_port :: os.port_for(startup.budget, root.end) or_return 9
+    // Connections of the group, made from the root, until one's closed
+    made := cast[u32](1)
+    last : slop_os.Channel? = null
+    last_port : slop_os.Port? = null
+    for i in 0..<10 {
+        child :: sound.connect(root.end, root_port, startup.budget) or_return 9
+        port :: os.port_for(startup.budget, child.end) or_return 9
+        if !answers(child.end, port) {
+            break
+        }
+        made += 1
+        last = child.end
+        last_port = port
+    }
+    if made != 6 {
+        runtime.log_info("a group held % connections, not 6", made)
+        return 9
+    }
+    // One that never reads its answers: SetVolume after SetVolume until the service lets it go
+    flooded :: last or_return 9
+    flooded_port :: last_port or_return 9
+    out := os.Outgoing.{}
+    os.begin[sound.Request](&out)^ = .SetVolume(sound.FULL_VOLUME)
+    sent := cast[u32](0)
+    loop {
+        if sent >= 10000 || sound.send_request(flooded, flooded_port, &out) is_some {
+            break
+        }
+        sent += 1
+    }
+    if sent >= 10000 {
+        runtime.log_info("the connection that didn't read its answers wasn't let go")
+        return 10
+    }
+    if !answers(root.end, root_port) {
+        runtime.log_info("the service stopped answering")
+        return 10
+    }
+    runtime.log_info(
+        "6 connections a group, the next closed; one not reading its answers let go after % requests",
+        sent
+    )
+    return 0
+}
+
+/**
  * Play the two streams through the audio service, a second each, or three with test_sound_load on the command line;
  * or with test_sound_record, record a second through a microphone grant instead.
  *
@@ -342,9 +422,17 @@ main :: fn(
     }
     dialing :: sound_service or_return 2
     loaded := false
+    limited := false
     match command_line {
-        case Some(memory) => loaded = service_kit.has_word(service_kit.text_of(startup, memory) or_else "", "test_sound_load")
+        case Some(memory) => {
+            text :: service_kit.text_of(startup, memory) or_else ""
+            loaded = service_kit.has_word(text, "test_sound_load")
+            limited = service_kit.has_word(text, "test_sound_limits")
+        }
         case None => {}
+    }
+    if limited {
+        return limits(dialing.end)
     }
     seconds :: if loaded { cast[u32](3) } else { cast[u32](1) }
     first := open(dialing.end, sound.Format.{sample = 4, rate = 48000, channels = 2}, 1000.0, seconds) or_return 3

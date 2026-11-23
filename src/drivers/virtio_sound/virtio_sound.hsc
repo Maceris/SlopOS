@@ -832,13 +832,24 @@ take_recorded :: fn(driver : ptr[mut Driver]) {
             bytes :: period_bytes(driver.capture_format)
             status :: virtio.read_u32(here(driver, CAPTURE_TRANSFER_PAGE, cast[u64](slot) * 16 + 8), 0)
             if status == S_OK && cast[slop_os.Handle](driver.capture_ring) != slop_os.NO_HANDLE {
-                from :: view_of(cast[ptr[u8]](here(driver, CAPTURE_FRAMES_PAGE, cast[u64](slot) * bytes)), cast[usize](bytes))
+                /*
+                 * Only what the device says it wrote, its status's 8 bytes after the frames, and silence past it, so a
+                 * short write doesn't hand on what an earlier one left
+                 */
+                written :: if cast[u64](used.length) >= 8 { cast[u64](used.length) - 8 } else { cast[u64](0) }
+                heard :: if written < bytes { written } else { bytes }
+                from :: view_of(cast[ptr[u8]](here(driver, CAPTURE_FRAMES_PAGE, cast[u64](slot) * bytes)), cast[usize](heard))
                 samples :: cast[usize](audio.PERIOD_FRAMES * audio.CHANNELS)
                 into :: view_of(
                     cast[ptr[mut f32]](driver.capture_ring_at + cast[u64](slot) * cast[u64](audio.PERIOD_BYTES)),
                     samples
                 )
-                _ = pcm.decode(sample_format(driver.capture_format), from, into)
+                decoded :: pcm.decode(sample_format(driver.capture_format), from, into)
+                for &sample, k in into {
+                    if k >= decoded {
+                        sample^ = 0.0
+                    }
+                }
             }
             if driver.capture_given == 0 && driver.recording {
                 driver.overruns += 1
@@ -874,9 +885,10 @@ answer_recorded :: fn(driver : ptr[mut Driver], period : u32, status : u32) {
 
 /**
  * Stop recording: the input stream stopped and released, which returns the periods it held, each answered, and
- * prepared again for the next Record.
+ * prepared again for the next Record. A period the device hasn't returned yet stays given, its descriptors freed and
+ * it answered when it does, so none is lost; a Record of it meanwhile is refused BadPeriod.
  *
- * @param driver The driver, its capture periods and recording cleared.
+ * @param driver The driver, its recording cleared.
  */
 stop_recording :: fn(driver : ptr[mut Driver]) {
     if driver.capture_stream == NO_STREAM {
@@ -888,9 +900,5 @@ stop_recording :: fn(driver : ptr[mut Driver]) {
     }
     _ = stream_request(driver, driver.capture_stream, R_PCM_RELEASE)
     take_recorded(driver)
-    for &head in driver.capture_heads {
-        head^ = virtio.NO_DESCRIPTOR
-    }
-    driver.capture_given = 0
     _ = stream_request(driver, driver.capture_stream, R_PCM_PREPARE)
 }

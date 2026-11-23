@@ -130,11 +130,16 @@ answer_microphone :: fn(greeter : ptr[mut Greeter]) {
  * @param greeter The greeter; the grant's kept among its holders, and a WaitReleased sent for it.
  * @param requester The program's name, as its powerbox gave it.
  * @return The grant's sound connection, for the program; null without a microphone connection, with MAX_HOLDERS held,
- *     or if the audio service refused.
+ *     without the sound window to show it held, or if the audio service refused.
  */
 grant_microphone :: fn(greeter : ptr[mut Greeter], requester : u8[]) -> os.Channel[sound.Sound]? {
     state :: &greeter.microphone
     if state.count >= MAX_HOLDERS {
+        return null
+    }
+    // Nothing's held that can't be shown held
+    if sound_window(greeter) is_none {
+        runtime.log_info("microphone: refused, as the sound window couldn't be made to show it held")
         return null
     }
     end :: microphone_end(greeter) or_return null
@@ -153,11 +158,14 @@ grant_microphone :: fn(greeter : ptr[mut Greeter], requester : u8[]) -> os.Chann
                 return null
             }
         }
-        // A grant let go meanwhile is said first
+        // A grant let go meanwhile is said first, and a Revoke's answers, a grant gone already NoGrant, aren't Grant's
         match os.message_of[microphone_protocol.Response](&into)^ {
             case Granted(made) => found = made
             case Released(id) => released(greeter, id)
             case Revoked => {}
+            case Refused(why) => if why != .NoGrant {
+                return null
+            }
             case _ => return null
         }
     }
@@ -279,6 +287,20 @@ show_microphone :: fn(greeter : ptr[mut Greeter]) {
         }
         return void
     }
+    match sound_window(greeter) {
+        case Some(window) => window.due = true
+        case None => runtime.log_info("the sound window couldn't be made")
+    }
+}
+
+/**
+ * The sound window, made the first time.
+ *
+ * @param greeter The greeter.
+ * @return It; null if it couldn't be made.
+ */
+sound_window :: fn(greeter : ptr[mut Greeter]) -> ptr[mut gui_kit.Window]? {
+    state :: &greeter.microphone
     if state.window == null {
         budget :: slop_os.startup_block().budget
         // Its own connection, made from the trusted one, so it's in the trusted layer too
@@ -287,10 +309,7 @@ show_microphone :: fn(greeter : ptr[mut Greeter]) {
             case None => {}
         }
     }
-    match state.window {
-        case Some(window) => window.due = true
-        case None => runtime.log_info("the sound window couldn't be made")
-    }
+    return state.window
 }
 
 /**

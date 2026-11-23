@@ -244,7 +244,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 98 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 105 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -276,6 +276,14 @@ TESTS = [
         "--expect-line-start=[user] test_sound: played 1 s of 1 kHz at 48 kHz stereo floats and of 1.5 kHz",
         "--expect-line-start=[user] audio: mixed ",
         "--expect-line=[user] supervisor: test_sound ended",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # What the audio service keeps from a program (decisions/0196, 17h): a group's seventh connection closed, and one
+    # that doesn't read its answers let go, the service answering the rest still
+    ("keeps a program from taking the audio service's places or stalling it", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_sound test_sound_limits test_settle=60", "--audio-none",
+        "--expect-line=[user] audio: let go of a client that doesn't read its answers",
+        "--expect-line-start=[user] test_sound: 6 connections a group, the next closed; one not reading its answers let go ",
+        "--expect-line=[user] root task: the supervisor's test_sound ended with 0",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The microphone's grants (decisions/0196, 17f): test_sound, given a microphone connection as the trusted path is,
     # grants itself the microphone, whose connection refuses Play, records a second of QEMU's none input, silence, at
@@ -1178,7 +1186,8 @@ TESTS = [
         "--expect-console-line=error: where needs true or false, not a string"])),
     # Help and completion (decisions/0174): help alone lists the built-ins; help on a program shows its documentation,
     # from its bundle, and its parameters' types, from its manifest; Tab completes a program's name, its --name and an
-    # enum's member, and lists the programs a prefix starts with, each with its summary
+    # enum's member, and lists the programs a prefix starts with, each with its summary: test_shell_'s, as test_ has
+    # more programs than summaries are asked for (completion's MAX_SUMMARIES)
     ("helps with the built-ins and programs, and completes commands, parameters and members", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", 
@@ -1186,7 +1195,7 @@ TESTS = [
         "\\w\\>help\\r\\>help test_shell_calls\\r\\>"
         "test_shell_c\\t3 tabbed\\r\\>"
         "test_shell_calls 2 named --spe\\tFa\\t\\r\\>"
-        "test_\\t\\r",
+        "test_shell_\\t\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=print   Write its arguments on a line, separated by spaces.",
@@ -1199,7 +1208,7 @@ TESTS = [
         "--expect-console-line=called with named, 2, loud false, speed Fast, wait none, tags none, place none",
         "--expect-console-line=test_shell_calls    Write what the shell gave on one line of the terminal, or, in a pipeline, write rows.",
         "--expect-console-line=test_shell_results  Give back what it's asked to: a summary of what it was given, or an error.",
-        "--expect-console-line=error: there's no command named test_"])),
+        "--expect-console-line=error: there's no command named test_shell_"])),
     # History (design/shell.md §6): a line entered in one session comes back with Up in the next, from the shell's data
     # directory in the user's home
     ("keeps the shell's history from one session to the next", 7,

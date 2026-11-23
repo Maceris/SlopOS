@@ -24,7 +24,11 @@ import slop_os from "std:os/slop_os"
  * A session's volume (17g): a connection made through the listener is a group's root, and every connection made by a
  * Connect on it, or on one made so, is in its group. SetSessionVolume, on the root alone, scales every stream of the
  * group, as well as each stream's own volume: the session manager dials a root for each session, gives its programs
- * connections of its group, and sets its volume as the trusted path asks.
+ * connections of its group, and sets its volume as the trusted path asks. A group has at most a few connections, and
+ * the service keeps a few places for the trusted path's; a Connect past them is closed.
+ *
+ * The service answers without waiting: a client whose ring of answers is full, as one that doesn't read them, is let
+ * go, its connection closed.
  */
 
 /**
@@ -128,7 +132,8 @@ Request :: union {
     Open(Format),
     /**
      * Make the stream's ring and give a window onto it, or on a connection that records, the ring, read only. Answered
-     * with Buffer, or Refused.
+     * with Buffer, or Refused: NoMemory past what the service keeps for every stream's ring together, NotAllowed for a
+     * second GetBuffer.
      */
     GetBuffer,
     /** Give a period, its frames written. Answered with Played once it's mixed in, or with PlayRefused. */

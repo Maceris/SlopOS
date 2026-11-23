@@ -48,6 +48,12 @@ MIX_CHANNELS : usize : 2
 CARRY_FRAMES : usize : 2048
 /** The most samples of a stream's period: the highest rate's frames times the most channels. */
 MAX_PERIOD_SAMPLES : usize : 960 * 8
+/** The places kept for the trusted path's connections and the microphone's grants: playing ones take the rest. */
+KEPT_FOR_TRUSTED : usize : 3
+/** The most connections a group, a session's, has at once, its root among them. */
+MAX_PER_GROUP : usize : 6
+/** The most bytes every stream's ring takes together, of the service's own memory: 1 MiB. */
+MAX_RING_BYTES : u64 : 1024 * 1024
 /** The most recording streams' rings kept after their grants are gone (sound.RETIRED_NS); past it, the oldest goes. */
 MAX_RETIRED : usize : 8
 /** How many periods of the mix with nothing to mix before the device is stopped: 100 ms. */
@@ -59,6 +65,8 @@ Stream :: struct {
     open : bool,
     /** Whether it records, a microphone grant's, rather than plays. */
     records : bool,
+    /** Whether its client's been given its buffer, which it is once. */
+    buffer_given : bool,
     /** Its format, as Open gave it, and how its samples are stored. */
     format : sound.Format,
     sample : pcm.SampleFormat,
@@ -122,6 +130,8 @@ Slot :: struct {
     root : bool,
     /** For a Player: its group's volume, as a gain, which scales its stream's. */
     session_gain : f32,
+    /** Whether an answer to it couldn't be sent, its ring full: it's let go once the clients are served. */
+    broken : bool,
 }
 
 /** A recording stream's ring, kept a while after its grant's gone, so its client isn't faulted reading it. */
@@ -130,6 +140,8 @@ Retired :: struct {
     ring : slop_os.Memory,
     /** Where it's mapped here. */
     at : u64,
+    /** Its bytes, counted in ring_bytes until it's destroyed. */
+    bytes : u64,
     /** When it's destroyed, by the monotonic clock. */
     until : u64,
 }
@@ -179,6 +191,8 @@ Service :: struct {
     next_grant : u32,
     /** The next group's number, for the next connection made through the listener. */
     next_group : u32,
+    /** The bytes of every stream's ring, those retired too: at most MAX_RING_BYTES. */
+    ring_bytes : u64,
     /** Recording streams' rings kept after their grants are gone, the first retired_count of them, oldest first. */
     retired : Retired[MAX_RETIRED],
     retired_count : usize,
@@ -258,6 +272,13 @@ main :: fn(
             i += 1
         }
         while i < service.clients.count
+        // Those whose answers couldn't be sent, let go now, outside what was answering them
+        for k in 0..<service.streams.count {
+            if service.streams[k].broken {
+                runtime.log_info("let go of a client that doesn't read its answers")
+                gone(service, k)
+            }
+        }
         take_driver_answers(service, &into)
         mix_due(service)
         let_go_retired(service, false)
@@ -298,7 +319,7 @@ serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incomin
             case Received => {}
             case Empty => return void
             case Unsupported => {
-                _ = sound.answer_unsupported(end, service.port)
+                fell_behind(service, index, sound.answer_unsupported(end, service.port, wait = false))
                 continue
             }
             case _ => {
@@ -345,7 +366,12 @@ serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incomin
                 }
             }
             case Connect(connection) => {
-                // Through the listener, a group's root; through another, in that one's group
+                // Through the listener, a group's root; through another, in that one's group, if they've room
+                group :: if kind == .Listener { cast[u32](0) } else { service.streams[index].group }
+                if !room_for_player(service, kind == .Listener, group) {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
+                    continue
+                }
                 match add_index(service, connection.end, .Player) {
                     case Some(made) => if made < service.streams.count {
                         if kind == .Listener {
@@ -363,8 +389,47 @@ serve :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Incomin
                 continue
             }
         }
-        _ = sound.send_response(end, service.port, &out)
+        fell_behind(service, index, sound.send_response(end, service.port, &out, wait = false))
     }
+}
+
+/**
+ * Note a client an answer couldn't be sent to, its ring full: it's let go once the clients are served.
+ *
+ * @param service The service.
+ * @param index The client's index.
+ * @param result What sending gave: null if it was sent.
+ */
+fell_behind :: fn(service : ptr[mut Service], index : usize, result : slop_os.ChannelError?) {
+    if result is_some && index < service.streams.count {
+        service.streams[index].broken = true
+    }
+}
+
+/**
+ * Tell whether there's room for another playing connection: the places kept for the trusted aside, and its group's
+ * connections fewer than MAX_PER_GROUP.
+ *
+ * @param service The service.
+ * @param root Whether it'd be a group's root, through the listener.
+ * @param group Otherwise, its group.
+ * @return Whether it may be added.
+ */
+room_for_player :: fn(service : ptr[mut Service], root : bool, group : u32) -> bool {
+    players := cast[usize](0)
+    in_group := cast[usize](0)
+    for slot in service.streams {
+        if slot.kind == .Player {
+            players += 1
+            if slot.group == group {
+                in_group += 1
+            }
+        }
+    }
+    if players + KEPT_FOR_TRUSTED >= MAX_CLIENTS {
+        return false
+    }
+    return root || in_group < MAX_PER_GROUP
 }
 
 /**
@@ -468,7 +533,7 @@ released :: fn(service : ptr[mut Service], slot : Slot) {
     for i in 0..<slot.watches {
         out := os.Outgoing.{}
         os.begin[microphone.Response](&out)^ = .Released(slot.grant)
-        _ = microphone.send_response(end, service.port, &out)
+        fell_behind(service, slot.granted_by, microphone.send_response(end, service.port, &out, wait = false))
     }
 }
 
@@ -490,7 +555,7 @@ serve_control :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os
             case Received => {}
             case Empty => return void
             case Unsupported => {
-                _ = microphone.answer_unsupported(end, service.port)
+                fell_behind(service, index, microphone.answer_unsupported(end, service.port, wait = false))
                 continue
             }
             case _ => {
@@ -527,7 +592,7 @@ serve_control :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os
                 continue
             }
         }
-        _ = microphone.send_response(end, service.port, &out)
+        fell_behind(service, index, microphone.send_response(end, service.port, &out, wait = false))
     }
 }
 
@@ -664,7 +729,14 @@ open_stream :: fn(service : ptr[mut Service], index : usize, format : sound.Form
 buffer_for :: fn(service : ptr[mut Service], index : usize) -> sound.Response {
     stream :: stream_of(service, index) or_return sound.Response.Refused(.NotOpen)
     startup :: slop_os.startup_block()
+    // Once: each window's charged to the service
+    if stream.buffer_given {
+        return .Refused(.NotAllowed)
+    }
     if cast[slop_os.Handle](stream.ring) == slop_os.NO_HANDLE {
+        if service.ring_bytes + stream.ring_bytes > MAX_RING_BYTES {
+            return .Refused(.NoMemory)
+        }
         memory :: slop_os.memory_create(startup.budget, stream.ring_bytes) or_return sound.Response.Refused(.NoMemory)
         at :: runtime.reserve_addresses(cast[usize](stream.ring_bytes)) or_return sound.Response.Refused(.NoMemory)
         read_write :: cast[slop_os.Protection](cast[u32](slop_os.PROTECTION_READ) | cast[u32](slop_os.PROTECTION_WRITE))
@@ -674,7 +746,9 @@ buffer_for :: fn(service : ptr[mut Service], index : usize) -> sound.Response {
         }
         stream.ring = memory
         stream.ring_at = cast[u64](at)
+        service.ring_bytes += stream.ring_bytes
     }
+    stream.buffer_given = true
     if stream.records {
         read_only :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
         copy :: slop_os.handle_duplicate(cast[slop_os.Handle](stream.ring), read_only)
@@ -812,7 +886,7 @@ answer :: fn(service : ptr[mut Service], index : usize, period : u32, refused : 
         case Some(why) => response^ = sound.Response.PlayRefused(sound.PlayRefused.{period = period, why = why})
         case None => response^ = sound.Response.Played(sound.Played.{period = period, underruns = underruns})
     }
-    _ = sound.send_response(end, service.port, &out)
+    fell_behind(service, index, sound.send_response(end, service.port, &out, wait = false))
 }
 
 /**
@@ -830,7 +904,7 @@ answer_recorded :: fn(service : ptr[mut Service], index : usize, stream : ptr[St
     end :: service.clients.ends[index]
     out := os.Outgoing.{}
     os.begin[sound.Response](&out)^ = .Recorded(sound.Recorded.{period = period, overruns = stream.overruns})
-    _ = sound.send_response(end, service.port, &out)
+    fell_behind(service, index, sound.send_response(end, service.port, &out, wait = false))
 }
 
 /**
@@ -869,11 +943,12 @@ close_stream :: fn(service : ptr[mut Service], index : usize) {
     stream :: stream_of(service, index) or_return void
     if cast[slop_os.Handle](stream.ring) != slop_os.NO_HANDLE {
         if stream.records {
-            retire(service, stream.ring, stream.ring_at)
+            retire(service, stream.ring, stream.ring_at, stream.ring_bytes)
         }
         else {
             _ = slop_os.memory_unmap(slop_os.startup_block().space, stream.ring_at)
             _ = slop_os.handle_close(cast[slop_os.Handle](stream.ring))
+            service.ring_bytes -= if stream.ring_bytes <= service.ring_bytes { stream.ring_bytes } else { service.ring_bytes }
         }
     }
     match stream.resampler {
@@ -893,14 +968,15 @@ close_stream :: fn(service : ptr[mut Service], index : usize) {
  * @param service The service, which keeps it.
  * @param ring The ring, the service's owning handle.
  * @param at Where it's mapped here.
+ * @param bytes Its bytes, still counted in ring_bytes until it's destroyed.
  */
-retire :: fn(service : ptr[mut Service], ring : slop_os.Memory, at : u64) {
+retire :: fn(service : ptr[mut Service], ring : slop_os.Memory, at : u64, bytes : u64) {
     if service.retired_count >= service.retired.count {
         let_go_retired(service, true)
     }
     now :: slop_os.clock_monotonic() or_else 0
     if service.retired_count < service.retired.count {
-        service.retired[service.retired_count] = Retired.{ring = ring, at = at, until = now + sound.RETIRED_NS}
+        service.retired[service.retired_count] = Retired.{ring = ring, at = at, bytes = bytes, until = now + sound.RETIRED_NS}
         service.retired_count += 1
     }
 }
@@ -923,6 +999,7 @@ let_go_retired :: fn(service : ptr[mut Service], oldest : bool) {
         }
         _ = slop_os.memory_unmap(slop_os.startup_block().space, first.at)
         _ = slop_os.handle_close(cast[slop_os.Handle](first.ring))
+        service.ring_bytes -= if first.bytes <= service.ring_bytes { first.bytes } else { service.ring_bytes }
         for k in 0..<service.retired_count {
             next :: k + 1
             if next < service.retired_count && k < service.retired.count && next < service.retired.count {
@@ -1427,6 +1504,8 @@ fill :: fn(service : ptr[mut Service], index : usize, stream : ptr[mut Stream]) 
         decoded_all :: service.decoded[0..<service.decoded.count]
         stereo_all :: service.stereo[0..<service.stereo.count]
         decoded :: pcm.decode(stream.sample, bytes, first(decoded_all, samples))
+        // Floats past full scale, or infinite, clipped first, so no stream's louder than its volumes let it be
+        _ = pcm.clip(first(decoded_all, decoded))
         made :: pcm.remix(first(decoded_all, decoded), cast[u32](channels), first(stereo_all, frames * MIX_CHANNELS),
             cast[u32](MIX_CHANNELS))
         converted := first(stereo_all, made * MIX_CHANNELS)

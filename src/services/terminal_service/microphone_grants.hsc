@@ -113,11 +113,15 @@ grant_microphone :: fn(service : ptr[mut Service], requester : u8[]) -> os.Chann
                 return null
             }
         }
-        // A grant let go meanwhile is said first
+        // A grant let go meanwhile is said first, and a Revoke's answers, a grant gone already NoGrant, aren't Grant's
         match os.message_of[microphone.Response](&into)^ {
             case Granted(made) => found = made
             case Released(id) => released(service, id)
             case Revoked => {}
+            case Refused(why) => if why != .NoGrant {
+                runtime.log_info("microphone: the audio service refused")
+                return null
+            }
             case _ => {
                 runtime.log_info("microphone: the audio service refused")
                 return null
