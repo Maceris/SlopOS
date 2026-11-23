@@ -1707,6 +1707,8 @@ TESTS = [
     # And counts who holds a memory object, and says when no one does (decisions/0178)
     program_test("maps memory objects, paid for by budgets, and counts who holds them", "test_memory", 7),
     program_test("splits, sets and destroys CPU budgets", "test_cpu_budgets", 2),
+    # 17a (decisions/0196): a thread on a 2 ms high-priority budget wakes for its deadlines, idle and with every CPU busy
+    program_test("wakes a high-priority thread for its deadlines, with the CPUs idle and with every one busy", "test_latency", 2),
     program_test("reads I/O ports through a range of them", "test_io_ports", 1),
     program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits", 2),
     program_test("gives an entry's parameters that aren't handles as values", "test_values", 1),
@@ -1826,6 +1828,8 @@ KVM_TESTS = [
     ("KVM: has CET's shadow stacks", 0, ["--expect-line=[boot] cpu: control-flow integrity: shadow stacks yes, indirect branch tracking no"]),
     # A tampered return refused by the shadow stack (decisions/0186); a branch to no landing pad is skipped, with no IBT
     program_test("KVM: refuses a tampered return through the shadow stack", "test_control", "8 tests: 6 passed, 0 failed, 2 skipped"),
+    # The latency test where the guest's CPUs keep the host's pace and its timer is the hardware's (decisions/0196, 17a)
+    program_test("KVM: wakes a high-priority thread for its deadlines, with the CPUs idle and with every one busy", "test_latency", 2),
 ]
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS, own=False)

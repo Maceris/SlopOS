@@ -53,3 +53,27 @@ powerbox capability, shown on the trusted path while held. What's there (2026-11
 - **The device's format**: one fixed format the service mixes into, 48 kHz stereo 32-bit float.
 - **17g** as proposed: the shell's `play` and `record`, sound in the viewer, and the session's volume in the trusted
   layer.
+
+## As Built: 17a, latency
+- **`test_latency`**, a test program the root task gives the root CPU budget: a thread on a budget of priority 250, a
+  quarter of a CPU every 2 ms, waits for 1500 deadlines 2 ms apart on a port with nothing bound, and logs its worst,
+  99.9th percentile and median lateness: with the CPUs idle, kept to the boot CPU, kept to CPU 1, and while a spinner
+  on a priority-10 budget of nearly every CPU runs on each. On both architectures under TCG, and on x86-64 through KVM
+  in the Linux VM (`KVM_TESTS`).
+- **What it measured** (2026-11-22), in microseconds:
+
+  | | TCG x86-64 | TCG AArch64 | KVM x86-64 |
+  |---|---|---|---|
+  | idle: worst, 99.9th, median | 1689, 1672, 775 | 1725, 1650, 816 | 1737 to 72008, 1518 to 70097, ~360 |
+  | under load | 1596, 1585, 907 | 1537, 1520, 968 | 611 to 1508, 585 to 1484, ~277 |
+
+- **What it says of the kernel, and what of the hosts.** Under TCG, lateness is spread evenly to about 1.7 ms, idle or
+  loaded: QEMU's timers on Windows fire as the host's wakes let them. Through KVM the median is the Linux VM's own (a
+  loop sleeping 2 ms in it: median 355 to 441, worst 1418 to 8619), and the idle CPU 1's worst ran to tens of
+  milliseconds; kept ticking (a diagnostic `always_tick`, since removed), it still went 15 to 50 ms without its own
+  ticks, so the stall is the halted virtual CPU's, under VMware, not the tickless idle's. Under load, nothing halted,
+  every wake came within 1.5 ms. No kernel latency showed that the hosts don't make; neither can show the kernel's
+  finer than about a millisecond.
+- **So the test holds** what can fail: no wake early, and under load 999 wakes in 1000 within 5 ms, half a tick, which
+  a wake that waited for a tick, its IPI missed, wouldn't make. The idle numbers are logged. The mixer's period and its
+  buffer (17d) are chosen against these: at least 2 ms of slack beyond its period under TCG.

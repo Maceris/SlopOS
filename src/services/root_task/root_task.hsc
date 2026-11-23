@@ -216,7 +216,8 @@ TestGrants :: struct {
     peer : slop_os.Channel?,
     /**
      * A copy of the root CPU budget, which may be split and bound, for the tests of CPU budgets (decisions/0093):
-     * test_cpu_budgets, test_budgets and test_affinity; None for the others.
+     * test_cpu_budgets, test_budgets and test_affinity, and test_latency's of a high priority's (decisions/0196); None for
+     * the others.
      */
     cpu_budget : slop_os.CpuBudget?,
 }
@@ -981,8 +982,8 @@ run_test :: fn(
         case None => {}
     }
     concurrency.unlock(&root.manager_lock)
-    // Only the tests of CPU budgets are given the root one
-    if name == "test_cpu_budgets" || name == "test_budgets" || name == "test_affinity" {
+    // Only the tests of CPU budgets are given the root one, and the latency test, which splits it
+    if name == "test_cpu_budgets" || name == "test_budgets" || name == "test_affinity" || name == "test_latency" {
         budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE)
             | cast[u32](slop_os.RIGHT_TRANSFER)
             | cast[u32](slop_os.RIGHT_CPU_BUDGET_SPLIT)

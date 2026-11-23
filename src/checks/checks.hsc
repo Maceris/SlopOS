@@ -1277,9 +1277,9 @@ is_result :: fn(checked : type) -> bool {
  * firmware's tables and protocols are reached through addresses without a type (bootloader); - a device's callbacks
  * take their context without a type, which Hemera's function values, capturing nothing, need (fat, gpt, slopfs, the
  * servers and tests that give one, image_builder); - structs are read at offsets in a buffer of bytes, from the address
- * of its data, which base gives as a rawptr (events_service); - a model-checked test's threads take their data as an
- * any, whose value is behind a rawptr (handle_entries_test, shootdowns_test). A string's bytes are string_bytes(text),
- * not its data.
+ * of its data, which base gives as a rawptr (events_service); - a test's threads take their data as an any, whose
+ * value is behind a rawptr (handle_entries_test, shootdowns_test, test_latency). A string's bytes are
+ * string_bytes(text), not its data.
  */
 RAW_POINTERS :: string.[
     "arch_aarch64",
@@ -1305,6 +1305,7 @@ RAW_POINTERS :: string.[
     "slopfs_test",
     "slopos_boot",
     "test_kit",
+    "test_latency",
     "volume_server",
     "x86_64_test"
 ]
