@@ -27,8 +27,8 @@ Options :: struct {
      */
     test_lockup : bool,
     /**
-     * test_lockup_lock: test_lockup, CPU 1 holding a lock as it stops, which CPU 0 then waits for at a tick, so its
-     * wait for the lock is what catches it.
+     * test_lockup_lock: test_lockup, CPU 1 holding a lock as it stops, which CPU 0 then waits for at a tick or in a
+     * shootdown's wait, so its wait for the lock is what catches it.
      */
     test_lockup_lock : bool,
     /**

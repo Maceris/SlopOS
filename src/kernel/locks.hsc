@@ -93,7 +93,7 @@ LockRank :: enum #backed_by(u32) {
     ProcessDebug = 305,
     /** A CPU's trace ring's lock, taken in the scheduler's paths under any other (tracing.hsc). */
     Trace = 310,
-    /** test_lockup_lock's lock, which CPU 1 holds as it stops and CPU 0 then waits for, at a tick (lockups.hsc). */
+    /** test_lockup_lock's lock, which CPU 1 holds as it stops and CPU 0 then waits for (lockups.hsc). */
     LockupTest = 320,
 }
 

@@ -55,21 +55,14 @@ check_lockups :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], now : u64) 
             arch.spin_hint()
         }
     }
-    // test_lockup_lock: the boot CPU then waits for that lock, at a tick, so only its wait can see CPU 1 stuck
-    if kernel.options.test_lockup
-        && kernel.options.test_lockup_lock
-        && cpu.index == 0
-        && intrinsics.atomic_load_u32_acquire(&kernel.lockup_test_held) != 0 {
-        runtime.log_info("test_lockup: CPU 0 waits for the lock CPU 1 holds")
-        lock_at(&kernel.lockup_test_lock, .LockupTest)
-    }
+    wait_for_lockup_test_lock(kernel, cpu)
     check_others(kernel, cpu, now)
 }
 
 /**
  * While this CPU waits on the others with interrupts off, as a TLB shootdown does for their flushes, note that it's
  * making progress and check them itself: its ticks don't come, and a stuck CPU it waits on would otherwise stop it
- * too, with nothing left ticking to see either (called in the wait's loop).
+ * too, with nothing left ticking to see either (called in the wait's loop, with no lock held).
  *
  * @param kernel The kernel.
  * @param cpu The calling CPU, which waits.
@@ -77,7 +70,31 @@ check_lockups :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu], now : u64) 
 check_lockups_while_waiting :: fn(kernel : ptr[mut Kernel], cpu : ptr[mut PerCpu]) {
     now :: arch.counter()
     intrinsics.atomic_store_u64_release(&cpu.heartbeat, now)
+    wait_for_lockup_test_lock(kernel, cpu)
     check_others(kernel, cpu, now)
+}
+
+/**
+ * test_lockup_lock: once CPU 1 holds its lock and has stopped, the boot CPU waits for that lock, so only its wait for
+ * the lock sees CPU 1 stuck; it never gets the lock, as the lockup's report stops the kernel. Does nothing on other
+ * CPUs, without test_lockup_lock, or before CPU 1 holds the lock.
+ *
+ * Called at the boot CPU's tick, and in a shootdown's wait (check_lockups_while_waiting), which also checks the others:
+ * a shootdown begun as CPU 1 stops waits for a flush it never makes, interrupts off, so the boot CPU ticks no more and
+ * would otherwise see CPU 1 stuck from the shootdown, never waiting for the lock. Either caller holds no lock.
+ *
+ * @param kernel The kernel, whose lockup_test_held says whether CPU 1 holds lockup_test_lock.
+ * @param cpu The calling CPU.
+ */
+wait_for_lockup_test_lock :: fn(kernel : ptr[mut Kernel], cpu : ptr[PerCpu]) {
+    if !kernel.options.test_lockup
+        || !kernel.options.test_lockup_lock
+        || cpu.index != 0
+        || intrinsics.atomic_load_u32_acquire(&kernel.lockup_test_held) == 0 {
+        return void
+    }
+    runtime.log_info("test_lockup: CPU 0 waits for the lock CPU 1 holds")
+    lock_at(&kernel.lockup_test_lock, .LockupTest)
 }
 
 /**
