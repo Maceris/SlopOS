@@ -37,7 +37,16 @@ runs, and working that through (2026-11-21) found three things it rests on:
 - **18e, the rate limit and the band by identity, and a review.** The powerbox's limits keyed by the name a launch
   proved; the identity band for programs anything starts; a security review and the full suites.
 
-## Open questions
-- Whether a shell's own children go through 18d as well, or keep the shell's naming, as the shell controls them.
-- How a recording's replay (`0183`, 12c), which loads a program with chosen seeds, fits the process manager making
-  the process.
+## Settled with the owner (2026-11-22)
+- **A shell's own children go through 18d**, as every launch does. A shell runs scripts, and through the SSH service a
+  remote login's commands, so a bug or a hostile script in it shouldn't be able to misname a program; one path is
+  simpler to trust and to test; and with 18b its crash reports and `profile` take intercepts that only report, so its
+  children are unsteered and named by launch like anyone's. A shell names by hand only itself and its scripts, which
+  run in it, the powerbox showing a script's name as a script's ("backup.sh, a script"), the shell vouching for it.
+- **Recording and replay are steering** (`0183`, 12c): trapping the counter and feeding recorded results back are
+  what a debugger's intercept does, so they take one on the user's say (18b), not a launcher's right of their own. The
+  process manager makes a replay's process with the recording's seeds and layout, as `Load` takes seeds now. The
+  session manager names a connection by launch only for a process the process manager says has no steering
+  intercept, the one rule covering debuggers, recordings and replays. A replay gets no fresh powerbox connection, as
+  what it was given while recorded can't be replayed anyway; or one shown as a replay's ("a replay of X"), which can't
+  pass for X asking.
