@@ -1,6 +1,6 @@
 # 0196: M17, Audio, Planned
 
-Status: proposed (2026-11-22), for the project's owner to choose from; not started
+Status: accepted, chosen with the project's owner (2026-11-22); not started
 Date: 2026-11-22
 Related: `0072` (audio after display), `0037` (budgets, lending), `../design/scheduling.md` (soft real-time, latency),
 `../design/display.md` §7 (audio), `0192` (M15), `0193` (M16), `0195` (M18, after this)
@@ -45,12 +45,11 @@ powerbox capability, shown on the trusted path while held. What's there (2026-11
   session's volume in the trusted layer.
 - **17h, a security review and the full suites.**
 
-## Questions for the owner
-- **Underruns under TCG**: count the service's missed periods against the guest's clock as the test that must be zero
-  (proposed), and the device's underruns only through KVM in the Linux VM, where the guest's CPUs keep the host's
-  pace; or something else.
-- **What's in std**: formats, mixing, resampling and WAV in Hemera's std, as fonts and the canvas are (proposed); or in
-  SlopOS.
-- **The device's format**: one fixed format the service mixes into, 48 kHz stereo 32-bit float (proposed), or the
-  device's best.
-- **17g's scope**: the shell's `play` and `record`, the viewer, and a volume control (proposed); or fewer.
+## Chosen with the owner (2026-11-22)
+- **Underruns under TCG**: the test that must be zero counts the audio service's own missed periods, against the
+  guest's clock, on both architectures; the device's underruns are checked through KVM in the Linux VM, where the
+  guest's CPUs keep the host's pace.
+- **Hemera's std** has the formats, mixing, resampling and WAV (`std/audio`), as it has fonts and the canvas.
+- **The device's format**: one fixed format the service mixes into, 48 kHz stereo 32-bit float.
+- **17g** as proposed: the shell's `play` and `record`, sound in the viewer, and the session's volume in the trusted
+  layer.
