@@ -166,3 +166,33 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
 - **The KVM host has 4 cores**, so QEMU's own loop isn't starved by a guest keeping its two CPUs busy.
 - **The microphone's indicator** shows in the trusted layer and the console's status line in 17f. A mark on each
   holding program's windows waits for M18, which knows which windows are whose.
+
+## As Built: 17f, the microphone
+- **The driver** captures from the device's first input stream that takes 48 kHz stereo, into a ring of its own
+  (`GetCaptureBuffer`, `Record`, `Recorded`, `StopRecording`); its refusals are `RecordRefused`, apart from playback's
+  `Refused`, so neither's taken for the other's period.
+- **The `microphone` protocol**, on a listener of the audio service's own, which only the supervisor holds: `Grant`
+  makes a sound connection that records, `Revoke` closes the service's end of it (revocation by destruction, `0010`),
+  and `WaitReleased` hears when it's gone. The supervisor dials it for the trusted path's power connections only, the
+  console's and the greeter's (power's `MicrophoneConnection`). A trusted path's connection gone takes its grants
+  with it, as nothing could show them or take them back.
+- **Recording streams**: a grant's sound connection refuses `Play`, and every other refuses `Record`. While any grant
+  records, the driver's capture ring is given whole; each period it fills is resampled, remixed and encoded into every
+  recording stream's format, and a stream with no period given drops it, its own overrun. Its `GetBuffer` gives the
+  ring itself, read only, not a window: closing the ring on revocation destroyed the window under a program still
+  reading a period it had been answered, which crashed it. A closed stream's ring is unmapped from the service too.
+- **The powerbox's `RequestMicrophone`** and the prompt's `Microphone` kind: allowed with the user's say alone, on the
+  console's elevation screen or the greeter's prompt, as the network is; the trusted path makes the grant and answers
+  with it.
+- **Shown held**: the console's status line says who holds the microphone, in every view, and M on the secure
+  attention key's screen takes every grant back. In the GUI, a passive window of the trusted layer in the screen's top
+  right corner says so, with Take it back: passive windows (a trusted client's only) are never focused and don't keep
+  other windows from input, as the trusted layer's others do. The mark on each holding program's windows waits for
+  M18, which knows whose windows are whose (chosen with the owner after 17e).
+- **`capture`**, the program that records into a WAV file, 16 kHz mono 16-bit: named so because the shell's own
+  `record` runs a program with its calls kept for replay. What it had recorded when the microphone's taken back is
+  kept.
+- **Tests**: test_sound, given a microphone connection with `test_sound_record`, grants itself the microphone, checks
+  Play is refused, records a second of QEMU's `none` input, silence, and takes the grant back, heard released and its
+  connection gone; the console's test has `capture` allowed, shown held, taken back with M and its status line clear
+  again; the GUI login test does the same through the prompt and the microphone window, clicked. Both architectures.
