@@ -205,6 +205,7 @@ In seven stages:
   A session's programs reach the terminal only through the terminal protocol, whose text is made safe, so SFTP's binary
   packets can't go through it; serving it from the service needs no binary channel to a program. What it reaches is
   only the login's home, as a program's would be, but its parser runs in the service that holds every connection.
+  Kept, by the owner, 2026-11-23 (`0197`).
 - **Found on the way:** an SFTP connection, which has no session, ended session 0, the console's, as its connection
   closed: it's marked as having none to end.
 - **Tests:** the SSH boot test, both architectures: a 300 KB file put with sftp, listed, got back the same, a directory

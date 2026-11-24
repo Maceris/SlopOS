@@ -594,9 +594,28 @@ Planned 2026-11-21 (`decisions/0193`), with the owner, after M15 and before audi
 Planned 2026-11-22 (`decisions/0195`), with the owner, when M16's 16b found naming by launch needs the launcher not to
 control what it starts; M16 trusts shells meanwhile.
 
+## Before M19 — What M14 to M18 Left
+
+- N1: the microphone's mark on its holder's windows, which M17 left for M18's names.
+- N2: M18's steering prompt naming what's steered by its launch, and installations of one executable told apart.
+- N3: deadlines on the trusted path's waits, a failed launch's font handles, the greeter's keys zeroed.
+- N4: Hemera's warning for unknown escapes, checked arithmetic, an undeclared name's cascade of errors, and the race in
+  `get_base_type`.
+
+Planned 2026-11-23 (`decisions/0197`), with the owner, after M18, who settled what M14 to M18's reviews left.
+
+## M19 — RISC-V (L1, L2)
+
+- LLVM with its RISC-V backend, and Hemera's `riscv64`, first for Linux.
+- The kernel on QEMU `virt` through SlopOS's bootloader: entry, Sv48 paging, the interrupt controllers, the timer and
+  the other harts; then user mode, and every boot test that applies.
+- The RISC-V IOMMU, and the CFI extensions, as D and H did for the others.
+
+Chosen 2026-11-23 (`decisions/0197`), the third architecture (`0022`); its stages planned with the owner when Before
+M19 is built, on A's pattern.
+
 ## Later
 
-- **RISC-V**, the third architecture (`decisions/0022`), after LLVM is rebuilt with its backend.
 - **Real hardware**: NVMe, xHCI (HID, mass storage, where a stick's FAT is untrusted input), AHCI.
 - **Indexing and live queries** over typed files' attributes (`0046`, BeOS).
 - **A POSIX personality**, a library over the native protocols for porting tools; optional, never in the core
@@ -641,3 +660,5 @@ control what it starts; M16 trusts shells meanwhile.
 | M16 | built 2026-11-22 (`decisions/0193`), 16a to 16g: Hemera's saturating casts, branches typed together and `-O0` builds; the identity band naming the program; the session manager and the powerbox no longer waiting on each other; the compositor's places capped and kept for the trusted, and activation tokens; prompts that ignore input at first and are rate-limited, per program and per session; the administrator asked in the GUI; shared fonts and typed paste; a security review, nothing high. only shells naming a powerbox's connections, the kernel's handle_same; its full suites passed 2026-11-21, the session's ask credit fixed on the way; naming by launch is M18 |
 | M17 | built 2026-11-23 (`decisions/0196`), 17a to 17h: latency measured; std/audio, its WAV reader fuzzed; virtio-sound and the audio protocol, playback and capture; the audio service mixing streams in formats of their own on a short high-priority budget; the soft real-time goal held under KVM with every CPU busy; the microphone as a powerbox grant the trusted path makes, shows held and takes back; play, capture and the viewer's sounds, each session at its own volume, set on the trusted path; a review |
 | M18 | built 2026-11-23 (`decisions/0195`), 18a to 18e: the process manager making launched processes, the launcher able to watch, end and read its child but not steer it; intercepts that steer only on the user's say, `debug`, `record` and `replay` asking the powerbox; handles that only move; powerbox connections named by what their holder was launched from, through the kernel's `channel_peer_owned_by` and the process manager's `Identify`; a script's asks shown as a script's; a security review, its critical and high findings fixed (sealed processes, ends used before they moved). Its full suites passed 2026-11-23; what the review left for the owner (0195's As Built: 18e) |
+| Before M19 | planned 2026-11-23 (`decisions/0197`), N1 to N4: the microphone's mark on its holder's windows, M18's steering prompt and installations, what M16 and M17 left, and Hemera's friction |
+| M19 | chosen 2026-11-23 (`decisions/0197`): RISC-V, planned when Before M19 is built |

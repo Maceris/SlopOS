@@ -392,7 +392,8 @@ These are the user's to decide; nothing above depends on them except where it sa
 own and already hashes the boot set (§1.5), so **sealing** is a small step: a TPM (QEMU's `swtpm`) measures the
 bootloader and the generation record, and the volume key's wrap for the system volume is sealed to those
 measurements, so a modified boot set can't capture a passphrase without the unlock failing visibly first. This guards
-against an evil maid, not an administrator. Proposed as an option for B, off by default.
+against an evil maid, not an administrator. Proposed as an option for B, off by default. Dropped 2026-11-23
+(`decisions/0197`): the threat model (`0013`) leaves out an attacker who can change the boot set.
 
 ### 10.2 Transient execution (`0013`)
 

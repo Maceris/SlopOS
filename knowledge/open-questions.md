@@ -131,11 +131,10 @@ Open, from `design/display.md` (2026-10-24):
 
 From `design/lessons.md` (2026-10-29). Answered: R (`decisions/0096`); Perf, memory pressure, the boot items, the
 trusted path's budgets and the lifecycle channel in 10a, names without invisible characters, and a log of the CPU's
-transient-execution issues (`0097`). The smaller items are proposed in each milestone's design note. Still open:
+transient-execution issues (`0097`). The smaller items are proposed in each milestone's design note. Sealing the
+system volume's key to a measured boot set (§10.1) was dropped 2026-11-23 (`decisions/0197`): an evil maid is outside
+the threat model. Still open:
 
-- **Sealing the system volume's key to a measured boot set** (a TPM measuring the bootloader and the generation), an
-  option off by default against an evil maid, not an administrator (`lessons.md` §10.1, `0013`). Decided when B is
-  planned.
 - **Forgetting a volume's key on suspend** (`lessons.md` §10.3, `0042`), once suspend exists after P.
 
 ## Hemera Threads

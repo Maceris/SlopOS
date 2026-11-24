@@ -41,6 +41,10 @@ Known limits, each an error rather than wrong code. Severity: nice.
   zero byte, with nothing said: std/audio's test wrote a WAV file's bytes that way and read three characters. A warning
   for an escape that isn't one of the table's (`\n`, `\t`, `\r`, `\0`, `\u{...}`, `\\`, `\"`) would catch it.
   Severity: friction (2026-11-22).
+- One undeclared name can hide behind its consequences: in M18's 18b, a name a shell file never declared gave about 64
+  E4030 errors ("escapes into the stack") in code that used it, and the error naming it was lost among them. Errors
+  that follow from a name that couldn't be resolved would be better left out. Severity: friction (2026-11-23). Planned
+  in Before M19's N4 (`decisions/0197`), with the escape warning and checked arithmetic.
 
 ### Targets and runtime
 

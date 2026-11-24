@@ -157,4 +157,5 @@ Built as proposed, except in how the holder is found:
   a program the asker launched itself, whose powerbox connection a steered program loses anyway; a debugger the user
   allows to attach to a running program acts with that program's grants, as it could before; the process manager
   lets go of a gone program's handles only when it's next asked something; and two installations of one executable
-  can't be told apart by it.
+  can't be told apart by it. Settled by the owner, 2026-11-23 (`0197`): the prompt's name and the installations are
+  fixed in Before M19's N2; the debugger's grants and the late pruning stay.
