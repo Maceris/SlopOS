@@ -604,6 +604,16 @@ control what it starts; M16 trusts shells meanwhile.
 
 Planned 2026-11-23 (`decisions/0197`), with the owner, after M18, who settled what M14 to M18's reviews left.
 
+## Bounds Checker — Before M19
+
+- B1: the proof keeps an `if` expression's value, loops' bounds at the constants they compare against, and fields set
+  from expressions.
+- B2: calls to functions that can't write memory keep what's known through pointers.
+- B3: declared field bounds, `count : usize #at_most(name.count)`, checked at every store and known at every read.
+- B4: every workaround the scan finds that these make needless taken out, the scan kept as a tool.
+
+Planned 2026-11-23 (`decisions/0198`), with the owner, after a scan of the code found what the proof made people write.
+
 ## M19 — RISC-V (L1, L2)
 
 - LLVM with its RISC-V backend, and Hemera's `riscv64`, first for Linux.
@@ -661,4 +671,5 @@ M19 is built, on A's pattern.
 | M17 | built 2026-11-23 (`decisions/0196`), 17a to 17h: latency measured; std/audio, its WAV reader fuzzed; virtio-sound and the audio protocol, playback and capture; the audio service mixing streams in formats of their own on a short high-priority budget; the soft real-time goal held under KVM with every CPU busy; the microphone as a powerbox grant the trusted path makes, shows held and takes back; play, capture and the viewer's sounds, each session at its own volume, set on the trusted path; a review |
 | M18 | built 2026-11-23 (`decisions/0195`), 18a to 18e: the process manager making launched processes, the launcher able to watch, end and read its child but not steer it; intercepts that steer only on the user's say, `debug`, `record` and `replay` asking the powerbox; handles that only move; powerbox connections named by what their holder was launched from, through the kernel's `channel_peer_owned_by` and the process manager's `Identify`; a script's asks shown as a script's; a security review, its critical and high findings fixed (sealed processes, ends used before they moved). Its full suites passed 2026-11-23; what the review left for the owner (0195's As Built: 18e) |
 | Before M19 | built 2026-11-23 (`decisions/0197`), N1 to N4: the microphone's mark on its holders' windows, drawn by the compositor when the trusted path says who holds it; a steering prompt naming the program by its launch (`NameOwn`, the process manager's `IdentifyProcess`), and each installation's executable a window of its own; the trusted path's waits on the audio service and the session manager limited to 5 s, and typed text zeroed in the compositor and gui_kit; Hemera's W2003 for escapes that aren't (which found the bootloader's backspace), checked arithmetic, and no cascade of E4030 behind a body's errors. Its full suites passed 2026-11-23 |
-| M19 | chosen 2026-11-23 (`decisions/0197`): RISC-V, planned when Before M19 is built |
+| Bounds Checker | planned 2026-11-23 (`decisions/0198`), B1 to B4: the proof's gaps (if expressions, loops against constants, fields set from expressions, calls that write nothing), declared field bounds, and the sweep of workarounds |
+| M19 | chosen 2026-11-23 (`decisions/0197`): RISC-V, planned once the bounds checker's built |
