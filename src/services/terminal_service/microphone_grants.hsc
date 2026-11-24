@@ -105,9 +105,16 @@ grant_microphone :: fn(service : ptr[mut Service], requester : u8[]) -> os.Chann
     }
     into := os.Incoming.{}
     found : microphone.Granted? = null
+    deadline :: (slop_os.clock_monotonic() or_else 0) + ANSWER_LIMIT
     loop {
-        match microphone.receive_response(end, port, &into, true) {
+        // Within ANSWER_LIMIT, or the connection's let go, every grant with it, as the audio service closes them (N3)
+        match microphone.receive_response(end, port, &into, true, deadline) {
             case Received => {}
+            case Empty => {
+                runtime.log_info("microphone: the audio service didn't answer in time")
+                microphone_gone(service)
+                return null
+            }
             case _ => {
                 microphone_gone(service)
                 return null

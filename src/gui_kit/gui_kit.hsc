@@ -8,6 +8,7 @@
  */
 package gui_kit
 
+import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import canvas from "std:canvas"
 import os from "std:os"
@@ -244,6 +245,7 @@ ask :: fn(window : ptr[mut Window], out : ptr[mut os.Outgoing]) -> surface.Respo
             case Input(given) => {
                 window.reading = false
                 take_input(window, &into, given)
+                forget_message(&into)
                 read_more(window)
             }
             case _ => return response
@@ -328,6 +330,7 @@ take :: fn(window : ptr[mut Window]) -> bool {
             case Input(given) => {
                 window.reading = false
                 take_input(window, &into, given)
+                forget_message(&into)
                 read_more(window)
             }
             case _ => {}
@@ -567,9 +570,9 @@ begin :: fn(window : ptr[mut Window]) -> ptr[mut ui.Ui] {
         }
     }
     if window.queued.count == 0 {
-        runtime.array_reset(&window.typed)
+        forget_bytes(&window.typed)
     }
-    runtime.array_reset(&window.pasted)
+    forget_bytes(&window.pasted)
     window.paste_typed = window.typed_pasted
     window.typed_pasted = false
     window.due = window.queued.count > 0
@@ -798,10 +801,10 @@ hide :: fn(window : ptr[mut Window]) {
  */
 drop_input :: fn(window : ptr[mut Window]) {
     runtime.array_reset(&window.queued)
-    runtime.array_reset(&window.typed)
-    runtime.array_reset(&window.pasted)
+    forget_bytes(&window.typed)
+    forget_bytes(&window.pasted)
     runtime.array_reset(&window.raw_keys)
-    runtime.array_reset(&window.raw_text)
+    forget_bytes(&window.raw_text)
     window.input.pressed = false
     window.input.released = false
     window.input.wheel = 0
@@ -810,7 +813,30 @@ drop_input :: fn(window : ptr[mut Window]) {
 /** Empty the raw keys, once a program's taken them. */
 take_keys :: fn(window : ptr[mut Window]) {
     runtime.array_reset(&window.raw_keys)
-    runtime.array_reset(&window.raw_text)
+    forget_bytes(&window.raw_text)
+}
+
+/**
+ * Empty text that was typed or pasted, zeroed first (decisions/0197, N3): what was typed into a trusted window, like a
+ * password, isn't left in memory to be read later.
+ *
+ * @param bytes The text, emptied.
+ */
+forget_bytes :: fn(bytes : ptr[mut u8[..]]) {
+    held := bytes^
+    if held.count > 0 {
+        intrinsics.secure_zero(&held[0], held.count)
+    }
+    runtime.array_reset(bytes)
+}
+
+/**
+ * Zero a message received, once what it held is taken: an Input's text, typed keys among it.
+ *
+ * @param into The message, zeroed.
+ */
+forget_message :: fn(into : ptr[mut os.Incoming]) {
+    intrinsics.secure_zero(cast[ptr[mut u8]](into), size_of(os.Incoming))
 }
 
 /**

@@ -344,7 +344,18 @@ Request :: union {
      * client, at most PASTE_LIFE ago, and not taken yet. Answered with Pasted, or Refused(NoSuchThing) for none.
      */
     TakePaste,
+    /**
+     * For a trusted client only (decisions/0197, N1): the programs holding the microphone, as the trusted path shows
+     * them held, by the names their connections were named (Name), each ended by a line break, at most
+     * MAX_HELD_BYTES kept; empty for none. Each window of a client of one of those names has a mark on its identity
+     * band, which no program can draw, until a later one leaves its name out. Replaces the last; ignored from any other
+     * client. Not answered.
+     */
+    MicrophoneHeld(slop_os.Relative[u8]),
 }
+
+/** The most bytes of MicrophoneHeld's names the compositor keeps, line breaks among them. */
+MAX_HELD_BYTES :: 256
 
 /** The most bytes of a copy's typed data (Offer.data) the compositor keeps: 1 MiB. */
 MAX_PASTE_BYTES : u64 : 1 << 20
@@ -427,6 +438,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Name(_) => false
         case Activation => false
         case TakePaste => false
+        case MicrophoneHeld(_) => true
     }
 }
 

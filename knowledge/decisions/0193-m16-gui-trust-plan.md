@@ -218,7 +218,8 @@ A review of M16's changes, by a reader who hadn't written them, found nothing hi
 - Left as they are, and why:
   - A launch whose request to the process manager couldn't be sent leaks its font handles: `ManagerGone` is both
     "not sent" and "sent, not answered", and closing a sent handle could close another's. Two handles a failed
-    launch; a distinct error would need os.launch's errors split again.
+    launch; a distinct error would need os.launch's errors split again. Wrong, found 2026-11-23 (`0197`, N3):
+    `send` takes a message's handles out of the caller's table whether it's sent or not, so none leak.
   - Keys typed into the greeter pass through gui_kit's and the compositor's queues, which aren't zeroed. None is
     reachable by an untrusted program.
   - ListKeys answers without asking, as on the console: public keys, and their comments.

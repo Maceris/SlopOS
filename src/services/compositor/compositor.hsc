@@ -17,6 +17,7 @@
  */
 package compositor
 
+import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import canvas from "std:canvas"
 import fonts from "std:fonts"
@@ -40,6 +41,8 @@ BAND :: 28
 PASSIVE_MARGIN : i32 : 16
 /** The band's text's size, in pixels to the em. */
 BAND_TEXT : f32 : 14
+/** The mark on the band of a program holding the microphone, after its name. */
+MICROPHONE_MARK :: "Microphone"
 /** The close box's side, at the band's right. */
 CLOSE :: 16
 /** The most windows, of every client together. */
@@ -252,6 +255,13 @@ Compositor :: struct {
     drag_x : i32,
     /** Where in the dragged window's band it went down, from the content's top (negative, in the band). */
     drag_y : i32,
+    /**
+     * The programs holding the microphone, as the trusted path last said (MicrophoneHeld): names each ended by a line
+     * break, the first held_count bytes. Their windows' bands are marked.
+     */
+    held : u8[surface.MAX_HELD_BYTES],
+    /** How many of held's bytes are in use. */
+    held_count : usize,
     /** What changed since the last frame, on the screen. */
     damage : canvas.Rect,
     /** What changed for the last frame. */
@@ -638,6 +648,15 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
                 compositor.states[index].held = if most == 0 { cast[u32](1) } else { most }
             }
             case TakePaste => response^ = take_paste(compositor, index)
+            case MicrophoneHeld(names) => {
+                answered = false
+                if index < compositor.states.count && compositor.states[index].trusted {
+                    microphone_held(compositor, os.items(into, names))
+                }
+                else {
+                    runtime.log_info("refused who holds the microphone from a client that isn't trusted")
+                }
+            }
             case Copy(offer) => {
                 answered = false
                 /*
@@ -1102,6 +1121,76 @@ focus_top_shown :: fn(compositor : ptr[mut Compositor]) {
 title_of :: fn(window : ptr[Window]) -> string {
     count :: if window.title_count <= window.title.count { window.title_count } else { window.title.count }
     return if count > 0 { string_of(&window.title[0], count) } else { "" }
+}
+
+/**
+ * Take who holds the microphone, as the trusted path says (MicrophoneHeld): every window's band is drawn again, its mark
+ * then shown or taken away.
+ *
+ * @param compositor The compositor, whose held names are replaced.
+ * @param names The holders' names, each ended by a line break; past surface.MAX_HELD_BYTES, cut at the last whole one.
+ */
+microphone_held :: fn(compositor : ptr[mut Compositor], names : u8[]) {
+    compositor.held_count = 0
+    holders := cast[usize](0)
+    for byte, i in names {
+        if i < compositor.held.count {
+            compositor.held[i] = byte
+            if byte == cast[u8]('\n') {
+                compositor.held_count = i + 1
+                holders += 1
+            }
+        }
+    }
+    marked := cast[usize](0)
+    for &window in compositor.windows {
+        if window.used {
+            add_damage(compositor, band_of(window))
+            if !window.trusted && holds_microphone(compositor, window.client) {
+                marked += 1
+            }
+        }
+    }
+    runtime.log_info("programs holding the microphone: %, their windows marked: %", holders, marked)
+}
+
+/**
+ * Tell whether a client's program holds the microphone: its name's among those the trusted path last said.
+ *
+ * @param compositor The compositor.
+ * @param client The client, by index.
+ * @return False for a client never named, or past the clients.
+ */
+holds_microphone :: fn(compositor : ptr[Compositor], client : usize) -> bool {
+    if client >= compositor.states.count {
+        return false
+    }
+    state :: &compositor.states[client]
+    if state.name_count == 0 || state.name_count > state.name.count || compositor.held_count > compositor.held.count {
+        return false
+    }
+    name :: state.name[0..<state.name_count]
+    start := cast[usize](0)
+    for byte, i in compositor.held[0..<compositor.held_count] {
+        if byte != cast[u8]('\n') {
+            continue
+        }
+        if i >= start && i - start == name.count {
+            same := true
+            for wanted, k in name {
+                at :: start + k
+                if at >= compositor.held.count || compositor.held[at] != wanted {
+                    same = false
+                    break
+                }
+            }
+            if same {
+                return true
+            }
+        }
+        start = i + 1
+    }
+    return false
 }
 
 /** Change a window's title, its band drawn again. */
@@ -1619,8 +1708,8 @@ queue :: fn(compositor : ptr[mut Compositor], client : usize, made : surface.Eve
     if state.count >= state.events.count || bytes.count > state.text.count - state.text_count {
         // A client that doesn't read loses what's oldest, and its text
         runtime.log_warn("client % isn't reading: % events dropped", client, state.count)
+        forget_text(state, 0)
         state.count = 0
-        state.text_count = 0
     }
     if bytes.count > state.text.count {
         return void
@@ -1680,7 +1769,7 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
                 state.count
             )
             state.count = 0
-            state.text_count = 0
+            forget_text(state, 0)
             return void
         }
         out := os.Outgoing.{}
@@ -1691,7 +1780,10 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
                 text = os.append(&out, state.text[0..<text_end]),
             }
         )
-        match surface.send_response(compositor.clients.ends[client], compositor.port, &out) {
+        sending :: surface.send_response(compositor.clients.ends[client], compositor.port, &out)
+        // Its copy of the text, typed keys among it, zeroed once it's sent or not (decisions/0197, N3)
+        intrinsics.secure_zero(cast[ptr[mut u8]](&out), size_of(os.Outgoing))
+        match sending {
             case Some(error) => {
                 if error != .TooBig || most <= 1 {
                     // Tried again at the next deliver
@@ -1730,7 +1822,21 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
         }
     }
     state.count = left
-    state.text_count = text_left
+    forget_text(state, text_left)
+}
+
+/**
+ * Keep only a client's first queued text bytes, the rest zeroed (decisions/0197, N3): what was typed, as a password
+ * into the trusted layer, isn't left in the compositor once it's given or dropped.
+ *
+ * @param state The client's state, whose text_count becomes kept.
+ * @param kept How many of its text's bytes stay, at most text_count.
+ */
+forget_text :: fn(state : ptr[mut ClientState], kept : usize) {
+    if kept < state.text_count && state.text_count <= state.text.count {
+        intrinsics.secure_zero(&state.text[kept], state.text_count - kept)
+    }
+    state.text_count = if kept < state.text_count { kept } else { state.text_count }
 }
 
 // ---- Drawing
@@ -1890,6 +1996,32 @@ draw_window :: fn(compositor : ptr[mut Compositor], buffer : u32, index : usize,
                     canvas.Paint.Solid(canvas.rgb(33, 33, 33))
                 )
                 title_at = cast[f32](band.x0 + 4) + wide + 10 + 8
+            }
+            /*
+             * While the program holds the microphone, as the trusted path says, a mark after its name, white on red in a
+             * box no title can draw either (decisions/0197, N1)
+             */
+            if holds_microphone(compositor, window.client) {
+                mark :: string_bytes(MICROPHONE_MARK)
+                wide :: fonts.measure(&font, BAND_TEXT, mark)
+                canvas.fill_rect(
+                    painter,
+                    title_at - 4,
+                    cast[f32](band.y0 + 4),
+                    wide + 10,
+                    cast[f32](BAND - 8),
+                    canvas.Paint.Solid(canvas.rgb(198, 40, 40))
+                )
+                _ = canvas.draw_text(
+                    painter,
+                    &font,
+                    BAND_TEXT,
+                    title_at + 1,
+                    cast[f32](band.y0 + 19),
+                    mark,
+                    canvas.Paint.Solid(canvas.rgb(255, 255, 255))
+                )
+                title_at = title_at + wide + 10 + 4
             }
         }
         _ = canvas.draw_text(

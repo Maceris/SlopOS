@@ -390,7 +390,8 @@ edit_command_line :: fn(generation : ptr[mut generations.Generation]) {
         if key.unicode == 0x08 {
             if line.count > 0 {
                 runtime.array_remove(&line, line.count - 1)
-                show("\x08 \x08")
+                // Back over the character, a space over it, and back again (\x isn't an escape: it was x08 shown)
+                show("\u{8} \u{8}")
             }
             continue
         }

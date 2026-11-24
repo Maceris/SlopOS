@@ -46,7 +46,11 @@ MAX_NAME :: 64
  * manifest's bytes are its.
  */
 Program :: struct {
-    /** The program's executable, the ELF image the shell launches; the handle moves to the shell. */
+    /**
+     * The program's executable, the ELF image the shell launches: a window onto the bundle store's of the installation's
+     * own (decisions/0197, N2), so two installations of one executable are told apart by what a program was loaded
+     * from; the handle moves to the shell.
+     */
     executable : slop_os.Memory,
     /**
      * The program's manifest, the schema of its entry's type, which says what it takes: a copy, whose owning handle
@@ -150,6 +154,14 @@ Request :: union {
      * manager loaded.
      */
     SteerOwn(slop_os.Process),
+    /**
+     * The session's powerbox's only (decisions/0197, N2): what a program was launched as, by a handle with
+     * RIGHT_PROCESS_KILL and RIGHT_DUPLICATE to its process that moves with the request, so a prompt to steer it names it by that, not by
+     * its launcher's word. Answered with Named: the name Find gave its executable under, empty if it wasn't loaded from
+     * one Find gave, or isn't a program the process manager loaded; or Refused(NotAllowed) from any other connection
+     * or without the process manager's steering.
+     */
+    NameOwn(slop_os.Process),
     /**
      * The session's powerbox's only: where a program runs, by name, so it knows whom to ask before Attach. Answered
      * with Located, or Refused(NotAllowed) from any other connection.
@@ -394,6 +406,8 @@ Response :: union {
     Steered(process_manager.Steering),
     /** The answer to Locate. */
     Located(Location),
+    /** NameOwn's answer: the name, UTF-8, at most MAX_NAME bytes; empty for none. */
+    Named(slop_os.Relative[u8]),
     /** The answer to Running: the session's programs, at most MAX_RUNNING. */
     RunningPrograms(slop_os.Relative[RunningProgram]),
     /** The answer to EndInstallation, Install and Uninstall once it's done. */

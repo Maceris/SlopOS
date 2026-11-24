@@ -1,11 +1,12 @@
 package shell_language
 
 import runtime from "base:runtime"
+import math from "std:math"
 import strings from "std:strings"
 
 /*
- * Arithmetic that says when it overflows, where Hemera's wraps. //STD(missing): checked arithmetic, like LLVM's
- * llvm.sadd.with.overflow, in base or std, which these would be.
+ * Arithmetic that says when it overflows, where Hemera's wraps: std:math's checked arithmetic, LLVM's
+ * *.with.overflow (decisions/0197, N4), and division, which it hasn't.
  */
 
 /** What arithmetic says when its result is past what its kind holds. */
@@ -22,9 +23,7 @@ SMALLEST :: cast[i64](cast[u64](1) << 63)
  * @return The sum; null if it's below -2^63 or above 2^63 - 1.
  */
 added :: fn(a : i64, b : i64) -> i64? {
-    sum :: a + b
-    // Overflow made the sum's sign unlike both operands'
-    return if (a ~ sum) & (b ~ sum) < 0 { null } else { sum }
+    return math.checked_add(a, b)
 }
 
 /**
@@ -35,9 +34,7 @@ added :: fn(a : i64, b : i64) -> i64? {
  * @return The difference; null if it's below -2^63 or above 2^63 - 1.
  */
 subtracted :: fn(a : i64, b : i64) -> i64? {
-    difference :: a - b
-    // Overflow needs operands of unlike signs, and gives a difference of b's sign
-    return if (a ~ b) & (a ~ difference) < 0 { null } else { difference }
+    return math.checked_subtract(a, b)
 }
 
 /**
@@ -48,14 +45,7 @@ subtracted :: fn(a : i64, b : i64) -> i64? {
  * @return The product; null if it's below -2^63 or above 2^63 - 1.
  */
 multiplied :: fn(a : i64, b : i64) -> i64? {
-    if a == 0 || b == 0 {
-        return 0
-    }
-    if (a == -1 && b == SMALLEST) || (b == -1 && a == SMALLEST) {
-        return null
-    }
-    product :: a * b
-    return if product / b != a { null } else { product }
+    return math.checked_multiply(a, b)
 }
 
 /**
@@ -80,8 +70,7 @@ divided :: fn(a : i64, b : i64) -> i64? {
  * @return The sum, in bytes; null if it's 2^64 or more.
  */
 added_sizes :: fn(a : u64, b : u64) -> u64? {
-    sum :: a + b
-    return if sum < a { null } else { sum }
+    return math.checked_add(a, b)
 }
 
 /**
@@ -92,11 +81,7 @@ added_sizes :: fn(a : u64, b : u64) -> u64? {
  * @return The product; null if it's 2^64 or more.
  */
 multiplied_sizes :: fn(a : u64, b : u64) -> u64? {
-    if a == 0 {
-        return 0
-    }
-    product :: a * b
-    return if product / a != b { null } else { product }
+    return math.checked_multiply(a, b)
 }
 
 /**

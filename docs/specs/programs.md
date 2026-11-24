@@ -251,8 +251,9 @@ rings (`RING_BYTES`):
 - `Steer` (`0195`, 18b), answered only on the connections of the manager's steering listener, whose other end the
   root task gives the supervisor, which gives the session manager one: given a launcher's handle to a program the
   manager loaded, the program's intercept with `RIGHT_INTERCEPT_STEER`, attached afresh on a port given, its owning
-  handle the steerer's, so letting it go detaches it (18e), and its process with the right to change its threads. The session manager asks once the user's allowed a debugger, a
-  recording or a replay through the powerbox (`RequestDebug`, and `RequestSteer` for a program the asker launched,
+  handle the steerer's, so letting it go detaches it (18e), and its process with the right to change its threads.
+  The session manager asks once the user's allowed a debugger, a recording or a replay through the powerbox
+  (`RequestDebug`, and `RequestSteer` for a program the asker launched,
   which the shell's `debug`, `record` and `replay` start held at their first call); the supervisor and the session
   manager for their own test crashes.
 - `Identify` (`0195`, 18d), on a steering connection only: given an end of a channel, which program the manager
@@ -261,12 +262,20 @@ rings (`RING_BYTES`):
   it at its calls, as a debugger's, recording's or replay's is held (18e); or `NotSteered(NoProgram)`. The session
   manager names a program's powerbox connection so: a launcher asks its session for one (`PendingPowerbox`) and gives
   it to the program, the end it's given can't be copied, and once the end's moved to a program the session manager
-  serves it under the name of the installation whose executable it handed out (`Find`). An end still the session
+  serves it under the name of the installation whose executable it handed out (`Find`), which gives each
+  installation's executable as a window of its own onto the store's (`0197`, N2), so two installations of one
+  executable are told apart; a window's kept until no one else holds it. An end still the session
   manager's, or held by one of its own programs, is waited on; one a steered program holds, or one whose executable
   it never handed out, is closed. `Powerbox` with a name is left to the shell's own asks; a shell running a script
   gives the script's shell a connection to the session made with `ConnectScript` and the script's file name (18e),
   on which every `Powerbox` is served under that name, which the powerbox shows the user as a script's
   ("backup.shell, a script"), the shell vouching for it.
+- `IdentifyProcess` (`0197`, N2), on a steering connection only: given a launcher's handle to a program the manager
+  loaded, with `RIGHT_PROCESS_KILL`, as `Steer` takes, the same `Identified`. Before the powerbox asks the user to let
+  a program steer one it launched (`RequestSteer`), it asks the session manager what that one was launched as
+  (`NameOwn`), which this answers: the prompt names the installation whose executable it was loaded from, not what
+  the asker calls it, and a program loaded from no executable `Find` gave is shown by the asker's name, marked "by its
+  launcher's word".
 
 ## Protocols
 

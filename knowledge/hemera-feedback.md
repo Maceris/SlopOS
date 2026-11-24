@@ -32,7 +32,9 @@ Known limits, each an error rather than wrong code. Severity: nice.
 - No checked arithmetic: integer overflow wraps, and nothing in `base` or `std` says when it would have. The shell's
   language (11d, `src/shell_language/arithmetic.hsc`) checks its own with the sign tricks (`added`, `subtracted`,
   `multiplied`); intrinsics over LLVM's `llvm.sadd.with.overflow` and its kin would be one instruction and a branch.
-  Marked `//STD(missing)`.
+  Marked `//STD(missing)`. Done 2026-11-23 (Before M19's N4, `decisions/0197`): `intrinsics.add_overflows`,
+  `subtract_overflows` and `multiply_overflows`, and `std:math`'s `checked_add`, `checked_subtract` and
+  `checked_multiply` giving optionals (`docs/operators.md`, *Integer overflow*); the shell's language uses them.
 - `is_ok` and `is_error` bind as loosely as `if`, so `a is_error || b is_error` doesn't parse: each needs parentheses
   or a variable of its own, as M16's greeter and powerbox kept needing. Chosen with the project's owner (2026-11-21):
   they bind tighter than `&&` and `||`, as a comparison does. Severity: friction. Done 2026-11-21 (Hemera 0454b7c):
@@ -40,11 +42,18 @@ Known limits, each an error rather than wrong code. Severity: nice.
 - An escape a string doesn't know is the character after the backslash (`docs/types.md`), so `"\x00"` is `x00`, not a
   zero byte, with nothing said: std/audio's test wrote a WAV file's bytes that way and read three characters. A warning
   for an escape that isn't one of the table's (`\n`, `\t`, `\r`, `\0`, `\u{...}`, `\\`, `\"`) would catch it.
-  Severity: friction (2026-11-22).
+  Severity: friction (2026-11-22). Done 2026-11-23 (N4): W2003, for any but `\\`, `\"` and `\'` past the table's,
+  in strings and characters. Its first build found the bootloader's backspace, `"\x08 \x08"`, showing `x08 x08`.
 - One undeclared name can hide behind its consequences: in M18's 18b, a name a shell file never declared gave about 64
   E4030 errors ("escapes into the stack") in code that used it, and the error naming it was lost among them. Errors
-  that follow from a name that couldn't be resolved would be better left out. Severity: friction (2026-11-23). Planned
-  in Before M19's N4 (`decisions/0197`), with the escape warning and checked arithmetic.
+  that follow from a name that couldn't be resolved would be better left out. Severity: friction (2026-11-23). Done
+  2026-11-23 (N4): the cause was a function whose body had the error, left out of the stack-pointer check, so its
+  callers took it to give back pointers from everything they passed it; it's taken to give back nothing now.
+- The bounds proof loses a counter kept at most a constant count through a loop: `if n < buffer.count { buffer[n] =
+  byte; n += 1 }` over elements, then `buffer[0..<n]`, is E4031 when `buffer` is a fixed array, as its count is the
+  constant, and the bound against it loosens by one each time around until it's dropped (widening without
+  thresholds). `docs/types.md` says one "kept below a count keeps that". Found in Before M19's N2, where the powerbox
+  needed an `if` it can't reach. Severity: friction (2026-11-23).
 
 ### Targets and runtime
 

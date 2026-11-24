@@ -77,7 +77,10 @@ PENDING_POLL : u64 : 5_000_000
  * a program the process manager loaded, kept by its launcher, or given on to another.
  */
 PENDING_LIMIT : u64 : 30_000_000_000
-/** The most executables Find gave that are kept, to name programs by; past it, the oldest goes. */
+/**
+ * The most executables Find gave that are kept, to name programs by; past it, the oldest whose window no one holds
+ * goes, and with none, Find gives the executable itself, its programs' powerbox connections then not named.
+ */
 MAX_HANDED : usize : 64
 /** The port key the session manager's budget's pressure is bound under. */
 PRESSURE_KEY : u64 : 900
@@ -333,10 +336,19 @@ PowerboxGrants :: struct {
     network : os.Channel[network.Network]?,
 }
 
-/** An executable Find gave, kept to name the programs loaded from it (decisions/0195, 18d). */
+/**
+ * An executable Find gave, kept to name the programs loaded from it (decisions/0195, 18d), as a window of the
+ * installation's own (decisions/0197, N2): two installations of one executable are then two objects, which the
+ * process manager's Identify tells apart.
+ */
 Handed :: struct {
-    /** The executable, read only; NO_HANDLE for a place not in use. */
+    /** The executable, as the bundle store gave it; NO_HANDLE for a place not in use. */
     executable : slop_os.Memory,
+    /**
+     * The window onto all of it that Find gives, its owning handle: the shell's copy, and the process manager's for
+     * each program loaded from it, name the installation. Its place is reused only once no one else holds it.
+     */
+    window : slop_os.Memory,
     /** The name it was found by, the first count bytes. */
     name : u8[programs.MAX_NAME],
     count : usize,
@@ -2116,10 +2128,10 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
     }
     match store_request(sessions, .Get(referred[0])) {
         case Got(object) => {
-            // Kept, to name the programs loaded from it (decisions/0195, 18d)
-            hand_out(sessions, object.memory, name)
+            // Kept, to name the programs loaded from it, which are given the installation's window (decisions/0197, N2)
+            given :: hand_out(sessions, object.memory, name)
             return .Found(
-                programs.Program.{executable = object.memory, manifest = manifest.memory, manifest_size = manifest.size}
+                programs.Program.{executable = given, manifest = manifest.memory, manifest_size = manifest.size}
             )
         }
         case _ => {
@@ -2394,14 +2406,18 @@ powerbox_for :: fn(sessions : ptr[mut Manager], number : u32, name : string) -> 
 }
 
 /**
- * Keep an executable Find gave, read only, with the name it was found by: the place of the oldest if they're all in
- * use (decisions/0195, 18d).
+ * Keep an executable Find gave with the name it was found by, as a window of that installation's own (decisions/0195,
+ * 18d; 0197, N2), and give what Find answers with. A name and executable kept already give the same window again; a
+ * new one takes a free place, or the oldest whose window no one but the session manager holds.
  *
  * @param sessions The session manager.
- * @param executable The executable, which stays the caller's.
+ * @param executable The executable, as the bundle store gave it, which moves here: kept, or closed.
  * @param name The name it was found by.
+ * @return The installation's window, a handle with the executable's rights, for the shell to own; the executable
+ *     itself if no window could be made or kept, when the powerbox connections of programs loaded from it aren't named.
  */
-hand_out :: fn(sessions : ptr[mut Manager], executable : slop_os.Memory, name : u8[]) {
+hand_out :: fn(sessions : ptr[mut Manager], executable : slop_os.Memory, name : u8[]) -> slop_os.Memory {
+    info :: slop_os.handle_info(cast[slop_os.Handle](executable)) or_return executable
     for &handed in sessions.handed {
         if cast[slop_os.Handle](handed.executable) != slop_os.NO_HANDLE
             && handed.count == name.count
@@ -2409,27 +2425,51 @@ hand_out :: fn(sessions : ptr[mut Manager], executable : slop_os.Memory, name : 
             && same_bytes(handed.name[0..<handed.count], name)
             && (slop_os.handle_same(cast[slop_os.Handle](handed.executable), cast[slop_os.Handle](executable))
                 or_else false) {
-            return void
+            given :: slop_os.handle_duplicate(cast[slop_os.Handle](handed.window), info.rights) or_return executable
+            _ = slop_os.handle_close(cast[slop_os.Handle](executable))
+            return cast[slop_os.Memory](given)
         }
     }
-    copy :: slop_os.handle_duplicate(cast[slop_os.Handle](executable), slop_os.RIGHT_MEMORY_READ) or_return void
-    at :: sessions.handed_next % MAX_HANDED
-    sessions.handed_next += 1
-    if at >= sessions.handed.count {
-        _ = slop_os.handle_close(copy)
-        return void
+    // A free place, or the oldest whose window's held by no one, no program loaded from it still recorded
+    at := MAX_HANDED
+    for k in 0..<MAX_HANDED {
+        candidate :: (sessions.handed_next + k) % MAX_HANDED
+        if candidate >= sessions.handed.count {
+            continue
+        }
+        window :: sessions.handed[candidate].window
+        if cast[slop_os.Handle](window) == slop_os.NO_HANDLE || (slop_os.memory_holders(window) or_else 1) == 0 {
+            at = candidate
+            break
+        }
     }
+    if at >= sessions.handed.count {
+        runtime.log_info("no room to keep an executable Find gave: programs loaded from it won't be named")
+        return executable
+    }
+    size :: slop_os.memory_size(executable) or_return executable
+    window :: slop_os.memory_create_window(executable, slop_os.startup_block().budget, 0, size) or_return executable
+    given :: slop_os.handle_duplicate(cast[slop_os.Handle](window), info.rights) or_else slop_os.NO_HANDLE
+    if given == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](window))
+        return executable
+    }
+    sessions.handed_next = at + 1
     place :: &sessions.handed[at]
+    if cast[slop_os.Handle](place.window) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](place.window))
+    }
     if cast[slop_os.Handle](place.executable) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](place.executable))
     }
-    place^ = Handed.{executable = cast[slop_os.Memory](copy)}
+    place^ = Handed.{executable = executable, window = window}
     for byte, i in name {
         if i < place.name.count {
             place.name[i] = byte
             place.count = i + 1
         }
     }
+    return cast[slop_os.Memory](given)
 }
 
 /**
@@ -2564,18 +2604,7 @@ name_pending :: fn(sessions : ptr[mut Manager]) {
             drop_pending(sessions, i)
             continue
         }
-        name := sessions.handed[0].name[0..<0]
-        for &handed in sessions.handed {
-            same :: cast[slop_os.Handle](handed.executable) != slop_os.NO_HANDLE
-                && (slop_os.handle_same(
-                    cast[slop_os.Handle](handed.executable),
-                    cast[slop_os.Handle](identity.executable)
-                )
-                    or_else false)
-            if same && handed.count <= handed.name.count {
-                name = handed.name[0..<handed.count]
-            }
-        }
+        name :: handed_name(sessions, identity.executable)
         if name.count == 0 {
             runtime.log_info("a powerbox connection held by a program from no executable Find gave isn't named")
             drop_pending(sessions, i)
@@ -2583,6 +2612,25 @@ name_pending :: fn(sessions : ptr[mut Manager]) {
         }
         serve_pending(sessions, i, name)
     }
+}
+
+/**
+ * The name a program's installation was found by (decisions/0197, N2): Find gave each installation's executable as a
+ * window of its own, which the process manager keeps for each program loaded from it.
+ *
+ * @param sessions The session manager, whose handed executables are looked through.
+ * @param executable What the program was loaded from, as the process manager's Identify gave it; only read.
+ * @return The name, a view of the session manager's own, good until the next Find; empty for none Find gave.
+ */
+handed_name :: fn(sessions : ptr[Manager], executable : slop_os.Memory) -> u8[] {
+    for &handed in sessions.handed {
+        same :: cast[slop_os.Handle](handed.window) != slop_os.NO_HANDLE
+            && (slop_os.handle_same(cast[slop_os.Handle](handed.window), cast[slop_os.Handle](executable)) or_else false)
+        if same && handed.count <= handed.name.count {
+            return handed.name[0..<handed.count]
+        }
+    }
+    return sessions.handed[0].name[0..<0]
 }
 
 /**

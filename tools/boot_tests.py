@@ -381,6 +381,10 @@ TESTS = [
         # Its typed data too, taken once (decisions/0193, 16f)
         "--expect-line=[user] test_compositor: B took typed data: typed from A",
         "--expect-line=[user] test_compositor: B took it once",
+        # Who holds the microphone, said by the trusted path alone: A's window marked, then none (decisions/0197, N1)
+        "--expect-line=[user] compositor: refused who holds the microphone from a client that isn't trusted",
+        "--expect-line=[user] compositor: programs holding the microphone: 1, their windows marked: 1",
+        "--expect-line=[user] compositor: programs holding the microphone: 0, their windows marked: 0",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A std/ui window through gui_kit (decisions/0192, 15g): test_gui's field typed into on the virtio keyboard, through
     # the seat lent to the compositor, line after line, each submitted with Enter; and the input-to-photon latency
@@ -589,6 +593,8 @@ TESTS = [
         "--expect-line=[user] greeter: asked by capture for the microphone",
         "--expect-line=[user] greeter: allowed capture the microphone",
         "--expect-line=[user] greeter: microphone: capture holds it",
+        # The compositor told, to mark capture's windows, of which it has none (decisions/0197, N1)
+        "--expect-line=[user] compositor: programs holding the microphone: 1, their windows marked: 0",
         "--expect-line=[user] greeter: microphone: the user took it back from capture",
         "--expect-line=[user] audio: took back grant 1",
         "--expect-line=[user] greeter: microphone: capture no longer holds it",

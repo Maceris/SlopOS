@@ -55,6 +55,11 @@ ASKS_PER_MINUTE : u64 : 3
 SESSION_ASKS_PER_MINUTE : u64 : 6
 /** What follows a script's name where the user's shown it, as "backup.shell, a script". */
 SCRIPT_SHOWN :: ", a script"
+/**
+ * What follows the name a launcher gives a program it asks to steer, shown to the user, when the program wasn't loaded
+ * from an executable Find gave, so the name is only the launcher's word (decisions/0197, N2).
+ */
+NOT_FOUND_SHOWN :: ", by its launcher's word"
 /** The programs whose asks are counted at once; the one heard from longest ago is forgotten for another. */
 MAX_ASKERS :: 16
 /** The most bytes of a kept grant's link's path, grants/<program>/<key>; a longer one is cut. */
@@ -119,6 +124,8 @@ SessionAsk :: enum {
     Attach,
     /** To steer the program its launcher asked to, which the user allowed (SteerOwn). */
     Steer,
+    /** What a program its launcher asks to steer was launched as (NameOwn), before the user's asked. */
+    NameSteered,
 }
 
 /** The powerbox's state: its connections, its clients, and the request waiting for the user. */
@@ -999,6 +1006,13 @@ take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
     if box.waiting.name_count <= box.waiting.name.count {
         name = box.waiting.name[0..<box.waiting.name_count]
     }
+    if asked == .NameSteered {
+        match os.message_of[programs.Response](into)^ {
+            case Named(text) => ask_named_steer(box, os.items(into, text))
+            case _ => ask_named_steer(box, u8.[])
+        }
+        return void
+    }
     if asked == .Steer {
         match os.message_of[programs.Response](into)^ {
             case Steered(given) => {
@@ -1076,14 +1090,17 @@ take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
 
 /**
  * Ask the user whether a program may steer one it launched (decisions/0195, 18b), as debugging their own program is
- * asked: the program shown by the name it gives, which its launcher's handle to it backs.
+ * asked. The program's shown by what it was launched as (decisions/0197, N2), which the session manager's asked first
+ * (NameOwn), the request waiting for its answer (take_sessions_answer), not here; the name the asker gives is shown
+ * only for a program not loaded from an executable Find gave, marked as such.
  *
  * @param box The powerbox.
  * @param index The asking client's index.
- * @param name The program's name, shown to the user.
+ * @param name The program's name, as the asker gives it.
  * @param purpose Why it asks.
  * @param process The launcher's handle to the program's process, which the powerbox now holds; closed if it's refused.
- * @return An answer now, Busy or Refused, the handle closed; null once it's asked, answered when the user has.
+ * @return An answer now, Busy or Refused, the handle closed; null once the session manager's asked, answered when the
+ *     user has.
  */
 ask_steer :: fn(
     box : ptr[mut Box],
@@ -1092,19 +1109,110 @@ ask_steer :: fn(
     purpose : u8[],
     process : slop_os.Process
 ) -> powerbox.Response? {
+    if box.has_waiting {
+        _ = slop_os.handle_close(cast[slop_os.Handle](process))
+        return .Busy
+    }
     if box.programs_end == NONE || name.count == 0 || name.count > powerbox.NAME_BYTES {
         _ = slop_os.handle_close(cast[slop_os.Handle](process))
         return .Refused
     }
-    asked :: ask(box, index, .Debug, false, purpose, name, u8.[])
-    match asked {
-        case Some(answer) => {
-            _ = slop_os.handle_close(cast[slop_os.Handle](process))
-            return answer
+    // With RIGHT_DUPLICATE, as the session manager sends the process manager a copy of it in turn
+    copy :: slop_os.handle_duplicate(
+        cast[slop_os.Handle](process),
+        cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_KILL)
+            | cast[u32](slop_os.RIGHT_DUPLICATE)
+            | cast[u32](slop_os.RIGHT_TRANSFER))
+    ) or_else slop_os.NO_HANDLE
+    if copy == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](process))
+        return .Refused
+    }
+    out := os.Outgoing.{}
+    os.begin[programs.Request](&out)^ = .NameOwn(cast[slop_os.Process](copy))
+    if programs.send_request(box.programs_end, box.programs_port, &out) != null {
+        _ = slop_os.handle_close(cast[slop_os.Handle](process))
+        return .Refused
+    }
+    box.has_waiting = true
+    box.asking_sessions = .NameSteered
+    box.waiting = Waiting.{client = index, kind = .Debug, steering = process}
+    for byte, i in name {
+        if i < box.waiting.name.count {
+            box.waiting.name[i] = byte
+            box.waiting.name_count = i + 1
         }
-        case None => box.waiting.steering = process
+    }
+    for byte, i in purpose {
+        if i < box.waiting.purpose.count {
+            box.waiting.purpose[i] = byte
+            box.waiting.purpose_count = i + 1
+        }
     }
     return null
+}
+
+/**
+ * The session manager said what a program its launcher asks to steer was launched as: ask the user, showing that, or
+ * for a program not loaded from an executable Find gave, the name its launcher gave, marked as such.
+ *
+ * @param box The powerbox, whose waiting request is a steering one.
+ * @param named The name the session manager gave; empty for none.
+ */
+ask_named_steer :: fn(box : ptr[mut Box], named : u8[]) {
+    kept := box.waiting
+    // The program that asked went meanwhile: no one's asked for it
+    if kept.client >= box.clients.ends.count
+        || cast[slop_os.Handle](box.clients.ends[kept.client]) == slop_os.NO_HANDLE {
+        refuse_debug_port(box)
+        box.has_waiting = false
+        return void
+    }
+    shown : u8[powerbox.NAME_BYTES + 32]
+    shown_count := cast[usize](0)
+    given := kept.name[0..<0]
+    if kept.name_count <= kept.name.count {
+        given = kept.name[0..<kept.name_count]
+    }
+    for byte in named {
+        if shown_count < shown.count {
+            shown[shown_count] = byte
+            shown_count += 1
+        }
+    }
+    if named.count == 0 {
+        for byte in given {
+            if shown_count < shown.count {
+                shown[shown_count] = byte
+                shown_count += 1
+            }
+        }
+        for byte in string_bytes(NOT_FOUND_SHOWN) {
+            if shown_count < shown.count {
+                shown[shown_count] = byte
+                shown_count += 1
+            }
+        }
+    }
+    purpose := kept.purpose[0..<0]
+    if kept.purpose_count <= kept.purpose.count {
+        purpose = kept.purpose[0..<kept.purpose_count]
+    }
+    // Never past it, as each byte's added only below its count; said, as the bounds proof loses it over the loops
+    if shown_count > shown.count {
+        refuse_debug_port(box)
+        answer(box, .Refused)
+        return void
+    }
+    box.has_waiting = false
+    match ask(box, kept.client, .Debug, false, purpose, shown[0..<shown_count], u8.[]) {
+        case Some(response) => {
+            box.waiting = kept
+            refuse_debug_port(box)
+            answer(box, response)
+        }
+        case None => box.waiting.steering = kept.steering
+    }
 }
 
 /**

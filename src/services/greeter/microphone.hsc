@@ -20,9 +20,11 @@ import surface from "../../protocols/surface"
  * The microphone: once the user allows a program it in the prompt, the greeter has the audio service make a grant,
  * through a microphone connection the supervisor makes for it (power's MicrophoneConnection), and answers with the
  * grant's sound connection. While any grant's held, the sound window says who holds it, below the volume, and its "Take
- * it back" takes every grant back, the audio service closing each one's connection. A grant's gone once the program lets it go,
- * or it's taken back, which the audio service says (WaitReleased). A mark on each holding program's windows waits for
- * M18, which knows whose windows are whose.
+ * it back" takes every grant back, the audio service closing each one's connection. A grant's gone once the program
+ * lets it go, or it's taken back, which the audio service says (WaitReleased). Each holding program's windows are
+ * marked on their identity bands too: the compositor's told the holders' names (MicrophoneHeld), which are the names
+ * the session manager gave the programs' powerbox and compositor connections alike, from their launch (decisions/0197,
+ * N1). Two running copies of one program share a name, so both are marked while either holds it.
  *
  * The session's volume: the sound window's - and + turn it down and up a tenth, the session manager setting it on the
  * session's sound (session's SetVolume).
@@ -150,9 +152,16 @@ grant_microphone :: fn(greeter : ptr[mut Greeter], requester : u8[]) -> os.Chann
     }
     into := os.Incoming.{}
     found : microphone_protocol.Granted? = null
+    deadline :: (slop_os.clock_monotonic() or_else 0) + ANSWER_LIMIT
     loop {
-        match microphone_protocol.receive_response(end, state.port, &into, true) {
+        // Within ANSWER_LIMIT, or the connection's let go, every grant with it, as the audio service closes them (N3)
+        match microphone_protocol.receive_response(end, state.port, &into, true, deadline) {
             case Received => {}
+            case Empty => {
+                runtime.log_info("microphone: the audio service didn't answer in time")
+                microphone_gone(greeter)
+                return null
+            }
             case _ => {
                 microphone_gone(greeter)
                 return null
@@ -280,6 +289,7 @@ released :: fn(greeter : ptr[mut Greeter], id : u32) {
  */
 show_microphone :: fn(greeter : ptr[mut Greeter]) {
     state :: &greeter.microphone
+    mark_holders(greeter)
     if state.count == 0 && greeter.session is_none {
         match state.window {
             case Some(window) => gui_kit.hide(window)
@@ -290,6 +300,44 @@ show_microphone :: fn(greeter : ptr[mut Greeter]) {
     match sound_window(greeter) {
         case Some(window) => window.due = true
         case None => runtime.log_info("the sound window couldn't be made")
+    }
+}
+
+/**
+ * Tell the compositor who holds the microphone, through the greeter's trusted connection, so each holder's windows are
+ * marked on their bands (decisions/0197, N1); none when nothing's held.
+ *
+ * @param greeter The greeter, its holders as they are now.
+ */
+mark_holders :: fn(greeter : ptr[mut Greeter]) {
+    state :: &greeter.microphone
+    names : u8[surface.MAX_HELD_BYTES]
+    count := cast[usize](0)
+    for &holder, i in state.holders {
+        if i >= state.count {
+            break
+        }
+        // Each whole, with its line break, or not at all
+        name :: string_bytes(name_text(holder))
+        if count + name.count + 1 > names.count {
+            break
+        }
+        for byte in name {
+            if count < names.count {
+                names[count] = byte
+                count += 1
+            }
+        }
+        if count < names.count {
+            names[count] = cast[u8]('\n')
+            count += 1
+        }
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[surface.Request](&out)
+    request^ = .MicrophoneHeld(os.append(&out, names[0..<count]))
+    if surface.send_request(greeter.window.end, greeter.window.port, &out) is_some {
+        runtime.log_info("microphone: the compositor couldn't be told who holds it")
     }
 }
 
@@ -374,9 +422,9 @@ change_volume :: fn(greeter : ptr[mut Greeter], up : bool) {
         return void
     }
     into := os.Incoming.{}
-    match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, true) {
-        case Received => {}
-        case _ => return void
+    if !session_answer(greeter, &into, ANSWER_LIMIT) {
+        runtime.log_info("the session's volume couldn't be set")
+        return void
     }
     match os.message_of[session.Response](&into)^ {
         case Noted => {

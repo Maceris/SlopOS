@@ -9,6 +9,9 @@
  * - A copies "from A" the first time it's pressed, while it's focused, with typed data, "typed from A" (16f);
  *   "<A or B> pasted <text>" for what Ctrl+Shift+V pastes into it, then "<A or B> took typed data: <it>" once it's
  *   taken it (TakePaste), and "<A or B> took it once" when taking it again is refused.
+ * - Once both are shown, A says who holds the microphone, which the compositor refuses, as A isn't trusted; then the
+ *   trusted connection the supervisor gave it says A does, and then that none does (decisions/0197, N1); the
+ *   compositor logs how many windows each marks. Without it, "no trusted connection".
  *
  * Neither client holds anything of the other's: their buffers are memory each made, given only to the compositor.
  * It runs until the system stops.
@@ -54,7 +57,11 @@ Client :: struct {
  * @param compositor A connector to the compositor.
  * @return 2 without the compositor, or when a window can't be made or shown. It doesn't return otherwise.
  */
-main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]?) -> int {
+main :: fn(
+    log : slop_os.DebugLog?,
+    compositor : os.Channel[connector.Connector]?,
+    trusted : os.Channel[surface.Surface]?
+) -> int {
     dialing :: compositor or_return 2
     a :: open(dialing, true, 0, 0, 255) or_return 2
     b :: open(dialing, false, 255, 0, 0) or_return 2
@@ -69,6 +76,23 @@ main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]
         _ = slop_os.port_wait(a.port, packets, (slop_os.clock_monotonic() or_else 0) + 10_000_000)
     }
     runtime.log_info("windows shown")
+    /*
+     * Who holds the microphone (decisions/0197, N1): said by A, which isn't trusted, it's refused; said on the trusted
+     * connection, A's window is marked, and B's, never named, isn't; then nothing's held, and nothing marked
+     */
+    say_held(a.end, a.port, "B\n")
+    match trusted {
+        case Some(connection) => {
+            match os.port_for(slop_os.startup_block().budget, connection.end) {
+                case Some(port) => {
+                    say_held(connection.end, port, "A\n")
+                    say_held(connection.end, port, "")
+                }
+                case None => runtime.log_info("no port for the trusted connection")
+            }
+        }
+        case None => runtime.log_info("no trusted connection")
+    }
     /*
      * A asks for four more connections: with its own, one past what a client and those it makes hold (16d), so the
      * last is refused, its end closed
@@ -99,6 +123,20 @@ main :: fn(log : slop_os.DebugLog?, compositor : os.Channel[connector.Connector]
         packets : slop_os.Packet[4]
         _ = slop_os.port_wait(a.port, packets, (slop_os.clock_monotonic() or_else 0) + 10_000_000)
     }
+}
+
+/**
+ * Say who holds the microphone (MicrophoneHeld), which isn't answered.
+ *
+ * @param end The connection it's said on.
+ * @param port A port bound to end.
+ * @param names The holders' names, each ended by a line break; empty for none.
+ */
+say_held :: fn(end : slop_os.Channel, port : slop_os.Port, names : string) {
+    out := os.Outgoing.{}
+    request :: os.begin[surface.Request](&out)
+    request^ = .MicrophoneHeld(os.append(&out, string_bytes(names)))
+    _ = surface.send_request(end, port, &out)
 }
 
 /** Send a Name, which isn't answered. */

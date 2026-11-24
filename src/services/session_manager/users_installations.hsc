@@ -765,6 +765,7 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     &out
                 )
                 case SteerOwn(process) => response^ = steer_own(sessions, sessions.finders[i].powerbox, process)
+                case NameOwn(process) => response^ = name_own(sessions, sessions.finders[i].powerbox, process, &out)
                 // A GUI session's shell's asks of its session as the console shell's own connection does
                 case _ => response^ = if sessions.finders[i].shell {
                     own_session_answer(
@@ -1053,6 +1054,38 @@ steer_own :: fn(sessions : ptr[mut Manager], from_powerbox : bool, process : slo
             return .Refused(if why == .NoProgram { programs.InstallProblem.NotRunning } else { programs.InstallProblem.NotAllowed })
         }
     }
+}
+
+/**
+ * Say what a program its launcher asks to steer was launched as, for the powerbox's prompt (decisions/0197, N2): the
+ * process manager says which executable it was loaded from, and the name Find gave that installation's window under.
+ *
+ * @param sessions The session manager, whose steering connection asks.
+ * @param from_powerbox Whether it's asked on a session's powerbox's connection, the only one it's answered on.
+ * @param process The launcher's handle to the program's process, which is closed here.
+ * @param out Where the answer's being built, which the name's appended to.
+ * @return Named with the name, empty for a program not loaded from a window Find gave, or not loaded by the process
+ *     manager; Refused NotAllowed on another connection or without a steering connection.
+ */
+name_own :: fn(
+    sessions : ptr[mut Manager],
+    from_powerbox : bool,
+    process : slop_os.Process,
+    out : ptr[mut os.Outgoing]
+) -> programs.Response {
+    defer slop_os.handle_close(cast[slop_os.Handle](process))
+    if !from_powerbox || sessions.steering_end == NONE {
+        return .Refused(.NotAllowed)
+    }
+    identity :: match process_manager.identify_process(sessions.steering_end, sessions.steering_port, process) {
+        case Ok(found) => found
+        case Error(_) => return .Named(os.append(out, u8.[]))
+    }
+    defer {
+        _ = slop_os.handle_close(cast[slop_os.Handle](identity.process))
+        _ = slop_os.handle_close(cast[slop_os.Handle](identity.executable))
+    }
+    return .Named(os.append(out, handed_name(sessions, identity.executable)))
 }
 
 /**

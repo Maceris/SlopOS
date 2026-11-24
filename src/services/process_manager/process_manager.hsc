@@ -218,6 +218,26 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
                     case None => _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
                 }
             }
+            case IdentifyProcess(process) => {
+                out := os.Outgoing.{}
+                response :: os.begin[protocol.Response](&out)
+                response^ = if steers {
+                    identify_process(manager, process)
+                }
+                else {
+                    protocol.Response.NotSteered(.NotAllowed)
+                }
+                _ = slop_os.handle_close(cast[slop_os.Handle](process))
+                if protocol.send_response(end, manager.port, &out) is_some {
+                    match response^ {
+                        case Identified(found) => {
+                            _ = slop_os.handle_close(cast[slop_os.Handle](found.process))
+                            _ = slop_os.handle_close(cast[slop_os.Handle](found.executable))
+                        }
+                        case _ => {}
+                    }
+                }
+            }
             case Identify(channel) => {
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
@@ -494,31 +514,64 @@ close_steering :: fn(given : protocol.Steering) {
  */
 identify :: fn(manager : ptr[mut Manager], channel : slop_os.Channel) -> protocol.Response {
     prune(manager)
-    for record in manager.records {
-        if !(slop_os.channel_peer_owned_by(channel, record.process) or_else false) {
-            continue
+    for &record in manager.records {
+        if slop_os.channel_peer_owned_by(channel, record.process) or_else false {
+            return identity_of(record)
         }
-        process :: slop_os.handle_duplicate(
-            cast[slop_os.Handle](record.process),
-            cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT) | cast[u32](slop_os.RIGHT_TRANSFER))
-        ) or_return protocol.Response.NotSteered(.Failed)
-        executable :: slop_os.handle_duplicate(
-            cast[slop_os.Handle](record.executable),
-            cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
-        ) or_else slop_os.NO_HANDLE
-        if executable == slop_os.NO_HANDLE {
-            _ = slop_os.handle_close(process)
-            return .NotSteered(.Failed)
-        }
-        return .Identified(
-            protocol.Identity.{
-                process = cast[slop_os.Process](process),
-                executable = cast[slop_os.Memory](executable),
-                steered = record.steered,
-            }
-        )
     }
     return .NotSteered(.NoProgram)
+}
+
+/**
+ * Say which program the manager loaded a launcher's handle is to, on a steering connection's request, as a steering
+ * prompt names it (decisions/0197, N2).
+ *
+ * @param manager The manager, whose records are looked through.
+ * @param process The launcher's handle, which needs RIGHT_PROCESS_KILL, as Steer's does; only read.
+ * @return Identified, as identify's; NotSteered NoProgram for a handle without the right, or to no program kept,
+ *     Failed if a handle couldn't be made.
+ */
+identify_process :: fn(manager : ptr[mut Manager], process : slop_os.Process) -> protocol.Response {
+    prune(manager)
+    info :: slop_os.handle_info(cast[slop_os.Handle](process)) or_return protocol.Response.NotSteered(.NoProgram)
+    if cast[u32](info.rights) & cast[u32](slop_os.RIGHT_PROCESS_KILL) == 0 {
+        return .NotSteered(.NoProgram)
+    }
+    for &record in manager.records {
+        if slop_os.handle_same(cast[slop_os.Handle](record.process), cast[slop_os.Handle](process)) or_else false {
+            return identity_of(record)
+        }
+    }
+    return .NotSteered(.NoProgram)
+}
+
+/**
+ * Identified's answer for a program kept.
+ *
+ * @param record The program's record, only read.
+ * @return Identified with its process, to inspect, its executable, to read, and whether it's been steered; NotSteered
+ *     Failed if a handle couldn't be made, none left open.
+ */
+identity_of :: fn(record : ptr[Record]) -> protocol.Response {
+    process :: slop_os.handle_duplicate(
+        cast[slop_os.Handle](record.process),
+        cast[slop_os.Rights](cast[u32](slop_os.RIGHT_PROCESS_INSPECT) | cast[u32](slop_os.RIGHT_TRANSFER))
+    ) or_return protocol.Response.NotSteered(.Failed)
+    executable :: slop_os.handle_duplicate(
+        cast[slop_os.Handle](record.executable),
+        cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
+    ) or_else slop_os.NO_HANDLE
+    if executable == slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(process)
+        return .NotSteered(.Failed)
+    }
+    return .Identified(
+        protocol.Identity.{
+            process = cast[slop_os.Process](process),
+            executable = cast[slop_os.Memory](executable),
+            steered = record.steered,
+        }
+    )
 }
 
 /**

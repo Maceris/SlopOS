@@ -64,6 +64,12 @@ import safe_text from "../../safe_text"
 import screen from "../../screen"
 import vt from "../../vt"
 
+/**
+ * How long the trusted path waits for the session manager's or the audio service's answer, in nanoseconds, before it
+ * gives up on it (decisions/0197, N3): a service that's stuck doesn't stop the secure attention key. Starting and
+ * ending a session, which wait on its programs, aren't limited.
+ */
+ANSWER_LIMIT : u64 : 5_000_000_000
 /** The port key the serial line's connection is bound under, above the clients'. */
 SERIAL_KEY : u64 : 1000
 /** The port key the input service's connection is bound under, above the clients'. */
@@ -270,6 +276,11 @@ Service :: struct {
     session_end : slop_os.Channel,
     /** A port of session_end's own, which its answers are waited on, apart from the service's port. */
     session_port : slop_os.Port,
+    /**
+     * How many answers the session manager still owes to requests given up on past ANSWER_LIMIT (decisions/0197, N3):
+     * each dropped as it comes, so it isn't taken for a later request's.
+     */
+    session_late : u32,
     /** The programs listed for the secure attention key's screen, the first program_count. */
     programs : session.Program[session.MAX_PROGRAMS],
     /** How many of programs are used, 0 to session.MAX_PROGRAMS. */
@@ -1792,17 +1803,19 @@ end_chosen :: fn(service : ptr[mut Service]) {
 }
 
 /**
- * Send a request to the session manager and wait, with no deadline, for its answer.
+ * Send a request to the session manager and wait for its answer, up to a limit.
  *
  * The wait is on the session channel's own port, so nothing else is served meanwhile.
  *
  * @param service The service's state, whose session_end and session_port the request and answer go through; the
  *     service's own port isn't served while it waits.
  * @param request The request; it carries no items or handles, as it's built without an Outgoing of the caller's.
+ * @param limit How long to wait, in nanoseconds: ANSWER_LIMIT by default; slop_os.NO_DEADLINE for as long as it
+ *     takes, as ending a session does.
  * @return The answer, received, for the caller to read; null without a session channel, if the request couldn't be
- *     sent, or if the channel failed.
+ *     sent, if the channel failed, or if no answer came within limit, when it's dropped as it comes.
  */
-ask_session :: fn(service : ptr[mut Service], request : session.Request) -> os.Incoming? {
+ask_session :: fn(service : ptr[mut Service], request : session.Request, limit : u64 = ANSWER_LIMIT) -> os.Incoming? {
     if service.session_end == NONE {
         return null
     }
@@ -1812,12 +1825,36 @@ ask_session :: fn(service : ptr[mut Service], request : session.Request) -> os.I
         return null
     }
     into := os.Incoming.{}
+    return if session_answer(service, &into, limit) { into } else { null }
+}
+
+/**
+ * Wait for the session manager's answer to the request just sent, those it owes to requests given up on dropped first
+ * (decisions/0197, N3).
+ *
+ * @param service The service's state, whose session channel's waited on.
+ * @param into Where the answer's received.
+ * @param limit How long to wait, in nanoseconds; slop_os.NO_DEADLINE for as long as it takes.
+ * @return Whether it came; false if the channel failed, or if it didn't come within limit, when it's owed
+ *     (session_late).
+ */
+session_answer :: fn(service : ptr[mut Service], into : ptr[mut os.Incoming], limit : u64) -> bool {
+    now :: slop_os.clock_monotonic() or_else 0
+    deadline :: if limit == slop_os.NO_DEADLINE || now + limit < now { slop_os.NO_DEADLINE } else { now + limit }
     loop {
-        match session.receive_response(service.session_end, service.session_port, &into, true) {
-            case Received => return into
-            case Failed(error) => return null
-            case _ => return null
+        match session.receive_response(service.session_end, service.session_port, into, true, deadline) {
+            case Received => {}
+            case Empty => {
+                service.session_late += 1
+                runtime.log_info("the session manager didn't answer in time")
+                return false
+            }
+            case _ => return false
         }
+        if service.session_late == 0 {
+            return true
+        }
+        service.session_late -= 1
     }
 }
 
@@ -2938,12 +2975,9 @@ start_session :: fn(service : ptr[mut Service], home : os.Channel[dir.Dir]?) -> 
         return false
     }
     into := os.Incoming.{}
-    loop {
-        match session.receive_response(service.session_end, service.session_port, &into, true) {
-            case Received => break
-            case Failed(error) => return false
-            case _ => return false
-        }
+    // Starting a session waits on what the session manager starts in it: no limit
+    if !session_answer(service, &into, slop_os.NO_DEADLINE) {
+        return false
     }
     started :: match os.message_of[session.Response](&into)^ {
         case Started(number) => {
@@ -4021,7 +4055,7 @@ session_left :: fn(service : ptr[mut Service], index : usize) {
  * @param service The service's state, its view in use one a session runs in.
  */
 end_view :: fn(service : ptr[mut Service]) {
-    _ = ask_session(service, .EndSession(view(service).session))
+    _ = ask_session(service, .EndSession(view(service).session), slop_os.NO_DEADLINE)
     for i in 0..<service.client_view.count {
         if service.client_view[i] == service.viewing {
             service_kit.drop_client(&service.connected, i)

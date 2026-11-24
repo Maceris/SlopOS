@@ -107,6 +107,7 @@ import watchdog from "../../protocols/watchdog"
 import substitution from "../../substitution"
 import system_records from "../../system_records"
 import test_compositor from "../../tests/test_compositor"
+import test_gui from "../../tests/test_gui"
 import test_display from "../../tests/test_display"
 import test_network from "../../tests/test_network"
 import test_sound from "../../tests/test_sound"
@@ -435,6 +436,19 @@ GreeterGrants :: struct {
 
 /** What the compositor's test client is given (test_compositor.main); its handles move to it at its launch. */
 TestCompositorGrants :: struct {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connector to the compositor. */
+    compositor : os.Channel[connector.Connector]?,
+    /**
+     * A connection to the compositor's trusted layer, made on the trusted listener's other end, as only a trusted
+     * service's would be (decisions/0197, N1); null if it couldn't be made.
+     */
+    trusted : os.Channel[surface.Surface]?,
+}
+
+/** What the GUI's typing test client is given (test_gui.main); its handles move to it at its launch. */
+TestGuiGrants :: struct {
     /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
     log : slop_os.DebugLog?,
     /** A connector to the compositor. */
@@ -5810,36 +5824,62 @@ start_test_client :: fn(supervisor : ptr[mut Supervisor], name : string) {
         return void
     }
     service :: service_named(supervisor, name) or_return void
-    grants :: TestCompositorGrants.{
+    if name == "test_compositor" {
+        /*
+         * A trusted connection too, made on the trusted listener's other end, which no greeter has while test_compositor
+         * runs: what only the trusted path may ask is tested through it (decisions/0197, N1)
+         */
+        trusted := cast[os.Channel[surface.Surface]?](null)
+        if supervisor.trusted_surface != NONE {
+            match os.port_for(supervisor.block.budget, supervisor.trusted_surface) {
+                case Some(port) => {
+                    trusted = surface.connect(supervisor.trusted_surface, port, supervisor.block.budget)
+                    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+                }
+                case None => {}
+            }
+        }
+        grants :: TestCompositorGrants.{
+            log = duplicate_log(supervisor),
+            compositor = connector_to(supervisor, supervisor.compositor),
+            trusted = trusted,
+        }
+        match os.launch(
+            supervisor.manager,
+            supervisor.manager_port,
+            service.name,
+            module_of(supervisor, name),
+            service.budget,
+            type_of(test_compositor.main),
+            grants,
+            options_for(supervisor, service.name)
+        ) {
+            // Placed under its name as a constant: place keeps it
+            case Ok(launched) => _ = place(supervisor, "test_compositor", kept(supervisor, launched), NOWHERE)
+            case Error(error) => failed(supervisor, service.name, error)
+        }
+        return void
+    }
+    grants :: TestGuiGrants.{
         log = duplicate_log(supervisor),
         compositor = connector_to(supervisor, supervisor.compositor),
     }
-    // test_gui draws with the fonts GUI programs are given; test_compositor draws none
+    // test_gui draws with the fonts GUI programs are given
     fonts : os.NamedGrant[gui_programs.FONT_COUNT]
     options := options_for(supervisor, service.name)
-    if name == "test_gui" {
-        options.extra = font_copies(supervisor, &fonts)
-    }
+    options.extra = font_copies(supervisor, &fonts)
     match os.launch(
         supervisor.manager,
         supervisor.manager_port,
         service.name,
         module_of(supervisor, name),
         service.budget,
-        // Its entry's type, which test_gui's shares
-        type_of(test_compositor.main),
+        type_of(test_gui.main),
         grants,
         options
     ) {
         // Placed under its name as a constant: place keeps it
-        case Ok(
-            launched
-        ) => _ = place(
-            supervisor,
-            if name == "test_gui" { "test_gui" } else { "test_compositor" },
-            kept(supervisor, launched),
-            NOWHERE
-        )
+        case Ok(launched) => _ = place(supervisor, "test_gui", kept(supervisor, launched), NOWHERE)
         case Error(error) => {
             gui_programs.close_font_grants(options.extra, error)
             failed(supervisor, service.name, error)

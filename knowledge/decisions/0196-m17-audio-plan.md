@@ -188,7 +188,7 @@ In Hemera (`std/audio`, Freestanding; its hosted scenario `audio`, 10 tests):
   attention key's screen takes every grant back. In the GUI, a passive window of the trusted layer in the screen's top
   right corner says so, with Take it back: passive windows (a trusted client's only) are never focused and don't keep
   other windows from input, as the trusted layer's others do. The mark on each holding program's windows waits for
-  M18, which knows whose windows are whose (chosen with the owner after 17e).
+  M18, which knows whose windows are whose (chosen with the owner after 17e); built in Before M19's N1 (`0197`).
 - **`capture`**, the program that records into a WAV file, 16 kHz mono 16-bit: named so because the shell's own
   `record` runs a program with its calls kept for replay. What it had recorded when the microphone's taken back is
   kept.

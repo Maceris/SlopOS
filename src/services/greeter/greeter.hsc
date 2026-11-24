@@ -29,6 +29,12 @@ WIDTH : u32 : 360
 HEIGHT : u32 : 230
 /** The most bytes of a message. */
 MESSAGE_BYTES :: 96
+/**
+ * How long the greeter waits for the session manager's or the audio service's answer, in nanoseconds, before it gives
+ * up on it (decisions/0197, N3): a service that's stuck doesn't stop the trusted layer. Starting and ending a session,
+ * which wait on its programs, aren't limited.
+ */
+ANSWER_LIMIT : u64 : 5_000_000_000
 
 /** The greeter's state, on the heap. */
 Greeter :: struct {
@@ -42,6 +48,13 @@ Greeter :: struct {
     sessions_end : slop_os.Channel,
     /** The port it's bound to. */
     sessions_port : slop_os.Port,
+    /**
+     * How many answers the session manager still owes to requests given up on past ANSWER_LIMIT (decisions/0197, N3):
+     * each dropped as it comes, so it isn't taken for a later request's.
+     */
+    sessions_late : u32,
+    /** Whether the session's Wait was answered Exited while another answer was waited for, for wait_for_session. */
+    session_exited : bool,
     /** The name being typed. */
     name : u8[..],
     /** The password being typed, wiped once it's used. */
@@ -251,12 +264,9 @@ start_session :: fn(greeter : ptr[mut Greeter], home : os.Channel[dir.Dir]) {
         return void
     }
     into := os.Incoming.{}
-    match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, true) {
-        case Received => {}
-        case _ => {
-            say(greeter, "The session manager didn't answer.")
-            return void
-        }
+    if !session_answer(greeter, &into, slop_os.NO_DEADLINE) {
+        say(greeter, "The session manager didn't answer.")
+        return void
     }
     match os.message_of[session.Response](&into)^ {
         case Started(number) => {
@@ -300,9 +310,50 @@ end_session :: fn(greeter : ptr[mut Greeter], number : u32) {
         return void
     }
     into := os.Incoming.{}
-    match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, true) {
-        case Received => runtime.log_info("ended the GUI session")
-        case _ => runtime.log_info("the session couldn't be ended")
+    if session_answer(greeter, &into, slop_os.NO_DEADLINE) {
+        runtime.log_info("ended the GUI session")
+    }
+    else {
+        runtime.log_info("the session couldn't be ended")
+    }
+}
+
+/**
+ * Wait for the session manager's answer to the request just sent (decisions/0197, N3): those it owes to requests given
+ * up on are dropped first, and an Exited, the session's Wait's answer, is kept for wait_for_session.
+ *
+ * @param greeter The greeter, whose session manager connection's waited on.
+ * @param into Where the answer's received.
+ * @param limit How long to wait, in nanoseconds; slop_os.NO_DEADLINE for as long as it takes.
+ * @return Whether it came; false if the connection failed, or if it didn't come within limit, when it's owed
+ *     (sessions_late).
+ */
+session_answer :: fn(greeter : ptr[mut Greeter], into : ptr[mut os.Incoming], limit : u64) -> bool {
+    now :: slop_os.clock_monotonic() or_else 0
+    deadline :: if limit == slop_os.NO_DEADLINE || now + limit < now { slop_os.NO_DEADLINE } else { now + limit }
+    loop {
+        match session.receive_response(greeter.sessions_end, greeter.sessions_port, into, true, deadline) {
+            case Received => {}
+            case Empty => {
+                greeter.sessions_late += 1
+                runtime.log_info("the session manager didn't answer in time")
+                return false
+            }
+            case _ => return false
+        }
+        exited :: match os.message_of[session.Response](into)^ {
+            case Exited(_) => true
+            case _ => false
+        }
+        if exited {
+            greeter.session_exited = true
+        }
+        else if greeter.sessions_late == 0 {
+            return true
+        }
+        else {
+            greeter.sessions_late -= 1
+        }
     }
 }
 
@@ -317,40 +368,49 @@ forget_editing :: fn(greeter : ptr[mut Greeter]) {
 
 /** Once the session's first program has ended: the login window shown again, for the next. */
 wait_for_session :: fn(greeter : ptr[mut Greeter]) {
+    // Taken already while another answer was waited for, or now; an answer owed to a request given up on is dropped
+    exited := greeter.session_exited
+    greeter.session_exited = false
     into := os.Incoming.{}
-    match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, false) {
-        case Received => {}
-        case _ => return void
-    }
-    match os.message_of[session.Response](&into)^ {
-        case Exited(_) => {
-            /*
-             * The rest of the session ended with its first program, the launcher: its terminal windows, their shells,
-             * and every program it started, so the next to log in finds none of them
-             */
-            match greeter.session {
-                case Some(number) => end_session(greeter, number)
-                case None => {}
-            }
-            greeter.session = null
-            show_microphone(greeter)
-            forget_editing(greeter)
-            // What it asked, refused: its powerbox has gone with it
-            if greeter.asking.active {
-                answer(greeter, null, false)
-            }
-            if greeter.prompts != cast[slop_os.Channel](slop_os.NO_HANDLE) {
-                _ = slop_os.handle_close(cast[slop_os.Handle](greeter.prompts))
-                greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
-            }
-            if cast[slop_os.Handle](greeter.prompts_port) != slop_os.NO_HANDLE {
-                _ = slop_os.handle_close(cast[slop_os.Handle](greeter.prompts_port))
-                greeter.prompts_port = cast[slop_os.Port](slop_os.NO_HANDLE)
-            }
-            runtime.array_reset(&greeter.name)
-            runtime.log_info("the GUI session ended")
-            greeter.window.due = true
+    loop {
+        if exited {
+            break
         }
-        case _ => {}
+        match session.receive_response(greeter.sessions_end, greeter.sessions_port, &into, false) {
+            case Received => {}
+            case _ => return void
+        }
+        match os.message_of[session.Response](&into)^ {
+            case Exited(_) => exited = true
+            case _ => if greeter.sessions_late > 0 {
+                greeter.sessions_late -= 1
+            }
+        }
     }
+    /*
+     * Ended, as the loop above leaves only once it has: the rest of the session ended with its first program, the
+     * launcher, its terminal windows, their shells, and every program it started, so the next to log in finds none
+     */
+    match greeter.session {
+        case Some(number) => end_session(greeter, number)
+        case None => {}
+    }
+    greeter.session = null
+    show_microphone(greeter)
+    forget_editing(greeter)
+    // What it asked, refused: its powerbox has gone with it
+    if greeter.asking.active {
+        answer(greeter, null, false)
+    }
+    if greeter.prompts != cast[slop_os.Channel](slop_os.NO_HANDLE) {
+        _ = slop_os.handle_close(cast[slop_os.Handle](greeter.prompts))
+        greeter.prompts = cast[slop_os.Channel](slop_os.NO_HANDLE)
+    }
+    if cast[slop_os.Handle](greeter.prompts_port) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](greeter.prompts_port))
+        greeter.prompts_port = cast[slop_os.Port](slop_os.NO_HANDLE)
+    }
+    runtime.array_reset(&greeter.name)
+    runtime.log_info("the GUI session ended")
+    greeter.window.due = true
 }
