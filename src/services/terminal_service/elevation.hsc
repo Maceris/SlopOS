@@ -298,7 +298,7 @@ end_elevation :: fn(service : ptr[mut Service], made : bool) {
     else if made && (is_power(shown.ask.kind) || is_debug(shown.ask.kind) || shown.ask.kind == .Network) {
         response^ = .Allowed
     }
-    else if made && service.name_count <= service.name.count {
+    else if made {
         name :: name_bytes(service)
         response^ = .AccountMade(os.append(&out, name))
         runtime.log_info("elevation: made the account %", bytes_text(name))
@@ -345,8 +345,6 @@ end_elevation :: fn(service : ptr[mut Service], made : bool) {
  */
 make_account_by :: fn(service : ptr[mut Service]) {
     if service.accounts_end == NONE
-        || service.name_count > service.name.count
-        || service.password_count > service.password.count
         || service.admin_count > service.admin.count
         || service.admin_password_count > service.admin_password.count {
         say(service, "The account service isn't there.")
@@ -541,7 +539,7 @@ draw_power_elevation :: fn(service : ptr[mut Service], whole : bool, restart : b
     else if step != .AdminName {
         dots(panel, top + 1, column, 8)
     }
-    if service.message_count > 0 && service.message_count <= service.message.count {
+    if service.message_count > 0 {
         screen.write_at(panel, top + 6, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(panel, top + 8, 2, "Enter goes on, Backspace takes back what was typed last.", plain)
@@ -666,7 +664,7 @@ draw_elevation :: fn(service : ptr[mut Service], whole : bool) {
     else if step == .Making {
         dots(panel, top + 4, column, 8)
     }
-    if service.message_count > 0 && service.message_count <= service.message.count {
+    if service.message_count > 0 {
         screen.write_at(panel, top + 6, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(panel, top + 8, 2, "Enter goes on, Backspace takes back what was typed last.", plain)

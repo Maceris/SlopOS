@@ -195,7 +195,7 @@ Service :: struct {
     ring_bytes : u64,
     /** Recording streams' rings kept after their grants are gone, the first retired_count of them, oldest first. */
     retired : Retired[MAX_RETIRED],
-    retired_count : usize,
+    retired_count #at_most(retired.count) : usize,
     /** Since mixing started: periods mixed, periods mixed late (missed), the worst lateness, the device's underruns. */
     mixed : u64,
     missed : u64,
@@ -997,16 +997,17 @@ let_go_retired :: fn(service : ptr[mut Service], oldest : bool) {
         if first.until > now && !oldest {
             return void
         }
-        _ = slop_os.memory_unmap(slop_os.startup_block().space, first.at)
-        _ = slop_os.handle_close(cast[slop_os.Handle](first.ring))
-        service.ring_bytes -= if first.bytes <= service.ring_bytes { first.bytes } else { service.ring_bytes }
+        // Out of the list first, then let go of: what's known of the count doesn't outlast the calls
         for k in 0..<service.retired_count {
             next :: k + 1
-            if next < service.retired_count && k < service.retired.count && next < service.retired.count {
+            if next < service.retired_count {
                 service.retired[k] = service.retired[next]
             }
         }
         service.retired_count -= 1
+        _ = slop_os.memory_unmap(slop_os.startup_block().space, first.at)
+        _ = slop_os.handle_close(cast[slop_os.Handle](first.ring))
+        service.ring_bytes -= if first.bytes <= service.ring_bytes { first.bytes } else { service.ring_bytes }
         if oldest {
             return void
         }

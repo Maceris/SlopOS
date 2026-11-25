@@ -143,7 +143,12 @@ installations_are_named_with_programs_and_no_two_of_one_name #test :: fn(t : ptr
     testing.expect_none(t, system_records.check(&changed), "two installations of one program, named differently")
     _ = system_records.set_name(&changed.installations.entries[1].name, "counter")
     testing.expect_some(t, system_records.check(&changed), "two installations of one name")
-    changed.installations.count = system_records.MAX_INSTALLATIONS + 1
+    /*
+     * As a list read from the config store could be, past what #at_most lets code store: count is the record's
+     * first field, at its start
+     */
+    stored_count :: cast[ptr[mut u32]](&changed.installations)
+    stored_count^ = system_records.MAX_INSTALLATIONS + 1
     testing.expect_some(
         t,
         system_records.installations_check(&changed.installations),

@@ -281,7 +281,7 @@ Stack :: struct {
 
     outbox       : Outgoing[OUTBOX],
     outbox_first : usize,
-    outbox_count : usize,
+    outbox_count #at_most(outbox.count) : usize,
     events       : Event[EVENTS],
     events_first : usize,
     events_count : usize,
@@ -497,7 +497,7 @@ take_frame :: fn(stack : ptr[mut Stack], into : mut u8[]) -> usize? {
         return null
     }
     for i in 0..<frame.length {
-        if i < into.count && i < frame.bytes.count {
+        if i < frame.bytes.count {
             into[i] = frame.bytes[i]
         }
     }

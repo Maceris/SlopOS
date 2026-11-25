@@ -389,7 +389,7 @@ installation_at :: fn(
     users :: read_user_installations(sessions, number)
     at := cast[usize](index)
     for list, i in system_records.Installations.[systems, users] {
-        if at < cast[usize](list.count) && at < list.entries.count {
+        if at < cast[usize](list.count) {
             entry :: &list.entries[at]
             return .Listed(
                 programs.Installed.{
@@ -721,7 +721,7 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     asked :: text_from(os.items(into, name))
                     finder :: &sessions.finders[i]
                     // A script's shell's asks are the script's, whatever it names (decisions/0195, 18e)
-                    if finder.names && finder.script_count > 0 && finder.script_count <= finder.script.count {
+                    if finder.names && finder.script_count > 0 {
                         script :: text_from(finder.script[0..<finder.script_count])
                         match powerbox_for(sessions, finder.session, script) {
                             case Some(made) => response^ = .PowerboxGiven(made)

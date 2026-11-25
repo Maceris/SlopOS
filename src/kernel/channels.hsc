@@ -174,7 +174,7 @@ mark_used :: fn(end : ptr[mut Channel], process : u64) {
 /** Handles in flight, from the kernel heap, charged to the end that sent them while it lives. */
 HandleBatch :: struct {
     /** How many entries are filled in, up to slop_os.MAX_HANDLES_PER_BATCH. */
-    count : u32,
+    count #at_most(entries.count) : u32,
     /** The sender's generation when it sent them, so its charge goes back only to that end. */
     sender_generation : u32,
     /** The sending end, by address, which the batch's size is charged to. */

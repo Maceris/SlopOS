@@ -483,7 +483,7 @@ record :: fn(program : Program, shapes : CallShape[], seeds : u8[64]) -> ptr[mut
                 _ = slop_os.thread_read_registers(program.process, stop.thread, registers)
                 event := Event.{kind = .Enter, thread = index, number = cast[u32](registers[NUMBER_REGISTER])}
                 for register, i in ARGUMENT_REGISTERS {
-                    if i < event.words.count && cast[usize](register) < registers.count {
+                    if cast[usize](register) < registers.count {
                         event.words[i] = registers[cast[usize](register)]
                     }
                 }
@@ -522,7 +522,7 @@ record :: fn(program : Program, shapes : CallShape[], seeds : u8[64]) -> ptr[mut
                 followed :: &threads[cast[usize](index)]
                 event := Event.{kind = .Leave, thread = index}
                 for register, i in RESULT_REGISTERS {
-                    if i < event.results.count && cast[usize](register) < registers.count {
+                    if cast[usize](register) < registers.count {
                         event.results[i] = registers[cast[usize](register)]
                     }
                 }
@@ -784,7 +784,7 @@ replay :: fn(program : Program, shapes : CallShape[], recording : ptr[Recording]
                 number :: cast[u32](registers[NUMBER_REGISTER])
                 words : u64[6]
                 for register, i in ARGUMENT_REGISTERS {
-                    if i < words.count && cast[usize](register) < registers.count {
+                    if cast[usize](register) < registers.count {
                         words[i] = registers[cast[usize](register)]
                     }
                 }
@@ -837,7 +837,7 @@ replay :: fn(program : Program, shapes : CallShape[], recording : ptr[Recording]
                     registers : u64[slop_os.THREAD_REGISTERS]
                     _ = slop_os.thread_read_registers(program.process, followed.id, registers)
                     for register, i in RESULT_REGISTERS {
-                        if i < event.results.count && cast[usize](register) < registers.count {
+                        if cast[usize](register) < registers.count {
                             registers[cast[usize](register)] = event.results[i]
                         }
                     }

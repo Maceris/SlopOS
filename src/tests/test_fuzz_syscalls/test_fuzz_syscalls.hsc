@@ -117,7 +117,7 @@ Shape :: struct {
 /** An input: bytes the calls and their arguments are drawn from. */
 Input :: struct {
     bytes : u8[INPUT_BYTES],
-    count : usize,
+    count #at_most(bytes.count) : usize,
 }
 
 /** What the fuzzing came to, for the log. */
@@ -463,7 +463,7 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> t
  */
 add_handle :: fn(fuzzer : ptr[mut Fuzzer], handle : slop_os.Handle) {
     at :: fuzzer.pool_count
-    if at < fuzzer.pool.count && at < fuzzer.pool_kinds.count {
+    if at < fuzzer.pool_kinds.count {
         fuzzer.pool[at] = handle
         fuzzer.pool_kinds[at] = 0
         match slop_os.handle_info(handle) {
@@ -494,7 +494,7 @@ draw_pooled :: fn(fuzzer : ptr[Fuzzer], source : ptr[mut testing.Source], wanted
     }
     chosen := testing.draw_below(source, matching)
     for kind, i in fuzzer.pool_kinds {
-        if i < fuzzer.pool_count && i < fuzzer.pool.count && (wanted == 0 || kind == wanted) {
+        if i < fuzzer.pool_count && (wanted == 0 || kind == wanted) {
             if chosen == 0 {
                 return cast[u64](cast[u32](fuzzer.pool[i]))
             }
@@ -547,7 +547,7 @@ choose_input :: fn(fuzzer : ptr[mut Fuzzer], input : ptr[mut Input]) {
             if other < fuzzer.kept.count {
                 from_other :: fuzzer.kept[other]
                 for byte, i in from_other.bytes {
-                    if i >= at && i < input.bytes.count {
+                    if i >= at {
                         input.bytes[i] = byte
                     }
                 }

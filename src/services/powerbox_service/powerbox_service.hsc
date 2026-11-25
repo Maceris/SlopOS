@@ -72,7 +72,7 @@ Name :: struct {
     /** The name's bytes, the first count of them; a longer name is cut at NAME_BYTES. */
     bytes : u8[powerbox.NAME_BYTES],
     /** How many of bytes are the name: 0 for none, as for the session manager's own connection. */
-    count : usize,
+    count #at_most(bytes.count) : usize,
 }
 
 /** The request waiting for the user: whose, what it asked for, and the key to keep it under, if it asked. */
@@ -86,17 +86,17 @@ Waiting :: struct {
     /** The key to keep the grant under, the first key_count bytes, valid_key's. */
     key : u8[powerbox.KEY_BYTES],
     /** How many of key's bytes are the key: 0 if it didn't ask to keep it. */
-    key_count : usize,
+    key_count #at_most(key.count) : usize,
     /** For a debugger (Debug or DebugOther): the program's name, the first name_count bytes. */
     name : u8[powerbox.NAME_BYTES],
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /** For a debugger: its port, the powerbox's to give the session manager, or close if it's refused. */
     port : slop_os.Port,
     /** For a debugger: the key its stops come under. */
     stop_key : u64,
     /** For a debugger: why it asks, the first purpose_count bytes, asked again of the administrator if need be. */
     purpose : u8[powerbox.PURPOSE_BYTES],
-    purpose_count : usize,
+    purpose_count #at_most(purpose.count) : usize,
     /** For a network connection: what it would allow. */
     policy : network.Policy,
     /** For a program its launcher asks to steer: the launcher's handle to its process; NO_HANDLE for anything else. */
@@ -107,7 +107,7 @@ Waiting :: struct {
 Asker :: struct {
     /** Its name, the first count bytes; count 0 for a place not in use. */
     name : u8[powerbox.NAME_BYTES],
-    count : usize,
+    count #at_most(name.count) : usize,
     /** Its credit, in thousandths of an ask, at most ASKS_PER_MINUTE thousand. */
     credit : u64,
     /** When its credit was last brought up to date, in the monotonic clock's nanoseconds. */
@@ -461,7 +461,7 @@ name_of :: fn(box : ptr[Box], index : usize) -> u8[] {
         return box.names[0].bytes[0..<0]
     }
     name :: &box.names[index]
-    return if name.count <= name.bytes.count { name.bytes[0..<name.count] } else { name.bytes[0..<0] }
+    return name.bytes[0..<name.count]
 }
 
 /**
@@ -754,7 +754,7 @@ take_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
                     if who.count > 0 { string_of(&who[0], who.count) } else { "a program" },
                     if path.count > 0 { string_of(&path[0], path.count) } else { "the home" }
                 )
-                if choice.keep && box.waiting.key_count > 0 && box.waiting.key_count <= box.waiting.key.count {
+                if choice.keep && box.waiting.key_count > 0 {
                     keep(box, box.waiting.client, box.waiting.key[0..<box.waiting.key_count], path, box.waiting.write)
                 }
             }
@@ -793,7 +793,6 @@ spend :: fn(box : ptr[mut Box], name : u8[], cost : u64) -> bool {
     oldest := cast[usize](0)
     for asker, i in box.askers {
         if asker.count == name.count
-            && asker.count <= asker.name.count
             && same_text(asker.name[0..<asker.count], name) {
             place = i
         }
@@ -862,7 +861,6 @@ give_back :: fn(box : ptr[mut Box], name : u8[], amount : u64) {
     most :: ASKS_PER_MINUTE * 1000
     for &asker in box.askers {
         if asker.count == name.count
-            && asker.count <= asker.name.count
             && same_text(asker.name[0..<asker.count], name) {
             asker.credit = if asker.credit + amount > most { most } else { asker.credit + amount }
         }
@@ -1002,10 +1000,7 @@ take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
         }
     }
     box.asking_sessions = .None
-    name := box.waiting.name[0..<0]
-    if box.waiting.name_count <= box.waiting.name.count {
-        name = box.waiting.name[0..<box.waiting.name_count]
-    }
+    name :: box.waiting.name[0..<box.waiting.name_count]
     if asked == .NameSteered {
         match os.message_of[programs.Response](into)^ {
             case Named(text) => ask_named_steer(box, os.items(into, text))
@@ -1061,15 +1056,9 @@ take_sessions_answer :: fn(box : ptr[mut Box], into : ptr[mut os.Incoming]) {
         return void
     }
     box.has_waiting = false
-    purpose := kept.purpose[0..<0]
-    if kept.purpose_count <= kept.purpose.count {
-        purpose = kept.purpose[0..<kept.purpose_count]
-    }
+    purpose :: kept.purpose[0..<kept.purpose_count]
     // From the copy: ask sets box.waiting afresh, which name was a view of
-    kept_name := kept.name[0..<0]
-    if kept.name_count <= kept.name.count {
-        kept_name = kept.name[0..<kept.name_count]
-    }
+    kept_name :: kept.name[0..<kept.name_count]
     refused :: ask(box, kept.client, kind, false, purpose, kept_name, u8.[])
     match refused {
         case Some(response) => {
@@ -1170,10 +1159,7 @@ ask_named_steer :: fn(box : ptr[mut Box], named : u8[]) {
     }
     shown : u8[powerbox.NAME_BYTES + 32]
     shown_count := cast[usize](0)
-    given := kept.name[0..<0]
-    if kept.name_count <= kept.name.count {
-        given = kept.name[0..<kept.name_count]
-    }
+    given :: kept.name[0..<kept.name_count]
     for byte in named {
         if shown_count < shown.count {
             shown[shown_count] = byte
@@ -1194,16 +1180,7 @@ ask_named_steer :: fn(box : ptr[mut Box], named : u8[]) {
             }
         }
     }
-    purpose := kept.purpose[0..<0]
-    if kept.purpose_count <= kept.purpose.count {
-        purpose = kept.purpose[0..<kept.purpose_count]
-    }
-    // Never past it, as each byte's added only below its count; said, as the bounds proof loses it over the loops
-    if shown_count > shown.count {
-        refuse_debug_port(box)
-        answer(box, .Refused)
-        return void
-    }
+    purpose :: kept.purpose[0..<kept.purpose_count]
     box.has_waiting = false
     match ask(box, kept.client, .Debug, false, purpose, shown[0..<shown_count], u8.[]) {
         case Some(response) => {

@@ -57,7 +57,7 @@ Driver :: struct {
     /** What's arrived and no Read has taken yet, oldest first, in the first input_count bytes. */
     input : u8[INPUT_BYTES],
     /** How many of input's bytes are waiting, 0 to INPUT_BYTES. */
-    input_count : usize,
+    input_count #at_most(input.count) : usize,
     /** Each client's held Read, by its index: the most bytes it takes, or 0 for none held. */
     held : u32[service_kit.MAX_CLIENTS],
     /** Its clients, the listener among them. */
@@ -371,18 +371,20 @@ answer_held :: fn(driver : ptr[mut Driver]) {
         end :: driver.clients.ends[index]
         count :: if driver.input_count < cast[usize](most^) { driver.input_count } else { cast[usize](most^) }
         taken :: if count < serial.MAX_BYTES { count } else { cast[usize](serial.MAX_BYTES) }
+        // What's left, worked out before the send, which may write anything as far as the proof knows
+        left :: driver.input_count - taken
         out := os.Outgoing.{}
         response :: os.begin[serial.Response](&out)
         response^ = .Data(os.append(&out, view_of(&driver.input[0], taken)))
         _ = serial.send_response(end, driver.port, &out)
         most^ = 0
         // What's left moves to the front
-        for i in 0..<driver.input_count - taken {
+        for i in 0..<left {
             from :: i + taken
             if from < driver.input.count && i < driver.input.count {
                 driver.input[i] = driver.input[from]
             }
         }
-        driver.input_count -= taken
+        driver.input_count = left
     }
 }

@@ -29,7 +29,7 @@ EntryPlan :: struct {
     /** Its Config parameters' names, each its value's label and name; the first settings_count of them. */
     settings : string[MAX_SETTINGS],
     /** How many of settings there are. */
-    settings_count : usize,
+    settings_count #at_most(settings.count) : usize,
 }
 
 /** Why a bundle can't be installed. */
@@ -54,7 +54,7 @@ entry_plan :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash) -> Resu
     if !read || referred.count < 2 {
         return .Error(.Unreadable)
     }
-    manifest_object :: stored_object(sessions, referred[1 % referred.count]) or_return .Error(.Unreadable)
+    manifest_object :: stored_object(sessions, referred[1]) or_return .Error(.Unreadable)
     parsed := schema.parse(manifest_object.bytes)
     let_go_of_object(manifest_object)
     manifest := parsed or_return .Error(.Unreadable)

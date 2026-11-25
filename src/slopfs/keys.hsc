@@ -200,7 +200,7 @@ random_key #constant_time :: fn() -> crypto.Key256 {
  */
 generation_key :: fn(keys : ptr[Keys], number : u32) -> ptr[crypto.Key256]? {
     for i in 0..<keys.generations.count {
-        if i < keys.generations.count && keys.generations[i].number == number {
+        if keys.generations[i].number == number {
             return &keys.generations[i].key
         }
     }

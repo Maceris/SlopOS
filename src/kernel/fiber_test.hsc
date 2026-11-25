@@ -27,7 +27,7 @@ FiberTest :: struct {
     /** The letters the fibers wrote, in order, as mark writes them; count of them are written. */
     marks : u8[16],
     /** How many of marks are written, at most marks' count. */
-    count : usize,
+    count #at_most(marks.count) : usize,
     /** The fiber's stack trace at the bottom of its calls, before it suspends: return addresses, innermost first. */
     before : rawptr[80],
     /** How many of before are captured. */

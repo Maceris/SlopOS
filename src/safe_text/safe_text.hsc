@@ -21,7 +21,7 @@ Shown :: struct {
      */
     bytes : u8[MAX_CLUSTER_BYTES + 16],
     /** How many of bytes are used, 0 for a cluster that shows nothing. */
-    count : usize,
+    count #at_most(bytes.count) : usize,
     /** The terminal columns the bytes take, as std's unicode text_width counts them. */
     columns : usize,
 }
@@ -110,9 +110,7 @@ show :: fn(text : u8[], at : usize, end : usize, shown : ptr[mut Shown]) {
     }
     while position < end
     // The columns of what's shown, a cluster at a time, since substitutes are clusters of their own
-    if shown.count <= shown.bytes.count {
-        shown.columns = unicode.text_width(shown.bytes[0..<shown.count])
-    }
+    shown.columns = unicode.text_width(shown.bytes[0..<shown.count])
 }
 
 /**

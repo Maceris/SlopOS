@@ -35,7 +35,7 @@ Listed :: struct {
     /** Its name, the first name_count bytes. */
     name : u8[NAME_BYTES],
     /** How many bytes of name it has. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /** Whether it's a GUI program, started when clicked; a command shows its form. */
     gui : bool,
 }
@@ -55,7 +55,7 @@ Launcher :: struct {
     /** What it lists, the first listed_count: GUI programs and commands, in the store's order. */
     listed : Listed[MAX_LISTED],
     /** How many it lists. */
-    listed_count : usize,
+    listed_count #at_most(listed.count) : usize,
     /** The form shown in place of the list, while showing is set. */
     form : forms.Form,
     /** Whether form is shown, in place of the list. */

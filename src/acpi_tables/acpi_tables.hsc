@@ -142,11 +142,11 @@ Madt :: struct {
     /** The I/O APICs, the first io_apic_count of them. */
     io_apics : IoApic[MAX_MADT_ENTRIES],
     /** How many there are. */
-    io_apic_count : usize,
+    io_apic_count #at_most(io_apics.count) : usize,
     /** The overrides, the first override_count of them. */
     overrides : Override[MAX_MADT_ENTRIES],
     /** How many there are. */
-    override_count : usize,
+    override_count #at_most(overrides.count) : usize,
 }
 
 /**

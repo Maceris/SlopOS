@@ -2455,7 +2455,7 @@ put_alias :: fn(short : ptr[mut u8[11]], base : ptr[u8[8]], base_count : usize, 
     for d in 0..<digit_count {
         at :: keep + 1 + d
         from :: digit_count - 1 - d
-        if at < 8 && from < digits.count {
+        if at < 8 {
             short^[at] = digits[from]
         }
     }

@@ -86,7 +86,7 @@ interpolate :: fn(scope : ptr[Scope], text : string) -> string {
                 end += 1
             }
             name :: if start <= end && end <= bytes.count {
-                string_of(&bytes[start % bytes.count], end - start)
+                string_of(&bytes[start], end - start)
             }
             else {
                 ""

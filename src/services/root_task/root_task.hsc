@@ -1482,7 +1482,7 @@ serve_connectors :: fn(root : ptr[mut Root]) {
     for i in cast[usize](0)..<MAX_CONNECTORS {
         concurrency.lock(&root.connectors_lock)
         record := RootConnector.{end = NO_CHANNEL}
-        if i < root.connector_count && i < root.connectors.count {
+        if i < root.connector_count {
             record = root.connectors[i]
         }
         concurrency.unlock(&root.connectors_lock)

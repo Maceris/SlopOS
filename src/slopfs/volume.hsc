@@ -1205,7 +1205,7 @@ EntryList :: struct {
     /** The record's value. */
     bytes : u8[4096],
     /** How many of bytes are used; 0 for no record. */
-    count : usize,
+    count #at_most(bytes.count) : usize,
 }
 
 /** The entry named name in a list: where it starts, and its head. */
@@ -1315,7 +1315,12 @@ get_entries :: fn(
     hash : u64,
     list : ptr[mut EntryList]
 ) -> Result[void, Error] {
-    list.count = tree_get(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), list.bytes)? or_else 0
+    got :: tree_get(volume.nodes, &volume.tree, key_of(directory, .Entry, hash), list.bytes)? or_else 0
+    // Its whole length, which may be past what the list holds: one this never writes
+    if got > list.bytes.count {
+        return .Error(.Corrupt)
+    }
+    list.count = got
     return .Ok
 }
 
@@ -1337,9 +1342,6 @@ put_entries :: fn(volume : ptr[mut Volume], directory : u64, hash : u64, list : 
     if list.count == 0 {
         tree_delete(volume.nodes, &volume.tree, key)?
         return .Ok
-    }
-    if list.count > list.bytes.count {
-        return .Error(.TooLarge)
     }
     tree_put(volume.nodes, &volume.tree, key, list.bytes[0..<list.count])?
     return .Ok
@@ -1400,7 +1402,8 @@ add_entry :: fn(
     if find_in_list(list, name) is_some {
         return .Error(.AlreadyExists)
     }
-    if list.count + size_of(EntryHead) + name.count > list.bytes.count {
+    grown :: list.count + size_of(EntryHead) + name.count
+    if grown > list.bytes.count {
         return .Error(.TooLarge)
     }
     head := EntryHead.{
@@ -1410,7 +1413,7 @@ add_entry :: fn(
     }
     copy_bytes(list.bytes, list.count, view_of(cast[ptr[mut u8]](&head), size_of(EntryHead)))
     copy_bytes(list.bytes, list.count + size_of(EntryHead), string_bytes(name))
-    list.count += size_of(EntryHead) + name.count
+    list.count = grown
     put_entries(volume, directory, hash, list)?
     return .Ok
 }
@@ -1433,13 +1436,18 @@ remove_entry :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> 
     get_entries(volume, directory, hash, list)?
     found :: find_in_list(list, name) or_return .Error(.NotFound)
     length :: size_of(EntryHead) + cast[usize](cast[u16](found.head.name_bytes))
-    for i in found.at..<list.count - length {
+    // find_in_list found it inside the list, which nothing here can see: a list it isn't inside is broken
+    if length > list.count {
+        return .Error(.Corrupt)
+    }
+    left :: list.count - length
+    for i in found.at..<left {
         j :: i + length
         if j < list.bytes.count && i < list.bytes.count {
             list.bytes[i] = list.bytes[j]
         }
     }
-    list.count -= length
+    list.count = left
     put_entries(volume, directory, hash, list)?
     return .Ok
 }
@@ -1826,6 +1834,10 @@ list :: fn(volume : ptr[mut Volume], directory : u64, cursor : u64, name : mut u
             skip = 0
         }
         hash = found.key.offset
+        // Its whole length, which may be past what the list holds: one this never writes
+        if found.bytes > entries.bytes.count {
+            return .Error(.Corrupt)
+        }
         entries.count = found.bytes
         at : usize = 0
         for index in 0..<256 {

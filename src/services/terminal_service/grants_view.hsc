@@ -40,7 +40,7 @@ GrantsView :: struct {
     /** The kept grants, in the order the home lists them; the first count are used. */
     entries : Kept[MAX_GRANTS_SHOWN],
     /** How many of entries are used, 0 to MAX_GRANTS_SHOWN. */
-    count : usize,
+    count #at_most(entries.count) : usize,
     /** The index in entries of the grant chosen, which Delete revokes; 0 when there are none. */
     selected : usize,
 }

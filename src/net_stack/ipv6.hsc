@@ -79,7 +79,7 @@ start_ipv6 :: fn(stack : ptr[mut Stack]) {
 stable_address :: fn(stack : ptr[Stack], prefix : Ipv6, counter : u8) -> Ipv6 {
     input : u8[8 + 6 + 1 + 32]
     for i in cast[usize](0)..<8 {
-        if i < input.count && i < prefix.bytes.count {
+        if i < prefix.bytes.count {
             input[i] = prefix.bytes[i]
         }
     }
@@ -99,7 +99,7 @@ stable_address :: fn(stack : ptr[Stack], prefix : Ipv6, counter : u8) -> Ipv6 {
     digest :: crypto.sha256(view_of(&input[0], input.count))
     address := prefix
     for i in cast[usize](8)..<16 {
-        if i < address.bytes.count && i - 8 < digest.count {
+        if i - 8 < digest.count {
             address.bytes[i] = digest[i - 8]
         }
     }
@@ -193,7 +193,7 @@ has_router :: fn(stack : ptr[Stack]) -> bool {
 solicited_node :: fn(address : Ipv6) -> Ipv6 {
     group := Ipv6.{bytes = u8.[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0, 0, 0]}
     for i in cast[usize](13)..<16 {
-        if i < group.bytes.count && i < address.bytes.count {
+        if i < address.bytes.count {
             group.bytes[i] = address.bytes[i]
         }
     }
@@ -209,7 +209,7 @@ solicited_node :: fn(address : Ipv6) -> Ipv6 {
 multicast_mac :: fn(group : Ipv6) -> Mac {
     mac := Mac.{bytes = u8.[0x33, 0x33, 0, 0, 0, 0]}
     for i in cast[usize](2)..<6 {
-        if i < mac.bytes.count && 10 + i < group.bytes.count {
+        if 10 + i < group.bytes.count {
             mac.bytes[i] = group.bytes[10 + i]
         }
     }

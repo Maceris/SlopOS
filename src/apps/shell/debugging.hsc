@@ -526,7 +526,7 @@ say_where :: fn(session : ptr[mut Debugging]) {
     // The frames' lines, from the debug file, after their names
     offsets : u64[crash_reports.MAX_FRAMES]
     for i in cast[usize](0)..<cast[usize](count) {
-        if i < offsets.count && i < report.frames.count {
+        if i < report.frames.count {
             offsets[i] = if report.frames[i] >= launched.image { report.frames[i] - launched.image } else { 0 }
         }
     }
@@ -896,7 +896,7 @@ split_all :: fn(line #escaping : string, words : ptr[mut string[6]]) -> usize {
         if i < bytes.count && bytes[i] != 0x20 {
             continue
         }
-        if i > start && start < bytes.count && count < words.count {
+        if i > start && count < words.count {
             words^[count] = string_of(&bytes[start], i - start)
             count += 1
         }
@@ -1168,7 +1168,7 @@ say_fibers :: fn(session : ptr[mut Debugging]) {
     asked : u64[MAX_FIBERS_SHOWN * FIBER_FRAMES]
     asked_count : usize = 0
     for i in cast[usize](0)..<shown {
-        for j in cast[usize](0)..<counts[i % counts.count] {
+        for j in cast[usize](0)..<counts[i] {
             from :: i * FIBER_FRAMES + j
             if from < offsets.count && asked_count < asked.count {
                 asked[asked_count] = offsets[from]
@@ -1186,8 +1186,8 @@ say_fibers :: fn(session : ptr[mut Debugging]) {
     at : usize = 0
     say(shell, message("% fibers", shown + more))
     for i in cast[usize](0)..<shown {
-        state :: states[i % states.count]
-        address :: fibers[i % fibers.count]
+        state :: states[i]
+        address :: fibers[i]
         what :: if address == current {
             "running on this thread"
         }
@@ -1196,7 +1196,7 @@ say_fibers :: fn(session : ptr[mut Debugging]) {
         }
         else if state == 1 { "running" } else if state == 2 { "suspended" } else { "finished" }
         say(shell, message("  fiber %{#x}: %", address, what))
-        for j in cast[usize](0)..<counts[i % counts.count] {
+        for j in cast[usize](0)..<counts[i] {
             name :: next_line(answer, named, &at)
             say(shell, message("    #% %", j, if name == "" { "?" } else { name }))
         }

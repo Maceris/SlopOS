@@ -385,7 +385,7 @@ name_frames :: fn(shell : ptr[mut Shell], crash : ptr[Crash], into : mut u8[]) -
         cast[usize](crash_reports.MAX_FRAMES)
     }
     for i in cast[usize](0)..<count {
-        if i < offsets.count && i < crash.frames.count {
+        if i < crash.frames.count {
             offsets[i] = if crash.frames[i] >= crash.image { crash.frames[i] - crash.image } else { 0 }
         }
     }

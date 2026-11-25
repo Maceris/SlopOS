@@ -351,7 +351,7 @@ Handed :: struct {
     window : slop_os.Memory,
     /** The name it was found by, the first count bytes. */
     name : u8[programs.MAX_NAME],
-    count : usize,
+    count #at_most(name.count) : usize,
 }
 
 /** A powerbox connection given for a program not yet named (decisions/0195, 18d). */
@@ -524,7 +524,7 @@ Finder :: struct {
      */
     script : u8[programs.MAX_INSTALLATION_NAME],
     /** How many bytes of script are its name. */
-    script_count : usize,
+    script_count #at_most(script.count) : usize,
 }
 
 /** The session manager's state: its connections, its sessions and their programs, and its tests' progress. */
@@ -2122,7 +2122,7 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
     if !read || referred.count < 2 {
         return .Missing
     }
-    manifest :: match store_request(sessions, .Read(referred[1 % referred.count])) {
+    manifest :: match store_request(sessions, .Read(referred[1])) {
         case Got(object) => object
         case _ => return .Missing
     }
@@ -2161,7 +2161,7 @@ entry_of :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Response {
     if !read || referred.count < 2 {
         return .Missing
     }
-    return .EntryIs(programs.EntryHash.{bytes = referred[1 % referred.count].bytes})
+    return .EntryIs(programs.EntryHash.{bytes = referred[1].bytes})
 }
 
 /**
@@ -2421,7 +2421,6 @@ hand_out :: fn(sessions : ptr[mut Manager], executable : slop_os.Memory, name : 
     for &handed in sessions.handed {
         if cast[slop_os.Handle](handed.executable) != slop_os.NO_HANDLE
             && handed.count == name.count
-            && handed.count <= handed.name.count
             && same_bytes(handed.name[0..<handed.count], name)
             && (slop_os.handle_same(cast[slop_os.Handle](handed.executable), cast[slop_os.Handle](executable))
                 or_else false) {
@@ -2626,7 +2625,7 @@ handed_name :: fn(sessions : ptr[Manager], executable : slop_os.Memory) -> u8[] 
     for &handed in sessions.handed {
         same :: cast[slop_os.Handle](handed.window) != slop_os.NO_HANDLE
             && (slop_os.handle_same(cast[slop_os.Handle](handed.window), cast[slop_os.Handle](executable)) or_else false)
-        if same && handed.count <= handed.name.count {
+        if same {
             return handed.name[0..<handed.count]
         }
     }
@@ -3620,7 +3619,7 @@ program_of :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash, expecte
     if !read || referred.count < 2 {
         return null
     }
-    manifest :: referred[1 % referred.count]
+    manifest :: referred[1]
     program :: referred[0]
     if !bundle.same(manifest, expected) {
         return null

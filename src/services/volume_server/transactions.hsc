@@ -665,7 +665,7 @@ changes_of :: fn(server : ptr[mut Server], directory : u64, cursor : u64, out : 
     // A name whose directory can't be walked back to is given as the name alone
     if length == 0 && found.name_bytes <= name.count {
         for i in 0..<found.name_bytes {
-            if i < path.count && i < name.count {
+            if i < name.count {
                 path[i] = name[i]
             }
         }

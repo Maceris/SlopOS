@@ -99,11 +99,11 @@ Service :: struct {
     /** The events waiting for the reader, the first count of them, oldest first. */
     events : seat.Event[QUEUED_EVENTS],
     /** How many of events are waiting, at most QUEUED_EVENTS; an event past them is dropped. */
-    count : usize,
+    count #at_most(events.count) : usize,
     /** The waiting events' text, which their text_start and text_bytes are ranges of. */
     text : u8[QUEUED_TEXT],
     /** How many of text's bytes are in use. */
-    text_count : usize,
+    text_count #at_most(text.count) : usize,
     /**
      * The client that reads, the first to send a Read, by its index among the clients; null until one has, and after
      * it goes.
@@ -649,6 +649,9 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
     }
     count := most
     text_end := text_before(service, count)
+    // What's queued as the Read's answered, which what's left is worked out from once it's sent
+    queued :: service.count
+    queued_text :: service.text_count
     sent := false
     // Halved while they're too big for the client's ring: one made with the default ring takes fewer than MAX_EVENTS
     for attempt in cast[usize](0)..<8 {
@@ -686,7 +689,8 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
             }
         }
     }
-    if !sent {
+    // Halving loses how count stands to what's queued, and the next event's text_start is what it was given as
+    if !sent || count > queued || text_end > queued_text {
         return void
     }
     if borrowing {
@@ -696,7 +700,7 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
         service.held = 0
     }
     // Those after moved to the front, their text with them
-    left :: service.count - count
+    left :: queued - count
     for i in 0..<left {
         from :: i + count
         if from < service.events.count && i < service.events.count {
@@ -710,7 +714,7 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
             service.events[i] = moved
         }
     }
-    text_left :: service.text_count - text_end
+    text_left :: queued_text - text_end
     for i in 0..<text_left {
         from :: i + text_end
         if from < service.text.count && i < service.text.count {
@@ -729,7 +733,7 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
  * @return The offset in the queue's text: text_count, all of it, if there are none after.
  */
 text_before :: fn(service : ptr[Service], count : usize) -> usize {
-    if count < service.count && count < service.events.count {
+    if count < service.count {
         return cast[usize](service.events[count].text_start)
     }
     return service.text_count

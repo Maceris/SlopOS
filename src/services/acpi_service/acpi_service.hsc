@@ -1027,7 +1027,7 @@ add_window :: fn(windows : ptr[mut platform.BridgeWindows], window : platform.Br
             smallest = i
         }
     }
-    if smallest < windows.windows.count && window.size > windows.windows[smallest].size {
+    if window.size > windows.windows[smallest].size {
         windows.windows[smallest] = window
     }
 }

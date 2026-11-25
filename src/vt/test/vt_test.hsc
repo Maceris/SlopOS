@@ -17,7 +17,7 @@ Bytes :: struct {
     /** The bytes, the first count of them. */
     bytes : u8[256],
     /** How many of bytes there are, at most 256. */
-    count : usize,
+    count #at_most(bytes.count) : usize,
 }
 
 /**
@@ -58,7 +58,7 @@ bytes_of :: fn(text : string) -> Bytes {
  * @return Its first count bytes, a view of made's, good as long as it is.
  */
 view :: fn(made : ptr[Bytes]) -> u8[] {
-    return if made.count <= made.bytes.count { made.bytes[0..<made.count] } else { made.bytes[0..<0] }
+    return made.bytes[0..<made.count]
 }
 
 /**

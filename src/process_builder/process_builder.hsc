@@ -282,7 +282,7 @@ build :: fn(
     block.cpu_features = slop_os.startup_block().cpu_features
     written :: view_of(cast[ptr[mut slop_os.Grant]](block_staging + grants_at), grants.count)
     for &grant, i in written {
-        if i < grants.count && i < kinds.count && OWN_HANDLES + i < given.count {
+        if OWN_HANDLES + i < given.count {
             grant.label = grants[i].label
             grant.kind = kinds[i]
             grant.handle = given[OWN_HANDLES + i]
@@ -322,7 +322,7 @@ Made :: struct {
     /** The handles, owning, their first count used; build makes 5 of them. */
     handles : slop_os.Handle[8],
     /** How many of handles are build's to close: 0 once they've gone to the process. */
-    count : usize,
+    count #at_most(handles.count) : usize,
 }
 
 /**

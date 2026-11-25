@@ -937,7 +937,8 @@ make_records :: fn() -> system_records.SystemRecords {
                 || !system_records.set_name(&entry.program, each.program) {
                 made.magic = 0
             }
-            made.installations.count += 1
+            // Filled in order from the first, so the count's one past this
+            made.installations.count = cast[u32](i + 1)
         }
     }
     return made

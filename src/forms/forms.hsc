@@ -33,7 +33,7 @@ Field :: struct {
     /** The parameter's name, the first name_count bytes, as the manifest has it. */
     name : u8[NAME_BYTES],
     /** How many bytes of name. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /**
      * What it takes, as the shell names a type, with an enum's members, and ", needed" when it can't be left empty; the
      * first hint_count bytes.
@@ -62,7 +62,7 @@ Form :: struct {
     /** Its fields, the first field_count, in the entry's order. */
     fields : Field[MAX_FIELDS],
     /** How many fields. */
-    field_count : usize,
+    field_count #at_most(fields.count) : usize,
     /**
      * Whether it needs a grant the shell can't make from a path (one of its parameters isn't optional and is Other), so
      * the shell would refuse it however it's filled in.
@@ -345,10 +345,18 @@ add_bytes :: fn(line : ptr[mut u8[..]], bytes : u8[]) {
 /**
  * Copy bytes into a fixed buffer from its start, cut at its end.
  *
- * @return How many were copied.
+ * @return How many were copied, at most N, as a field #at_most the buffer's count can be given.
  */
 copy_into :: fn[N : usize](into : ptr[mut u8[N]], bytes : u8[]) -> usize {
-    return copy_into_at(into, 0, bytes)
+    copied := cast[usize](0)
+    for byte, i in bytes {
+        if i >= into.count {
+            break
+        }
+        into[i] = byte
+        copied = i + 1
+    }
+    return copied
 }
 
 /**

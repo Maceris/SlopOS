@@ -227,11 +227,11 @@ Service :: struct {
      */
     typed : seat.Event[TYPED_KEYS],
     /** How many of typed are waiting, 0 to TYPED_KEYS; keys past them are dropped. */
-    typed_count : usize,
+    typed_count #at_most(typed.count) : usize,
     /** The waiting keys' text, UTF-8, the first typed_text_count bytes. */
     typed_text : u8[TYPED_TEXT],
     /** How many bytes of typed_text are used, 0 to TYPED_TEXT. */
-    typed_text_count : usize,
+    typed_text_count #at_most(typed_text.count) : usize,
     /** What's waiting to be sent on the serial line: a ring of output_count bytes from output_start. */
     output : u8[OUTPUT_BYTES],
     /** Where in output the oldest byte waiting is, below OUTPUT_BYTES. */
@@ -284,13 +284,13 @@ Service :: struct {
     /** The programs listed for the secure attention key's screen, the first program_count. */
     programs : session.Program[session.MAX_PROGRAMS],
     /** How many of programs are used, 0 to session.MAX_PROGRAMS. */
-    program_count : usize,
+    program_count #at_most(programs.count) : usize,
     /** The index in programs of the one chosen on the panel, which E ends. */
     chosen : usize,
     /** The first line of the boot before's panic record, if it stopped for a fault, the first panic_count bytes. */
     panic : u8[PANIC_TEXT],
     /** How many bytes of panic are used; 0 if the boot before didn't panic. */
-    panic_count : usize,
+    panic_count #at_most(panic.count) : usize,
     /** Whether the secure attention key's screen has been up since, so the status line stops pointing to it. */
     panic_seen : bool,
     /** The decoder of what's typed on the serial line, which keeps an escape sequence cut between reads. */
@@ -320,19 +320,19 @@ Service :: struct {
     /** The field being typed, the first field_count bytes; zeroed whenever a step changes. */
     field : u8[FIELD_BYTES],
     /** How many bytes of field are used, 0 to FIELD_BYTES. */
-    field_count : usize,
+    field_count #at_most(field.count) : usize,
     /** The account name taken from a field, for setup, login, lock or elevation, the first name_count bytes. */
     name : u8[account_records.MAX_NAME_BYTES],
     /** How many bytes of name are used. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /** The new account's password typed once, to compare with it again; zeroed once it's sent. */
     password : u8[FIELD_BYTES],
     /** How many bytes of password are used. */
-    password_count : usize,
+    password_count #at_most(password.count) : usize,
     /** What the screen last said, such as why something was refused, the first message_count bytes. */
     message : u8[MESSAGE_BYTES],
     /** How many bytes of message are used; 0 for nothing said. */
-    message_count : usize,
+    message_count #at_most(message.count) : usize,
     /** The recovery code of the account just made, shown once at the Code step, zeroed once it's left. */
     code : u8[accounts.RECOVERY_TEXT_BYTES],
     /** The terminal protocol's clients, each bound to port under its index. */
@@ -396,7 +396,7 @@ View :: struct {
     /** The line the owner's editing (InputLine, decisions/0147), the first input_count bytes, UTF-8. */
     input : u8[INPUT_LINE_BYTES],
     /** How many bytes of input are used; 0 for no line, which isn't drawn. */
-    input_count : usize,
+    input_count #at_most(input.count) : usize,
     /** Where in input the cursor is, a byte offset, 0 to input_count. */
     input_cursor : usize,
     /** Whether the line is drawn below the output now. */
@@ -409,7 +409,7 @@ View :: struct {
     /** That line, the first kept_count bytes, UTF-8. */
     kept : u8[INPUT_LINE_BYTES],
     /** How many bytes of kept are used. */
-    kept_count : usize,
+    kept_count #at_most(kept.count) : usize,
     /** Where in kept the cursor is, a byte offset, 0 to kept_count. */
     kept_cursor : usize,
     /** The program row the line starts on, while it's drawn. */
@@ -422,8 +422,8 @@ View :: struct {
     output_scrolls : u64,
     /** The name of the session's user, the first user_count bytes; empty for a session with no user. */
     user : u8[account_records.MAX_NAME_BYTES],
-    /** How many bytes of user are used. */
-    user_count : usize,
+    /** How many bytes of user are used, 0 to account_records.MAX_NAME_BYTES. */
+    user_count #at_most(user.count) : usize,
     /** Whether a session runs in the view, made by the session manager; false on a login screen. */
     logged_in : bool,
     /** The session manager's number for the session, valid while logged_in. */
@@ -1104,8 +1104,7 @@ hide_input :: fn(service : ptr[mut Service]) {
 show_input :: fn(service : ptr[mut Service]) {
     if view(service).input_drawn
         || view(service).input_count == 0
-        || view(service).screen.using_whole
-        || view(service).input_count > view(service).input.count {
+        || view(service).screen.using_whole {
         return void
     }
     grid :: &view(service).screen.lines
@@ -1147,19 +1146,17 @@ show_input :: fn(service : ptr[mut Service]) {
         shown := safe_text.Shown.{}
         // A line break or tab in it is shown as its substitute, as the line is one line
         safe_text.show(line, at, end, &shown)
-        if shown.count <= shown.bytes.count {
-            cluster :: shown.bytes[0..<shown.count]
-            wrapped :: grid.column + cast[u16](shown.columns) > COLUMNS
-            screen.put(&view(service).screen, cluster, shown.columns, plain)
-            text_buffer.clear(&out)
-            if wrapped {
-                vt.append_line_break(&out)
-            }
-            if cluster.count > 0 {
-                text_buffer.append(&out, string_of(&cluster[0], cluster.count))
-            }
-            emit_program(service, &out)
+        cluster :: shown.bytes[0..<shown.count]
+        wrapped :: grid.column + cast[u16](shown.columns) > COLUMNS
+        screen.put(&view(service).screen, cluster, shown.columns, plain)
+        text_buffer.clear(&out)
+        if wrapped {
+            vt.append_line_break(&out)
         }
+        if cluster.count > 0 {
+            text_buffer.append(&out, string_of(&cluster[0], cluster.count))
+        }
+        emit_program(service, &out)
         at = end
     }
     // Where it starts, and the cursor, moved up by any scrolling the line itself did
@@ -1277,12 +1274,10 @@ write :: fn(service : ptr[mut Service], into : ptr[os.Incoming], text : terminal
         else {
             shown := safe_text.Shown.{}
             safe_text.show(bytes, at, end, &shown)
-            if shown.count <= shown.bytes.count {
-                cluster :: shown.bytes[0..<shown.count]
-                screen.put(&view(service).screen, cluster, shown.columns, style)
-                if cluster.count > 0 {
-                    text_buffer.append(&out, string_of(&cluster[0], cluster.count))
-                }
+            cluster :: shown.bytes[0..<shown.count]
+            screen.put(&view(service).screen, cluster, shown.columns, style)
+            if cluster.count > 0 {
+                text_buffer.append(&out, string_of(&cluster[0], cluster.count))
             }
         }
         emit_program(service, &out)
@@ -1554,7 +1549,7 @@ draw_panel :: fn(service : ptr[mut Service]) {
     else {
         screen.write_at(panel, 3, 2, "Nothing is waiting for you: no prompt, and no one has logged in.", plain)
     }
-    if service.panic_count > 0 && service.panic_count <= service.panic.count {
+    if service.panic_count > 0 {
         screen.write_at(panel, 4, 2, "The boot before stopped for a fault: ", plain)
         screen.write_at(panel, 5, 4, string_of(&service.panic[0], service.panic_count), plain)
     }
@@ -2038,7 +2033,7 @@ pump :: fn(service : ptr[mut Service]) {
         taken :: if service.output_count < chunk.count { service.output_count } else { chunk.count }
         for i in 0..<taken {
             at :: (service.output_start + i) % service.output.count
-            if at < service.output.count && i < chunk.count {
+            if i < chunk.count {
                 chunk[i] = service.output[at]
             }
         }
@@ -2441,10 +2436,12 @@ take_seat_event :: fn(service : ptr[mut Service], event : seat.Event, text : u8[
 take_typed :: fn(service : ptr[mut Service]) {
     decoded :: &service.decoded
     first :: decoded.count
+    // How many wait, as the loop began: decoding them doesn't change it, though the proof can't know
+    waiting :: service.typed_count
     taken : usize = 0
     for event in service.typed {
         // Room for the event, and for its text, at most a key's
-        if taken >= service.typed_count
+        if taken >= waiting
             || decoded.count >= decoded.events.count
             || decoded.text_count + KEY_TEXT > decoded.text.count {
             break
@@ -2468,13 +2465,13 @@ take_typed :: fn(service : ptr[mut Service]) {
         return void
     }
     // Those left moved to the front, their text with them
-    text_from :: if taken < service.typed_count && taken < service.typed.count {
+    text_from :: if taken < waiting && taken < service.typed.count {
         cast[usize](service.typed[taken].text_start)
     }
     else {
         service.typed_text_count
     }
-    left :: service.typed_count - taken
+    left :: waiting - taken
     for i in 0..<left {
         from :: i + taken
         if from < service.typed.count && i < service.typed.count {
@@ -2533,7 +2530,7 @@ deliver :: fn(service : ptr[mut Service], connected : ptr[service_kit.Clients]) 
         cast[usize](view(service).held)
     }
     loop {
-        if count == 0 || count > decoded.events.count || decoded.text_count > decoded.text.count {
+        if count == 0 || count > decoded.events.count {
             return void
         }
         // The text up to the next event's
@@ -2583,7 +2580,7 @@ keep_after :: fn(service : ptr[mut Service], count : usize) {
         return void
     }
     text_from :: cast[usize](decoded.events[count].text_start)
-    if text_from > decoded.text_count || decoded.text_count > decoded.text.count {
+    if text_from > decoded.text_count {
         vt.reset(&service.decoder, decoded)
         return void
     }
@@ -2891,12 +2888,15 @@ enter_login :: fn(service : ptr[mut Service]) {
  */
 logged_in :: fn(service : ptr[mut Service], root : os.Channel[dir.Dir]) {
     name :: name_bytes(service)
+    copied : usize = 0
     for byte, i in name {
-        if i < view(service).user.count {
-            view(service).user[i] = byte
+        if i >= view(service).user.count {
+            break
         }
+        view(service).user[i] = byte
+        copied = i + 1
     }
-    view(service).user_count = name.count
+    view(service).user_count = copied
     if !start_session(service, root) {
         say(service, "The session couldn't be made. Type the password again.")
         setup_step(service, .LoginPassword)
@@ -2960,7 +2960,7 @@ start_session :: fn(service : ptr[mut Service], home : os.Channel[dir.Dir]?) -> 
                 session.SessionStart.{
                     user = os.append(
                         &out,
-                        view(service).user[0..<min_count(view(service).user_count, view(service).user.count)]
+                        view(service).user[0..<view(service).user_count]
                     ),
                     layout = os.append(&out, string_bytes(service.layout)),
                     home = root,
@@ -3153,7 +3153,7 @@ setup_key :: fn(service : ptr[mut Service], event : terminal.Event, text : u8[])
         return void
     }
     if event.code == USAGE_BACKSPACE {
-        if service.field_count > 0 && service.field_count <= service.field.count {
+        if service.field_count > 0 {
             typed :: service.field[0..<service.field_count]
             last : usize = 0
             at : usize = 0
@@ -3166,7 +3166,7 @@ setup_key :: fn(service : ptr[mut Service], event : terminal.Event, text : u8[])
                 at = end
             }
             while at < service.field_count
-            if last <= service.field_count && service.field_count <= service.field.count {
+            if last <= service.field_count {
                 wipe(service.field[last..<service.field_count])
             }
             service.field_count = last
@@ -3198,9 +3198,6 @@ setup_key :: fn(service : ptr[mut Service], event : terminal.Event, text : u8[])
  * @param service The service, setup's screen up.
  */
 setup_enter :: fn(service : ptr[mut Service]) {
-    if service.field_count > service.field.count {
-        return void
-    }
     typed :: service.field[0..<service.field_count]
     match service.setup {
         case .Name => {
@@ -3209,12 +3206,14 @@ setup_enter :: fn(service : ptr[mut Service]) {
                 setup_step(service, .Name)
                 return void
             }
+            copied := cast[usize](0)
             for byte, i in typed {
                 if i < service.name.count {
                     service.name[i] = byte
+                    copied = i + 1
                 }
             }
-            service.name_count = typed.count
+            service.name_count = copied
             say(service, "")
             setup_step(service, .Password)
         }
@@ -3238,8 +3237,7 @@ setup_enter :: fn(service : ptr[mut Service]) {
             setup_step(service, .Again)
         }
         case .Again => {
-            if service.password_count > service.password.count
-                || !same_bytes(typed, service.password[0..<service.password_count]) {
+            if !same_bytes(typed, service.password[0..<service.password_count]) {
                 say(service, "The two didn't match. Type the password again.")
                 setup_step(service, .Password)
                 return void
@@ -3337,7 +3335,7 @@ setup_enter :: fn(service : ptr[mut Service]) {
  * @param password The password typed, a view of the service's field, which is zeroed here.
  */
 open_home :: fn(service : ptr[mut Service], password : u8[]) {
-    if service.accounts_end == NONE || service.name_count > service.name.count {
+    if service.accounts_end == NONE {
         say(service, "The account service isn't there. Type the password again.")
         setup_step(service, .LoginPassword)
         return void
@@ -3376,9 +3374,7 @@ open_home :: fn(service : ptr[mut Service], password : u8[]) {
  * @param service The service, at first-boot setup, the password typed twice and matching.
  */
 make_account :: fn(service : ptr[mut Service]) {
-    if service.accounts_end == NONE
-        || service.name_count > service.name.count
-        || service.password_count > service.password.count {
+    if service.accounts_end == NONE {
         say(service, "The account service isn't there. Type the password again.")
         setup_step(service, .Password)
         return void
@@ -3515,11 +3511,11 @@ draw_setup :: fn(service : ptr[mut Service], whole : bool) {
     screen.write_at(panel, name_row + 2, 2, "Again:", plain)
     field_column : u16 = 13
     if service.setup == .Name {
-        if service.field_count <= service.field.count && service.field_count > 0 {
+        if service.field_count > 0 {
             screen.write_at(panel, name_row, field_column, string_of(&service.field[0], service.field_count), plain)
         }
     }
-    else if service.name_count > 0 && service.name_count <= service.name.count {
+    else if service.name_count > 0 {
         screen.write_at(panel, name_row, field_column, string_of(&service.name[0], service.name_count), plain)
     }
     if service.setup == .Again || service.setup == .Making {
@@ -3538,7 +3534,7 @@ draw_setup :: fn(service : ptr[mut Service], whole : bool) {
             clusters(field_bytes(service))
         )
     }
-    if service.message_count > 0 && service.message_count <= service.message.count {
+    if service.message_count > 0 {
         screen.write_at(panel, name_row + 4, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(panel, name_row + 6, 2, "Enter goes on, Backspace takes back what was typed last.", plain)
@@ -3599,7 +3595,7 @@ draw_login :: fn(service : ptr[mut Service], whole : bool) {
         }
         dots(panel, name_row + 1, field_column, if service.setup == .LoggingIn { 8 } else { clusters(typed) })
     }
-    if service.message_count > 0 && service.message_count <= service.message.count {
+    if service.message_count > 0 {
         screen.write_at(panel, name_row + 4, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(
@@ -3627,45 +3623,30 @@ draw_login :: fn(service : ptr[mut Service], whole : bool) {
  * Take what's typed in the field so far.
  *
  * @param service The service's state, whose field is viewed; only read.
- * @return A view of the field's used bytes, good until it's typed in or zeroed; empty if the count is past the buffer.
+ * @return A view of the field's used bytes, good until it's typed in or zeroed.
  */
 field_bytes :: fn(service : ptr[Service]) -> u8[] {
-    return if service.field_count <= service.field.count {
-        service.field[0..<service.field_count]
-    }
-    else {
-        service.field[0..<0]
-    }
+    return service.field[0..<service.field_count]
 }
 
 /**
  * Take the account name kept.
  *
  * @param service The service's state, whose name is viewed; only read.
- * @return A view of the name's used bytes, good until it's changed or zeroed; empty if the count is past the buffer.
+ * @return A view of the name's used bytes, good until it's changed or zeroed.
  */
 name_bytes :: fn(service : ptr[Service]) -> u8[] {
-    return if service.name_count <= service.name.count {
-        service.name[0..<service.name_count]
-    }
-    else {
-        service.name[0..<0]
-    }
+    return service.name[0..<service.name_count]
 }
 
 /**
  * Take the new account's password kept from its first typing.
  *
  * @param service The service's state, whose password is viewed; only read.
- * @return A view of the password's used bytes, good until it's zeroed; empty if the count is past the buffer.
+ * @return A view of the password's used bytes, good until it's zeroed.
  */
 password_bytes :: fn(service : ptr[Service]) -> u8[] {
-    return if service.password_count <= service.password.count {
-        service.password[0..<service.password_count]
-    }
-    else {
-        service.password[0..<0]
-    }
+    return service.password[0..<service.password_count]
 }
 
 /**
@@ -3963,12 +3944,14 @@ lock :: fn(service : ptr[mut Service]) {
     }
     service.attention = false
     screen.show_panel(&view(service).screen, false)
+    copied := cast[usize](0)
     for byte, i in view(service).user {
-        if i < view(service).user_count && i < service.name.count {
+        if i < view(service).user_count {
             service.name[i] = byte
+            copied = i + 1
         }
     }
-    service.name_count = view(service).user_count
+    service.name_count = copied
     service.unlocking = true
     runtime.log_info("locked")
     say(service, "")

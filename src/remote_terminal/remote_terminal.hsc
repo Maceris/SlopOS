@@ -38,7 +38,7 @@ RemoteTerminal :: struct {
     column : u16,
     /** The line being typed, its first input_count bytes, and the cursor's byte in it. */
     input : u8[INPUT_BYTES],
-    input_count : usize,
+    input_count #at_most(input.count) : usize,
     input_cursor : usize,
     /** Whether the line's drawn, whether a line break was written before it, and the cursor's row below its first. */
     input_drawn : bool,
@@ -170,7 +170,7 @@ write :: fn(
         else {
             shown := safe_text.Shown.{}
             safe_text.show(bytes, at, end, &shown)
-            if shown.count > 0 && shown.count <= shown.bytes.count {
+            if shown.count > 0 {
                 text_buffer.append(out, string_of(&shown.bytes[0], shown.count))
                 advance(term, shown.columns)
             }
@@ -316,14 +316,14 @@ drop_input :: fn(term : ptr[mut RemoteTerminal], out : ptr[mut text_buffer.TextB
 
 /** Draw the line being typed after the output, if there's one and the program's on lines. */
 show_input :: fn(term : ptr[mut RemoteTerminal], out : ptr[mut text_buffer.TextBuffer]) {
-    if term.input_drawn || term.whole || term.plain || term.input_count == 0 || term.input_count > term.input.count {
+    if term.input_drawn || term.whole || term.plain || term.input_count == 0 {
         return void
     }
     term.input_break = term.column > 0
     if term.input_break {
         vt.append_line_break(out)
     }
-    line :: if term.input_count <= term.input.count { term.input[0..<term.input_count] } else { term.input[0..<0] }
+    line :: term.input[0..<term.input_count]
     column := cast[usize](0)
     row := cast[u16](0)
     cursor_column := cast[usize](0)
@@ -343,7 +343,7 @@ show_input :: fn(term : ptr[mut RemoteTerminal], out : ptr[mut text_buffer.TextB
         }
         shown := safe_text.Shown.{}
         safe_text.show(line, at, end, &shown)
-        if shown.count > 0 && shown.count <= shown.bytes.count {
+        if shown.count > 0 {
             if column + shown.columns > cast[usize](term.columns) {
                 column = 0
                 row += 1

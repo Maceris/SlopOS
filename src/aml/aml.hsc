@@ -300,7 +300,7 @@ load_table :: fn(interpreter : ptr[mut Interpreter], table : u8[]) -> Error? {
     }
     for i in 0..<kept.count {
         at :: TABLE_HEADER + i
-        if at < length && at < table.count {
+        if at < length {
             kept[i] = table[at]
         }
     }

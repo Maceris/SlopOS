@@ -121,7 +121,7 @@ Source :: struct {
     /** Its name, its first name_count bytes: letters, digits and underscores. */
     name : u8[NAME_BYTES],
     /** How many bytes of name are used, 1 to NAME_BYTES. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /** Rings opened for it so far: each is an instance, from 1. */
     instances : u32,
     /** Its records so far this boot, which numbers the next, dropped ones counted. */
@@ -168,7 +168,7 @@ Waiting :: struct {
     /** The source's name, its first name_count bytes. */
     name : u8[NAME_BYTES],
     /** How many bytes of name are used. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /** The number of the first record it wants, among the source's this boot. */
     from : u64,
     /** The lowest level it wants, a LogLevel. */
@@ -1179,7 +1179,7 @@ write_file :: fn(service : ptr[mut Service], source : ptr[mut Source], bytes : u
 path_of :: fn(source : ptr[Source], extension : string, storage : ptr[mut u8[64]]) -> string {
     count : usize = 0
     for byte in source.name {
-        if count < source.name_count && count < storage.count {
+        if count < source.name_count {
             storage[count] = byte
             count += 1
         }

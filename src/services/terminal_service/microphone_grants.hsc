@@ -33,7 +33,7 @@ Holder :: struct {
     id : u32,
     /** The program's name, as its powerbox gave it, the first count bytes; cut at HOLDER_NAME_BYTES. */
     name : u8[HOLDER_NAME_BYTES],
-    count : usize,
+    count #at_most(name.count) : usize,
 }
 
 /** The microphone's state on the console. */
@@ -42,7 +42,7 @@ Microphone :: struct {
     end : slop_os.Channel,
     /** The grants held, the first count of them. */
     holders : Holder[MAX_HOLDERS],
-    count : usize,
+    count #at_most(holders.count) : usize,
 }
 
 /**
@@ -213,15 +213,16 @@ released :: fn(service : ptr[mut Service], id : u32) {
         if i >= state.holders.count || state.holders[i].id != id {
             continue
         }
+        // Out of the list before it's said, as what's known of the count doesn't outlast a call
         gone :: state.holders[i]
-        runtime.log_info("microphone: % no longer holds it", bytes_text(first_of(gone.name[0..<gone.name.count], gone.count)))
         for k in i..<state.count {
             next :: k + 1
-            if next < state.count && k < state.holders.count && next < state.holders.count {
+            if next < state.count {
                 state.holders[k] = state.holders[next]
             }
         }
         state.count -= 1
+        runtime.log_info("microphone: % no longer holds it", bytes_text(first_of(gone.name[0..<gone.name.count], gone.count)))
         microphone_changed(service)
         return void
     }

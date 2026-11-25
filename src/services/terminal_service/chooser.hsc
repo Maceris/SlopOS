@@ -49,7 +49,7 @@ Asked :: struct {
     /** Why it asks, in the program's words; its first purpose_count bytes. */
     purpose : u8[ASK_BYTES],
     /** How many bytes of purpose are used, 0 to ASK_BYTES. */
-    purpose_count : usize,
+    purpose_count #at_most(purpose.count) : usize,
     /** A file's suggested name, which the chooser's filter starts with; its first suggested_count bytes. */
     suggested : u8[ENTRY_BYTES],
     /** How many bytes of suggested are used, 0 to ENTRY_BYTES; 0 for no suggestion. */
@@ -76,7 +76,7 @@ Entry :: struct {
     /** The entry's name, its first count bytes. */
     name : u8[ENTRY_BYTES],
     /** How many bytes of name are used, 0 to ENTRY_BYTES. */
-    count : usize,
+    count #at_most(name.count) : usize,
     /** Whether it's a directory, which Enter opens, rather than a file. */
     directory : bool,
 }
@@ -89,11 +89,11 @@ Chooser :: struct {
     /** The directory it's in, a path beneath the home without a leading or trailing /; empty for the home itself. */
     path : u8[PATH_BYTES],
     /** How many bytes of path are used, 0 to PATH_BYTES. */
-    path_count : usize,
+    path_count #at_most(path.count) : usize,
     /** What's typed: only entries whose names contain it are listed, and a new file is offered by this name. */
     filter : u8[ENTRY_BYTES],
     /** How many bytes of filter are used, 0 to ENTRY_BYTES. */
-    filter_count : usize,
+    filter_count #at_most(filter.count) : usize,
     /** The directory's entries, as the volume lists them; the first entry_count are used. */
     entries : Entry[CHOOSER_ENTRIES],
     /** How many of entries are used, 0 to CHOOSER_ENTRIES. */
@@ -335,7 +335,7 @@ chooser_key :: fn(service : ptr[mut Service], event : terminal.Event, text : u8[
     if event.code == USAGE_BACKSPACE {
         // The last character, its continuation bytes with it
         loop {
-            if chooser.filter_count == 0 || chooser.filter_count > chooser.filter.count {
+            if chooser.filter_count == 0 {
                 break
             }
             chooser.filter_count -= 1
@@ -383,7 +383,7 @@ activate :: fn(service : ptr[mut Service]) {
         case .Here => answer_ask(service, first_of(chooser.path[0..<chooser.path.count], chooser.path_count), false)
         case .Up => {
             // The last component taken off
-            at := min_count(chooser.path_count, chooser.path.count)
+            at := chooser.path_count
             loop {
                 if at == 0 {
                     break
@@ -615,7 +615,7 @@ items_of :: fn(service : ptr[mut Service], items : ptr[mut Item[CHOOSER_ENTRIES 
         made[0] = Item.{kind = .Here}
         count = 1
     }
-    if chooser.path_count > 0 && count < made.count {
+    if chooser.path_count > 0 {
         made[count] = Item.{kind = .Up}
         count += 1
     }

@@ -577,11 +577,11 @@ ListenerSlot :: struct {
     listener : u32,
     /** Memories held by Accepts, oldest first, the first held_count of them. */
     held : slop_os.Memory[HELD_ACCEPTS],
-    held_count : usize,
+    held_count #at_most(held.count) : usize,
     /** Connections arrived with no Accept held, waiting for one, as the stack's accept wait allows. */
     pending : u32[HELD_ACCEPTS],
     pending_remote : net_address.Endpoint[HELD_ACCEPTS],
-    pending_count : usize,
+    pending_count #at_most(pending.count) : usize,
     /** Whether an answer to it couldn't be sent (drop_broken). */
     broken : bool,
     /** The root it's charged to, as are the streams it accepts. */
@@ -838,7 +838,7 @@ add_network_client :: fn(
     if index < serving.policies.count {
         serving.policies[index] = policy
     }
-    if index < serving.client_root.count && index < serving.client_listener.count {
+    if index < serving.client_listener.count {
         serving.client_root[index] = serving.next_root
         serving.next_root += 1
         serving.client_listener[index] = listener
@@ -933,7 +933,7 @@ answered :: fn(service : ptr[mut Service], end : slop_os.Channel, result : slop_
     }
     serving :: &service.serving
     for each, i in serving.clients.ends {
-        if i < serving.clients.count && i < serving.client_broken.count && each == end {
+        if i < serving.clients.count && each == end {
             serving.client_broken[i] = true
             return void
         }
@@ -1455,7 +1455,7 @@ forget_pending :: fn(service : ptr[mut Service], connection : u32) {
         loop {
             if i < slot.pending.count && slot.pending[i] == connection {
                 for j in i + 1..<slot.pending_count {
-                    if j < slot.pending.count && j < slot.pending_remote.count {
+                    if j < slot.pending_remote.count {
                         slot.pending[j - 1] = slot.pending[j]
                         slot.pending_remote[j - 1] = slot.pending_remote[j]
                     }
@@ -1643,7 +1643,7 @@ connection_arrived :: fn(service : ptr[mut Service], incoming : net_stack.TcpInc
         if cast[slop_os.Handle](slot.end) != slop_os.NO_HANDLE && slot.listener == incoming.listener {
             at :: slot.pending_count
             remote :: endpoint_of(incoming.remote, incoming.remote_port)
-            if at < slot.pending.count && at < slot.pending_remote.count {
+            if at < slot.pending_remote.count {
                 slot.pending[at] = incoming.connection
                 slot.pending_remote[at] = remote
                 slot.pending_count = at + 1

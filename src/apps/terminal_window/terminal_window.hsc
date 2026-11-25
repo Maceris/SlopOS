@@ -60,15 +60,15 @@ Term :: struct {
     /** Input waiting for the reader, the first count. */
     events : terminal.Event[QUEUED],
     /** How many are waiting. */
-    count : usize,
+    count #at_most(events.count) : usize,
     /** Their text. */
     text : u8[QUEUED_TEXT],
     /** How many bytes of text. */
-    text_count : usize,
+    text_count #at_most(text.count) : usize,
     /** The line the reader's editing, the first line_count bytes. */
     line : u8[LINE_BYTES],
     /** How many bytes of line. */
-    line_count : usize,
+    line_count #at_most(line.count) : usize,
     /**
      * The client whose Read came while another was the reader, held to make it the reader once the reader goes, as
      * the shell's is when a program it gave the terminal to has ended but isn't seen gone yet; null for none.
@@ -81,7 +81,7 @@ Term :: struct {
     /** That line, the first kept_count bytes. */
     kept : u8[LINE_BYTES],
     /** How many bytes of kept. */
-    kept_count : usize,
+    kept_count #at_most(kept.count) : usize,
     /** Whether the cursor's shown. */
     cursor_shown : bool,
     /** Whether what's shown changed since the last frame. */
@@ -252,9 +252,12 @@ deliver :: fn(term : ptr[mut Term]) {
     else {
         term.text_count
     }
-    if count > term.events.count || text_end > term.text.count {
+    // What's left once they're given, worked out before the send, which may write anything as far as the proof knows
+    if count > term.events.count || text_end > term.text.count || text_end > term.text_count {
         return void
     }
+    left :: term.count - count
+    text_left :: term.text_count - text_end
     out := os.Outgoing.{}
     response :: os.begin[terminal.Response](&out)
     response^ = .Input(
@@ -267,17 +270,15 @@ deliver :: fn(term : ptr[mut Term]) {
         return void
     }
     term.held = 0
-    left :: term.count - count
     for i in cast[usize](0)..<left {
-        if i + count < term.events.count && i < term.events.count {
+        if i + count < term.events.count {
             moved := term.events[i + count]
             moved.text_start = moved.text_start - cast[u32](text_end)
             term.events[i] = moved
         }
     }
-    text_left :: term.text_count - text_end
     for i in cast[usize](0)..<text_left {
-        if i + text_end < term.text.count && i < term.text.count {
+        if i + text_end < term.text.count {
             term.text[i] = term.text[i + text_end]
         }
     }
@@ -511,9 +512,7 @@ write :: fn(term : ptr[mut Term], into : ptr[os.Incoming], text : terminal.Text)
         else {
             shown := safe_text.Shown.{}
             safe_text.show(bytes, at, end, &shown)
-            if shown.count <= shown.bytes.count {
-                screen.put(&term.screen, shown.bytes[0..<shown.count], shown.columns, style)
-            }
+            screen.put(&term.screen, shown.bytes[0..<shown.count], shown.columns, style)
         }
         at = end
     }

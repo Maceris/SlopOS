@@ -355,14 +355,14 @@ parse :: fn(text : string) -> Wanted? {
     start : usize = 0
     for character, i in text {
         if character == ',' && count < 3 {
-            if count < fields.count && start <= i {
+            if start <= i {
                 fields[count] = text[start..<i]
             }
             count += 1
             start = i + 1
         }
     }
-    if count < fields.count && start <= text.count {
+    if start <= text.count {
         fields[count] = text[start..<text.count]
     }
     count += 1

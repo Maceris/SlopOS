@@ -1193,7 +1193,7 @@ bundle_of :: fn(
     }
     bars : slop_os.Memory[6]
     for bar, i in function.bars {
-        if bar.valid && bar.size != 0 && i < bars.count {
+        if bar.valid && bar.size != 0 {
             cpu :: cpu_address(host, bar.pci)
             bars[i] = slop_os.memory_create_physical(
                 platform,

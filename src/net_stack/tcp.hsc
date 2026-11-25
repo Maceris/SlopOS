@@ -327,7 +327,7 @@ Segment :: struct {
     ts_value       : u32,
     ts_echo        : u32,
     sacks          : SackBlock[SACK_BLOCKS],
-    sack_count     : usize,
+    sack_count #at_most(sacks.count) : usize,
 }
 
 // ---- Sequence numbers, which wrap

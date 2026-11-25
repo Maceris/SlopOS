@@ -405,8 +405,10 @@ pump :: fn(service : ptr[mut Service], remote : ptr[mut Remote]) {
                     remote.inbox_first + remote.inbox_count
                 )
             )
-            remote.inbox_first += taken
-            remote.inbox_count -= taken
+            // At most what it was given, which nothing but received's word says
+            used :: if taken <= remote.inbox_count { taken } else { remote.inbox_count }
+            remote.inbox_first += used
+            remote.inbox_count -= used
             moved = moved || taken > 0
         }
         moved = take_events(service, remote) || moved
@@ -479,7 +481,7 @@ log_in_with_password :: fn(service : ptr[mut Service], remote : ptr[mut Remote])
     password : u8[ssh.PASSWORD_BYTES]
     count :: if offered.count <= password.count { offered.count } else { password.count }
     for i in cast[usize](0)..<count {
-        if i < offered.count && i < password.count {
+        if i < password.count {
             password[i] = compiler.declassify(cast[u8](offered[i]))
         }
     }

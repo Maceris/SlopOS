@@ -387,7 +387,7 @@ lineage_of :: fn(container : ptr[mut Container], record : ptr[VolumeRecord]) -> 
             return .Error(.TooLarge)
         }
         index :: lineage.count
-        if index < lineage.owners.count && index < lineage.up_to.count {
+        if index < lineage.up_to.count {
             lineage.owners[index] = origin
             lineage.up_to[index] = up_to
         }

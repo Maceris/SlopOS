@@ -83,7 +83,7 @@ append_style :: fn(out : ptr[mut text_buffer.TextBuffer], style : terminal.Style
     ]
     codes :: u8.[1, 2, 3, 4, 7, 9]
     for attribute, i in attributes {
-        if style.attributes & attribute != 0 && i < codes.count {
+        if style.attributes & attribute != 0 {
             text_buffer.append_byte(out, cast[u8](';'))
             text_buffer.append_unsigned(out, cast[u64](codes[i]))
         }
@@ -351,7 +351,7 @@ Decoder :: struct {
     /** A UTF-8 code point's bytes so far. */
     partial : u8[4],
     /** How many of partial's bytes there are so far. */
-    partial_count : usize,
+    partial_count #at_most(partial.count) : usize,
     /** How many bytes the code point being gathered takes, 2 to 4; 0 when none is. */
     partial_needed : usize,
 }
@@ -361,11 +361,11 @@ Decoded :: struct {
     /** The events, the first count of them, in the order the bytes came. */
     events : terminal.Event[terminal.MAX_EVENTS],
     /** How many of events there are, at most MAX_EVENTS; events past them are dropped. */
-    count : usize,
+    count #at_most(events.count) : usize,
     /** The text the events' text_start and text_bytes are ranges of. */
     text : u8[terminal.MAX_EVENT_TEXT],
     /** How many of text's bytes are in use, at most MAX_EVENT_TEXT. */
-    text_count : usize,
+    text_count #at_most(text.count) : usize,
 }
 
 /**
@@ -565,7 +565,7 @@ continue_code_point :: fn(decoder : ptr[mut Decoder], byte : u8, decoded : ptr[m
     }
     decoder.partial[decoder.partial_count] = byte
     decoder.partial_count += 1
-    if decoder.partial_count == decoder.partial_needed && decoder.partial_count <= decoder.partial.count {
+    if decoder.partial_count == decoder.partial_needed {
         key(decoded, 0, modifiers, decoder.partial[0..<decoder.partial_count])
         decoder.partial_needed = 0
     }

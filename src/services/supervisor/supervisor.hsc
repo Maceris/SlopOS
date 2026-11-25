@@ -1722,7 +1722,7 @@ main :: fn(
         }
     }
     serial_line :: supervisor.first_serial
-    if test_restart && serial_line < supervisor.started.count {
+    if test_restart {
         // Once the terminal service has its connection, which the driver's end takes with it
         loop {
             wait_and_handle(&supervisor)

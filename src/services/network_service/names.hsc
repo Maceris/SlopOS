@@ -55,7 +55,7 @@ Race :: struct {
     attempt_to : net_address.Endpoint[ATTEMPTS],
     /** The addresses the policy allows, in the order they're tried, and the next not yet tried. */
     candidates : net_stack.IpAddress[network.MAX_ADDRESSES],
-    candidate_count : usize,
+    candidate_count #at_most(candidates.count) : usize,
     next_candidate : usize,
     /** When the next address is started if none's connected by then. */
     next_attempt : u64,
@@ -208,7 +208,7 @@ lookup_done :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack], 
                 addresses : network.ResolvedAddress[network.MAX_ADDRESSES]
                 count := cast[usize](0)
                 for i in 0..<result.count {
-                    if i < result.addresses.count && count < addresses.count {
+                    if count < addresses.count {
                         address :: endpoint_of(result.addresses[i], 0).address
                         addresses[count] = network.ResolvedAddress.{
                             family = cast[u8](address.family),

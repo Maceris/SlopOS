@@ -30,10 +30,6 @@ expect_shows :: fn(
     end :: unicode.grapheme_end(text, 0)
     shown := safe_text.Shown.{}
     safe_text.show(text, 0, end, &shown)
-    if shown.count > shown.bytes.count {
-        testing.record(t, message, "shown more bytes than Shown holds", location)
-        return void
-    }
     testing.expect_eq(t, string_of(&shown.bytes[0], shown.count), expected, message, location)
     testing.expect_eq(t, shown.columns, columns, message, location)
 }

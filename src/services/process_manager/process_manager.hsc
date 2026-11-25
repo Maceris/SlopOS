@@ -378,7 +378,7 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
     }
     grants : process_builder.Grant[protocol.MAX_GRANTS]
     for i in 0..<grant_count {
-        if i < grants.count && i < request.labels.count && i < request.grants.count {
+        if i < request.grants.count {
             grants[i] = process_builder.Grant.{label = request.labels[i], handle = request.grants[i]}
         }
     }

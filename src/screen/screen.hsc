@@ -29,7 +29,7 @@ Cell :: struct {
     /** The cluster's UTF-8 bytes, the first count of them; what's past CELL_BYTES is dropped. */
     bytes : u8[CELL_BYTES],
     /** How many of bytes are the cluster's: 0 for an empty cell, at most CELL_BYTES. */
-    count : u8,
+    count #at_most(bytes.count) : u8,
     /** The columns the cluster takes: 1 or 2, or 0 for an empty cell or a wide cluster's second column. */
     width : u8,
     /** The colours and attributes the cell is drawn in. */
@@ -65,7 +65,7 @@ Screen :: struct {
     /** The status line's text, the first status_count bytes of it, as the terminal service set it. */
     status : u8[COLUMNS * 3],
     /** How many of status's bytes are the text, at most its count. */
-    status_count : usize,
+    status_count #at_most(status.count) : usize,
     /** The status line's cells, made from its text, inverse. */
     status_cells : Cell[COLUMNS],
     /** Whether the status line's text has changed: set by set_status, for its reader to clear. */
@@ -220,7 +220,7 @@ attach :: fn(grid : ptr[mut Grid], bytes : u8[]) {
 set :: fn(target : ptr[mut Cell], bytes : u8[], width : u8, style : terminal.Style) {
     taken :: if bytes.count < target.bytes.count { bytes.count } else { target.bytes.count }
     for i in 0..<taken {
-        if i < target.bytes.count && i < bytes.count {
+        if i < bytes.count {
             target.bytes[i] = bytes[i]
         }
     }
@@ -455,10 +455,5 @@ set_status :: fn(screen : ptr[mut Screen], text : string) {
  * @return The text's bytes, a view of screen's, good until the status line's set again.
  */
 status_text :: fn(screen : ptr[Screen]) -> u8[] {
-    return if screen.status_count <= screen.status.count {
-        screen.status[0..<screen.status_count]
-    }
-    else {
-        screen.status[0..<0]
-    }
+    return screen.status[0..<screen.status_count]
 }

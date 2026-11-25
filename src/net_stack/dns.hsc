@@ -78,7 +78,7 @@ Resolution :: struct {
     outcome : ResolveOutcome,
     /** Its addresses, the first count of them, IPv6 and IPv4 interleaved, IPv6 first. */
     addresses : IpAddress[MAX_ANSWERS],
-    count : usize,
+    count #at_most(addresses.count) : usize,
 }
 
 /** A server the resolver asks. */
@@ -122,7 +122,7 @@ Query :: struct {
     deadline  : u64,
     outcome   : ResolveOutcome,
     addresses : IpAddress[MAX_ANSWERS / 2],
-    count     : usize,
+    count #at_most(addresses.count) : usize,
     /** The answer's lowest TTL, in nanoseconds, for the cache. */
     life : u64,
 }
@@ -154,7 +154,7 @@ CacheEntry :: struct {
     v6          : bool,
     outcome     : ResolveOutcome,
     addresses   : IpAddress[MAX_ANSWERS / 2],
-    count       : usize,
+    count #at_most(addresses.count) : usize,
     expires     : u64,
 }
 

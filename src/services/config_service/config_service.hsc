@@ -71,7 +71,7 @@ Value :: struct {
     /** The value's name's bytes, name_count of them, checked by valid_name. */
     name : u8[MAX_OWNER],
     /** How many of name's bytes are the name's. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
     /** The newest version's number, as newest says on the volume; 0 before it's declared, or once it's forgotten. */
     newest : u64,
 }
@@ -674,8 +674,8 @@ connection_for :: fn(service : ptr[mut Store], owner : string, name : string) ->
         value = service.value_count
         entry :: &service.values[value]
         entry^ = Value.{}
-        copy_name(&entry.owner, &entry.owner_count, owner)
-        copy_name(&entry.name, &entry.name_count, name)
+        entry.owner_count = copy_name(&entry.owner, owner)
+        entry.name_count = copy_name(&entry.name, name)
         if !open_value(service, entry) {
             return null
         }
@@ -801,7 +801,7 @@ Path :: struct {
     /** The path's bytes, count of them. */
     bytes : u8[160],
     /** How many of bytes are the path's. */
-    count : usize,
+    count #at_most(bytes.count) : usize,
 }
 
 /**
@@ -848,7 +848,7 @@ version_path :: fn(path : ptr[mut Path], value : ptr[Value], version : u64) -> s
     while left != 0
     for i in cast[usize](0)..<count {
         at :: count - 1 - i
-        if path.count < path.bytes.count && at < digits.count {
+        if path.count < path.bytes.count {
             path.bytes[path.count] = digits[at]
             path.count += 1
         }
@@ -906,10 +906,10 @@ name_of :: fn(value : ptr[Value]) -> string {
  *
  * @param into The value's owner or name array, MAX_OWNER bytes, written from its start; bytes past the name are left as
  *     they were.
- * @param count Set to how many bytes were copied.
  * @param name The name, an owner or a value's name, checked already.
+ * @return How many bytes were copied, at most MAX_OWNER.
  */
-copy_name :: fn(into : ptr[mut u8[MAX_OWNER]], count : ptr[mut usize], name : string) {
+copy_name :: fn(into : ptr[mut u8[MAX_OWNER]], name : string) -> usize {
     copied := cast[usize](0)
     for character in name {
         if copied < into.count {
@@ -917,7 +917,7 @@ copy_name :: fn(into : ptr[mut u8[MAX_OWNER]], count : ptr[mut usize], name : st
             copied += 1
         }
     }
-    count^ = copied
+    return copied
 }
 
 /**

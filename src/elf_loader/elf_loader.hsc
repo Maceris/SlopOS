@@ -51,7 +51,7 @@ Executable :: struct {
     /** Its loadable segments, in order of address, each on pages of its own; only the first segment_count are used. */
     segments : Segment[MAX_SEGMENTS],
     /** How many of segments are used: 1 to MAX_SEGMENTS. */
-    segment_count : usize,
+    segment_count #at_most(segments.count) : usize,
     /**
      * Where its relocations start in the file, in bytes: RELA entries, each a RELATIVE_RELOCATION of 8 bytes into a
      * writable segment. 0 when it has none.

@@ -87,12 +87,12 @@ SftpHandle :: struct {
 Sftp :: struct {
     home        : os.Directory,
     inbox       : u8[SFTP_PACKET_BYTES],
-    inbox_count : usize,
+    inbox_count #at_most(inbox.count) : usize,
     handles     : SftpHandle[SFTP_HANDLES],
     message     : u8[SFTP_READ_BYTES + 1024],
     /** Answers to be sent, their first outbox_count bytes. */
     outbox : u8[OUTBOX_BYTES],
-    outbox_count : usize,
+    outbox_count #at_most(outbox.count) : usize,
 }
 
 /** The most bytes of answers held at once, for the caller to send: a READ's data and room besides. */

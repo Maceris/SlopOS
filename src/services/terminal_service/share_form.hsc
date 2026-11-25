@@ -220,7 +220,7 @@ draw_share_form :: fn(service : ptr[mut Service], whole : bool) {
     if service.setup == .ShareMember {
         screen.write_at(panel, top + 1, column, bytes_text(typed), plain)
     }
-    if service.message_count > 0 && service.message_count <= service.message.count {
+    if service.message_count > 0 {
         screen.write_at(panel, top + 3, 2, string_of(&service.message[0], service.message_count), plain)
     }
     screen.write_at(panel, top + 5, 2, "Enter shares it with them, Delete takes them out of it, Esc goes back.", plain)

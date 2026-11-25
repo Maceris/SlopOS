@@ -87,7 +87,7 @@ main :: fn(
         if bytes[i] != 0x0a {
             continue
         }
-        if i > start && start < bytes.count && asked < MAX_OFFSETS {
+        if i > start && asked < MAX_OFFSETS {
             match offset_of(elf, table, string_of(&bytes[start], i - start)) {
                 case Some(offset) => text_buffer.append_format(&text, "%{#x}\n", offset)
                 case None => text_buffer.append(&text, "?\n")
@@ -139,7 +139,7 @@ answer_queries :: fn(elf : u8[], queries : string, into : ptr[mut text_buffer.Te
         if bytes[i] != 0x0a {
             continue
         }
-        if i > start && start < bytes.count && asked < MAX_OFFSETS {
+        if i > start && asked < MAX_OFFSETS {
             query :: string_of(&bytes[start], i - start)
             match found {
                 case Some(dwarf) => answer_query(elf, dwarf, query, into)

@@ -273,7 +273,7 @@ convert_memory_map :: fn(map : ptr[MemoryMap], handoff : ptr[mut boot_protocol.H
         first :: if handoff.regions.count > 0 { handoff.regions[0] } else { boot_info.MemoryRegion.{} }
         for j in 0..<count {
             back :: count - j
-            if back < handoff.regions.count && back >= 1 {
+            if back >= 1 {
                 handoff.regions[back] = handoff.regions[back - 1]
             }
         }

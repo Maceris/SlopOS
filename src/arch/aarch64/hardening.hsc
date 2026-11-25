@@ -68,7 +68,7 @@ LogLine :: struct {
     /** The text so far. */
     bytes : u8[256],
     /** How many of bytes are used. */
-    count : usize,
+    count #at_most(bytes.count) : usize,
 }
 
 /**

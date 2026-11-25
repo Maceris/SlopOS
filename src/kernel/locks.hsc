@@ -225,7 +225,7 @@ lock_order_broken :: fn(rank : LockRank, what : string) #never_returns {
     runtime.log_fatal("lock order: a % lock % on CPU % (decisions/0106)", rank, what, cpu.index)
     held :: &cpu.held_ranks
     for i in 0..<cast[usize](held.count) {
-        if i < held.ranks.count && i < held.locks.count {
+        if i < held.locks.count {
             runtime.log_fatal("lock order: holding a % lock at %{#x}", cast[LockRank](held.ranks[i]), held.locks[i])
         }
     }

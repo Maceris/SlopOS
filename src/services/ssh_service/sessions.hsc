@@ -51,7 +51,7 @@ Remote :: struct {
     /** What's come from the client that the connection hasn't taken yet. */
     inbox : u8[16384],
     inbox_first : usize,
-    inbox_count : usize,
+    inbox_count #at_most(inbox.count) : usize,
     /** The home the login opened, until a session takes it; NONE for none. */
     home : slop_os.Channel,
     /** Its session channel. */
@@ -75,7 +75,7 @@ Remote :: struct {
     held : u32,
     /** What's to go on the channel. */
     pending : u8[PENDING_BYTES],
-    pending_count : usize,
+    pending_count #at_most(pending.count) : usize,
     /** The session's first program's end, once it's come, to be sent once what's pending is. */
     exited : bool,
     exit_code : u64,
@@ -577,8 +577,7 @@ deliver :: fn(remote : ptr[mut Remote]) {
 /** Answer the Read waiting with the first count events decoded, all of them or none, and start again. */
 answer_read :: fn(remote : ptr[mut Remote], count : usize) {
     if remote.terminal_end == NONE
-        || count > remote.decoded.events.count
-        || remote.decoded.text_count > remote.decoded.text.count {
+        || count > remote.decoded.events.count {
         return void
     }
     out := os.Outgoing.{}

@@ -203,7 +203,7 @@ TlbBatch :: struct {
     /** Whether every entry for tag is to be flushed, not just addresses. */
     all : bool,
     /** How many of addresses are set, 0 to 16. */
-    count : u32,
+    count #at_most(addresses.count) : u32,
     /** The virtual addresses of pages to flush; only the first count are meaningful. */
     addresses : VirtualAddress[16],
 }

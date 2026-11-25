@@ -358,7 +358,7 @@ decimal :: fn(value : u64, digits : ptr[mut u8[20]]) -> string {
     while left != 0
     for i in cast[usize](0)..<count {
         at :: count - 1 - i
-        if i < digits.count && at < reversed.count {
+        if i < digits.count {
             digits^[i] = reversed[at]
         }
     }

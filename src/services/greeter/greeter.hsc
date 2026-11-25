@@ -62,7 +62,7 @@ Greeter :: struct {
     /** What it says under the fields, the first message_count bytes. */
     message : u8[MESSAGE_BYTES],
     /** How many bytes of message there are. */
-    message_count : usize,
+    message_count #at_most(message.count) : usize,
     /** The session it started, while it runs; null when the login window's shown. */
     session : u32?,
     /** The prompt connection of the session it started, whose asks it shows; NO_HANDLE without one. */

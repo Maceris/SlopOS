@@ -136,7 +136,7 @@ Handoff :: struct {
     /** The kernel image's loadable segments, where they're mapped, their first segment_count used. */
     segments : Segment[MAX_SEGMENTS],
     /** How many of segments are used, at most MAX_SEGMENTS. */
-    segment_count : u64,
+    segment_count #at_most(segments.count) : u64,
     /** The boot modules, their first module_count used. */
     modules : Module[MAX_MODULES],
     /** How many of modules are used, at most MAX_MODULES. */

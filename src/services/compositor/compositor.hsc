@@ -111,11 +111,11 @@ ClientState :: struct {
     /** Its events waiting, the first count of them, oldest first. */
     events : surface.Event[QUEUED],
     /** How many of events are waiting. */
-    count : usize,
+    count #at_most(events.count) : usize,
     /** The waiting events' text. */
     text : u8[QUEUED_TEXT],
     /** How many of text's bytes are in use. */
-    text_count : usize,
+    text_count #at_most(text.count) : usize,
     /** How many events its held Read asks for; 0 for none held. */
     held : u32,
     /** The number its next surface gets, from 1. */
@@ -140,7 +140,7 @@ ClientState :: struct {
     /** Its program's name, as its dialer named it (Name), the first name_count bytes; none when it wasn't. */
     name : u8[surface.NAME_BYTES],
     /** How many of name's bytes are used. */
-    name_count : usize,
+    name_count #at_most(name.count) : usize,
 }
 
 /** An activation token given for a gesture, until a window presents it or it's too old. */
@@ -196,7 +196,7 @@ Window :: struct {
     /** Its title, the first title_count bytes. */
     title : u8[TITLE_BYTES],
     /** How many of title's bytes it has. */
-    title_count : usize,
+    title_count #at_most(title.count) : usize,
 }
 
 /** The compositor's state, on the heap. */
@@ -238,7 +238,7 @@ Compositor :: struct {
     /** The windows in use from the bottom up, by index, the first order_count of them. */
     order : usize[MAX_WINDOWS],
     /** How many windows are in order. */
-    order_count : usize,
+    order_count #at_most(order.count) : usize,
     /** The focused window, or NO_WINDOW. */
     focus : usize,
     /** The window the pointer's over, or NO_WINDOW. */
@@ -261,7 +261,7 @@ Compositor :: struct {
      */
     held : u8[surface.MAX_HELD_BYTES],
     /** How many of held's bytes are in use. */
-    held_count : usize,
+    held_count #at_most(held.count) : usize,
     /** What changed since the last frame, on the screen. */
     damage : canvas.Rect,
     /** What changed for the last frame. */
@@ -269,7 +269,7 @@ Compositor :: struct {
     /** What was copied last, as text, the first clipboard_count bytes. */
     clipboard : u8[TITLE_BYTES],
     /** How many bytes of clipboard there are. */
-    clipboard_count : usize,
+    clipboard_count #at_most(clipboard.count) : usize,
     /**
      * What was copied last as typed data (decisions/0193, 16f): the compositor's own copy, paste_bytes of it, its
      * schema's hash paste_schema; nothing while paste_bytes is 0.
@@ -567,12 +567,12 @@ serve :: fn(compositor : ptr[mut Compositor], index : usize, into : ptr[mut os.I
             case Activation => response^ = .Token(token_for(compositor, index))
             case Name(given) => {
                 answered = false
-                if first_request && index < compositor.states.count && !compositor.states[index].listener {
+                if first_request && !compositor.states[index].listener {
                     state :: &compositor.states[index]
                     text :: os.items(into, given)
                     kept :: if text.count < state.name.count { text.count } else { state.name.count }
                     for byte, i in text {
-                        if i < kept && i < state.name.count {
+                        if i < kept {
                             state.name[i] = byte
                         }
                     }
@@ -1119,8 +1119,7 @@ focus_top_shown :: fn(compositor : ptr[mut Compositor]) {
 
 /** A window's title as text. */
 title_of :: fn(window : ptr[Window]) -> string {
-    count :: if window.title_count <= window.title.count { window.title_count } else { window.title.count }
-    return if count > 0 { string_of(&window.title[0], count) } else { "" }
+    return if window.title_count > 0 { string_of(&window.title[0], window.title_count) } else { "" }
 }
 
 /**
@@ -1166,7 +1165,7 @@ holds_microphone :: fn(compositor : ptr[Compositor], client : usize) -> bool {
         return false
     }
     state :: &compositor.states[client]
-    if state.name_count == 0 || state.name_count > state.name.count || compositor.held_count > compositor.held.count {
+    if state.name_count == 0 {
         return false
     }
     name :: state.name[0..<state.name_count]
@@ -1744,6 +1743,9 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
     }
     count := most
     text_end := state.text_count
+    // What's queued as the Read's answered, which what's left is worked out from once it's sent
+    queued :: state.count
+    queued_text :: state.text_count
     sent := false
     // Halved while they're too big for the client's ring, as one made with the default ring is
     for attempt in cast[usize](0)..<8 {
@@ -1797,11 +1799,12 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
             }
         }
     }
-    if !sent {
+    // Halving loses how count stands to what's queued, and the next event's text_start is what it was given as
+    if !sent || count > queued || text_end > queued_text {
         return void
     }
     state.held = 0
-    left :: state.count - count
+    left :: queued - count
     for i in 0..<left {
         from :: i + count
         if from < state.events.count && i < state.events.count {
@@ -1815,9 +1818,9 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
             state.events[i] = moved
         }
     }
-    text_left :: state.text_count - text_end
+    text_left :: queued_text - text_end
     for i in 0..<text_left {
-        if i + text_end < state.text.count && i < state.text.count {
+        if i + text_end < state.text.count {
             state.text[i] = state.text[i + text_end]
         }
     }
@@ -1833,7 +1836,7 @@ deliver :: fn(compositor : ptr[mut Compositor], client : usize) {
  * @param kept How many of its text's bytes stay, at most text_count.
  */
 forget_text :: fn(state : ptr[mut ClientState], kept : usize) {
-    if kept < state.text_count && state.text_count <= state.text.count {
+    if kept < state.text_count {
         intrinsics.secure_zero(&state.text[kept], state.text_count - kept)
     }
     state.text_count = if kept < state.text_count { kept } else { state.text_count }
@@ -1975,7 +1978,7 @@ draw_window :: fn(compositor : ptr[mut Compositor], buffer : u32, index : usize,
         title_at := cast[f32](band.x0 + 8)
         if window.client < compositor.states.count {
             state :: &compositor.states[window.client]
-            if state.name_count > 0 && state.name_count <= state.name.count {
+            if state.name_count > 0 {
                 name :: state.name[0..<state.name_count]
                 wide :: fonts.measure(&font, BAND_TEXT, name)
                 canvas.fill_rect(

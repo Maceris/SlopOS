@@ -255,7 +255,7 @@ part :: fn(bytes : u8[], from : usize, to : usize) -> u8[] {
 fill :: fn(into : mut u8[], body : u8[]) -> usize {
     count :: if body.count < into.count { body.count } else { into.count }
     for i in 0..<count {
-        if i < into.count && i < body.count {
+        if i < body.count {
             into[i] = body[i]
         }
     }

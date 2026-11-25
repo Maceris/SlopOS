@@ -791,7 +791,7 @@ parse_binary :: fn(parser : ptr[mut Parser], level : usize) -> ptr[mut Node] {
  */
 operator_at :: fn(parser : ptr[Parser], operators : string[]) -> string? {
     for operator in operators {
-        if is_letter(cast[u8](operator[0 % operator.count])) {
+        if operator.count > 0 && is_letter(cast[u8](operator[0])) {
             if at_keyword(parser, operator) {
                 return operator
             }
@@ -1142,14 +1142,14 @@ unit_value :: fn(unit : string) -> Unit? {
         1000 * 1000 * 1000 * 1000
     ]
     for each, i in sizes {
-        if each == unit && i < scales.count {
+        if each == unit {
             return Unit.{scale = scales[i], size = true}
         }
     }
     durations :: string.["ns", "us", "ms", "s", "m", "h", "d"]
     nanos :: u64.[1, 1000, 1_000_000, 1_000_000_000, 60_000_000_000, 3_600_000_000_000, 86_400_000_000_000]
     for each, i in durations {
-        if each == unit && i < nanos.count {
+        if each == unit {
             return Unit.{scale = nanos[i], size = false}
         }
     }

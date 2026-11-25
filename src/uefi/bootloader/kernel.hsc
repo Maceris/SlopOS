@@ -58,7 +58,7 @@ LoadedKernel :: struct {
     /** The loadable segments, as they run: their virtual addresses with the slide, sizes in memory and permissions. */
     segments : boot_protocol.Segment[boot_protocol.MAX_SEGMENTS],
     /** How many of segments are filled; segments past MAX_SEGMENTS are loaded but not listed. */
-    segment_count : usize,
+    segment_count #at_most(segments.count) : usize,
 }
 
 /**

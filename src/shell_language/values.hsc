@@ -298,7 +298,7 @@ append_size :: fn(out : ptr[mut text_buffer.TextBuffer], bytes : u64) {
         text_buffer.append_unsigned(out, tenths)
     }
     text_buffer.append(out, " ")
-    text_buffer.append(out, SIZE_UNITS[unit % SIZE_UNITS.count])
+    text_buffer.append(out, SIZE_UNITS[unit])
 }
 
 /**
@@ -315,7 +315,7 @@ append_duration :: fn(out : ptr[mut text_buffer.TextBuffer], nanos : i64) {
     units :: u64.[3_600_000_000_000, 60_000_000_000, 1_000_000_000, 1_000_000, 1_000, 1]
     names :: string.["h", "m", "s", "ms", "us", "ns"]
     for unit, i in units {
-        if magnitude >= unit && magnitude % unit == 0 && i < names.count {
+        if magnitude >= unit && magnitude % unit == 0 {
             text_buffer.append_unsigned(out, magnitude / unit)
             text_buffer.append(out, " ")
             text_buffer.append(out, names[i])

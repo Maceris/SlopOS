@@ -229,7 +229,7 @@ InstallationRecord :: struct {
  */
 Installations :: struct {
     /** How many of entries are used, from the first: 0 to MAX_INSTALLATIONS. */
-    count : u32,
+    count #at_most(entries.count) : u32,
     /**
      * 1 once it's been written: the config store's default, all zeros, is no list at all, and the build's stands.
      */

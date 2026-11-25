@@ -47,7 +47,7 @@ Holder :: struct {
     id : u32,
     /** The program's name, as its powerbox gave it, the first count bytes; cut at HOLDER_NAME_BYTES. */
     name : u8[HOLDER_NAME_BYTES],
-    count : usize,
+    count #at_most(name.count) : usize,
 }
 
 /** The microphone's state in the GUI. */
@@ -58,7 +58,7 @@ Microphone :: struct {
     port : slop_os.Port,
     /** The grants held, the first count of them. */
     holders : Holder[MAX_HOLDERS],
-    count : usize,
+    count #at_most(holders.count) : usize,
     /** The sound window, passive, in the trusted layer; null until it's first needed. */
     window : ptr[mut gui_kit.Window]?,
     /** The GUI session's volume, as last set: 0 to sound.FULL_VOLUME, full when the session starts. */
@@ -268,14 +268,16 @@ released :: fn(greeter : ptr[mut Greeter], id : u32) {
         if i >= state.holders.count || state.holders[i].id != id {
             continue
         }
-        runtime.log_info("microphone: % no longer holds it", name_text(&state.holders[i]))
+        // Out of the list before it's said, as what's known of the count doesn't outlast a call
+        gone :: state.holders[i]
         for k in i..<state.count {
             next :: k + 1
-            if next < state.count && k < state.holders.count && next < state.holders.count {
+            if next < state.count {
                 state.holders[k] = state.holders[next]
             }
         }
         state.count -= 1
+        runtime.log_info("microphone: % no longer holds it", name_text(&gone))
         show_microphone(greeter)
         return void
     }
@@ -481,5 +483,5 @@ take_back_microphone :: fn(greeter : ptr[mut Greeter]) {
 
 /** A holder's name as text. */
 name_text :: fn(holder : ptr[Holder]) -> string {
-    return if holder.count > 0 && holder.count <= holder.name.count { string_of(&holder.name[0], holder.count) } else { "" }
+    return if holder.count > 0 { string_of(&holder.name[0], holder.count) } else { "" }
 }

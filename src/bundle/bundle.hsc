@@ -74,7 +74,7 @@ MAX_SUBSTITUTIONS :: 8
 /** A substitution policy: its substitutions, in the first count of entries. */
 Substitutions :: struct {
     /** How many of entries are the policy's, 0 to MAX_SUBSTITUTIONS. */
-    count : u64,
+    count #at_most(entries.count) : u64,
     /** The substitutions, the first count of them. */
     entries : Substitution[MAX_SUBSTITUTIONS],
 }
