@@ -1,6 +1,6 @@
 # 0198: Bounds Checker Improvements, Before M19, Planned
 
-Status: accepted
+Status: accepted; built
 Date: 2026-11-23
 Related: Hemera's `docs/types.md` (*Bounds Checking*), `0197` (N2, where the powerbox needed an `if` it can't reach),
 `../hemera-feedback.md`, `../roadmap.md`

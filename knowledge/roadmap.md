@@ -616,13 +616,21 @@ Planned 2026-11-23 (`decisions/0198`), with the owner, after a scan of the code 
 
 ## M19 — RISC-V (L1, L2)
 
-- LLVM with its RISC-V backend, and Hemera's `riscv64`, first for Linux.
-- The kernel on QEMU `virt` through SlopOS's bootloader: entry, Sv48 paging, the interrupt controllers, the timer and
-  the other harts; then user mode, and every boot test that applies.
-- The RISC-V IOMMU, and the CFI extensions, as D and H did for the others.
+The baseline is RVA23, CFI used where the CPU has it; QEMU `virt` through edk2 and OpenSBI.
 
-Chosen 2026-11-23 (`decisions/0197`), the third architecture (`0022`); its stages planned with the owner when Before
-M19 is built, on A's pattern.
+- R1: Hemera on RISC-V, hosted: LLVM with its RISC-V backend, the carrier register, the prologue stack check,
+  `morestack` and fibers, Linux on riscv64 in `base`, Hemera's Linux tests through user-mode QEMU.
+- R2: Hemera for a RISC-V kernel: trap entry, CSR intrinsics, fences and SBI calls, and the ELF-to-PE writer that
+  builds SlopOS's bootloader as a UEFI program.
+- R3: SlopOS boots: `arch_riscv64`, the bootloader through edk2, the 16550 console, traps, Sv48 paging.
+- R4: interrupts, time and SMP: the AIA and the PLIC, each tested; Sstc's timer, harts through SBI's HSM, IPIs and
+  TLB shootdown.
+- R5: threads and user mode: U-mode, FP and vector state, virtio over PCI, every boot test on all three.
+- R6: the RISC-V IOMMU, Zicfiss shadow stacks and Zicfilp landing pads.
+- R7: a review.
+
+Planned 2026-11-24 (`decisions/0199`), with the owner, on A's pattern (`0061`); chosen 2026-11-23 (`0197`), the third
+architecture (`0022`).
 
 ## Later
 
@@ -672,4 +680,4 @@ M19 is built, on A's pattern.
 | M18 | built 2026-11-23 (`decisions/0195`), 18a to 18e: the process manager making launched processes, the launcher able to watch, end and read its child but not steer it; intercepts that steer only on the user's say, `debug`, `record` and `replay` asking the powerbox; handles that only move; powerbox connections named by what their holder was launched from, through the kernel's `channel_peer_owned_by` and the process manager's `Identify`; a script's asks shown as a script's; a security review, its critical and high findings fixed (sealed processes, ends used before they moved). Its full suites passed 2026-11-23; what the review left for the owner (0195's As Built: 18e) |
 | Before M19 | built 2026-11-23 (`decisions/0197`), N1 to N4: the microphone's mark on its holders' windows, drawn by the compositor when the trusted path says who holds it; a steering prompt naming the program by its launch (`NameOwn`, the process manager's `IdentifyProcess`), and each installation's executable a window of its own; the trusted path's waits on the audio service and the session manager limited to 5 s, and typed text zeroed in the compositor and gui_kit; Hemera's W2003 for escapes that aren't (which found the bootloader's backspace), checked arithmetic, and no cascade of E4030 behind a body's errors. Its full suites passed 2026-11-23 |
 | Bounds Checker | built 2026-11-24 (`decisions/0198`), B1 to B4: if expressions' values, loops widened to the constants they compare against, stores keeping other fields; calls to functions that write nothing keeping what's known; `#at_most` field bounds, proven at every store; the sweep, 102 fields bounded and the workarounds they made needless taken out, the scan kept as `tools/bounds_workarounds.py` |
-| M19 | chosen 2026-11-23 (`decisions/0197`): RISC-V, planned once the bounds checker's built |
+| M19 | planned 2026-11-24 (`decisions/0199`), R1 to R7: RISC-V on RVA23, Hemera hosted and for a kernel, the bootloader as a PE Hemera writes, the AIA and the PLIC, user mode and every boot test, the IOMMU and CFI, a review |
