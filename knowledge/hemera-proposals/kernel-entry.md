@@ -1,6 +1,9 @@
 # Kernel Entry on AArch64 and RISC-V
 
-Status: **open** for RISC-V. AArch64 was built 2026-10-24 (`../decisions/0063`): one `.entry` function for the
+Status: **built** for all three. RISC-V was built 2026-11-25 (`../decisions/0199`, R2): one `.entry` function that
+`stvec` points at directly, `sscratch` holding the hart's `riscv64.TrapScratch` in U-mode and 0 in S-mode,
+`riscv64.RegisterFrame`, `return_to_user(frame, scratch)`, and CSRs by name as compile-time arguments.
+AArch64 was built 2026-10-24 (`../decisions/0063`): one `.entry` function for the
 whole vector table (`aarch64.vector_table`), `aarch64.RegisterFrame`, `return_to_user(frame, kernel_stack)`, and system
 registers by name as compile-time arguments. x86-64 was adopted 2026-10-13 as
 `#calling_convention(.entry)` and `.syscall_entry`, with `x86_64.RegisterFrame`, `entry_points`

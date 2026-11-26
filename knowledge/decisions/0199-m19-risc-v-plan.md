@@ -100,3 +100,45 @@ In seven stages:
 - The device tree package reads RISC-V's nodes: harts, the AIA, the PLIC, the 16550.
 - `../hemera-proposals/kernel-entry.md`'s RISC-V half is R2.
 - The boot tests run three times over. A full run is about half as long again.
+
+## As Built: R1 (2026-11-25)
+- **LLVM** builds its RISC-V backend. Three patches of Hemera's: the prologue stack check (0007, a trap or `morestack`),
+  quoted symbols in RISC-V assembly's `call` and `la` (0008), and a fix for instruction selection looping forever on
+  an AND mask with Zba or Zbs (0009), found compiling `std/ntp`.
+- **The carrier register is `s11`.** RVA23U64's features are the default, with the LP64D ABI.
+- **`morestack`, fibers and stack traces** are RISC-V assembly. A suspended fiber keeps 112 bytes, or 224 with
+  floating point. Assembly in the module that uses D or V turns them on itself, since LLVM reads module assembly with
+  no features.
+- **Linux on riscv64 in `base` and `std/os`:** startup, the generic system call table, threads through `clone`, and
+  linking C (LP64D's foreign calls, `ld-linux-riscv64-lp64d.so.1`). The thread carrier is local-exec thread-local
+  storage in an executable, since RISC-V's linker doesn't relax general-dynamic as the others' do.
+- **Tests:** Hemera's Linux tests run as riscv64 programs through user-mode QEMU on the Linux VM, 83 of 83, `libc`
+  against a sysroot from Debian's `libc6-riscv64-cross`.
+
+## As Built: R2 (2026-11-25)
+- **Trap entry:** `#calling_convention(.entry)` on RISC-V is what `stvec` points at, in direct mode. `sscratch` is the
+  hart's `riscv64.TrapScratch` in U-mode and 0 in S-mode; the entry swaps it with `tp`, so a trap from U-mode runs on
+  `TrapScratch.kernel_stack` with `tp` pointing at the `TrapScratch`. A trap from S-mode builds its frame on the stack
+  it was on. `riscv64.RegisterFrame` is `x0`–`x31`, `sepc`, `sstatus`, `scause` and `stval`, 288 bytes. The entry
+  clears `SUM`. `return_to_user(frame, scratch)` sets `sscratch` and returns with `sret`. So SlopOS's per-hart data
+  can start with its `TrapScratch`, and `tp` finds it.
+- **`base/intrinsics/riscv64`:**
+  - `csrr`, `csrw`, `csrrw`, `csrrs` and `csrrc`, the CSR a compile-time `riscv64.Csr`;
+  - `fence` with its access kinds as compile-time arguments, `fence_i`, and `sfence_vma` in four forms;
+  - `wfi`, `pause`, `ebreak` and `seed`;
+  - `read_tp` and `write_tp`;
+  - `sbi_call`, `enter` for the bootloader, `semihosting`, and `system_call` answering in a0–a2;
+  - `sstatus`'s bits and `scause`'s codes as constants.
+- **The ELF-to-PE writer:** a RISC-V UEFI application is linked by `ld.lld` as a position-independent ELF, each
+  segment on pages of its own from 0x1000. Hemera makes the PE32+ image from it: a section per segment, with the
+  segment's protection; base 0; relative relocations as DIR64 base relocations. edk2 applies each section's
+  protection. Debug info isn't kept, so a bootloader's stack traces can't be symbolized yet.
+- **A kernel's features** are `-f,-d,-zve32x,-zvl32b`, which takes out every vector extension RVA23 implies. Without
+  D or F the ABI is LP64. A kernel above 2 GiB needs `--code-model=medium` (`medany`).
+- **Tests:**
+  - Hemera's `freestanding_tests.py` boots a RISC-V kernel under OpenSBI on QEMU's `virt` (`rva23s64`). It turns on
+    Sv39, takes an S-mode breakpoint, runs three U-mode `ecall`s (returned by `sret` and through `return_to_user`),
+    reads a U page with `SUM` set, calls the SBI, and ends at the stack check's trap.
+  - Every function in `base` and `std` generates for that target.
+  - A UEFI application runs under edk2 (`edk2-riscv-code.fd`), finds its image base, and turns the machine off.
+  - HemeraTest reads the image back as a PE.
