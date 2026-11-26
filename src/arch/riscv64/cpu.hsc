@@ -71,6 +71,13 @@ ArchCpu :: struct #align(64) {
      * The IPIs sent to this hart by the SBI and not yet taken, a bit for each IpiKind, set atomically by the senders.
      */
     ipis : u32,
+    /** The kernel's deadline on this hart, a time CSR value (set_deadline), or NO_DEADLINE when it has none. */
+    deadline : u64,
+    /**
+     * When this hart next pends the test device's line, a time CSR value, or NO_DEADLINE when it doesn't
+     * (test_device_interrupts). stimecmp holds the earlier of it and deadline.
+     */
+    test_deadline : u64,
 }
 
 /**
@@ -107,6 +114,8 @@ ArchSystem :: struct {
     direct_map_offset : u64,
     /** The time CSR's frequency in Hz, the device tree's timebase-frequency; 0 if it doesn't say. */
     timebase : u64,
+    /** The vector registers' length in bytes, vlenb, read once by init_system; 0 without V. */
+    vlenb : u64,
     /** Which interrupt controller the harts have, found in the device tree (interrupts.hsc). */
     controller : Controller,
     /** The harts the device tree lists, by hart ID, with their place on the interrupt controller (interrupts.hsc). */
@@ -131,9 +140,12 @@ ArchSystem :: struct {
     routes : Route[MAX_ROUTES],
     /** The lock that guards routes. */
     routes_lock : concurrency.SpinLock,
-    /** Whether test_device_interrupts is on: each tick on the hart that started it pends the test line again. */
+    /**
+     * Whether test_device_interrupts is on: the hart that started it pends the test line TEST_DEVICE_HZ times a
+     * second.
+     */
     test_interrupts : bool,
-    /** The hart test_device_interrupts was started on, whose ticks pend the test line. */
+    /** The hart test_device_interrupts was started on, which pends the test line. */
     test_hart : u64,
     /** The UART's line on the PLIC, the test device on a machine with a PLIC; 0 if the device tree doesn't say. */
     uart_line : u32,
@@ -234,6 +246,12 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
     }
     system.features = detect_features(firmware, direct_map_offset)
     system.asid_bits = probe_asid_bits()
+    if has(&system.features, .RiscvV) {
+        // vlenb, which only reads with sstatus.VS on
+        _ = riscv64.csrrs(.SSTATUS, SSTATUS_VS_INITIAL)
+        system.vlenb = riscv64.csrr(.VLENB)
+        _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_VS)
+    }
     tree := devicetree.open(devicetree_address(firmware, direct_map_offset)) or_return void
     cpus := devicetree.find_node_named(&tree, "cpus") or_else devicetree.Node.{}
     if cpus.offset != 0 {
@@ -342,13 +360,17 @@ init_cpu :: fn(
     cpu.bootloader_tables = true
     cpu.hart_id = hardware_id
     cpu.active_line = NO_ACTIVE_LINE
-    _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SIE)
+    cpu.deadline = NO_DEADLINE
+    cpu.test_deadline = NO_DEADLINE
+    _ =riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SIE)
     riscv64.csrw(.SIE, 0)
     riscv64.write_tp(cast[rawptr](cpu))
     riscv64.csrw(.SSCRATCH, 0)
     riscv64.csrw(.STVEC, cast[u64](trap_entry))
     _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SUM | riscv64.SSTATUS_FS | riscv64.SSTATUS_VS)
     riscv64.csrw(.STIMECMP, NO_DEADLINE)
+    // User mode reads the time CSR, until a recorded process's thread runs (set_counter_trap)
+    riscv64.csrw(.SCOUNTEREN, COUNTEREN_TIME)
     init_hart_controller(system, cpu)
     riscv64.csrw(.SIE, SIE_SOFTWARE | SIE_TIMER | SIE_EXTERNAL)
 }

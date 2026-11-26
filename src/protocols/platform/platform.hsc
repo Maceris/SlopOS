@@ -99,6 +99,11 @@ ClockKind :: enum #backed_by(u32) {
     Mc146818 = 1,
     /** Arm's PL031, its registers' 4 KiB, from the device tree's arm,pl031. */
     Pl031 = 2,
+    /**
+     * Google's Goldfish RTC, as QEMU's RISC-V virt has, its registers' 4 KiB, from the device tree's
+     * google,goldfish-rtc.
+     */
+    Goldfish = 3,
 }
 
 /** The real-time clock, and what its driver holds of it: its ports, or its registers, NO_HANDLE for the other. */
@@ -107,7 +112,9 @@ RealTimeClock :: struct {
     kind : ClockKind,
     /** For an Mc146818, its two I/O ports, which move to the client; NO_HANDLE otherwise. */
     ports : slop_os.IoPortRange,
-    /** For a Pl031, its registers' 4 KiB as device memory, which moves to the client; NO_HANDLE otherwise. */
+    /**
+     * For a Pl031 or a Goldfish, its registers' 4 KiB as device memory, which moves to the client; NO_HANDLE otherwise.
+     */
     registers : slop_os.Memory,
 }
 

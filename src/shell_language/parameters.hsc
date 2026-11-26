@@ -95,7 +95,7 @@ giving_of :: fn(manifest : ptr[schema.Schema], place : usize) -> Giving {
     }
     // Hosted, as the package's tests are, no type's a handle's
     handle := false
-    #if OS == .SlopOS && (TARGET_ARCH == .x86_64 || TARGET_ARCH == .arm64) {
+    #if OS == .SlopOS && (TARGET_ARCH == .x86_64 || TARGET_ARCH == .arm64 || TARGET_ARCH == .riscv64) {
         handle = runtime.slop_os_kind_of(kind) != 0
     }
     if !handle {

@@ -38,6 +38,9 @@ import test_kit from "../../test_kit"
 #else_if TARGET_ARCH == .arm64 {
     import aarch64 from "base:intrinsics/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import riscv64 from "base:intrinsics/riscv64"
+}
 
 /** The test's name, which starts each line it logs. */
 NAME :: "test_control"
@@ -128,6 +131,14 @@ SLOT_RESULTS :: 8
     REGISTER_TAG :: 0
     /** The index of the register holding a call's result's first value: x1. */
     REGISTER_FIRST :: 1
+}
+#else_if TARGET_ARCH == .riscv64 {
+    /** The index of the register holding a system call's number, by register number: a7, x17. */
+    REGISTER_NUMBER :: 17
+    /** The index of the register holding a call's result's tag: a0, x10. */
+    REGISTER_TAG :: 10
+    /** The index of the register holding a call's result's first value: a1, x11. */
+    REGISTER_FIRST :: 11
 }
 
 /** What T tells D, with its address space's handle in the message's batch: where its things are. */
@@ -402,10 +413,11 @@ build_copy :: fn(log : slop_os.DebugLog, program : slop_os.Memory, role : u64) -
     random_stream.fill(&stream, seed)
     grants :: process_builder.Grant.[
         process_builder.grant("log", log_copy),
-        process_builder.grant("peer", cast[slop_os.Handle](pair.b)),
+        process_builder.grant("peer", cast[slop_os.Handle](pair.b))
     ]
     target :: process_builder.Target.{process = process, space = space, budget = budget}
-    built :: process_builder.build(target, file, grants[0..<grants.count], seed, &stream, slop_os.ABI_VERSION) or_return null
+    built :: process_builder.build(target, file, grants[0..<grants.count], seed, &stream, slop_os.ABI_VERSION)
+        or_return null
     copy := Copy.{
         end = pair.a,
         launched = os.Launched.{process = process, budget = budget, thread = built.thread, image = built.image},
@@ -480,11 +492,19 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
     copy :: testing.require_some(t, build_copy(given.log, program, ROLE_TARGET), "T is built and told its role")?
     target :: copy.launched.process
     // Who holds a channel's other end (decisions/0195, 18d): T owns its end of the peer channel, and not one D keeps
-    testing.expect_eq(t, slop_os.channel_peer_owned_by(copy.end, target) or_else false, true,
-        "T owns the other end of the channel D built it with")
+    testing.expect_eq(
+        t,
+        slop_os.channel_peer_owned_by(copy.end, target) or_else false,
+        true,
+        "T owns the other end of the channel D built it with"
+    )
     kept :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "a channel D keeps both ends of")?
-    testing.expect_eq(t, slop_os.channel_peer_owned_by(kept.a, target) or_else true, false,
-        "T doesn't own the other end of a channel it was never given")
+    testing.expect_eq(
+        t,
+        slop_os.channel_peer_owned_by(kept.a, target) or_else true,
+        false,
+        "T doesn't own the other end of a channel it was never given"
+    )
     /*
      * An end written on by D, then given to T, isn't T's alone (decisions/0195, 18e): what D wrote would be read as
      * T's
@@ -497,8 +517,12 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
         slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](kept.b)], given_end),
         "D gives T the end it wrote on"
     )?
-    testing.expect_eq(t, slop_os.channel_peer_owned_by(kept.a, target) or_else true, false,
-        "T doesn't own alone an end D wrote on before giving it")
+    testing.expect_eq(
+        t,
+        slop_os.channel_peer_owned_by(kept.a, target) or_else true,
+        false,
+        "T doesn't own alone an end D wrote on before giving it"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](kept.a))
     other :: testing.require_ok(t, slop_os.channel_create(block.budget, 0, 0), "another channel, its end given unused")?
     unused_end : slop_os.Handle[1]
@@ -507,8 +531,12 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
         slop_os.process_give_handles(target, slop_os.Handle.[cast[slop_os.Handle](other.b)], unused_end),
         "D gives T an end it never used"
     )?
-    testing.expect_eq(t, slop_os.channel_peer_owned_by(other.a, target) or_else false, true,
-        "T owns the other end it was given unused")
+    testing.expect_eq(
+        t,
+        slop_os.channel_peer_owned_by(other.a, target) or_else false,
+        true,
+        "T owns the other end it was given unused"
+    )
     _ = slop_os.handle_close(cast[slop_os.Handle](other.a))
     // Where T's things are, and its space
     found := TargetReport.{}
@@ -735,11 +763,7 @@ a_process_ending_itself_gives_its_code #test :: fn(t : ptr[mut testing.T]) -> te
     )?
     // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
-    copy :: testing.require_some(
-        t,
-        build_copy(given.log, program, ROLE_EXITING),
-        "E is built and told its role"
-    )?
+    copy :: testing.require_some(t, build_copy(given.log, program, ROLE_EXITING), "E is built and told its role")?
     exiting :: copy.launched.process
     exiting_found := TargetReport.{}
     exiting_space_handles : slop_os.Handle[1]
@@ -819,14 +843,30 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
     testing.expect(t, report.frame_count >= 2, "a report of the fault has its faulting frame and its caller's")
     testing.expect(t, report.frames[0] >= copy.launched.image, "the faulting instruction is in F's image")
     // A launch's intercept reports, and can't steer: where F stops isn't its to change, nor F's threads (0195, 18b)
-    testing.expect_error(t, slop_os.intercept_set(faults.intercept, 0, slop_os.STOP_SYSCALL_ENTRY),
-        slop_os.ControlError.MissingRight, "a launch's intercept can't change where F stops")
+    testing.expect_error(
+        t,
+        slop_os.intercept_set(faults.intercept, 0, slop_os.STOP_SYSCALL_ENTRY),
+        slop_os.ControlError.MissingRight,
+        "a launch's intercept can't change where F stops"
+    )
     registers : u64[slop_os.THREAD_REGISTERS]
-    testing.expect_error(t, slop_os.thread_write_registers(copy.launched.process, stop.thread, registers),
-        slop_os.ControlError.MissingRight, "a launcher can't change F's threads")
-    info :: testing.require_ok(t, slop_os.handle_info(cast[slop_os.Handle](copy.launched.process)), "F's handle described")?
-    testing.expect_eq(t, cast[u32](info.rights) & cast[u32](slop_os.RIGHT_PROCESS_THREADS), 0,
-        "a launcher can't start threads in F")
+    testing.expect_error(
+        t,
+        slop_os.thread_write_registers(copy.launched.process, stop.thread, registers),
+        slop_os.ControlError.MissingRight,
+        "a launcher can't change F's threads"
+    )
+    info :: testing.require_ok(
+        t,
+        slop_os.handle_info(cast[slop_os.Handle](copy.launched.process)),
+        "F's handle described"
+    )?
+    testing.expect_eq(
+        t,
+        cast[u32](info.rights) & cast[u32](slop_os.RIGHT_PROCESS_THREADS),
+        0,
+        "a launcher can't start threads in F"
+    )
     /*
      * F moved under a process of the launcher's own is still sealed (decisions/0195, 18e): nothing above it reaches
      * its threads, which its handle can't change
@@ -840,10 +880,18 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
         "F's owning handle moved into a process the launcher made"
     )?
     ids : u64[4]
-    testing.expect_eq(t, slop_os.process_threads(above, ids) or_else 99, 0,
-        "a process F's moved under lists none of F's threads")
-    testing.expect_error(t, slop_os.thread_write_registers(above, stop.thread, registers),
-        slop_os.ControlError.NoSuchThread, "nor changes them")
+    testing.expect_eq(
+        t,
+        slop_os.process_threads(above, ids) or_else 99,
+        0,
+        "a process F's moved under lists none of F's threads"
+    )
+    testing.expect_error(
+        t,
+        slop_os.thread_write_registers(above, stop.thread, registers),
+        slop_os.ControlError.NoSuchThread,
+        "nor changes them"
+    )
     // Not let go: F ends within the limit, as if nothing intercepted it
     deadline :: (slop_os.clock_monotonic() or_else 0) + FAULTING_END_NANOSECONDS
     ended := false
@@ -1069,11 +1117,7 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
     )?
     // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
-    copy :: testing.require_some(
-        t,
-        build_copy(given.log, program, ROLE_EXITING),
-        "E is built and told its role"
-    )?
+    copy :: testing.require_some(t, build_copy(given.log, program, ROLE_EXITING), "E is built and told its role")?
     target :: copy.launched.process
     found := TargetReport.{}
     space_handles : slop_os.Handle[1]
@@ -1170,11 +1214,14 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
 /**
  * Read the CPU's counter directly, as a program that doesn't ask the kernel for the time might.
  *
- * @return The counter: x86-64's time-stamp counter, AArch64's CNTVCT_EL0.
+ * @return The counter: x86-64's time-stamp counter, AArch64's CNTVCT_EL0, RISC-V's time CSR.
  */
 read_counter :: fn() -> u64 {
     #if TARGET_ARCH == .x86_64 {
         return x86_64.rdtsc()
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        return riscv64.csrr(.TIME)
     }
     #else {
         return aarch64.read_system_register(.CNTVCT_EL0)
@@ -1201,11 +1248,7 @@ a_recorder_traps_counter_reads #test :: fn(t : ptr[mut testing.T]) -> testing.Ou
     )?
     // Closed, as a channel end has room for two bindings, and every test binds one to the manager's
     defer slop_os.handle_close(cast[slop_os.Handle](manager_port))
-    copy :: testing.require_some(
-        t,
-        build_copy(given.log, program, ROLE_COUNTING),
-        "C is built and told its role"
-    )?
+    copy :: testing.require_some(t, build_copy(given.log, program, ROLE_COUNTING), "C is built and told its role")?
     target :: copy.launched.process
     found := TargetReport.{}
     space_handles : slop_os.Handle[1]
@@ -1235,11 +1278,20 @@ a_recorder_traps_counter_reads #test :: fn(t : ptr[mut testing.T]) -> testing.Ou
     testing.expect_eq(t, stop.number, slop_os.FAULT_COUNTER, "C stops at its counter read")
     registers : u64[slop_os.THREAD_REGISTERS]
     testing.require_ok(t, slop_os.thread_read_registers(target, stop.thread, registers), "D reads C's registers")?
-    // The register the value went to: edx:eax on x86-64; on AArch64, the one holding it
+    // The register the value went to: edx:eax on x86-64; on AArch64 and RISC-V, the one holding it
     target_register := cast[usize](0)
     #if TARGET_ARCH == .arm64 {
         for value, i in registers {
             if i < 31 && value == stop.address {
+                target_register = i
+                break
+            }
+        }
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        // x1 to x31, x0 being always 0
+        for value, i in registers {
+            if i >= 1 && i < 32 && value == stop.address {
                 target_register = i
                 break
             }

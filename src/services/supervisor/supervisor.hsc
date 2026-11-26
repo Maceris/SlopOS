@@ -278,8 +278,10 @@ Speaks :: enum {
 ClockGrants :: struct {
     /** The real-time clock's I/O ports, as the platform service claimed them; null where it's memory-mapped. */
     rtc_ports : slop_os.IoPortRange?,
-    /** The real-time clock's registers, as the platform service claimed them; null where it has I/O ports. */
+    /** A PL031's registers, as the platform service claimed them; null for another clock. */
     rtc_registers : slop_os.Memory?,
+    /** A Goldfish RTC's registers, as the platform service claimed them; null for another clock. */
+    rtc_goldfish : slop_os.Memory?,
     /**
      * A handle to the clock page, readable and writable, which the clock service writes the time on; named "clock", as
      * every program's read-only one is, so the runtime reads the time from it in the clock service too.
@@ -4924,7 +4926,10 @@ start_clock :: fn(supervisor : ptr[mut Supervisor], again : usize) {
     if cast[slop_os.Handle](rtc.ports) != slop_os.NO_HANDLE {
         grants.rtc_ports = rtc.ports
     }
-    if cast[slop_os.Handle](rtc.registers) != slop_os.NO_HANDLE {
+    if cast[slop_os.Handle](rtc.registers) != slop_os.NO_HANDLE && rtc.kind == .Goldfish {
+        grants.rtc_goldfish = rtc.registers
+    }
+    else if cast[slop_os.Handle](rtc.registers) != slop_os.NO_HANDLE {
         grants.rtc_registers = rtc.registers
     }
     // The clock service doesn't read the time from the page it writes

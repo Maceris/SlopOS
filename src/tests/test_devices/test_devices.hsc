@@ -58,6 +58,18 @@ IRQ_KEY : u64 : 11
     /** The kind of IOMMU registering is tried for: the architecture's own, an SMMUv3. */
     IOMMU : slop_os.IommuKind : .Smmuv3
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /** The physical address of QEMU virt's first virtio-mmio transport, where its device tree puts it. */
+    DEVICE_MEMORY : u64 : 0x10001000
+    /** The offset of the register the ID is in: MagicValue, the transport's first. */
+    DEVICE_ID_OFFSET : u64 : 0
+    /** How far the ID is shifted up in its 32-bit register: not at all. */
+    DEVICE_ID_SHIFT : u32 : 0
+    /** The ID the device gives: MagicValue is "virt", 0x74726976 (virtio 1.2, §4.2.2). */
+    DEVICE_ID : u64 : 0x74726976
+    /** The kind of IOMMU registering is tried for: the architecture's own, the RISC-V IOMMU. */
+    IOMMU : slop_os.IommuKind : .RiscV
+}
 
 /** What main was given that the tests use. */
 Given :: struct {

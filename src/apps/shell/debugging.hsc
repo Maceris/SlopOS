@@ -1143,10 +1143,8 @@ say_fibers :: fn(session : ptr[mut Debugging]) {
         // A suspended one's frames: where it continues, then its frame pointers' chain
         if state_bytes[0] == 2 && fiber != current {
             saved :: remote_word(session, fiber + resume_at) or_else 0
-            continuation :: if crash_reports.PC_REGISTER == 32 { cast[u64](96) } else { cast[u64](72) }
-            top :: if crash_reports.PC_REGISTER == 32 { cast[u64](0) } else { cast[u64](16) }
-            pc := remote_word(session, saved + continuation) or_else 0
-            frame := remote_word(session, saved + top) or_else 0
+            pc := remote_word(session, saved + crash_reports.FIBER_CONTINUATION_AT) or_else 0
+            frame := remote_word(session, saved + crash_reports.FIBER_FRAME_AT) or_else 0
             for j in cast[usize](0)..<FIBER_FRAMES {
                 at :: shown * FIBER_FRAMES + j
                 if pc < image || at >= offsets.count {
@@ -1154,11 +1152,12 @@ say_fibers :: fn(session : ptr[mut Debugging]) {
                 }
                 offsets[at] = if j > 0 { pc - image - 1 } else { pc - image }
                 counts[shown] += 1
-                if frame == 0 {
+                if frame < crash_reports.FRAME_RECORD_BELOW + 8 {
                     break
                 }
-                pc = crash_reports.without_authentication(remote_word(session, frame + 8) or_else 0)
-                frame = remote_word(session, frame) or_else 0
+                record :: frame - crash_reports.FRAME_RECORD_BELOW
+                pc = crash_reports.without_authentication(remote_word(session, record + 8) or_else 0)
+                frame = remote_word(session, record) or_else 0
             }
         }
         shown += 1

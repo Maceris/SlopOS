@@ -28,14 +28,20 @@ import text_buffer from "std:text_buffer"
 #if TARGET_ARCH == .arm64 {
     /** Where the frame pointer (x29) is among a thread's registers, as get_user_register numbers them. */
     SAMPLE_FRAME_REGISTER : u32 : 29
+    /** How far below the frame pointer its frame record is: at it. */
+    SAMPLE_RECORD_BELOW : u64 : 0
 }
 #else_if TARGET_ARCH == .riscv64 {
     /** Where the frame pointer (s0, x8) is among a thread's registers, as get_user_register numbers them: by number. */
     SAMPLE_FRAME_REGISTER : u32 : 8
+    /** How far below the frame pointer its frame record is: the caller's s0, then the return address. */
+    SAMPLE_RECORD_BELOW : u64 : 16
 }
 #else {
     /** Where the frame pointer (rbp) is among a thread's registers, as get_user_register numbers them. */
     SAMPLE_FRAME_REGISTER : u32 : 6
+    /** How far below the frame pointer its frame record is: at it. */
+    SAMPLE_RECORD_BELOW : u64 : 0
 }
 
 /** A CPU's trace: its last events, from the kernel heap. */
@@ -254,9 +260,9 @@ sample_of :: fn(kernel : ptr[mut Kernel], thread : ptr[mut Thread]) -> slop_os.S
     frame := arch.get_user_register(&thread.registers, SAMPLE_FRAME_REGISTER)
     for depth in cast[usize](1)..<sample.frames.count {
         record : u64[2]
-        if frame == 0
+        if frame < SAMPLE_RECORD_BELOW + 8
             || frame & 7 != 0
-            || !copy_from_user(kernel, thread.space, frame, cast[u64](&record[0]), 16)
+            || !copy_from_user(kernel, thread.space, frame - SAMPLE_RECORD_BELOW, cast[u64](&record[0]), 16)
             || record[1] == 0 {
             break
         }

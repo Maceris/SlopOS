@@ -28,6 +28,14 @@ RELA_SIZE : u64 : 24
 X86_64_RELATIVE : u32 : 8
 /** The relocation type R_AARCH64_RELATIVE, in a RELA entry's info's low 32 bits: base plus addend. */
 AARCH64_RELATIVE : u32 : 1027
+/** The relocation type R_RISCV_RELATIVE, in a RELA entry's info's low 32 bits: base plus addend. */
+RISCV_RELATIVE : u32 : 3
+/** ELF's e_machine for x86-64, EM_X86_64. */
+MACHINE_X86_64 : u64 : 62
+/** ELF's e_machine for AArch64, EM_AARCH64. */
+MACHINE_AARCH64 : u64 : 183
+/** ELF's e_machine for RISC-V, EM_RISCV. */
+MACHINE_RISCV : u64 : 243
 /* Where the record's fields are (runtime.LibraryInterface, LibraryExport). */
 /** The record's calling convention, a u64, in bytes from the record's start. */
 INTERFACE_CONVENTION : u64 : 8
@@ -57,6 +65,8 @@ Image :: struct #scoped {
     relocations : u64,
     /** How many bytes of relocations there are at relocations, within the file; 0 if it has none. */
     relocation_bytes : u64,
+    /** The relative relocation's type for the file's machine, its e_machine; 0 for a machine this doesn't know. */
+    relative : u32,
 }
 
 /** An interface record's start, as read: its convention, and where its Context's hash and its exports are. */
@@ -135,6 +145,14 @@ image_of :: fn(file : u8[]) -> Image? {
         return null
     }
     image := Image.{file = file, headers = word_of(file, 32, 8), count = word_of(file, 56, 2)}
+    machine :: word_of(file, 18, 2)
+    image.relative = if machine == MACHINE_X86_64 {
+        X86_64_RELATIVE
+    }
+    else if machine == MACHINE_AARCH64 {
+        AARCH64_RELATIVE
+    }
+    else if machine == MACHINE_RISCV { RISCV_RELATIVE } else { 0 }
     if image.headers > cast[u64](file.count) || image.count * 56 > cast[u64](file.count) - image.headers {
         return null
     }
@@ -245,7 +263,7 @@ pointer :: fn(image : ptr[Image], address : u64) -> u64? {
     for i in cast[u64](0)..<image.relocation_bytes / RELA_SIZE {
         entry :: image.relocations + i * RELA_SIZE
         kind :: cast[u32](word_of(image.file, entry + 8, 4))
-        if word_of(image.file, entry, 8) == address && (kind == X86_64_RELATIVE || kind == AARCH64_RELATIVE) {
+        if word_of(image.file, entry, 8) == address && kind == image.relative && kind != 0 {
             return word_of(image.file, entry + 16, 8)
         }
     }

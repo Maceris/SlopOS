@@ -48,7 +48,7 @@ trap_entry #calling_convention(.entry) :: fn(frame : ptr[mut riscv64.RegisterFra
         }
     }
     // A page fault on a mapping this hart hadn't seen made yet: fenced, and the access made again
-    if stale_fault(cpu, frame.scause, frame.stval) {
+    if stale_fault(cpu, frame.scause, frame.stval, false) {
         riscv64.sfence_vma_address(cast[rawptr](frame.stval))
         return void
     }
@@ -68,9 +68,10 @@ trap_entry #calling_convention(.entry) :: fn(frame : ptr[mut riscv64.RegisterFra
 }
 
 /**
- * Tell whether a page fault in the kernel is only stale: the active tables, satp's, map the address with a leaf that
- * allows the access, so the hart faulted on an entry it walked before another hart made it valid, which a hart may
- * keep until Svvptc's bounded time has passed. The kernel never touches user pages, so a leaf with U set doesn't count.
+ * Tell whether a page fault is only stale: the active tables, satp's, map the address with a leaf that allows the
+ * access, so the hart faulted on an entry it walked before another hart made it valid, which a hart may keep until
+ * Svvptc's bounded time has passed; or the leaf is a user page whose accessed bit take_accessed cleared, which Svade
+ * faults on, and which is set again here. The kernel never touches user pages, nor user mode the kernel's.
  *
  * Runs in the trap entry, before there's a context, on whatever stack the kernel was on, so it calls nothing that
  * needs one.
@@ -78,9 +79,11 @@ trap_entry #calling_convention(.entry) :: fn(frame : ptr[mut riscv64.RegisterFra
  * @param cpu The calling hart's state, for the direct map's offset.
  * @param cause scause at the trap.
  * @param address stval at the trap, the faulting address for a page fault.
+ * @param user Whether the access was user mode's, which reaches only leaves with U set, and the kernel's only those
+ *     without.
  * @return True for a load, store or instruction page fault whose access the tables now allow; false for anything else.
  */
-stale_fault #no_context :: fn(cpu : ptr[ArchCpu], cause : u64, address : u64) -> bool {
+stale_fault #no_context :: fn(cpu : ptr[ArchCpu], cause : u64, address : u64, user : bool) -> bool {
     needed := cast[u64](0)
     if cause == riscv64.CAUSE_LOAD_PAGE_FAULT {
         needed = ENTRY_READ
@@ -98,12 +101,20 @@ stale_fault #no_context :: fn(cpu : ptr[ArchCpu], cause : u64, address : u64) ->
     table := ((riscv64.csrr(.SATP) & SATP_PPN_MASK) << 12)
     level := TOP_LEVEL
     loop {
-        entry :: cast[ptr[u64]](offset + table + ((address >> (12 + 9 * level)) & 511) * 8)^
+        slot :: cast[ptr[mut u64]](offset + table + ((address >> (12 + 9 * level)) & 511) * 8)
+        entry :: slot^
         if entry & ENTRY_VALID == 0 {
             return false
         }
         if entry & ENTRY_LEAF != 0 {
-            return entry & ENTRY_USER == 0 && entry & needed != 0
+            if (entry & ENTRY_USER != 0) != user || entry & needed == 0 {
+                return false
+            }
+            // A user page take_accessed cleared the mark of: touched now, so marked again
+            if entry & ENTRY_ACCESSED == 0 {
+                _ = intrinsics.interlocked_or_u64(slot, ENTRY_ACCESSED)
+            }
+            return true
         }
         if level == 0 {
             return false
@@ -161,7 +172,14 @@ from_user :: fn(frame : ptr[mut riscv64.RegisterFrame]) #never_returns {
         kernel_entry.interrupt(.User(registers), interrupt_source(frame.scause))
     }
     if frame.scause == riscv64.CAUSE_USER_ECALL {
+        // Past the ecall, so the thread goes on after it; restart_syscall moves it back
+        frame.sepc += ECALL_BYTES
         kernel_entry.syscall(registers)
+    }
+    // A page fault on a user mapping this hart hadn't seen made yet: fenced, and the access made again
+    if stale_fault(current_cpu(), frame.scause, frame.stval, true) {
+        riscv64.sfence_vma_address(cast[rawptr](frame.stval))
+        return_to_user(registers)
     }
     if frame.scause == CAUSE_HARDWARE_ERROR {
         kernel_entry.fatal_critical(.MachineCheck)
@@ -176,10 +194,11 @@ from_user :: fn(frame : ptr[mut riscv64.RegisterFrame]) #never_returns {
  * §12.1.2 (stval); the Zicfilp and Zicfiss chapters (software-check exceptions).
  *
  * @param cause scause, an exception's code (CAUSE_INTERRUPT clear).
- * @param value stval: for a page fault, the faulting address; for a software check, which one.
+ * @param value stval: for a page fault, the faulting address; for an illegal instruction, the instruction; for a
+ *     software check, which one.
  * @return A Page fault for a page fault, at value, Execute, Read or Write, present if the active tables map value with
- *     a valid leaf (so the access broke its protection); Alignment for a misaligned access; InvalidInstruction for an
- *     illegal instruction; Breakpoint for ebreak; ControlFlow for a landing pad's or a shadow stack's software check;
+ *     a valid leaf (so the access broke its protection); Alignment for a misaligned access; Protection for an rdtime
+ *     scounteren traps, and InvalidInstruction for another illegal instruction; Breakpoint for ebreak; ControlFlow for a landing pad's or a shadow stack's software check;
  *     Protection for the rest, like an access fault the PMP or the bus raised.
  */
 decode_fault :: fn(cause : u64, value : u64) -> arch_interface.Fault {
@@ -196,6 +215,10 @@ decode_fault :: fn(cause : u64, value : u64) -> arch_interface.Fault {
             || cause == riscv64.CAUSE_STORE_MISALIGNED
         if misaligned {
             return .Alignment
+        }
+        // A read of the time CSR that scounteren traps is a privileged instruction, as x86-64's and AArch64's are
+        if cause == riscv64.CAUSE_ILLEGAL_INSTRUCTION && cast[u32](value) & RDTIME_MASK == RDTIME {
+            return .Protection
         }
         if cause == riscv64.CAUSE_ILLEGAL_INSTRUCTION {
             return .InvalidInstruction

@@ -437,6 +437,9 @@ controller_kind :: fn(kind : u32) -> arch_interface.ControllerKind? {
     if kind == cast[u32](slop_os.ControllerKind.Plic) {
         return arch_interface.ControllerKind.Plic
     }
+    if kind == cast[u32](slop_os.ControllerKind.Aplic) {
+        return arch_interface.ControllerKind.Aplic
+    }
     return null
 }
 

@@ -93,8 +93,10 @@ LAST_YEAR : i64 : 2099
 Rtc :: struct {
     /** An MC146818's I/O ports, its index port then its data port; None for a PL031. */
     ports : slop_os.IoPortRange?,
-    /** Where a PL031's registers are mapped, readable and writable; 0 for an MC146818. */
+    /** Where a PL031's or a Goldfish RTC's registers are mapped, readable and writable; 0 for an MC146818. */
     registers : u64,
+    /** Whether registers are a Goldfish RTC's, rather than a PL031's. */
+    goldfish : bool,
 }
 
 /** The clock service's state. */
@@ -137,6 +139,8 @@ SAVE_INTERVAL : u64 : cast[u64](clock_setting.SAVE_MINUTES) * 60 * 1_000_000_000
  *
  * @param rtc_ports An MC146818's two I/O ports, its index port then its data port, for x86's real-time clock.
  * @param rtc_registers A PL031's registers, one page of device memory, for Arm's; it's started counting if it wasn't.
+ * @param rtc_goldfish A Goldfish RTC's registers, one page of device memory, for RISC-V's virt; used without either of
+ *     the others.
  * @param clock The clock page, mapped readable and writable for the service's life; every program is given it
  *     read-only, as its grant "clock", and the runtime maps it read-only here too, which time.now reads, as TLS does.
  * @param clients The listener of the clock_setting protocol its first client connects on; who holds a connection can
@@ -149,6 +153,7 @@ SAVE_INTERVAL : u64 : cast[u64](clock_setting.SAVE_MINUTES) * 60 * 1_000_000_000
 main :: fn(
     rtc_ports : slop_os.IoPortRange?,
     rtc_registers : slop_os.Memory?,
+    rtc_goldfish : slop_os.Memory?,
     clock : slop_os.Memory,
     clients : os.Listener[clock_setting.ClockSetting],
     command_line : slop_os.Memory?
@@ -167,6 +172,17 @@ main :: fn(
             service.rtc.registers = address
             // Counting, if it wasn't
             write_register(address, PL031_CONTROL, PL031_START)
+        }
+        case None => {}
+    }
+    match rtc_goldfish {
+        case Some(registers) => {
+            if service.rtc.registers == 0 {
+                address :: runtime.reserve_addresses(cast[usize](PAGE)) or_return 2
+                slop_os.memory_map(registers, block.space, address, 0, PAGE, read_write) or_return 2
+                service.rtc.registers = address
+                service.rtc.goldfish = true
+            }
         }
         case None => {}
     }
@@ -514,8 +530,46 @@ publish :: fn(page : ptr[mut runtime.SlopOsClockPage], utc : i64, at : u64) {
 read_rtc :: fn(rtc : ptr[Rtc]) -> i64? {
     match rtc.ports {
         case Some(ports) => return read_mc146818(ports)
-        case None => return cast[i64](read_register(rtc.registers, PL031_DATA))
+        case None => {
+            if rtc.goldfish {
+                return read_goldfish(rtc.registers)
+            }
+            return cast[i64](read_register(rtc.registers, PL031_DATA))
+        }
     }
+}
+
+// A Goldfish RTC's registers: its time in nanoseconds since 1970, a read of the low half latching the high
+/** TIME_LOW: the time's low 32 bits; reading it latches TIME_HIGH, and writing it sets the time with TIME_HIGH's. */
+GOLDFISH_TIME_LOW : u64 : 0x00
+/** TIME_HIGH: the time's high 32 bits, as the last read of TIME_LOW latched them, or as written for the next set. */
+GOLDFISH_TIME_HIGH : u64 : 0x04
+
+/**
+ * Read a Goldfish RTC's time, its low half first, which latches the high.
+ *
+ * SPEC: QEMU's hw/rtc/goldfish_rtc.c and the Android emulator's GOLDFISH-VIRTUAL-HARDWARE.TXT (TIME_LOW, TIME_HIGH).
+ *
+ * @param registers Where its registers are mapped.
+ * @return Its time in seconds since 1970 UTC, rounded down; null for one past i64's seconds, which it can't hold.
+ */
+read_goldfish :: fn(registers : u64) -> i64? {
+    low :: cast[u64](read_register(registers, GOLDFISH_TIME_LOW))
+    high :: cast[u64](read_register(registers, GOLDFISH_TIME_HIGH))
+    seconds :: ((high << 32) | low) / cast[u64](NANOSECONDS)
+    return if seconds > 0x7fffffffffffffff { null } else { cast[i64](seconds) }
+}
+
+/**
+ * Set a Goldfish RTC's time: its high half written first, then the low, which sets it.
+ *
+ * @param registers Where its registers are mapped.
+ * @param seconds The time, in seconds since 1970 UTC, 0 or more.
+ */
+write_goldfish :: fn(registers : u64, seconds : i64) {
+    nanoseconds :: cast[u64](seconds) * cast[u64](NANOSECONDS)
+    write_register(registers, GOLDFISH_TIME_HIGH, cast[u32](nanoseconds >> 32))
+    write_register(registers, GOLDFISH_TIME_LOW, cast[u32](nanoseconds & 0xffffffff))
 }
 
 /**
@@ -531,7 +585,11 @@ write_rtc :: fn(rtc : ptr[Rtc], seconds : i64) -> bool {
     match rtc.ports {
         case Some(ports) => return write_mc146818(ports, seconds)
         case None => {
-            if seconds < 0 || seconds > 0xffffffff {
+            if rtc.goldfish && seconds >= 0 {
+                write_goldfish(rtc.registers, seconds)
+                return true
+            }
+            if seconds < 0 || seconds > 0xffffffff || rtc.goldfish {
                 return false
             }
             write_register(rtc.registers, PL031_LOAD, cast[u32](seconds))

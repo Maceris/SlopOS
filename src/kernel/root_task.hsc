@@ -578,7 +578,8 @@ test_device_page :: fn(kernel : ptr[mut Kernel], process : ptr[mut Process]) -> 
     kind : slop_os.ControllerKind = match device.kind {
         case .IoApic => .IoApic
         case .GicDistributor => .GicDistributor
-        case _ => .Plic
+        case .Plic => .Plic
+        case .Aplic => .Aplic
     }
     info.kind = cast[u32](kind)
     info.line = device.line

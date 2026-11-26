@@ -342,11 +342,7 @@ interrupt_source :: fn(cause : u64) -> kernel_entry.InterruptSource {
     system :: current_system()
     number :: cause & ~riscv64.CAUSE_INTERRUPT
     if number == riscv64.CAUSE_SUPERVISOR_TIMER {
-        riscv64.csrw(.STIMECMP, NO_DEADLINE)
-        if system.test_interrupts && system.test_hart == cpu.hart_id {
-            pend_test_line(system)
-        }
-        return .Timer
+        return if take_timer(cpu, system) { kernel_entry.InterruptSource.Timer } else { .Spurious }
     }
     if number == riscv64.CAUSE_SUPERVISOR_SOFTWARE {
         return take_sbi_ipi(cpu)
@@ -833,16 +829,20 @@ test_device :: fn() -> arch_interface.TestDevice {
 
 /**
  * Start or stop the test device (arch_interface.test_device_interrupts): while it's on, each tick of the hart that
- * started it pends its line once (pend_test_line), a hundred a second.
+ * started it pends its line once (pend_test_line), TEST_DEVICE_HZ a second, by a deadline of the test device's own
+ * (take_timer), as the kernel's ticks stop while the hart's idle.
  *
- * @param on True to start it, its line pended at once; false to stop it, the UART's transmitter interrupt turned off.
+ * @param on True to start it on the calling hart, its line pended at once; false to stop it, from any hart, the
+ *     UART's transmitter interrupt turned off. The starting hart's own deadline lapses at its next timer interrupt.
  */
 test_device_interrupts :: fn(on : bool) {
     system :: current_system()
-    system.test_hart = current_cpu().hart_id
+    cpu :: current_cpu()
     system.test_interrupts = on
     if on {
-        pend_test_line(system)
+        system.test_hart = cpu.hart_id
+        arm_test_line(cpu, system, riscv64.csrr(.TIME))
+        write_compare(cpu)
     }
     else if system.controller == .Plic {
         write_register(system.console, UART_INTERRUPT_ENABLE, 0)

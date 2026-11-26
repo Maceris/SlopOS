@@ -716,16 +716,28 @@ walk :: fn(table : ptr[PageTable], address : u64, leaf : u64) -> Result[Path, ar
 }
 
 /**
- * Tell whether the 4 KiB page at an address was touched since this last asked (arch_interface.take_accessed): never
- * here, as the hardware doesn't keep the mark. Every leaf is made with its accessed bit set, since Svade, which
- * RVA23S64 has, faults on a clear one; Svadu, which would set it, isn't assumed.
+ * Tell whether the 4 KiB user page at an address was touched since this last asked, and clear the mark
+ * (arch_interface.take_accessed), atomically, without a TLB flush.
  *
- * @param table Unused.
- * @param virtual_address Unused.
- * @return False, always.
+ * The mark is kept by software: under Svade, which RVA23S64 has, an access through a leaf whose accessed bit is clear
+ * faults, and the trap entry sets the bit and makes the access again (entries.hsc, stale_fault). A hart holding the
+ * page's translation from before may go on using it without faulting, so a touch may be missed until that's flushed,
+ * as on x86-64 without a flush. Kernel leaves keep the bit set, so they never fault for it.
+ *
+ * @param table The address space holding the page.
+ * @param virtual_address Any address in the page.
+ * @return True if the bit was set; false if it wasn't, or nothing's mapped there as a 4 KiB user page.
  */
 take_accessed :: fn(table : ptr[mut PageTable], virtual_address : arch_interface.VirtualAddress) -> bool {
-    return false
+    path :: match walk(table, cast[u64](virtual_address), 0) {
+        case Ok(found) => found
+        case Error(error) => return false
+    }
+    if load_entry(path.leaf_slot) & ENTRY_USER == 0 {
+        return false
+    }
+    old :: intrinsics.interlocked_and_u64(cast[ptr[mut u64]](path.leaf_slot), ~ENTRY_ACCESSED)
+    return old & ENTRY_ACCESSED != 0
 }
 
 /**

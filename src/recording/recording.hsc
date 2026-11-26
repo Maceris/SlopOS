@@ -54,6 +54,14 @@ RECORDING_POINTS : u32 : slop_os.STOP_SYSCALL_ENTRY
     /** Where its result is: x0 the tag, x1 and x2 the value. */
     RESULT_REGISTERS :: u32.[0, 1, 2]
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /** Where a call's number is among thread_read_registers' registers, by register number: a7, x17. */
+    NUMBER_REGISTER :: 17
+    /** Where its argument words are, in order: a0 to a5, x10 to x15. */
+    ARGUMENT_REGISTERS :: u32.[10, 11, 12, 13, 14, 15]
+    /** Where its result is: a0 the tag, a1 and a2 the value. */
+    RESULT_REGISTERS :: u32.[10, 11, 12]
+}
 #else {
     /** Where a call's number is among thread_read_registers' registers: rax. */
     NUMBER_REGISTER :: 0
@@ -1155,6 +1163,20 @@ give_counter :: fn(program : Program, stop : slop_os.StopInfo, value : u64) {
         )
         target :: cast[usize](instruction & 0x1f)
         if target < 31 {
+            registers[target] = value
+        }
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        // rdtime's rd, bits 7 to 11, the kernel having moved the thread past it
+        instruction : u32 = 0
+        _ = slop_os.process_read_memory(
+            program.process,
+            program.space,
+            registers[32] - 4,
+            os.mut_bytes_of(&instruction)
+        )
+        target :: cast[usize]((instruction >> 7) & 0x1f)
+        if target != 0 && target < 32 {
             registers[target] = value
         }
     }

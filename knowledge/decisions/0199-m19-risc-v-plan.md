@@ -210,3 +210,57 @@ In seven stages:
   heap, a CPU without V) once.
 - **Left for R5:** device interrupts reach drivers through user space, so MSIs and wired lines from real devices are
   first used there; and the stale-fault retry for user pages, which return through `return_to_user`.
+
+## As Built: R5 (2026-11-26)
+- **User mode** (`src/arch/riscv64/user.hsc`): threads in U-mode, `ecall` system calls (the number in `a7`, arguments
+  in `a0` to `a5`, results in `a0` to `a2`), the entry moving `sepc` past the `ecall` and `restart_syscall` back;
+  `return_to_user` through `riscv64.return_to_user`, `sscratch` the hart's `TrapScratch`, `sstatus` made a user one
+  each time. A debugger sees `x0` to `x31` by number, then `pc`: 33 registers (`slop_os.THREAD_REGISTERS`).
+- **Floating-point and vector state**, switched eagerly as on the other two: `f0` to `f31` and `fcsr`, then the vector
+  registers and `vstart`, `vtype`, `vl` and `vcsr`, by Hemera's new `riscv64.save_floating`, `restore_floating`,
+  `save_vector` and `restore_vector`, which turn D and V on for their own instructions, as a kernel is built without
+  them. `sstatus.FS` and `VS` are off in the kernel and on, Initial, in user mode.
+- **Accessed bits kept by software** (`take_accessed`): under Svade an access through a leaf whose A bit is clear
+  faults, and the trap entry sets it and makes the access again, as it does for a stale entry; so the pager's working
+  sets work as on the others.
+- **A trapped read of the time CSR** (`set_counter_trap`, scounteren's TM) is decoded as a Protection fault, as x86-64's
+  and AArch64's are, so the kernel emulates it (`emulate_counter_read`, `rdtime`'s `rd`) and recording works.
+- **No hardware debugging yet:** `set_debug` takes nothing but no slots and no stepping. RISC-V's triggers are the SBI's
+  debug triggers extension's (Sdtrig), which isn't driven yet, so the debugger's breakpoints, steps and watchpoints
+  don't run on RISC-V.
+- **User space on RISC-V:** every program, library and test builds for RVA23U64. In Hemera's `base`, SlopOS's runtime
+  takes riscv64 (its system calls through `riscv64.system_call`, and typed libraries as `EM_RISCV` with
+  `R_RISCV_RELATIVE`), and `std/os/slop_os`'s system call stubs and `THREAD_REGISTERS` do too. In SlopOS: crash
+  reports, the kernel's samples and the debugger's fiber walk read RISC-V's frame records 16 bytes below `s0`
+  (`crash_reports.FRAME_RECORD_BELOW`), and a suspended fiber's continuation at 104; recording names RISC-V's call
+  registers; `library_interface` takes a library's relative relocation type by its machine; the platform service finds
+  the Goldfish RTC, which the clock service drives (its new `rtc_goldfish` grant).
+- **Devices** are virtio over PCI, the host bridge's ECAM from the device tree, as on AArch64. Their MSIs need the AIA,
+  so the RISC-V boot tests with programs run on `virt,aia=aplic-imsic`; the PLIC's are the kernel's own tests.
+- **Found on the way:**
+  - A fiber's first stack segment was 1 KiB, too little on RISC-V, whose frames save twelve callee-saved registers
+    and `ra`, for a kernel fiber that allocates (a kernel's fibers can't grow). Hemera's `FIBER_INITIAL_STACK_SIZE` is
+    1536 on RISC-V.
+  - edk2's console on RISC-V's virt, with no display device, was only its serial terminal, which wraps lines at 80
+    columns, and a program's first line short, from where the firmware's own messages left the cursor. `boot.py` gives
+    virt QEMU's `ramfb`, as x86-64's q35 has its VGA, which makes the console 100 columns; Hemera's UEFI runtime starts
+    a program's first output on a line of its own when the console's cursor isn't at column 0; and the bootloader's
+    longest line, about a kept panic record, is shorter.
+  - The bootloader's command line editor let go of held keys for a fixed half second; on a slow machine more came
+    after. It now waits until half a second passes with none.
+  - RISC-V's debug files are about twice the others' (198 MiB for every program), so a boot disk with them gets 256 MiB
+    more for them on RISC-V.
+  - R4's test device was pended at each of the kernel's timer interrupts on the hart that started it; but the kernel's
+    tickless, and with that hart idle, under a loaded host, a driver saw 1 interrupt in two seconds. It has a deadline
+    of its own now, as AArch64's has a timer of its own, the hart's compare the earlier of the two.
+  - `boot_tests.py` said how many tests there were, not how many `SLOPOS_BOOT_TESTS` chose, and always ran the address
+    tests; it counts what runs and chooses those too.
+- **Tests:** 149 RISC-V boot tests pass: the PLIC's 8, every test of `TESTS` that applies on the AIA, the address
+  tests, and a CPU without V. Left out, with why, in `boot_tests.py`'s `RISCV_LEFT_OUT`: x86-64's baseline; the NMI and the two
+  lockup tests, as RISC-V's supervisor has no NMI to send; the power button, which virt hasn't; DMA outside a domain,
+  the IOMMU's (R6); and the four that need hardware breakpoints, steps or watchpoints. Without a power button,
+  `--end-when-done` can't end a run early, so a test waits for the root task's settle, with 90 s more.
+- **Left for R7:** in the whole RISC-V suite, two tests stalled among the others and passed alone: the GUI login,
+  its input stopping after the terminal started, just after `device interrupt 16 arrived, routed from nothing`, and
+  SSH, whose scp never connected after sftp. Both look like a device's interrupt lost under load; x86-64's KVM audio
+  test logged the same warning once when it was flaky. R7 looks for why an MSI comes to a hart with no route.

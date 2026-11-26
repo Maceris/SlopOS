@@ -49,8 +49,10 @@ What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x8
   own, routed from lines as AArch64 routes SPIs, there are no MSIs, and IPIs are the SBI's, their kinds kept in the
   target's `ArchCpu`. An interrupt only comes while idle, and its entry is moved to the kernel stack's top, as x86-64's
   IST does. The test device is the APLIC's last source, pended in software, or with a PLIC the UART's transmitter
-  interrupt, armed at each tick.
-- **Timer:** Sstc's `stimecmp`.
+  interrupt, armed again a hundred times a second.
+- **Timer:** Sstc's `stimecmp`, holding the earlier of the hart's two deadlines: the kernel's and, on the hart that
+  started the test device, the test device's own, as the kernel's stop while the hart's idle. A timer interrupt for
+  the test device's alone is Spurious to the kernel.
 - **Stale page faults:** a hart may keep an invalid entry it walked before another hart made it valid, until Svvptc's
   bounded time; a kernel page fault on an address the tables now allow is fenced and retried.
 - **Traps:** one `.entry` function in `stvec`, direct mode. From user mode the frame is on the kernel stack's top.
@@ -61,14 +63,31 @@ What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x8
   exception is fatal.
 - **Paging:** Sv48 with Svpbmt (`WriteBack` PMA, `WriteCombining` NC, `Device` IO); the kernel half shared by copying
   its 256 top-level entries, as on x86-64. Non-leaf entries have no spare bits for a count, so `unmap` scans for a
-  second valid entry. A and D are always set (Svade); `take_accessed` gives false. `map` fences each new entry on the
-  calling hart, since a hart may keep an invalid entry it walked.
+  second valid entry. D is always set. A is kept by software under Svade: a kernel leaf's is always set, a user
+  leaf's is cleared by `take_accessed`, and the next access through it faults, which the trap entry answers by setting
+  it and making the access again, as for a stale entry. `map` fences each new entry on the calling hart, since a hart
+  may keep an invalid entry it walked.
 - **Console:** the device tree's 16550, mapped through the direct map as an I/O page, as AArch64 maps its PL011.
-- **Reset and power:** the SBI's SRST. `test_exit` is semihosting, as on AArch64.
+- **Reset and power:** the SBI's SRST. `test_exit` is semihosting, as on AArch64. `virt` has no power button.
+- **User mode:** `ecall` with the number in `a7`, arguments in `a0` to `a5` and results in `a0` to `a2`; the entry
+  moves `sepc` past the `ecall` (4 bytes) before the call, and `restart_syscall` moves it back. A thread's registers,
+  for a debugger, are `x0` to `x31` by number, then `pc`.
+- **Floating-point and vector state:** switched eagerly with the thread, by Hemera's `riscv64.save_floating`,
+  `restore_floating`, `save_vector` and `restore_vector`: `f0` to `f31` and `fcsr`, then the vector registers in groups
+  of eight and `vstart`, `vtype`, `vl` and `vcsr`, the area's size from `vlenb`. `sstatus.FS` and `VS` are off in the
+  kernel and Initial when a thread first enters user mode.
+- **Counters:** `scounteren.TM` gives user mode `rdtime`; with it clear, for recording and replay, the read traps as an
+  illegal instruction whose `stval` is the instruction, which the entry decodes as a Protection fault for the kernel to
+  emulate.
+- **Debugging:** none in hardware yet. The triggers are the SBI's debug triggers extension's, not driven, so
+  `set_debug` takes no slots and no stepping.
+- **Frame records:** `s0` points past the saved `ra` and `s0`, so a record is 16 bytes below it
+  (`crash_reports.FRAME_RECORD_BELOW`), and a suspended fiber's continuation is at 104.
+- **Devices:** virtio over PCI, the ECAM from the device tree, as on AArch64; their MSIs go to the IMSIC, so programs
+  need the AIA. The RTC is Goldfish's, which the platform service finds and the clock service drives.
 
 ## Later Stages
 
-- **R5:** user mode, `ecall` system calls, floating-point and vector state, the debug triggers, virtio over PCI, and
-  the stale-fault retry for user pages too.
+- **Later than M19:** the SBI's debug triggers, for hardware breakpoints, steps and watchpoints.
 - **R6:** the RISC-V IOMMU, Zicfiss shadow stacks and Zicfilp landing pads; QEMU's CPU then needs `zicfilp=on` and
   `zicfiss=on`, which `rva23s64` leaves out.

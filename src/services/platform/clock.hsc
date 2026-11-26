@@ -9,7 +9,9 @@ import platform as protocol from "../../protocols/platform"
 /*
  * The real-time clock (roadmap 9a, decisions/0093), for the clock service, its driver. On x86-64 it's the MC146818 at
  * I/O ports 0x70 and 0x71, unless ACPI's FADT says there's no CMOS RTC. On AArch64 it's the device tree's PL031,
- * disabled or not: UEFI's runtime services keep it for themselves, but SlopOS doesn't call them.
+ * disabled or not: UEFI's runtime services keep it for themselves, but SlopOS doesn't call them. On RISC-V it's the
+ * device
+ * tree's Goldfish RTC, the same way.
  */
 /*
  * SPEC: ACPI 6.5, §5.2.9 (FADT: IAPC_BOOT_ARCH's CMOS RTC Not Present)
@@ -64,9 +66,15 @@ find_clock :: fn(tables : u64, size : u64) -> Clock? {
         blob :: pci.firmware_table(tables, size, "DTB ") or_return null
         tree := devicetree.open(blob.address) or_return null
         // UEFI marks it disabled, as its runtime services use it
-        rtc := devicetree.find_compatible_even_disabled(&tree, "arm,pl031") or_return null
+        kind : protocol.ClockKind = .Pl031
+        found := devicetree.find_compatible_even_disabled(&tree, "arm,pl031")
+        if found is_none {
+            kind = .Goldfish
+            found = devicetree.find_compatible_even_disabled(&tree, "google,goldfish-rtc")
+        }
+        rtc := found or_return null
         region :: devicetree.reg(&tree, &rtc, 0) or_return null
-        return Clock.{kind = .Pl031, registers = region.address}
+        return Clock.{kind = kind, registers = region.address}
     }
 }
 
@@ -111,7 +119,7 @@ claim_clock :: fn(
                 }
             }
         }
-        case .Pl031 => {
+        case .Pl031, .Goldfish => {
             match slop_os.memory_create_physical(platform, block.budget, clock.registers, PL031_SIZE, .Device) {
                 case Ok(registers) => result.registers = registers
                 case Error(error) => {

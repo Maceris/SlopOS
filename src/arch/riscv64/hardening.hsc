@@ -64,6 +64,25 @@ has_user_shadow_stacks :: fn() -> bool {
 }
 
 /**
+ * Set the hart's user-mode control-flow integrity for the thread about to return to user mode
+ * (arch_interface.load_user_control_flow): nothing yet, as neither Zicfilp's landing pads nor Zicfiss's shadow stacks
+ * are turned on before R6, which needs the SBI's firmware features extension to let user mode have them.
+ *
+ * @param landing_pads Unused: indirect branches aren't checked yet.
+ * @param shadow_stack Unused: has_user_shadow_stacks is false, so L2 gives none.
+ */
+load_user_control_flow :: fn(landing_pads : bool, shadow_stack : u64) {}
+
+/**
+ * Read the hart's user-mode shadow-stack pointer (arch_interface.read_user_shadow_stack): none yet.
+ *
+ * @return 0, as no thread has a shadow stack before R6.
+ */
+read_user_shadow_stack :: fn() -> u64 {
+    return 0
+}
+
+/**
  * Tell whether the kernel's own code runs on shadow stacks (arch_interface.has_kernel_shadow_stacks): not yet, until
  * R6 turns Zicfiss on for supervisor mode.
  *

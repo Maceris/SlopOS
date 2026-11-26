@@ -1708,7 +1708,7 @@ TESTS = [
         [argument.replace("test_services", "test_services panic_reset test_panic_once") for argument in BOOT_DISK_BASE], [
         "--allow-reboot", "--expect-line=[info] test_panic_once: failing an assertion",
         "--expect-line=[info] resetting, the panic record kept",
-        "--expect-line=[info] bootloader: the boot before stopped for a fault, its panic record kept as EFI/SlopOS/LAST_PANIC",
+        "--expect-line=[info] bootloader: the boot before faulted, its panic record kept as EFI/SlopOS/LAST_PANIC",
         "--expect-disk-text=assertion failed: test_panic_once",
         "--expect-line=[user] root task: the boot before stopped for a fault: [fatal] assertion failed: test_panic_once",
         "--expect-line=[user] terminal: showing the boot before's fault: [fatal] assertion failed: test_panic_once"])),
@@ -1956,16 +1956,63 @@ RISCV_INTERRUPT_TESTS = [
         "--expect-line=[info] test_ioapic: test the_test_device_is_routed_to_the_boot_cpu ... ok",
         "--expect-line=[info] test_ioapic: test the_test_devices_interrupts_arrive ... ok"]),
 ]
-RISCV_TESTS = [(f"RISC-V: {name}", expected, arguments) for name, expected, arguments in RISCV_INTERRUPT_TESTS] + [
-    (f"RISC-V AIA: {name}", expected, ["--aia", *arguments]) for name, expected, arguments in RISCV_INTERRUPT_TESTS] + [
-    ("RISC-V: reports a kernel fault", 1, ["--command-line=test_exit test_fault",
-        "--expect-line-start=[fatal] kernel fault: invalid instruction at "]),
-    ("RISC-V: reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
-    ("RISC-V: keeps the kernel's code read-only", 1, ["--command-line=test_exit test_write_code",
-        "--expect-line=[info] test_write_code: writing to the kernel's code",
-        "--expect-line-start=[fatal] kernel fault: page fault, write breaking the protection at "]),
-    ("RISC-V: allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
-        "--expect-line=[info] test_heap: 2 tests: 2 passed, 0 failed"]),
+# The real-time clock the platform service finds on RISC-V's virt: the device tree's Goldfish RTC
+RISCV_CLOCK_LINE = "[user] platform: the real-time clock (Goldfish) claimed"
+# Every test again on RISC-V (tools/boot.py --arch riscv64), on virt with the AIA, whose IMSIC takes the PCI devices'
+# MSIs (the PLIC takes none); but those that can't apply there (knowledge/decisions/0199): x86-64's baseline; an NMI,
+# which RISC-V's supervisor hasn't, nor so the lockup detection that sends one; a power button, which virt hasn't; the
+# IOMMU's, until M19's R6; and hardware breakpoints, steps and watchpoints, RISC-V's being the SBI's debug triggers,
+# not driven yet
+RISCV_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI",
+                  "keeps a stuck CPU's registers and stack in the panic record",
+                  "sees a stuck CPU from a CPU waiting for the lock it holds",
+                  "shuts down and turns off when the power button's pressed",
+                  "stops a driver that DMAs outside its domain, until it's ended too often",
+                  "debugs a program from the shell: a breakpoint by function, a step and its stack",
+                  "debugs a program by its lines, and shows its values through their types",
+                  "debugs a program's other threads and lists its fibers",
+                  "controls a process from a debugger in user mode, with breakpoints, steps and watchpoints, and a launch's "
+                  "intercept of its faults",
+                  "draws the GUI on the firmware's framebuffer, and gives it back to the console"}
+# Without a power button, --end-when-done can't end a run early, so a run waits for the root task's settle: this much
+# past it, in seconds
+RISCV_SETTLE_ROOM = 90
+RISCV_NAMES = {
+    "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the APLIC",
+}
+
+
+def riscv_tests(tests: list) -> list:
+    """The tests for RISC-V, named so, on the AIA, with RISC-V's own lines, but those RISCV_LEFT_OUT and the IOMMU's."""
+    lines = {f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={RISCV_CLOCK_LINE}",
+             f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
+             f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={RISCV_HARDENING_LINE}"}
+    # The system volume's room for debug files, larger on RISC-V (boot.py's RISCV_DEBUG_FILES_SECTORS)
+    debug_disk = {"serving 468992 blocks": "serving 796672 blocks",
+                  "partitions on a disk of 468992 blocks": "partitions on a disk of 796672 blocks",
+                  "SlopOS system, 327680 blocks": "SlopOS system, 655360 blocks"}
+    iommu = {f"--expect-line={X86_IOMMU_LINE}", f"--expect-line={X86_TRANSLATING_LINE}"}
+    adapted = []
+    for name, expected, arguments in tests:
+        if name in RISCV_LEFT_OUT or any(argument in iommu for argument in arguments):
+            continue
+        resized = [argument for argument in arguments]
+        settle = max([int(word.split("=", 1)[1]) for argument in arguments if argument.startswith("--command-line=")
+                      for word in argument.split("=", 1)[1].split() if word.startswith("test_settle=")] or [0])
+        if settle:
+            given = max([int(argument.split("=", 1)[1]) for argument in arguments if argument.startswith("--timeout=")] or [60])
+            at = resized.index("--") if "--" in resized else len(resized)
+            resized.insert(at, f"--timeout={max(given, settle + RISCV_SETTLE_ROOM)}")
+        if "--debug-files" in arguments:
+            for old, new in debug_disk.items():
+                resized = [argument.replace(old, new) for argument in resized]
+        adapted.append((f"RISC-V: {RISCV_NAMES.get(name, name)}", expected,
+                        ["--aia", *[lines.get(argument, argument) for argument in resized]]))
+    return adapted
+
+
+RISCV_TESTS = [(f"RISC-V PLIC: {name}", expected, arguments) for name, expected, arguments in RISCV_INTERRUPT_TESTS] \
+    + riscv_tests(TESTS) + [
     # RVA23 but its vector extension, which the kernel doesn't use, so its own check is what refuses it
     ("RISC-V: refuses a CPU below RVA23", 2, ["--cpu=rva23s64,sv48=on,zkr=on,v=false",
         "--expect-line=[boot] SlopOS needs an RVA23 CPU, and this one lacks the vector extension (V)"]),
@@ -2079,8 +2126,8 @@ def main() -> int:
             print("FAILED: the programs don't build for AArch64")
             return 1
         PROGRAMS_RISCV = Path(temporary) / "programs_riscv"
-        if not build_programs(PROGRAMS_RISCV, "riscv64"):
-            print("FAILED: the bootloader doesn't build for RISC-V")
+        if not build_programs(PROGRAMS_RISCV, "riscv64", test_kdf=True):
+            print("FAILED: the programs don't build for RISC-V")
             return 1
         tools = Path(temporary) / "tools"
         if not build_tools(tools):
@@ -2122,9 +2169,7 @@ def main() -> int:
             print("the KVM tests are left out: SLOPOS_KVM_HOST isn't set")
         jobs += boot_jobs(kernel, kvm_tests, [f"--kvm={KVM_HOST}"])
         failed = run_jobs(jobs)
-        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 3 * len(ADDRESS_TESTS)
-        count += len(RISCV_TESTS)
-        count += len(COVERAGE_TESTS) + len(AARCH64_COVERAGE_TESTS)             + len(kvm_tests)
+        count = len(jobs)
         print_timings(time.monotonic() - suite_started, built)
         if FLAKY:
             print(f"{len(FLAKY)} flaky, failing among the others and passing alone: " + "; ".join(FLAKY))
@@ -2178,9 +2223,10 @@ def address_test(kernel: Path, name: str, differ: bool, arguments: list) -> tupl
 
 
 def address_jobs(kernel: Path, more: list = [], prefix: str = "") -> list:
-    """The address tests, as jobs: a name and what runs it."""
+    """The address tests, as jobs: a name and what runs it. SLOPOS_BOOT_TESTS chooses among them as boot_jobs does."""
+    only = [part for part in os.environ.get("SLOPOS_BOOT_TESTS", "").split(",") if part]
     return [(prefix + name, lambda name=name, differ=differ, arguments=arguments: address_test(kernel, name, differ, more + arguments))
-            for name, differ, arguments in ADDRESS_TESTS]
+            for name, differ, arguments in ADDRESS_TESTS if not only or any(part in prefix + name for part in only)]
 
 
 def boot_test(kernel: Path, expected: int, arguments: list) -> tuple[bool, str]:

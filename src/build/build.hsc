@@ -19,7 +19,7 @@
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
  * - arch: the kernel's and the programs' architecture, x86_64 (the default), aarch64 (roadmap A) or riscv64 (M19,
- *   decisions/0199), for which programs are only the bootloader until user space comes with R5.
+ *   decisions/0199).
  * - robustness: on, for robustness testing's machinery (src/robustness, decisions/0096): the kernel's failure points,
  *   which fail= on its command line makes fail, and the hosted tests' (SLOPOS_FAIL). off by default, and then none of
  *   it is compiled in. Read by the code with compiler.target_setting, as every target gets the command line's settings.
@@ -74,14 +74,11 @@ build :: fn() {
          * then the many small tests, which fill in around them
          */
         add_uefi_programs("../uefi")
-        // User space on RISC-V comes with M19's R5 (decisions/0199): until then, only the bootloader
-        if compiler.target_setting("arch", default = "x86_64") != "riscv64" {
-            add_programs("../services")
-            add_programs("../apps")
-            add_programs("../drivers")
-            add_libraries("../libraries")
-            add_programs("../tests")
-        }
+        add_programs("../services")
+        add_programs("../apps")
+        add_programs("../drivers")
+        add_libraries("../libraries")
+        add_programs("../tests")
     }
     if targets == "all" || targets == "tests" {
         add_tests("..")
@@ -337,6 +334,11 @@ add_programs :: fn(folder : string) {
             // The baseline, which Hemera gives AArch64 without a CPU
             program.target_options.cpu = ""
         }
+        if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
+            program.target_options.architecture = .riscv64
+            // RVA23U64, which Hemera gives RISC-V without a CPU
+            program.target_options.cpu = ""
+        }
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
         // Landing pads, signed returns and the ELF note saying so, as every SlopOS program has (decisions/0186)
@@ -413,6 +415,10 @@ add_libraries :: fn(folder : string) {
         library.target_options.cpu = "x86-64-v3"
         if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
             library.target_options.architecture = .arm64
+            library.target_options.cpu = ""
+        }
+        if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
+            library.target_options.architecture = .riscv64
             library.target_options.cpu = ""
         }
         library.target_options.relocation_model = .Default

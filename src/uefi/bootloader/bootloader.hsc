@@ -36,7 +36,10 @@ RECOVERY_KEY :: 'r'
  * boots (decisions/0181, F7).
  */
 EDIT_KEY :: 'e'
-/** How long the command line's editor lets what was typed before it go, in steps of KEY_WINDOW_STEP_MICROSECONDS. */
+/**
+ * How long no key has to come before the command line's editor starts, letting go what's typed before, in steps of
+ * KEY_WINDOW_STEP_MICROSECONDS: half a second.
+ */
 EDIT_SETTLE_STEPS :: 50
 // How long the bootloader looks for it: 100 ms, in steps
 /** How many steps the bootloader looks for RECOVERY_KEY in, ended early by the first key it sees. */
@@ -369,7 +372,7 @@ key_asked :: fn() -> KeyAsked {
  * typed added to its end, Backspace taking the last back, Enter booting with it, Escape keeping it as it was. One not
  * built for development boots as it was built, and that's said.
  *
- * What's typed for half a second first is let go, as the key that asked may still be arriving.
+ * What's typed first is let go, until half a second passes with no key, as the key that asked may still be arriving.
  *
  * @param generation The generation, its command_line changed in place when Enter's pressed; its record on the ESP
  *     isn't.
@@ -385,12 +388,17 @@ edit_command_line :: fn(generation : ptr[mut generations.Generation]) {
     services :: uefi.boot_services() or_return void
     // Said first, so what's still pressing the key that asked stops, and what it pressed meanwhile is let go
     runtime.log_info("bootloader: editing the command line: Enter boots with it, Escape keeps it as it was")
-    for step in 0..<EDIT_SETTLE_STEPS {
+    // Until none has come for EDIT_SETTLE_STEPS steps, as a slow machine may still be handing over what was held
+    quiet := 0
+    loop {
+        quiet += 1
         loop {
             _ = uefi.key_waiting() or_break
+            quiet = 0
         }
         _ = services.stall(KEY_WINDOW_STEP_MICROSECONDS)
     }
+    while quiet < EDIT_SETTLE_STEPS
     line : u8[..]
     defer runtime.array_free(&line)
     append(&line, generations.line_of(&generation.command_line))
@@ -504,7 +512,7 @@ keep_panic_record :: fn(root : ptr[uefi.File], handoff : ptr[mut boot_protocol.H
                 }
             }
             runtime.log_info(
-                "bootloader: the boot before stopped for a fault, its panic record kept as %",
+                "bootloader: the boot before faulted, its panic record kept as %",
                 LAST_PANIC_PATH
             )
         }

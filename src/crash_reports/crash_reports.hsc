@@ -34,6 +34,31 @@ MAX_FRAME_SIZE : u64 : 1 << 20
     FRAME_REGISTER : usize : 29
     /** Where the stack pointer is among them. */
     STACK_REGISTER : usize : 31
+    /**
+     * How far below the frame pointer its frame record is: at it, the caller's frame pointer then the return address.
+     */
+    FRAME_RECORD_BELOW : u64 : 0
+    /** Where a suspended fiber's top frame continues, in its saved state (Hemera's docs/calling_convention.md). */
+    FIBER_CONTINUATION_AT : u64 : 96
+    /** Where a suspended fiber's top frame's frame pointer is, in its saved state. */
+    FIBER_FRAME_AT : u64 : 0
+}
+#else_if TARGET_ARCH == .riscv64 {
+    /** Where the program counter is among thread_read_registers' registers, after x0 to x31. */
+    PC_REGISTER : usize : 32
+    /** Where the frame pointer (s0, x8) is among them. */
+    FRAME_REGISTER : usize : 8
+    /** Where the stack pointer (sp, x2) is among them. */
+    STACK_REGISTER : usize : 2
+    /**
+     * How far below the frame pointer its frame record is: RISC-V's s0 is the stack pointer at the frame's entry, the
+     * caller's s0 then the return address just below it.
+     */
+    FRAME_RECORD_BELOW : u64 : 16
+    /** Where a suspended fiber's top frame continues, in its saved state (Hemera's docs/calling_convention.md). */
+    FIBER_CONTINUATION_AT : u64 : 104
+    /** Where a suspended fiber's top frame's frame pointer is, in its saved state. */
+    FIBER_FRAME_AT : u64 : 0
 }
 #else {
     /** Where the program counter (rip) is among thread_read_registers' registers. */
@@ -42,6 +67,14 @@ MAX_FRAME_SIZE : u64 : 1 << 20
     FRAME_REGISTER : usize : 6
     /** Where the stack pointer (rsp) is among them. */
     STACK_REGISTER : usize : 7
+    /**
+     * How far below the frame pointer its frame record is: at it, the caller's frame pointer then the return address.
+     */
+    FRAME_RECORD_BELOW : u64 : 0
+    /** Where a suspended fiber's top frame continues, in its saved state (Hemera's docs/calling_convention.md). */
+    FIBER_CONTINUATION_AT : u64 : 72
+    /** Where a suspended fiber's top frame's frame pointer is, in its saved state. */
+    FIBER_FRAME_AT : u64 : 16
 }
 
 /** A crash report: a fault that stopped a program's thread, and where the thread was. */
@@ -170,11 +203,11 @@ make :: fn(
     frame := report.registers[FRAME_REGISTER]
     // Each frame record: the caller's frame pointer, then the return address
     for depth in cast[u32](1)..<MAX_FRAMES {
-        if frame == 0 || (frame & 7) != 0 {
+        if frame < FRAME_RECORD_BELOW || (frame & 7) != 0 {
             break
         }
         record : u8[16]
-        match slop_os.process_read_memory(process, space, frame, record) {
+        match slop_os.process_read_memory(process, space, frame - FRAME_RECORD_BELOW, record) {
             case Ok => {}
             case Error(error) => break
         }

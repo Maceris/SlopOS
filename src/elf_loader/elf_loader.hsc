@@ -1,7 +1,7 @@
 /**
  * Loading SlopOS programs (decisions/0004, 0058): position-independent ELF executables for the architecture
- * this is built for, x86-64's or AArch64's, whose only relocations are relative ones (R_X86_64_RELATIVE,
- * R_AARCH64_RELATIVE). The kernel uses it for the root task, and the root task and the
+ * this is built for, x86-64's, AArch64's or RISC-V's, whose only relocations are relative ones (R_X86_64_RELATIVE,
+ * R_AARCH64_RELATIVE, R_RISCV_RELATIVE). The kernel uses it for the root task, and the root task and the
  * process manager for every other program. It allocates nothing:
  *
  *     executable :: elf_loader.read(file)?        // checked: segments, entry, relocations

@@ -232,6 +232,12 @@ general-dynamic. R2: `#calling_convention(.entry)` for `stvec`, `riscv64.Registe
 compile-time arguments, fences, `sfence.vma`, `sbi_call`, `enter` and `semihosting` in `base/intrinsics/riscv64`,
 and UEFI on riscv64 as an ELF Hemera turns into a PE. R3, in `std` only: RISC-V's `CpuFeature`s (128 on) in
 `std/os/slop_os`, and `RISCV_EFI_BOOT_PROTOCOL` (`uefi.RiscvBoot`) in `std/os/uefi`, for the boot hart's ID.
+R5 (2026-11-26): `riscv64.save_floating`, `restore_floating`, `save_vector` and `restore_vector`, which turn D and V
+on for their own instructions in a kernel built without them; SlopOS's runtime in `base` on riscv64 (system calls by
+`ecall`, typed libraries as `EM_RISCV` with `R_RISCV_RELATIVE`) and `std/os/slop_os`'s system calls and 33
+`THREAD_REGISTERS`; a fiber's first segment 1536 bytes on RISC-V, whose frames are bigger, as 1 KiB overflowed in a
+kernel fiber that can't grow; and the UEFI runtime starting a program's first output on a line of its own when the
+firmware left the console's cursor mid-line.
 
 ## 4. Features That Look Like a Strong Fit
 

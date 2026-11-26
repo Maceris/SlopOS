@@ -23,6 +23,9 @@ import text_buffer from "std:text_buffer"
 #else_if TARGET_ARCH == .arm64 {
     import aarch64 from "base:intrinsics/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import riscv64 from "base:intrinsics/riscv64"
+}
 
 /** How many threads mix into the total. */
 WORKERS :: 3
@@ -109,11 +112,14 @@ work : runtime.ThreadFunction : fn(data #escaping : any) {
 /**
  * Read the CPU's counter directly, which a recording traps.
  *
- * @return x86-64's time-stamp counter, or AArch64's CNTVCT_EL0.
+ * @return x86-64's time-stamp counter, AArch64's CNTVCT_EL0, or RISC-V's time CSR.
  */
 read_counter :: fn() -> u64 {
     #if TARGET_ARCH == .x86_64 {
         return x86_64.rdtsc()
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        return riscv64.csrr(.TIME)
     }
     #else {
         return aarch64.read_system_register(.CNTVCT_EL0)

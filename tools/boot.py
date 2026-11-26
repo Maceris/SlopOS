@@ -359,6 +359,9 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     return returncode >> 1 if returncode % 2 == 1 else NO_EXIT_CODE
 
 
+# The architecture booted (--arch), for what differs by it, like the room debug files take
+ARCHITECTURE = "x86_64"
+
 # Whether RISC-V's virt has the AIA, an IMSIC for each hart and an APLIC, rather than the PLIC (--aia, decisions/0199)
 RISCV_AIA = False
 
@@ -389,6 +392,9 @@ def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
         "-boot", "menu=on,splash-time=0",
         *serial_arguments(serial, keys), "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
         "-semihosting-config", "enable=on,target=native",
+        # A framebuffer, through QEMU's ramfb, as x86-64's q35 has its VGA: edk2 draws its console there too, which makes the
+        # console wider than the serial terminal's 80 columns alone, where long lines would wrap
+        "-device", "ramfb",
     ]
     if keys is not None:
         keys.thread.start()
@@ -2228,6 +2234,8 @@ BOOT_SYSTEM_SECTORS = 131072
 # With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185):
 # 96 MiB, as 64 MiB grew too small for AArch64's once the GUI programs came (2026-11-19)
 DEBUG_FILES_SECTORS = 196608
+# On RISC-V: 256 MiB, as its debug files are about twice the others' (198 MiB on 2026-11-26)
+RISCV_DEBUG_FILES_SECTORS = 524288
 
 
 # The encrypted volume the image builder makes beside the system volume, and its passphrase, which the disk check
@@ -2328,7 +2336,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
                                   staged, str(kernel)] + [str(program) for program in boot_set], capture_output=True, text=True)
         if staging.returncode != 0:
             sys.exit(f"boot.py: the generation builder couldn't stage generation 2:\n{staging.stdout}{staging.stderr}")
-    more = DEBUG_FILES_SECTORS if debug_files else 0
+    more = (RISCV_DEBUG_FILES_SECTORS if ARCHITECTURE == "riscv64" else DEBUG_FILES_SECTORS) if debug_files else 0
     built = subprocess.run([str(image_builder), str(path), str(BOOT_DISK_SECTORS + more), f"--sealed={SEALED_VOLUME}:{SEALED_PASSPHRASE}",
                             f"test,{PARTITIONS[0][0]},{PARTITIONS[0][2]}",
                             f"test,{PARTITIONS[1][0]},{PARTITIONS[1][2]}",
@@ -2546,9 +2554,10 @@ def main() -> int:
                              "exit code 0 (roadmap B1, decisions/0132)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
-    global KVM_HOST, RISCV_AIA
+    global KVM_HOST, RISCV_AIA, ARCHITECTURE
     KVM_HOST = arguments.kvm
     RISCV_AIA = arguments.aia
+    ARCHITECTURE = arguments.arch
     if KVM_HOST is not None and arguments.arch != "x86_64":
         sys.exit("boot.py: --kvm boots x86-64 only")
     if arguments.end_when_done and (arguments.shut_down_when_done or arguments.restart_when_done
