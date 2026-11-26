@@ -2,6 +2,7 @@ package arch_x86_64
 
 import x86_64 from "base:intrinsics/x86_64"
 import slop_os from "std:os/slop_os"
+import boot_info from "../../boot_info"
 
 /** One of the four registers CPUID reports in. */
 CpuidRegister :: enum {
@@ -122,13 +123,24 @@ has :: fn(features : ptr[slop_os.CpuFeatures], feature : slop_os.CpuFeature) -> 
 }
 
 /**
+ * Detect the calling CPU's features (arch_interface.detect_features), from CPUID.
+ *
+ * @param firmware Unused: CPUID says it all.
+ * @param direct_map_offset Unused.
+ * @return The features the CPU has, as cpu_features finds them.
+ */
+detect_features :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> slop_os.CpuFeatures {
+    return cpu_features()
+}
+
+/**
  * Detect the calling CPU's features, from CPUID, as FEATURE_BITS says where each is.
  *
  * A leaf above the highest the CPU reports, basic or extended, isn't asked: its features count as missing.
  *
  * @return The features the CPU has, of those in FEATURE_BITS.
  */
-detect_features :: fn() -> slop_os.CpuFeatures {
+cpu_features :: fn() -> slop_os.CpuFeatures {
     features : slop_os.CpuFeatures
     highest_basic :: x86_64.cpuid(0).eax
     highest_extended :: x86_64.cpuid(0x80000000).eax

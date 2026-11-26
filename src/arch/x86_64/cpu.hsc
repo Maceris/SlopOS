@@ -93,6 +93,12 @@ IdtEntry :: struct {
 INTERRUPT_GATE : u8 : 0x8e
 
 /**
+ * Whether the kernel goes on past its own address space on x86-64: true, it takes interrupts, starts the timer and the
+ * other CPUs (the kernel's stop_before_interrupts).
+ */
+TAKES_INTERRUPTS :: true
+
+/**
  * One CPU's architecture state (arch_interface.ArchCpu). The gs base points at it while the CPU is
  * in the kernel, so entries find their CPU with x86_64.read_gs_base(). Must not move after init_cpu.
  */

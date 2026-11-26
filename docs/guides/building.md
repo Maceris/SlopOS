@@ -30,7 +30,7 @@ as `--setting=name=value,name=value`:
 | `programs_output` | The folder for SlopOS's programs, each `<name>.elf` with its manifest and docs; `build/programs` by default |
 | `tests_output` | The folder for test programs; `build/tests` by default |
 | `tools_output` | The folder for the hosted tools in `src/tools`, like the image builder; `build/tools` by default |
-| `arch` | `x86_64` (the default) or `aarch64`, for the kernel and the programs |
+| `arch` | `x86_64` (the default), `aarch64` or `riscv64`, for the kernel and the programs; on `riscv64` the programs are only the UEFI ones, the bootloader among them, until RISC-V has user space |
 | `stack_check` | What the kernel's prologue checks do without room: `trap` (the default), or `morestack` |
 
 ```
@@ -67,7 +67,7 @@ python tools/boot.py --expect 0
 | `--expect-console-line LINE` | With `--expect`: the virtio console must show this exact line, read as a terminal shows it (the status line left out, a cursor move a line break, other sequences gone); may be repeated |
 | `--refuse-console-line LINE` | With `--expect`: the virtio console mustn't show this line; may be repeated |
 | `--screen-after LINE` | With `--expect`: once the virtio console shows this line, take the screen through QMP and check the console's drawn on the framebuffer, its status line and text below it; adds a virtio keyboard, and on AArch64 QEMU's `ramfb`. `SLOPOS_SCREENSHOT=<path>` keeps the screenshot |
-| `--arch ARCH` | `x86_64` (the default), or `aarch64` on QEMU's virt machine through UEFI |
+| `--arch ARCH` | `x86_64` (the default), `aarch64` on QEMU's virt machine through UEFI, or `riscv64` on virt through edk2 over OpenSBI, the kernel alone, with `--cpu` `rva23s64,sv48=on,zkr=on` unless it's given (`QEMU_RISCV64`, and `RISCV_EFI` for the firmware if QEMU's `edk2-riscv-code.fd` isn't beside it) |
 | `--disk MARK` | Add a virtio block device: a 38 MiB GPT disk whose `SlopOS check` partition has `MARK` at the start of its block 0 and `block N` at the start of its blocks 2 to 9, and an EFI system partition holding the disk check's files, its FAT32 written by `boot.py` itself |
 | `--programs FOLDER` | The programs, built, the bootloader (`bootloader.efi`) among them, instead of building them |
 | `--kernel-alone` | The kernel with no modules: its generation's boot set is empty, `--programs` giving only the bootloader |

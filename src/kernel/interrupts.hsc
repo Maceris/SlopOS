@@ -12,6 +12,9 @@ import boot_info from "../boot_info"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Wired interrupts (roadmap M3, decisions/0039): interrupt controllers the platform service registers,

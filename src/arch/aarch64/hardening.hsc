@@ -256,7 +256,7 @@ has_permission_indirection :: fn() -> bool {
  * @param system The shared state, whose gcs is set where it's turned on, on the boot CPU, and kept by the others.
  */
 enable_permission_indirection :: fn(system : ptr[mut ArchSystem]) {
-    features :: detect_features()
+    features :: cpu_features()
     if !has(&features, .Aarch64Gcs) || !has_permission_indirection() {
         return void
     }

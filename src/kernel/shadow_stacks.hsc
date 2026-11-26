@@ -11,6 +11,9 @@ import frames from "frames"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Shadow stacks for user threads (decisions/0186): a process built for them gives the kernel a region of its address

@@ -9,6 +9,9 @@ import testing from "std:testing"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * test_ownership_race: an object moved from one process's owned list to another's, as take_one moves an owning handle

@@ -249,7 +249,7 @@ unmask_interrupts :: fn() {
  *     again later.
  */
 hardware_entropy :: fn() -> u64? {
-    features :: detect_features()
+    features :: cpu_features()
     if !has(&features, .X86Rdseed) {
         return null
     }

@@ -78,11 +78,16 @@ CpuStacks :: struct {
 }
 
 /**
- * Read the CPU's features. L2 calls it once, on the boot CPU.
+ * Read the CPU's features. L2 calls it once, on the boot CPU, before init_system.
  *
+ * @param firmware The firmware's tables, for an architecture whose CPUs say what they have only there, like RISC-V's
+ *     device tree; x86-64 and AArch64 read their own registers and ignore it.
+ * @param direct_map_offset The virtual address of physical 0 in the bootloader's direct map, through which the tables
+ *     are reached; 0 for none, which leaves an architecture that needs the tables with none of the features found
+ *     there.
  * @return The calling CPU's features. CpuFeatures is defined with the system ABI (0019).
  */
-detect_features : fn() -> slop_os.CpuFeatures : ---
+detect_features : fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> slop_os.CpuFeatures : ---
 
 /**
  * Find the first baseline feature the CPU lacks (x86-64-v3 on x86-64, 0003), which the kernel can't run without.
@@ -108,8 +113,8 @@ init_system : fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmware
  * no-execute, address-space tags, and the default vector state.
  *
  * Records carrier and context in cpu, and cpu in the architecture's per-CPU register (x86-64: IA32_KERNEL_GS_BASE;
- * AArch64: TPIDR_EL1; RISC-V: sscratch), for entry stubs. Keeping carrier and context makes them #escaping
- * (Hemera's docs/memory.md).
+ * AArch64: TPIDR_EL1; RISC-V: tp, and sscratch in user mode), for entry stubs. Keeping carrier and context makes them
+ * #escaping (Hemera's docs/memory.md).
  *
  * @param system The shared state init_system set up.
  * @param cpu The calling CPU's architecture state, in L2's memory; it must not move afterwards.

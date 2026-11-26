@@ -18,7 +18,8 @@
  * - tools_output: the folder tools go in, build/tools by default.
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
- * - arch: the kernel's and the programs' architecture, x86_64 (the default) or aarch64 (roadmap A).
+ * - arch: the kernel's and the programs' architecture, x86_64 (the default), aarch64 (roadmap A) or riscv64 (M19,
+ *   decisions/0199), for which programs are only the bootloader until user space comes with R5.
  * - robustness: on, for robustness testing's machinery (src/robustness, decisions/0096): the kernel's failure points,
  *   which fail= on its command line makes fail, and the hosted tests' (SLOPOS_FAIL). off by default, and then none of
  *   it is compiled in. Read by the code with compiler.target_setting, as every target gets the command line's settings.
@@ -73,11 +74,14 @@ build :: fn() {
          * then the many small tests, which fill in around them
          */
         add_uefi_programs("../uefi")
-        add_programs("../services")
-        add_programs("../apps")
-        add_programs("../drivers")
-        add_libraries("../libraries")
-        add_programs("../tests")
+        // User space on RISC-V comes with M19's R5 (decisions/0199): until then, only the bootloader
+        if compiler.target_setting("arch", default = "x86_64") != "riscv64" {
+            add_programs("../services")
+            add_programs("../apps")
+            add_programs("../drivers")
+            add_libraries("../libraries")
+            add_programs("../tests")
+        }
     }
     if targets == "all" || targets == "tests" {
         add_tests("..")
@@ -290,6 +294,14 @@ add_kernel :: fn() {
         kernel.target_options.cpu_features = "-fp-armv8,-neon"
         kernel.target_options.linker_script = "../boot/slopos/aarch64.ld"
     }
+    if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
+        kernel.target_options.architecture = .riscv64
+        // RVA23 without floating point or any vector extension, which trap in the kernel with sstatus.FS and VS off
+        kernel.target_options.cpu_features = "-f,-d,-zve32x,-zvl32b"
+        // medany: the kernel is linked in the top 2 GiB, and code reaches it relative to itself
+        kernel.target_options.code_model = .Medium
+        kernel.target_options.linker_script = "../boot/slopos/riscv64.ld"
+    }
     target :: compiler.add_target(kernel)
 }
 
@@ -450,6 +462,12 @@ add_uefi_programs :: fn(folder : string) {
         if compiler.target_setting("arch", default = "x86_64") == "aarch64" {
             program.target_options.architecture = .arm64
             program.target_options.cpu = ""
+        }
+        if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
+            program.target_options.architecture = .riscv64
+            program.target_options.cpu = ""
+            // RVA23 without its vector extensions, as the firmware leaves sstatus.VS off
+            program.target_options.cpu_features = "-zve32x,-zvl32b"
         }
         program.target_options.startup_code = true
         target :: compiler.add_target(program)

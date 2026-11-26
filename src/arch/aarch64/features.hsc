@@ -2,6 +2,7 @@ package arch_aarch64
 
 import aarch64 from "base:intrinsics/aarch64"
 import slop_os from "std:os/slop_os"
+import boot_info from "../../boot_info"
 
 /** Which of the ID registers a feature is reported in. */
 IdRegister :: enum {
@@ -92,13 +93,24 @@ has :: fn(features : ptr[slop_os.CpuFeatures], feature : slop_os.CpuFeature) -> 
 }
 
 /**
- * Read the calling CPU's features from its ID registers (arch_interface.detect_features).
+ * Read the calling CPU's features (arch_interface.detect_features), from its ID registers.
+ *
+ * @param firmware Unused: the ID registers say it all.
+ * @param direct_map_offset Unused.
+ * @return The features the CPU has, as cpu_features finds them.
+ */
+detect_features :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> slop_os.CpuFeatures {
+    return cpu_features()
+}
+
+/**
+ * Read the calling CPU's features from its ID registers.
  *
  * 1 GiB blocks come with 4 KiB pages on every AArch64 CPU, so Aarch64Pages1G is always there.
  *
  * @return Every feature FEATURE_FIELDS finds, and Aarch64Pages1G.
  */
-detect_features :: fn() -> slop_os.CpuFeatures {
+cpu_features :: fn() -> slop_os.CpuFeatures {
     features : slop_os.CpuFeatures
     for field in FEATURE_FIELDS {
         if feature_present(field) {

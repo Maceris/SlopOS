@@ -13,6 +13,9 @@ import frames from "frames"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * test_shootdown: a page in the kernel window every CPU reads, so each has it in its TLB, then pointed

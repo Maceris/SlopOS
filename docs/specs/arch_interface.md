@@ -11,7 +11,8 @@ Status: **specified**, and implemented on x86-64 (`src/arch/x86_64`): CPU setup,
 and the miscellaneous functions (roadmap M1), paging (M2), wired interrupts (M3), and user and vector
 state (M4). On AArch64 (`src/arch/aarch64`): CPU setup, entry, paging and the miscellaneous functions
 (roadmap A3), interrupts, wired interrupts and the timer (A4), user and vector state (A5), and MSIs through the
-GICv3's ITS (M7); an NMI comes later. Choices and alternatives are in
+GICv3's ITS (M7); an NMI comes later. On RISC-V (`src/arch/riscv64`): CPU setup, entry, paging and the miscellaneous
+functions (M19's R3); the rest comes with R4 to R6. Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -127,8 +128,12 @@ CpuStacks :: struct {
     critical : StackRange[3],
 }
 
-// The CPU's features, read once on the boot CPU. CpuFeatures is defined with the system ABI (0019).
-detect_features : fn() -> abi.CpuFeatures : ---
+/*
+ * The CPU's features, read once on the boot CPU, before init_system. CpuFeatures is defined with the system ABI
+ * (0019). The firmware's tables, through the direct map, are for an architecture whose CPUs say what they have only
+ * there, like RISC-V's device tree.
+ */
+detect_features : fn(firmware: ptr[boot_info.FirmwareTables], direct_map_offset: u64) -> abi.CpuFeatures : ---
 
 // The first baseline feature the CPU lacks (x86-64-v3 on x86-64, 0003), or null.
 missing_baseline_feature : fn(features: ptr[abi.CpuFeatures]) -> string? : ---
@@ -144,7 +149,7 @@ init_system : fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTa
  * Set up the calling CPU: descriptor tables, entry points, the stacks entries use,
  * user-access protection, no-execute, address-space tags, and the default vector state.
  * Records carrier and context in cpu, and cpu in the architecture's per-CPU register
- * (x86-64: the gs base while in the kernel; AArch64: TPIDR_EL1; RISC-V: sscratch), for entry stubs.
+ * (x86-64: the gs base while in the kernel; AArch64: TPIDR_EL1; RISC-V: tp, and sscratch in user mode), for entry stubs.
  */
 init_cpu : fn(
     system: ptr[ArchSystem],
@@ -747,8 +752,8 @@ On x86-64, entry stubs are Hemera entry functions (`#calling_convention(.entry)`
 `.syscall_entry`, Hemera `docs/calling_convention.md`, *Entry Functions*), whose compiler-generated
 code does step 1. Step 3 is `push_context cpu_context from` the recorded context (Hemera
 `docs/control_flow.md`, *Pushing a Whole Context*). On AArch64 it's one `.entry` function for the whole
-vector table, through `aarch64.vector_table`. RISC-V entry isn't expressible in Hemera yet
-(`../../knowledge/hemera-feedback.md`).
+vector table, through `aarch64.vector_table`. On RISC-V it's one `.entry` function, which `stvec` points at, its
+frame found through `sscratch` from user mode.
 
 ## x86-64
 
@@ -822,6 +827,34 @@ virtual timer's interrupt and the PL011.
 | `log_hardening` | BTI, PAC and GCS (`ID_AA64PFR1_EL1`, `ID_AA64ISAR1_EL1`); Spectre v2 and Meltdown not applying by `CSV2` and `CSV3`; PAN, and whether there's SSBS |
 | `nmi_register_name` | `x0` to `x30`, `sp`, `pc` and `pstate` |
 | Not yet | `test_nmi`, which needs pseudo-NMIs or FEAT_NMI |
+
+## RISC-V
+
+How `arch/riscv64` meets the interface so far (M19's R3, `../../knowledge/decisions/0199-m19-risc-v-plan.md`,
+`../../knowledge/design/arch-riscv64.md`). It finds its devices and its features in the device tree. Until R4 it doesn't
+take interrupts (`TAKES_INTERRUPTS` false), and the kernel stops once its own address space, heap and console are up.
+
+| Interface | RISC-V |
+|---|---|
+| `ArchSystem` | The early console's word, the harts' features, the ASID bits `satp` keeps, and the device blocks L1 maps |
+| `UserRegisters` | `riscv64.RegisterFrame` |
+| `ArchCpu` | `riscv64.TrapScratch` first (`tp` points here in the kernel, `sscratch` in user mode), then the carrier block and context for entries, the kernel stack's limit and top, the trap stack's top and limit, the early console's word and the `ArchSystem` |
+| `detect_features` | The device tree's first cpu node: its `riscv,isa-extensions`, or its `riscv,isa` string, and its `mmu-type`. The baseline is RVA23 as the kernel and programs are built for it, with Sv48 |
+| `init_system` | The early console's registers kept for the kernel's own tables; the features; the ASID bits, found by writing all ones to `satp`'s ASID field and reading it back |
+| `init_cpu` | `tp` at the `ArchCpu`; `sscratch` 0; `stvec` at the entry, direct mode; `sstatus.SIE` and `sie` clear; `sstatus.SUM`, `FS` and `VS` clear |
+| `AddressSpaceTag` | ASID: as many as `satp` keeps bits for, up to 65536 |
+| Paging | Sv48, one root for both halves, as on x86-64: the kernel's table gets all 256 tables of the kernel half up front, and other address spaces copy its top-level entries. A non-leaf entry has no bits to spare, so `unmap` looks for a second valid entry to know a table emptied. Every leaf has A and D set, as Svade faults on a clear one; `take_accessed` is always false. Kernel mappings are global, user ones `U` with their ASID. Svpbmt: `WriteBack` is the physical memory attributes (0), `WriteCombining` NC, `Device` IO; a changed memory type is taken out and fenced before the new one goes in. A shadow stack's page is W alone, Zicfiss's encoding |
+| TLB | `sfence.vma` by address and ASID for user pages, by address alone for the kernel's global ones, by ASID for a tag, and whole for everything. `map` fences the new entry on the calling hart, which may have walked it while it was invalid. The first `activate` on a hart flushes everything |
+| Entry | One `.entry` function, which `stvec` points at. From user mode it runs on the kernel stack's top and never returns: `ecall` is a system call, a hardware error (code 19) a machine check, any other exception the thread's fault. An exception in the kernel is moved, by the entry's `sret`, to `kernel_trap` on the CPU's DoubleFault critical stack, since the trap's frame is on the stack it came from, which may be the one the stack check found full; the interrupted `s0` and `ra` stay, so the stack trace goes on through the faulting code. A page fault is `present` if the active tables map the address |
+| Stacks | A stack's limit leaves room below it for the guard and for a trap's frame (288 bytes), since a trap in the kernel builds its frame wherever the stack pointer is |
+| `counter` | The `time` CSR |
+| `hardware_entropy` | Zkr's `seed`, 16 bits at a time, where the harts have Zkr; null before `init_cpu` |
+| `early_console_write` | The device tree's first `ns16550a` (or `ns16550`), through the direct map: `early_console_init` maps its registers there as an I/O page in the bootloader's tables, and `init_kernel_page_table` again in the kernel's, with `kernel_half_frames` (one for each 2 MiB block). It honours `reg-shift`, `reg-io-width` and `clock-frequency`. Its word is in `tp` until `init_cpu`, then in the `ArchCpu` |
+| `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, as on AArch64 |
+| `reset` and `power_off` | The SBI's system reset extension, a warm reboot and a shutdown; `can_power_off` is true where the SBI has it |
+| `send_nmi`, `nmi_register_name` | RISC-V's supervisor has no NMI: false, and `"?"` |
+| `log_hardening` | Zicfilp and Zicfiss, neither used yet; nothing in the ISA says which transient-execution issues apply |
+| Not yet | Interrupts, the timer, IPIs and MSIs (R4); user mode, system calls, debugging and vector state (R5); interrupt remapping and control-flow integrity (R6); `test_nmi` (there's no NMI) |
 
 ## Not Covered
 

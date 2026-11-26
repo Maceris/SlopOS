@@ -13,6 +13,9 @@ import console from "console"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /**
  * The kernel's logger: one line per message on the architecture's early console and the framebuffer console,

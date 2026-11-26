@@ -1,6 +1,6 @@
 /**
- * SlopOS's bootloader (roadmap B, decisions/0131, 0133, 0134, 0135): a UEFI application, BOOTX64.EFI or BOOTAA64.EFI on
- * the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations), boots the newest,
+ * SlopOS's bootloader (roadmap B, decisions/0131, 0133, 0134, 0135): a UEFI application, BOOTX64.EFI, BOOTAA64.EFI or
+ * BOOTRISCV64.EFI on the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations), boots the newest,
  * each of its files checked against its hash, and hands the kernel SlopOS's own boot protocol (src/boot_protocol): the
  * kernel loaded and relocated at a random place, every module in its own pages, a direct map at a random offset, the
  * memory map, the firmware's tables and the framebuffer, then the firmware's boot services left and the kernel
@@ -15,10 +15,14 @@ import uefi from "std:os/uefi"
 import boot_info from "../../boot_info"
 import boot_protocol from "../../boot_protocol"
 import bundle from "../../bundle"
+import devicetree from "../../devicetree"
 import generations from "../../generations"
 
 #if TARGET_ARCH == .x86_64 {
     import x86_64 from "base:intrinsics/x86_64"
+}
+#else_if TARGET_ARCH == .riscv64 {
+    import riscv64 from "base:intrinsics/riscv64"
 }
 #else {
     import aarch64 from "base:intrinsics/aarch64"
@@ -70,6 +74,13 @@ PANIC_MEMORY : u32 : 0x80000003
     /** The panic record page's physical address on x86-64: 4 MiB, 4096-aligned. */
     PANIC_RECORD_AT : u64 : 0x400000
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /**
+     * The panic record page's physical address on RISC-V: 4 MiB above 0x80000000, where RAM starts on QEMU's virt,
+     * past the SBI firmware's 2 MiB at its start.
+     */
+    PANIC_RECORD_AT : u64 : 0x80400000
+}
 #else {
     /** The panic record page's physical address on AArch64: 4 MiB above 0x40000000, where RAM starts on QEMU's virt. */
     PANIC_RECORD_AT : u64 : 0x40400000
@@ -92,6 +103,8 @@ LAST_PANIC_PATH :: "EFI/SlopOS/LAST_PANIC"
  */
 main :: fn() -> int {
     runtime.log_info("bootloader: SlopOS's bootloader")
+    // Before anything else allocates, as the firmware may keep it in memory its allocations reuse
+    device_tree :: copy_device_tree()
     services :: uefi.boot_services() or_return fail("no boot services")
     // The firmware's watchdog off, which would reset the machine after five minutes in the bootloader
     _ = services.set_watchdog_timer(0, 0, 0, null)
@@ -138,13 +151,18 @@ main :: fn() -> int {
         handoff.segments[i] = segment
         handoff.segment_count = cast[u64](i + 1)
     }
-    firmware_tables(handoff)
+    firmware_tables(handoff, device_tree)
     framebuffer(handoff)
     entropy(handoff, root)
     _ = root.close(root)
     stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE)
         or_return fail("no memory for the kernel's stack")
     handoff.direct_map_offset = direct_map_offset(&random)
+    #if TARGET_ARCH == .riscv64 {
+        if !has_sv48(device_tree) {
+            return fail("the CPU has no Sv48 paging, which the kernel's tables are")
+        }
+    }
     tables := new_tables() or_return fail("no memory for page tables")
     starting :: prepare_cpus(handoff, &tables, handoff.direct_map_offset)
         or_return fail("no room for the other CPUs' trampoline")
@@ -160,6 +178,19 @@ main :: fn() -> int {
         start_cpus(handoff, starting)
         x86_64.enter(
             tables.root,
+            handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+            image.virtual_base + image.entry,
+            handoff.direct_map_offset + handoff_address
+        )
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        // The kernel's code, written as data, where this hart's instruction fetches see it, and interrupts off
+        riscv64.fence_i()
+        _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SIE)
+        riscv64.csrw(.SIE, 0)
+        start_cpus(handoff, starting)
+        riscv64.enter(
+            satp_value(&tables),
             handoff.direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
             image.virtual_base + image.entry,
             handoff.direct_map_offset + handoff_address
@@ -579,20 +610,43 @@ number_of :: fn(text : string) -> u64? {
 }
 
 /**
+ * Copy the firmware's device tree into the bootloader's own pages, before anything else allocates.
+ *
+ * Some firmware installs the device tree's configuration table in its pool's memory, which its own allocations reuse
+ * while the bootloader runs (edk2 on RISC-V's virt), so the tree the kernel gets is the copy, which is the bootloader's
+ * until the kernel reclaims it.
+ *
+ * @return The copy's physical address, in loader-data pages, the whole blob as its header's totalsize says; 0 if
+ *     there's
+ *     no device tree, its magic is wrong, or no pages can be had.
+ */
+copy_device_tree :: fn() -> u64 {
+    address :: cast[u64](uefi.configuration_table(uefi.DEVICE_TREE_GUID) or_else null)
+    if address == 0 || devicetree.big_endian_u32(address) != devicetree.FDT_MAGIC {
+        return 0
+    }
+    size :: cast[u64](devicetree.big_endian_u32(address + 4))
+    copy :: allocate_pages(LOADER_DATA, size) or_return 0
+    intrinsics.mem_copy_non_overlapping(cast[mut rawptr](copy), cast[rawptr](address), cast[usize](size))
+    return copy
+}
+
+/**
  * Find the firmware's tables in its configuration tables, by their GUIDs, and put their addresses in the handoff.
  *
  * ACPI's RSDP is the 2.0 one if there is one, else the 1.0 one; SMBIOS's entry point the 3.0 one, else the older one.
- * Each address is physical, and 0 when the firmware has no such table.
+ * Each address is physical, and 0 when the firmware has no such table. The device tree is the bootloader's copy of it.
  *
  * @param handoff The handoff, whose acpi_rsdp, devicetree, smbios and efi_system_table are written.
+ * @param device_tree The device tree's copy, from copy_device_tree; 0 for none.
  */
-firmware_tables :: fn(handoff : ptr[mut boot_protocol.Handoff]) {
+firmware_tables :: fn(handoff : ptr[mut boot_protocol.Handoff], device_tree : u64) {
     acpi := uefi.configuration_table(uefi.ACPI_20_GUID)
     if acpi is_none {
         acpi = uefi.configuration_table(uefi.ACPI_10_GUID)
     }
     handoff.acpi_rsdp = cast[u64](acpi or_else null)
-    handoff.devicetree = cast[u64](uefi.configuration_table(uefi.DEVICE_TREE_GUID) or_else null)
+    handoff.devicetree = device_tree
     smbios := uefi.configuration_table(uefi.SMBIOS3_GUID)
     if smbios is_none {
         smbios = uefi.configuration_table(uefi.SMBIOS_GUID)
@@ -707,6 +761,9 @@ cpu_counter :: fn() -> u64 {
     #if TARGET_ARCH == .x86_64 {
         return x86_64.rdtsc()
     }
+    #else_if TARGET_ARCH == .riscv64 {
+        return riscv64.csrr(.TIME)
+    }
     #else {
         return aarch64.read_system_register(.CNTVCT_EL0)
     }
@@ -716,14 +773,60 @@ cpu_counter :: fn() -> u64 {
  * Read the boot CPU's hardware identifier, as boot_protocol.Cpu's hardware_id holds it.
  *
  * @return On x86-64 its initial local APIC ID from CPUID leaf 1, 0 to 255; on AArch64 its MPIDR_EL1's affinity fields,
- *     Aff3 and Aff2 to Aff0 with the other bits cleared, as PSCI's CPU_ON and the device tree's cpu nodes name it.
+ *     Aff3 and Aff2 to Aff0 with the other bits cleared, as PSCI's CPU_ON and the device tree's cpu nodes name it; on
+ *     RISC-V its hart ID (boot_hart_id).
  */
 boot_cpu_id :: fn() -> u64 {
     #if TARGET_ARCH == .x86_64 {
         return cast[u64](x86_64.cpuid(1).ebx >> 24)
     }
+    #else_if TARGET_ARCH == .riscv64 {
+        return boot_hart_id()
+    }
     #else {
         return aarch64.read_system_register(.MPIDR_EL1) & 0xff00ffffff
+    }
+}
+
+#if TARGET_ARCH == .riscv64 {
+    /**
+     * Find the boot hart's ID, its mhartid, which supervisor mode can't read: from the firmware's
+     * RISCV_EFI_BOOT_PROTOCOL,
+     * which the RISC-V UEFI Protocol Specification has every RISC-V UEFI firmware give. Boot services have to be
+     * running.
+     *
+     * @return The hart ID, as the SBI's HSM and the device tree's cpu nodes name harts; 0, logged, if the firmware
+     *     lacks
+     *     the protocol or it fails.
+     */
+    boot_hart_id :: fn() -> u64 {
+        id : usize = 0
+        match uefi.locate[uefi.RiscvBoot](uefi.RISCV_BOOT_GUID) {
+            case Some(protocol) => {
+                if protocol.get_boot_hart_id(protocol, &id) == uefi.SUCCESS {
+                    return cast[u64](id)
+                }
+            }
+            case None => {}
+        }
+        runtime.log_warn("bootloader: the firmware doesn't say which hart it booted on, so it's taken to be hart 0")
+        return 0
+    }
+
+    /**
+     * Tell whether the harts can run the kernel's Sv48 tables, as the device tree's first cpu node's mmu-type says.
+     *
+     * A write of an unsupported mode to satp does nothing, so without Sv48 the kernel would run on no tables at all.
+     *
+     * @param device_tree The device tree's copy, from copy_device_tree; 0 for none.
+     * @return False if the mmu-type is there and is neither riscv,sv48 nor riscv,sv57, which has Sv48 too; true if it
+     *     is, or the device tree or the property isn't there to say.
+     */
+    has_sv48 :: fn(device_tree : u64) -> bool {
+        tree := devicetree.open(device_tree) or_return true
+        cpu := devicetree.find_device_type(&tree, "cpu") or_return true
+        mode :: devicetree.property(&tree, &cpu, "mmu-type") or_return true
+        return devicetree.lists(mode, "riscv,sv48") || devicetree.lists(mode, "riscv,sv57")
     }
 }
 
@@ -771,6 +874,13 @@ random_u64 :: fn(random : ptr[Random]) -> u64 {
             return x86_64.rdrand() or_else x86_64.rdtsc()
         }
         return x86_64.rdtsc()
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        /*
+         * The time CSR: Zkr's seed may trap in supervisor mode, as the machine's firmware decides, and the device tree
+         * that would say isn't read here
+         */
+        return riscv64.csrr(.TIME)
     }
     #else {
         // RNDR only where ID_AA64ISAR0_EL1 has FEAT_RNG (bits 63:60), as on x86-64 for RDRAND

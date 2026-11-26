@@ -11,6 +11,9 @@ import text_buffer from "std:text_buffer"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * test_binding_reuse: one binding slot unbound and bound again, over and over, on two ports in turn, while every other

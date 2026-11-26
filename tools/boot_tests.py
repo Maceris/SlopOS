@@ -2,7 +2,8 @@
 Builds SlopOS's kernel once, through its build package (src/build), then boots it for each test
 below with tools/boot.py and checks the code it stops with (src/kernel/stop.hsc, StopReason). Tests
 of growing stacks get a second kernel, built with morestack (the build package's stack_check), and the
-AArch64 tests kernels built for AArch64 (its arch setting), the same two ways.
+AArch64 tests kernels built for AArch64 (its arch setting), the same two ways, and the RISC-V tests a kernel built for
+RISC-V, which stops after memory until it takes interrupts (knowledge/decisions/0199).
 Exits 0 if every test passed. SLOPOS_BOOT_TESTS, names separated by commas, runs only the tests whose names have one of
 them in them. SLOPOS_KVM_HOST, user@address of a Linux machine with KVM and a CPU with CET, adds the tests that boot
 there (KVM_TESTS, boot.py --kvm).
@@ -39,6 +40,8 @@ BOOT = ROOT / "tools" / "boot.py"
 # SlopOS's programs, built once for each architecture, carried as modules by the tests whose arguments have WITH_PROGRAMS
 PROGRAMS = Path()
 PROGRAMS_AARCH64 = Path()
+# RISC-V's are only the bootloader until it has user space (decisions/0199)
+PROGRAMS_RISCV = Path()
 # How long each test took, in seconds, by name, for the summary of the slowest
 TIMINGS: dict[str, float] = {}
 WITH_PROGRAMS = "<programs>"
@@ -88,7 +91,9 @@ def boot_arguments(arguments: list, more: list) -> list:
     without WITH_PROGRAMS boots the kernel alone, with the programs only for the bootloader.
     """
     aarch64 = "--arch=aarch64" in more + arguments
-    programs = PROGRAMS_AARCH64 if aarch64 else PROGRAMS_REAL_KDF if WITH_REAL_KDF in arguments else PROGRAMS
+    riscv = "--arch=riscv64" in more + arguments
+    programs = PROGRAMS_AARCH64 if aarch64 else PROGRAMS_RISCV if riscv \
+        else PROGRAMS_REAL_KDF if WITH_REAL_KDF in arguments else PROGRAMS
     alone = [] if WITH_PROGRAMS in arguments or WITH_REAL_KDF in arguments else ["--kernel-alone"]
     given = [argument for argument in arguments if argument not in (WITH_PROGRAMS, WITH_REAL_KDF, WITH_IMAGE_BUILDER, KEEPS_SETTLE)]
     services = any(argument.startswith("--command-line=") and "test_services" in argument.split("=", 1)[1].split()
@@ -1927,6 +1932,30 @@ def aarch64_tests(tests: list, own: bool = True) -> list:
 
 AARCH64_TESTS = aarch64_tests(TESTS)
 
+# What QEMU's RVA23 CPU has against exploits: neither of RISC-V's control-flow integrity extensions, both optional
+RISCV_HARDENING_LINE = ("[boot] cpu: control-flow integrity: landing pads (Zicfilp) no, shadow stacks (Zicfiss) no; "
+                        "neither is used yet")
+# Where the RISC-V kernel stops until it takes interrupts (decisions/0199, R3)
+RISCV_STOP_LINE = "[info] no interrupts on this architecture yet, so stopping after memory"
+
+# RISC-V's tests (tools/boot.py --arch riscv64), the kernel alone: until M19's R4 it stops after memory, so only the
+# tests that need nothing more apply (knowledge/decisions/0199)
+RISCV_TESTS = [
+    ("RISC-V: boots, sets up memory and stops before interrupts", 0, [f"--expect-line={RISCV_STOP_LINE}",
+        f"--expect-line={RISCV_HARDENING_LINE}"]),
+    ("RISC-V: reports a kernel fault", 1, ["--command-line=test_exit test_fault",
+        "--expect-line-start=[fatal] kernel fault: invalid instruction at "]),
+    ("RISC-V: reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),
+    ("RISC-V: keeps the kernel's code read-only", 1, ["--command-line=test_exit test_write_code",
+        "--expect-line=[info] test_write_code: writing to the kernel's code",
+        "--expect-line-start=[fatal] kernel fault: page fault, write breaking the protection at "]),
+    ("RISC-V: allocates from the kernel heap", 0, ["--command-line=test_exit test_heap",
+        "--expect-line=[info] test_heap: 2 tests: 2 passed, 0 failed"]),
+    # RVA23 but its vector extension, which the kernel doesn't use, so its own check is what refuses it
+    ("RISC-V: refuses a CPU below RVA23", 2, ["--cpu=rva23s64,sv48=on,zkr=on,v=false",
+        "--expect-line=[boot] SlopOS needs an RVA23 CPU, and this one lacks the vector extension (V)"]),
+]
+
 # x86-64 through KVM on SLOPOS_KVM_HOST's Linux machine (user@address), with its CPU, which gives CET's shadow stacks
 # where TCG gives none (boot.py --kvm, decisions/0186); left out without one. Its machine is this project's: VMware gives
 # it shadow stacks and not IBT
@@ -2015,7 +2044,7 @@ def build_programs(output: Path, architecture: str = "x86_64", robustness: bool 
 
 
 def main() -> int:
-    global PROGRAMS, PROGRAMS_AARCH64, PROGRAMS_REAL_KDF, IMAGE_BUILDER
+    global PROGRAMS, PROGRAMS_AARCH64, PROGRAMS_RISCV, PROGRAMS_REAL_KDF, IMAGE_BUILDER
     suite_started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="slopos-boot-tests-") as temporary:
         kernel = Path(temporary) / "kernel.elf"
@@ -2034,6 +2063,10 @@ def main() -> int:
         if not build_programs(PROGRAMS_AARCH64, "aarch64", test_kdf=True):
             print("FAILED: the programs don't build for AArch64")
             return 1
+        PROGRAMS_RISCV = Path(temporary) / "programs_riscv"
+        if not build_programs(PROGRAMS_RISCV, "riscv64"):
+            print("FAILED: the bootloader doesn't build for RISC-V")
+            return 1
         tools = Path(temporary) / "tools"
         if not build_tools(tools):
             print("FAILED: the tools don't build")
@@ -2051,6 +2084,10 @@ def main() -> int:
         if not build_kernel(aarch64_morestack_kernel, "morestack", "aarch64"):
             print("FAILED: the kernel doesn't build for AArch64 with morestack")
             return 1
+        riscv_kernel = Path(temporary) / "kernel_riscv.elf"
+        if not build_kernel(riscv_kernel, architecture="riscv64"):
+            print("FAILED: the kernel doesn't build for RISC-V")
+            return 1
         coverage_kernel = Path(temporary) / "kernel_coverage.elf"
         aarch64_coverage_kernel = Path(temporary) / "kernel_aarch64_coverage.elf"
         if not (build_kernel(coverage_kernel, coverage=True) and build_kernel(aarch64_coverage_kernel, architecture="aarch64", coverage=True)):
@@ -2062,13 +2099,16 @@ def main() -> int:
                 + boot_jobs(aarch64_coverage_kernel, AARCH64_COVERAGE_TESTS, ["--arch=aarch64"])
                 + boot_jobs(aarch64_kernel, AARCH64_TESTS, ["--arch=aarch64"])
                 + boot_jobs(aarch64_morestack_kernel, AARCH64_MORESTACK_TESTS, ["--arch=aarch64"])
-                + address_jobs(aarch64_kernel, ["--arch=aarch64"], "AArch64: "))
+                + address_jobs(aarch64_kernel, ["--arch=aarch64"], "AArch64: ")
+                + boot_jobs(riscv_kernel, RISCV_TESTS, ["--arch=riscv64"])
+                + address_jobs(riscv_kernel, ["--arch=riscv64"], "RISC-V: "))
         kvm_tests = KVM_TESTS if KVM_HOST else []
         if not KVM_HOST:
             print("the KVM tests are left out: SLOPOS_KVM_HOST isn't set")
         jobs += boot_jobs(kernel, kvm_tests, [f"--kvm={KVM_HOST}"])
         failed = run_jobs(jobs)
-        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 2 * len(ADDRESS_TESTS)
+        count = len(TESTS) + len(MORESTACK_TESTS) + len(AARCH64_TESTS) + len(AARCH64_MORESTACK_TESTS) + 3 * len(ADDRESS_TESTS)
+        count += len(RISCV_TESTS)
         count += len(COVERAGE_TESTS) + len(AARCH64_COVERAGE_TESTS)             + len(kvm_tests)
         print_timings(time.monotonic() - suite_started, built)
         if FLAKY:

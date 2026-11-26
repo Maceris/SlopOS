@@ -35,6 +35,12 @@ RELA_SIZE : u64 : 24
     /** The only relocation type the kernel may have: R_X86_64_RELATIVE, the slide added to the addend. */
     RELATIVE : u64 : 8
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /** The ELF machine the kernel has to be for: EM_RISCV. */
+    ELF_MACHINE : u64 : 243
+    /** The only relocation type the kernel may have: R_RISCV_RELATIVE, the slide added to the addend. */
+    RELATIVE : u64 : 3
+}
 #else {
     /** The ELF machine the kernel has to be for: EM_AARCH64. */
     ELF_MACHINE : u64 : 183

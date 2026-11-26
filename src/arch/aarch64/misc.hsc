@@ -286,7 +286,7 @@ unmask_interrupts :: fn() {
  * @return 64 random bits; null if the CPU has no FEAT_RNG, or RNDRRS had nothing ready.
  */
 hardware_entropy :: fn() -> u64? {
-    features :: detect_features()
+    features :: cpu_features()
     if !has(&features, .Aarch64Rng) {
         return null
     }

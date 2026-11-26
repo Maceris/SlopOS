@@ -166,7 +166,7 @@ init_cpu :: fn(
     enable_cpu_features()
     enable_speculation_controls()
     cpu.xcr0 = XCR0_BASE
-    features :: detect_features()
+    features :: cpu_features()
     cpu.xsaveopt = has(&features, .X86Xsaveopt)
     enable_control_flow(cpu, &features)
     init_paging(cpu)
@@ -243,7 +243,7 @@ enable_cpu_features :: fn() {
 
     x86_64.write_cr0((x86_64.read_cr0() & ~CR0_EMULATION) | CR0_MONITOR_COPROCESSOR | CR0_NUMERIC_ERROR)
 
-    features :: detect_features()
+    features :: cpu_features()
     cr4 := x86_64.read_cr4() | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE
     if has(&features, .X86Smep) {
         cr4 |= CR4_SMEP

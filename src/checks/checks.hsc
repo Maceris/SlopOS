@@ -1283,6 +1283,7 @@ is_result :: fn(checked : type) -> bool {
  */
 RAW_POINTERS :: string.[
     "arch_aarch64",
+    "arch_riscv64",
     "arch_x86_64",
     "container_service",
     "elf_loader",
@@ -1314,6 +1315,7 @@ RAW_POINTERS :: string.[
 DISCARDED_RESULTS :: string.[
     // A block another one's tables already cover is mapped already
     "arch_aarch64.init_kernel_page_table",
+    "arch_riscv64.init_kernel_page_table",
     // Cleaning up after a failure, whose own error is the one given
     "kernel.sys_channel_create"
 ]

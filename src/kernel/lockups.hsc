@@ -9,6 +9,9 @@ import runtime from "base:runtime"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Lockup detection (decisions/0183, 12a, design/lessons.md §6.2): each CPU's tick notes when it ticked, and checks

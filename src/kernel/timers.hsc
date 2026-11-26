@@ -10,6 +10,9 @@ import concurrency from "std:concurrency"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Timers (roadmap M5, knowledge/design/kernel.md §2, ipc.md §3): deadlines on each CPU, in a binary

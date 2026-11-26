@@ -12,6 +12,9 @@ import text_buffer from "std:text_buffer"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Tracing and sampling (decisions/0183, 12d). The trace: each CPU keeps the last slop_os.TRACE_EVENTS of its
@@ -25,6 +28,10 @@ import text_buffer from "std:text_buffer"
 #if TARGET_ARCH == .arm64 {
     /** Where the frame pointer (x29) is among a thread's registers, as get_user_register numbers them. */
     SAMPLE_FRAME_REGISTER : u32 : 29
+}
+#else_if TARGET_ARCH == .riscv64 {
+    /** Where the frame pointer (s0, x8) is among a thread's registers, as get_user_register numbers them: by number. */
+    SAMPLE_FRAME_REGISTER : u32 : 8
 }
 #else {
     /** Where the frame pointer (rbp) is among a thread's registers, as get_user_register numbers them. */

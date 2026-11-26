@@ -18,6 +18,10 @@ import frames from "frames"
     import arch_aarch64 as arch from "../arch/aarch64"
     import iommu_smmuv3 as iommu_unit from "../iommu/smmuv3"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+    import iommu_riscv as iommu_unit from "../iommu/riscv"
+}
 
 /*
  * DMA through the IOMMUs (roadmap Db and Dd, decisions/0079, 0081, 0083). An IOMMU (VT-d, SMMUv3) turns translation

@@ -23,7 +23,9 @@ bootloader (bootloader.efi, from --programs) as the firmware's default boot file
 programs as objects with its record, which the generation builder writes and the image builder makes a volume of
 (both built, as SlopOS's tools, unless --image-builder names them). QEMU boots it with the serial port captured.
 --arch aarch64 builds SlopOS's kernel for AArch64 (the build package's arch setting) and boots it on QEMU's virt
-machine, ending through semihosting instead of the debug exit device, with the same code. The bootloader randomizes
+machine, ending through semihosting instead of the debug exit device, with the same code; --arch riscv64 does the same
+for RISC-V (decisions/0199), on virt with edk2 over OpenSBI, the kernel alone, as RISC-V has no user space yet. The
+bootloader randomizes
 the kernel's base and its direct map (KASLR), unless --no-kaslr. A kernel ends the run by writing a code to QEMU's isa-debug-exit device at
 port 0xf4; QEMU then exits with (code << 1) | 1, which this script turns back into the code. It
 exits with that code, so --expect makes it a test: 0 if the kernel's code matched, 1 otherwise.
@@ -34,6 +36,9 @@ Tools are found from the environment, then the PATH:
     XORRISO   xorriso
     OVMF      UEFI firmware, if QEMU's own edk2-x86_64-code.fd isn't next to it
     AAVMF     UEFI firmware for --arch aarch64, if QEMU's own edk2-aarch64-code.fd isn't next to it
+    QEMU_RISCV64  qemu-system-riscv64, or its folder, for --arch riscv64 (default: next to qemu-system-x86_64)
+    RISCV_EFI UEFI firmware for --arch riscv64, if QEMU's own edk2-riscv-code.fd isn't next to it; its variables are
+              edk2-riscv-vars.fd beside it
 """
 
 import argparse
@@ -158,7 +163,7 @@ def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_build
     """
     esp = folder / "iso_esp"
     (esp / "EFI" / "BOOT").mkdir(parents=True)
-    for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
+    for name in ["BOOTX64.EFI", "BOOTAA64.EFI", "BOOTRISCV64.EFI"]:
         shutil.copy(bootloader, esp / "EFI" / "BOOT" / name)
     # No bundle store: every program is in the boot set
     store = folder / "iso_store"
@@ -337,6 +342,47 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
         *(["-global", "arm-smmuv3.stage=2"] if iommu else []),
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}", *cd,
         # No wait for edk2's boot menu, 5 s by default on virt, in every boot (decisions/0194, T1)
+        "-boot", "menu=on,splash-time=0",
+        *serial_arguments(serial, keys), "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
+        "-semihosting-config", "enable=on,target=native",
+    ]
+    if keys is not None:
+        keys.thread.start()
+    try:
+        returncode = run_watched(command + extra, timeout)
+    finally:
+        if keys is not None:
+            keys.thread.join(timeout=5)
+    if returncode is None:
+        return TIMED_OUT
+    # As with the debug exit device, the kernel's test_exit ends QEMU with (code << 1) | 1
+    return returncode >> 1 if returncode % 2 == 1 else NO_EXIT_CODE
+
+
+# QEMU's CPU for RISC-V when --cpu is left as it is: RVA23's supervisor profile, SlopOS's baseline (decisions/0199),
+# with Sv48 and Zkr, which the profile leaves optional and QEMU's model leaves out
+RISCV_DEFAULT_CPU = "rva23s64,sv48=on,zkr=on"
+
+
+def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str],
+                folder: Path, keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
+    """
+    Boots the image, or with none the drive in extra, on QEMU's RISC-V virt machine through edk2 over OpenSBI, with
+    the device tree rather than ACPI, and gives the code the kernel ended with. The firmware's variables are a copy in
+    folder, made on the first boot and kept for the boots after it.
+    """
+    cd = ["-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd", "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}"] \
+        if image is not None else []
+    code = find_tool("RISCV_EFI", ["edk2-riscv-code.fd"], [qemu.parent / "share"])
+    variables = folder / "riscv-vars.fd"
+    if not variables.exists():
+        shutil.copy(code.parent / "edk2-riscv-vars.fd", variables)
+    command = [
+        str(qemu), "-M", "virt,acpi=off,pflash0=code,pflash1=variables", "-m", "512M",
+        "-cpu", RISCV_DEFAULT_CPU if cpu == DEFAULT_CPU else cpu,
+        "-blockdev", f"node-name=code,driver=file,filename={code},read-only=on",
+        "-blockdev", f"node-name=variables,driver=file,filename={variables}", *cd,
+        # No wait for edk2's boot menu, in every boot (decisions/0194, T1)
         "-boot", "menu=on,splash-time=0",
         *serial_arguments(serial, keys), "-display", "none", "-nic", "none", *([] if reboot else ["-no-reboot"]),
         "-semihosting-config", "enable=on,target=native",
@@ -2227,7 +2273,7 @@ def make_boot_disk(path: Path, kernel: Path, programs: list[Path], bootloader: P
     for program in programs:
         shutil.copy(program, esp / "boot" / "modules" / program.name)
     # SlopOS's own bootloader as the firmware's default boot file (decisions/0133)
-    for name in ["BOOTX64.EFI", "BOOTAA64.EFI"]:
+    for name in ["BOOTX64.EFI", "BOOTAA64.EFI", "BOOTRISCV64.EFI"]:
         shutil.copy(bootloader, esp / "EFI" / "BOOT" / name)
     for name, data in ESP_FILES:
         (esp / "EFI" / "SlopOS" / name).write_bytes(data)
@@ -2362,7 +2408,8 @@ def main() -> int:
                         help="the start of a line the serial output should contain, for a line part of which changes from "
                         "boot to boot, with --expect; may be repeated")
     parser.add_argument("--timeout", type=float, default=30, help="seconds before giving up")
-    parser.add_argument("--arch", choices=["x86_64", "aarch64"], default="x86_64", help="the architecture to build and boot for")
+    parser.add_argument("--arch", choices=["x86_64", "aarch64", "riscv64"], default="x86_64",
+                        help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
     parser.add_argument("--no-iommu", action="store_true",
                         help="no IOMMU: by default q35 has VT-d and virt an SMMUv3, and virtio devices this adds go through it")
@@ -2496,7 +2543,7 @@ def main() -> int:
     arguments = parser.parse_args()
     global KVM_HOST
     KVM_HOST = arguments.kvm
-    if KVM_HOST is not None and arguments.arch == "aarch64":
+    if KVM_HOST is not None and arguments.arch != "x86_64":
         sys.exit("boot.py: --kvm boots x86-64 only")
     if arguments.end_when_done and (arguments.shut_down_when_done or arguments.restart_when_done
                                     or arguments.power_button_after is not None or KVM_HOST is not None):
@@ -2505,8 +2552,11 @@ def main() -> int:
 
     qemu = find_tool("QEMU", ["qemu-system-x86_64.exe", "qemu-system-x86_64"], [Path(r"C:\Program Files\qemu")])
     aarch64 = arguments.arch == "aarch64"
+    riscv = arguments.arch == "riscv64"
     if aarch64:
         qemu = find_tool("QEMU_AARCH64", ["qemu-system-aarch64.exe", "qemu-system-aarch64"], [qemu.parent, Path(r"C:\Program Files\qemu")])
+    if riscv:
+        qemu = find_tool("QEMU_RISCV64", ["qemu-system-riscv64.exe", "qemu-system-riscv64"], [qemu.parent, Path(r"C:\Program Files\qemu")])
     if arguments.efi is not None:
         return run_efi(arguments, qemu, aarch64)
     xorriso = find_tool("XORRISO", ["xorriso.exe", "xorriso"], [])
@@ -2558,7 +2608,7 @@ def main() -> int:
         if not arguments.boot_disk:
             image = make_image(kernel.resolve(), [program.resolve() for program in programs], bootloader, image_builder, xorriso, folder,
                                command_line, not arguments.no_kaslr, not arguments.release_generation)
-        extra = (X86_IOMMU if not aarch64 and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
+        extra = (X86_IOMMU if arguments.arch == "x86_64" and not arguments.no_iommu else []) + list(arguments.qemu_arguments)
         if peers is not None:
             extra += peers.qemu_arguments()
         # A sound device, what it plays written by QEMU to a WAV file in the run's folder (decisions/0196, 17c)
@@ -2631,7 +2681,10 @@ def main() -> int:
         keys = SerialKeys(serial, "r") if arguments.recovery_key else None
         if arguments.bootloader_edit is not None:
             keys = SerialKeys(serial, "e", arguments.bootloader_edit + "\r")
-        if aarch64:
+        if riscv:
+            code = run_riscv64(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, 1), folder, keys,
+                               arguments.allow_reboot)
+        elif aarch64:
             code = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, 1), not arguments.no_iommu, keys,
                                arguments.allow_reboot)
         else:
@@ -2653,7 +2706,9 @@ def main() -> int:
         for boot in range(2, arguments.boots + 1):
             serial.unlink(missing_ok=True)
             booting_started = time.monotonic()
-            if aarch64:
+            if riscv:
+                again = run_riscv64(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot), folder)
+            elif aarch64:
                 again = run_aarch64(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot), not arguments.no_iommu)
             else:
                 again = run(image, qemu, serial, arguments.timeout, arguments.cpu, extra + boot_only(arguments, boot))
@@ -2892,10 +2947,15 @@ def run_efi(arguments: argparse.Namespace, qemu: Path, aarch64: bool) -> int:
             sys.exit(f"boot.py: there's no {program.name} in the build")
         drive = folder / "drive"
         (drive / "EFI" / "BOOT").mkdir(parents=True)
-        shutil.copy(program, drive / "EFI" / "BOOT" / ("BOOTAA64.EFI" if aarch64 else "BOOTX64.EFI"))
+        boot_file = {"aarch64": "BOOTAA64.EFI", "riscv64": "BOOTRISCV64.EFI"}.get(arguments.arch, "BOOTX64.EFI")
+        shutil.copy(program, drive / "EFI" / "BOOT" / boot_file)
         serial = folder / "serial.txt"
         fat = f"fat:rw:{drive}"
-        if aarch64:
+        if arguments.arch == "riscv64":
+            code = run_riscv64(None, qemu, serial, arguments.timeout, arguments.cpu,
+                               ["-drive", f"if=none,id=efi,file={fat},format=raw", "-device", "virtio-blk-pci,drive=efi",
+                                *arguments.qemu_arguments], folder)
+        elif aarch64:
             code = run_aarch64(None, qemu, serial, arguments.timeout, arguments.cpu,
                                ["-drive", f"if=none,id=efi,file={fat},format=raw", "-device", "virtio-blk-pci,drive=efi",
                                 *arguments.qemu_arguments], False)

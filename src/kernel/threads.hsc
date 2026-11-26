@@ -12,6 +12,9 @@ import arch_interface from "../arch_interface"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Threads (roadmap M4, M5, knowledge/design/threads.md, decisions/0023, 0050): what runs in user mode.

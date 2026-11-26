@@ -10,6 +10,9 @@ import robustness from "../robustness"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /** How many ticks every CPU has a second, unless it idles without ticking: the scheduler's round-robin period. */
 TICKS_PER_SECOND :: 100

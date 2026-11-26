@@ -24,6 +24,9 @@ import slab from "slab"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /** The bytes of each CPU's kernel stack, where every entry runs (decisions/0023): 16 KiB. */
 KERNEL_STACK_SIZE :: 16 * 1024
@@ -363,7 +366,7 @@ per_cpu :: fn() -> ptr[mut PerCpu] {
 boot #never_returns :: fn(info : ptr[boot_info.BootInfo]) {
     options :: parse_command_line(info.command_line)
     log_boot_info(info)
-    features :: arch.detect_features()
+    features :: arch.detect_features(&info.firmware_tables, info.direct_map_offset)
     check_baseline(&options, &features)
 
     // The kernel's state, in frames from the allocator, which starts out on this stack
@@ -416,6 +419,9 @@ boot #never_returns :: fn(info : ptr[boot_info.BootInfo]) {
     }
     start_framebuffer_console(kernel, info)
     push_context cpu_context from cpu.context {
+        if !arch.TAKES_INTERRUPTS {
+            stop_before_interrupts(kernel)
+        }
         start_timer(kernel, info.counter_frequency_hint)
         // While the bootloader's memory, which may hold them, is still there
         copy_firmware_tables(kernel, &info.firmware_tables, info.framebuffers, info.direct_map_offset)
@@ -491,6 +497,18 @@ boot #never_returns :: fn(info : ptr[boot_info.BootInfo]) {
         runtime.log_info("idle")
         arch.idle()
     }
+}
+
+/**
+ * Stop where an architecture can't take interrupts yet (arch.TAKES_INTERRUPTS, RISC-V until roadmap M19's R4): with
+ * the kernel's own address space, its heap and its console up, run the tests that need only those, then halt.
+ *
+ * @param kernel The kernel, whose options say which tests run; called on the boot CPU at boot, its context pushed.
+ */
+stop_before_interrupts #never_returns :: fn(kernel : ptr[mut Kernel]) {
+    runtime.log_info("no interrupts on this architecture yet, so stopping after memory")
+    memory_tests(kernel)
+    stop(.Halted)
 }
 
 /**
@@ -619,7 +637,8 @@ test_nmi :: fn(kernel : ptr[Kernel], cpu : ptr[mut PerCpu]) {
 }
 
 /**
- * Stop with a message if the CPU lacks part of the baseline (decisions/0003): x86-64-v3, or ARMv8.2-A with LSE.
+ * Stop with a message if the CPU lacks part of the baseline (decisions/0003): x86-64-v3, ARMv8.2-A with LSE, or RVA23
+ * (decisions/0199).
  *
  * Returns only if the CPU has everything; otherwise it stops this CPU with CpuUnsupported, as there's no kernel yet.
  *
@@ -630,6 +649,9 @@ check_baseline :: fn(options : ptr[Options], features : ptr[slop_os.CpuFeatures]
     missing :: arch.missing_baseline_feature(features) or_return void
     #if TARGET_ARCH == .x86_64 {
         runtime.log_fatal("SlopOS needs an x86-64-v3 CPU, and this one lacks %", missing)
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        runtime.log_fatal("SlopOS needs an RVA23 CPU, and this one lacks %", missing)
     }
     #else {
         runtime.log_fatal("SlopOS needs an ARMv8.2-A CPU with LSE, and this one lacks %", missing)

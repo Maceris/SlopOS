@@ -14,6 +14,9 @@ import frames from "frames"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * System calls (roadmap M5, knowledge/design/system-abi.md §4, decisions/0057): the calling thread's

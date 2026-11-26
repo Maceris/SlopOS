@@ -127,6 +127,18 @@ ET_DYN : u64 : 3
     /** The only relocation type read (r_info, with symbol 0): R_AARCH64_RELATIVE, base plus addend. */
     RELATIVE_RELOCATION : u64 : 1027
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /** The ELF machine (e_machine) programs are for: EM_RISCV. */
+    MACHINE : u64 : 243
+    /** The property note's control-flow features (GNU_PROPERTY_RISCV_FEATURE_1_AND). */
+    FEATURES_PROPERTY : u64 : 0xc0000000
+    /** Its bits: CFI_LP_UNLABELED (landing pads) and CFI_SS (a shadow stack); RISC-V has no signed returns. */
+    FEATURE_LANDING_PADS : u64 : 1
+    FEATURE_SHADOW_STACK : u64 : 2
+    FEATURE_SIGNED_RETURNS : u64 : 0
+    /** The only relocation type read (r_info, with symbol 0): R_RISCV_RELATIVE, base plus addend. */
+    RELATIVE_RELOCATION : u64 : 3
+}
 #else {
     /** The ELF machine (e_machine) programs are for: EM_X86_64. */
     MACHINE : u64 : 62

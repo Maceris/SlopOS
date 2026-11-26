@@ -281,6 +281,41 @@ import boot_protocol from "../../boot_protocol"
         }
     }
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /*
+     * RISC-V's: the boot hart alone, until M19's R4 starts the others through the SBI's HSM (decisions/0199). They stay
+     * stopped in the SBI firmware, where the firmware leaves every hart but the one it booted on.
+     */
+
+    /** What starting the other harts needs, made before the boot services are left: nothing yet. */
+    Starting :: struct {}
+
+    /**
+     * Prepare to start the other harts: list the boot hart alone in the handoff, which runs on the bootloader's stack.
+     *
+     * @param handoff The handoff, whose cpus and cpu_count are written: one CPU, the boot hart, by its hart ID.
+     * @param tables Unused until the others are started.
+     * @param direct_map_offset Unused until the others are started.
+     * @return What start_cpus needs, always.
+     */
+    prepare_cpus :: fn(
+        handoff : ptr[mut boot_protocol.Handoff],
+        tables : ptr[PageTables],
+        direct_map_offset : u64
+    ) -> Starting? {
+        handoff.cpu_count = 1
+        handoff.cpus[0] = boot_protocol.Cpu.{hardware_id = boot_cpu_id()}
+        return Starting.{}
+    }
+
+    /**
+     * Start every hart but the boot hart, after the boot services are left: none yet, so cpu_count stays 1.
+     *
+     * @param handoff Unused.
+     * @param starting Unused.
+     */
+    start_cpus :: fn(handoff : ptr[mut boot_protocol.Handoff], starting : Starting) {}
+}
 #else {
     import aarch64 from "base:intrinsics/aarch64"
     import devicetree from "../../devicetree"

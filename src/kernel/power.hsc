@@ -10,6 +10,9 @@ import slop_os from "std:os/slop_os"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Turning the machine off and restarting it (decisions/0182). The platform capability's holders tell the kernel what

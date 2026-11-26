@@ -12,6 +12,9 @@ import slop_os from "std:os/slop_os"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * Process control (roadmap M5, decisions/0017, 0056, knowledge/design/kernel.md §4): rights on a process

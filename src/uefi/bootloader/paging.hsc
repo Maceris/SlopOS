@@ -122,6 +122,133 @@ import uefi from "std:os/uefi"
     /** The kernel's lowest link address, the top 2 GiB, before the slide. */
     KERNEL_LINK_BASE : u64 : 0xffffffff80000000
 }
+#else_if TARGET_ARCH == .riscv64 {
+    /*
+     * RISC-V's: Sv48, one root for both halves, every page readable, writable and executable for the supervisor, its
+     * accessed and dirty bits set (Svade faults on a clear one), and of the memory type the physical memory attributes
+     * give, which is RAM's. Devices' registers aren't mapped: the kernel maps those it needs itself, in the gaps
+     * (arch/riscv64, map_early_device).
+     *
+     * SPEC: The RISC-V Instruction Set Manual, Volume II: Privileged Architecture, §12.4 (Sv48), §10.1.11 (satp)
+     */
+
+    /** An entry's V bit: valid. */
+    VALID : u64 : 1
+    /** A leaf's R, W and X bits, its A and D bits: read, write, execute, accessed and dirty. */
+    LEAF_RIGHTS : u64 : (1 << 1) | (1 << 2) | (1 << 3) | (1 << 6) | (1 << 7)
+    /** Where an entry's physical page number starts. */
+    PPN_SHIFT : u64 : 10
+    /** 1 GiB in bytes, the size of a level 2 leaf. */
+    GIGABYTE : u64 : 1 << 30
+    /** 2 MiB in bytes, the size of a level 1 leaf. */
+    TWO_MEGABYTES : u64 : 1 << 21
+    /** The bottom of the higher half, the lowest Sv48 address with bit 47 set, where the direct map may start. */
+    HIGHER_HALF : u64 : 0xffff800000000000
+    /** satp's MODE for Sv48, in bits 60 to 63. */
+    SATP_SV48 : u64 : 9 << 60
+
+    /** The page tables the kernel starts on: their root, for both halves. */
+    PageTables :: struct {
+        /** The root table's physical address, 4096-aligned, whose page number goes in satp. */
+        root : u64,
+    }
+
+    /**
+     * Make empty page tables, the root a zeroed loader-data page, anywhere in memory.
+     *
+     * @return The tables; null if boot services are gone or a page can't be had.
+     */
+    new_tables :: fn() -> PageTables? {
+        root :: allocate_pages(LOADER_DATA, 4096) or_return null
+        return PageTables.{root = root}
+    }
+
+    /**
+     * Read the physical address an entry points at.
+     *
+     * @param entry A valid entry.
+     * @return Its page number shifted back into an address, 4096-aligned.
+     */
+    entry_address :: fn(entry : u64) -> u64 {
+        return ((entry >> PPN_SHIFT) & ((cast[u64](1) << 44) - 1)) << 12
+    }
+
+    /**
+     * Find the table an entry of a table points to, making it if it points to none.
+     *
+     * A table made is a zeroed loader-data page, and the entry valid with R, W and X clear, pointing at it.
+     *
+     * @param table The table's physical address, identity-mapped.
+     * @param index The entry's index, 0 to 511.
+     * @return The next table's physical address, 4096-aligned; null if no page can be had, or the entry is a leaf,
+     *     which isn't split.
+     */
+    next_table :: fn(table : u64, index : u64) -> u64? {
+        entry :: cast[ptr[mut u64]](cast[rawptr](table + index * 8))
+        if entry^ & VALID != 0 {
+            if entry^ & LEAF_RIGHTS != 0 {
+                return null
+            }
+            return entry_address(entry^)
+        }
+        made :: allocate_pages(LOADER_DATA, 4096) or_return null
+        entry^ = ((made >> 12) << PPN_SHIFT) | VALID
+        return made
+    }
+
+    /**
+     * Map a range at a virtual address to physical memory in the largest pages that fit, supervisor-only, readable,
+     * writable and executable.
+     *
+     * An entry already there is written over; ranges mapped shouldn't overlap, or a large page could land over part of
+     * one.
+     *
+     * @param tables The page tables, which grow as tables are needed.
+     * @param virtual The range's virtual address, 4096-aligned, below 2 to the 47th or at least HIGHER_HALF.
+     * @param physical The memory's physical address, 4096-aligned.
+     * @param size The range's size in bytes; a part of a page past a multiple of 4096 maps the whole page.
+     * @return True if the whole range was mapped; false if a table couldn't be had, or the range runs into a large
+     *     page already mapped, leaving what was mapped before it.
+     */
+    map :: fn(tables : ptr[PageTables], virtual : u64, physical : u64, size : u64) -> bool {
+        done := cast[u64](0)
+        loop {
+            if done >= size {
+                break
+            }
+            at :: virtual + done
+            to :: physical + done
+            left :: size - done
+            leaf :: ((to >> 12) << PPN_SHIFT) | LEAF_RIGHTS | VALID
+            third :: next_table(tables.root, (at >> 39) & 511) or_return false
+            if at & (GIGABYTE - 1) == 0 && to & (GIGABYTE - 1) == 0 && left >= GIGABYTE {
+                cast[ptr[mut u64]](cast[rawptr](third + ((at >> 30) & 511) * 8))^ = leaf
+                done += GIGABYTE
+                continue
+            }
+            second :: next_table(third, (at >> 30) & 511) or_return false
+            if at & (TWO_MEGABYTES - 1) == 0 && to & (TWO_MEGABYTES - 1) == 0 && left >= TWO_MEGABYTES {
+                cast[ptr[mut u64]](cast[rawptr](second + ((at >> 21) & 511) * 8))^ = leaf
+                done += TWO_MEGABYTES
+                continue
+            }
+            first :: next_table(second, (at >> 21) & 511) or_return false
+            cast[ptr[mut u64]](cast[rawptr](first + ((at >> 12) & 511) * 8))^ = leaf
+            done += 4096
+        }
+        return true
+    }
+
+    /**
+     * Give satp's value for the tables: Sv48, ASID 0, and the root.
+     *
+     * @param tables The page tables.
+     * @return The value for satp.
+     */
+    satp_value :: fn(tables : ptr[PageTables]) -> u64 {
+        return SATP_SV48 | (tables.root >> 12)
+    }
+}
 #else {
     import aarch64 from "base:intrinsics/aarch64"
 

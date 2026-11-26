@@ -14,6 +14,9 @@ import iommu_interface from "../iommu_interface"
 #else_if TARGET_ARCH == .arm64 {
     import iommu_smmuv3 as iommu_unit from "../iommu/smmuv3"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import iommu_riscv as iommu_unit from "../iommu/riscv"
+}
 
 /*
  * IOMMUs (roadmap D, decisions/0039, 0079): the platform service registers each one it finds in the firmware tables,

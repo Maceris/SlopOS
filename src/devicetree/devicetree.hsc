@@ -133,7 +133,21 @@ find_phandle :: fn(tree : ptr[Tree], phandle : u32) -> Node? {
 }
 
 /**
- * Find the first node, in the tree's order, that matches a compatible string, a phandle, or a property's first cell.
+ * Find the first node, in the tree's order, whose device_type is a string and which isn't disabled, like the first
+ * "cpu".
+ *
+ * @param tree The tree, from open; only read, its blob walked from the structure block's start.
+ * @param device_type The device_type to look for, matched whole, like "cpu" or "memory"; not "".
+ * @return The node, or null if none has it, every one that does is disabled, or the tree is malformed or nests deeper
+ *     than MAX_DEPTH before one is found.
+ */
+find_device_type :: fn(tree : ptr[Tree], device_type : string) -> Node? {
+    return find_node(tree, "", 0, device_type = device_type)
+}
+
+/**
+ * Find the first node, in the tree's order, that matches a compatible string, a phandle, a device_type, or a property's
+ * first cell.
  *
  * It walks the structure block once, keeping each depth's #address-cells and #size-cells so the node it gives knows
  * its reg's cells.
@@ -144,6 +158,7 @@ find_phandle :: fn(tree : ptr[Tree], phandle : u32) -> Node? {
  * @param even_disabled Whether a node with status "disabled" is found too; false skips them.
  * @param cell_name A property whose first cell is cell_value, as gpio-keys' "linux,code", or "" not to match by one.
  * @param cell_value The value cell_name's first cell has to be.
+ * @param device_type The node's device_type property, matched whole, or "" not to match by it.
  * @return The first matching node, or null if none matches, or the walk meets a malformed token, the structure
  *     block's end, or nesting deeper than MAX_DEPTH first.
  */
@@ -153,7 +168,8 @@ find_node :: fn(
     phandle : u32,
     even_disabled : bool = false,
     cell_name : string = "",
-    cell_value : u32 = 0
+    cell_value : u32 = 0,
+    device_type : string = ""
 ) -> Node? {
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
@@ -220,6 +236,9 @@ find_node :: fn(
                 matched = true
             }
             else if cell_name != "" && name == cell_name && length >= 4 && big_endian_u32(value.address) == cell_value {
+                matched = true
+            }
+            else if name == "device_type" && device_type != "" && lists(value, device_type) {
                 matched = true
             }
             else if name == "status" && lists(value, "disabled") {

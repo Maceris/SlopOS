@@ -9,6 +9,9 @@ import time from "std:time"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /*
  * test_clock: 10 ms by the counter has to be 10 ms by context.clock, the kernel's monotonic clock,

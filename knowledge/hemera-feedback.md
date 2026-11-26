@@ -22,7 +22,6 @@ Severity: **blocker** / **friction** / **nice**.
 
 | Topic | State | Details |
 |---|---|---|
-| Kernel entry on RISC-V | x86-64 and AArch64 done (`decisions/0062`, `0063`); RISC-V waits for the third architecture, on the same pattern: a frame type, `.entry`, an entry-table intrinsic, `return_to_user` (`sret`), and system-register instructions | `hemera-proposals/kernel-entry.md` |
 
 ### Smaller gaps
 
@@ -60,8 +59,7 @@ Known limits, each an error rather than wrong code. Severity: nice.
 From the survey of Hemera's docs against its compiler (2026-10-24):
 
 - **macOS / Mach-O** is in `compilation.md`'s linking table, but only ELF and PE/COFF can be linked (E7000), and a
-  build package's target for Mac is refused. RISC-V, which `multitasking.md` gives a carrier register (`s11`),
-  can't be built.
+  build package's target for Mac is refused.
 - **Signals**: `multitasking.md` describes per-carrier alternate signal stacks, but the runtime installs no signal
   handlers on Linux. This doesn't affect SlopOS (section 2, *Fibers*).
 
@@ -226,6 +224,14 @@ is an alias. Every import in `src` was rewritten by script, 1,588 lines in 370 f
 `import arch_x86_64 as arch`, `import shell_language as language` and the protocols' `import powerbox as
 powerbox_protocol`. The house rules' `is_std` (`src/checks`) tells std's imports by a `std:` location or none. The
 specs and the protocols design note use the new form; decisions and `compiler-plan.md` keep the old, as written.
+M19, RISC-V (2026-11-25, `decisions/0199`). R1: LLVM's RISC-V backend, three patches of Hemera's (the prologue
+stack check, quoted symbols in `call` and `la`, and instruction selection looping on an AND mask with Zba or Zbs,
+found compiling `std/ntp`); the carrier `s11`; `morestack`, fibers and stack traces in RISC-V assembly; Linux on
+riscv64 in `base` and `std/os`; the thread carrier local-exec in an executable, as RISC-V's linker doesn't relax
+general-dynamic. R2: `#calling_convention(.entry)` for `stvec`, `riscv64.RegisterFrame` and `TrapScratch`, CSRs as
+compile-time arguments, fences, `sfence.vma`, `sbi_call`, `enter` and `semihosting` in `base/intrinsics/riscv64`,
+and UEFI on riscv64 as an ELF Hemera turns into a PE. R3, in `std` only: RISC-V's `CpuFeature`s (128 on) in
+`std/os/slop_os`, and `RISCV_EFI_BOOT_PROTOCOL` (`uefi.RiscvBoot`) in `std/os/uefi`, for the boot hart's ID.
 
 ## 4. Features That Look Like a Strong Fit
 

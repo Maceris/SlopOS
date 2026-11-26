@@ -142,3 +142,39 @@ In seven stages:
   - Every function in `base` and `std` generates for that target.
   - A UEFI application runs under edk2 (`edk2-riscv-code.fd`), finds its image base, and turns the machine off.
   - HemeraTest reads the image back as a PE.
+
+## As Built: R3 (2026-11-25)
+- **`src/arch/riscv64`** (`../design/arch-riscv64.md`; the arch interface spec has its table): features from the
+  device tree and RVA23's baseline, `init_system` and `init_cpu`, one `.entry` function in `stvec`, Sv48 paging with
+  Svpbmt's memory types, the device tree's 16550 as the early console, the SBI's system reset, semihosting for
+  `test_exit`, and Zkr's `seed` for entropy. What R4 to R6 bring is listed in `NOT_YET_IMPLEMENTED`, 47 stubs that stop
+  the hart, and `TAKES_INTERRUPTS` is back, as A3 had it: false on RISC-V, so the kernel stops once its own address
+  space, heap and console are up, after the tests that need only those. `src/iommu/riscv` drives no IOMMU kind until
+  R6, so the platform service's registration of one fails.
+- **The arch interface's one change: `detect_features` takes the firmware's tables.** Supervisor mode can't read
+  `misa` or probe an extension, so a hart's features are the device tree's (`riscv,isa-extensions` or `riscv,isa`, and
+  `mmu-type`). x86-64 and AArch64 ignore them. RISC-V's `CpuFeature`s are 128 to 191 in `std/os/slop_os`.
+- **Exceptions in the kernel run on the DoubleFault critical stack.** A trap's frame goes on the stack it came from, so
+  the stack check's `ebreak` on a full stack would trap again in the handler. The entry instead rewrites the frame and
+  returns, its `sret` landing in `kernel_trap` on the critical stack; the interrupted `s0` and `ra` stay, so the stack
+  trace goes through the faulting code. Each stack's limit leaves room below it for the 288-byte frame as well as the
+  guard. The kernel never faults on purpose, as it reaches user memory through the direct map.
+- **Paging:** one root for both halves, the kernel half shared by copying its 256 top-level entries, as on x86-64. A
+  non-leaf entry has no spare bits, so `unmap` looks for a second valid entry rather than keeping a count. A and D are
+  always set (Svade); `take_accessed` is false. `map` fences each new entry on the calling hart.
+- **The bootloader on RISC-V:** `BOOTRISCV64.EFI`, built without vector extensions, which edk2 leaves off; Sv48 tables
+  for the identity map and the direct map; `riscv64.enter`; the boot hart alone, by `RISCV_EFI_BOOT_PROTOCOL`'s ID (in
+  `std/os/uefi`), until R4 starts the others; and it refuses a device tree whose `mmu-type` has no Sv48.
+- **Found on the way:** edk2 installs the device tree's configuration table in its pool, whose memory its own
+  allocations reuse while the bootloader reads files, so the tree was zeros by the time it was read. The bootloader
+  now copies the tree into its own pages before anything else, on every architecture.
+- **Sv48 isn't in RVA23S64**, which mandates only Sv39, and QEMU's `rva23s64` has only Sv39. The baseline keeps Sv48,
+  decided with this plan; the tests run `rva23s64,sv48=on,zkr=on`, Zkr being optional in RVA23 too, and needed for the
+  kernel window's randomness.
+- **`boot.py --arch riscv64`** boots on `virt` through edk2 (`edk2-riscv-code.fd`, a copy of the variables), the
+  kernel alone, as RISC-V has no user space yet; `boot_tests.py` builds the RISC-V kernel and bootloader and runs 8
+  tests: boots and stops before interrupts; a kernel fault; a failed assertion; read-only code; the heap; a CPU without
+  V refused by the kernel's check; and KASLR on and off. The bootloader's refusal of a CPU without Sv48 was checked by
+  hand: the firmware then goes on to its next boot option, so a test could only wait out its timeout.
+- **Left for R4:** another hart may fault on a kernel mapping just made, before Svvptc's bounded time; R4 retries such
+  a fault rather than stopping.

@@ -16,6 +16,12 @@ import boot_info from "../../boot_info"
 import devicetree from "../../devicetree"
 
 /**
+ * Whether the kernel goes on past its own address space on AArch64: true, it takes interrupts, starts the timer and the
+ * other CPUs (the kernel's stop_before_interrupts).
+ */
+TAKES_INTERRUPTS :: true
+
+/**
  * One CPU's architecture state (arch_interface.ArchCpu).
  *
  * TPIDR_EL1 points at it, so entries find their CPU with current_cpu(); the early console tells it from a
@@ -204,7 +210,7 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
     if system.console != 0 {
         add_device_block(system, system.console - direct_map_offset)
     }
-    features :: detect_features()
+    features :: cpu_features()
     system.asid16 = has(&features, .Aarch64Asid16)
     system.hardware_access_flag = has(&features, .Aarch64HardwareAccessFlag)
     system.timer_interrupt = DEFAULT_TIMER_INTERRUPT

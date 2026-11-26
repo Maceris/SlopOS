@@ -296,7 +296,7 @@ msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
 init_timer :: fn(hint : u64?) -> u64 {
     timer :: &current_cpu().timer
     timer.tsc_frequency = hint or_else (tsc_frequency_from_cpuid() or_else measure_tsc_frequency())
-    features :: detect_features()
+    features :: cpu_features()
     timer.tsc_deadline = has(&features, .X86TscDeadline)
     if timer.tsc_deadline {
         // The LVT entry has to be in TSC-deadline mode before IA32_TSC_DEADLINE is written

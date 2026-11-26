@@ -14,6 +14,7 @@ system as built lives in `../docs/` instead.
 | `decisions/` | Numbered decision records: what we chose and why |
 | `design/layers.md` | History of the layer model; the accepted version is `../docs/architecture/layers.md` |
 | `design/arch-x86-64.md` | What the boot and arch layers must handle on x86-64 |
+| `design/arch-riscv64.md` | What the boot and arch layers must handle on RISC-V, and what each of M19's stages adds |
 | `design/threads.md` | Making threads cheap: memory and creation cost |
 | `design/kernel.md` | What the kernel does (and doesn't), per-CPU state, syscall interception |
 | `design/ipc.md` | Shared-ring channels, ports, handle transfer, replay |

@@ -146,7 +146,7 @@ supports_page_size :: fn(size : arch_interface.PageSize) -> bool {
     if size != .Size1G {
         return true
     }
-    features :: detect_features()
+    features :: cpu_features()
     return has(&features, .X86Pages1G)
 }
 

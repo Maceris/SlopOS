@@ -11,6 +11,9 @@ import robustness from "../robustness"
 #else_if TARGET_ARCH == .arm64 {
     import arch_aarch64 as arch from "../arch/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import arch_riscv64 as arch from "../arch/riscv64"
+}
 
 /**
  * The kernel's lock order (decisions/0053, 0096, 0106), written once: a lock is taken only while every lock held is of
