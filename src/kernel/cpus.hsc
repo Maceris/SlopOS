@@ -110,7 +110,14 @@ start_cpus :: fn(kernel #escaping : ptr[mut Kernel], info : ptr[boot_info.BootIn
 cpu_started :: fn() #never_returns {
     cpu :: per_cpu()
     kernel :: cpu.kernel
-    arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
+    cpus :: kernel.cpus
+    hardware_id :: if cast[usize](cpu.index) < cpus.count {
+        cpus[cast[usize](cpu.index)].hardware_id
+    }
+    else {
+        cast[u64](0)
+    }
+    arch.init_cpu(&kernel.arch, &cpu.arch, hardware_id, &cpu.carrier, &cpu.context, &cpu.stacks)
     arch.activate(&kernel.page_table)
     _, online :: intrinsics.interlocked_compare_exchange_u32(&cpu.start_state, CPU_ONLINE, CPU_WAITING)
     if !online {

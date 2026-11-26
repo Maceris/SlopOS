@@ -3,7 +3,7 @@ Builds SlopOS's kernel once, through its build package (src/build), then boots i
 below with tools/boot.py and checks the code it stops with (src/kernel/stop.hsc, StopReason). Tests
 of growing stacks get a second kernel, built with morestack (the build package's stack_check), and the
 AArch64 tests kernels built for AArch64 (its arch setting), the same two ways, and the RISC-V tests a kernel built for
-RISC-V, which stops after memory until it takes interrupts (knowledge/decisions/0199).
+RISC-V, the kernel alone until it has user space, on the PLIC and on the AIA (knowledge/decisions/0199).
 Exits 0 if every test passed. SLOPOS_BOOT_TESTS, names separated by commas, runs only the tests whose names have one of
 them in them. SLOPOS_KVM_HOST, user@address of a Linux machine with KVM and a CPU with CET, adds the tests that boot
 there (KVM_TESTS, boot.py --kvm).
@@ -1935,14 +1935,29 @@ AARCH64_TESTS = aarch64_tests(TESTS)
 # What QEMU's RVA23 CPU has against exploits: neither of RISC-V's control-flow integrity extensions, both optional
 RISCV_HARDENING_LINE = ("[boot] cpu: control-flow integrity: landing pads (Zicfilp) no, shadow stacks (Zicfiss) no; "
                         "neither is used yet")
-# Where the RISC-V kernel stops until it takes interrupts (decisions/0199, R3)
-RISCV_STOP_LINE = "[info] no interrupts on this architecture yet, so stopping after memory"
-
-# RISC-V's tests (tools/boot.py --arch riscv64), the kernel alone: until M19's R4 it stops after memory, so only the
-# tests that need nothing more apply (knowledge/decisions/0199)
-RISCV_TESTS = [
-    ("RISC-V: boots, sets up memory and stops before interrupts", 0, [f"--expect-line={RISCV_STOP_LINE}",
-        f"--expect-line={RISCV_HARDENING_LINE}"]),
+# RISC-V's tests (tools/boot.py --arch riscv64), the kernel alone, as it has no user space until M19's R5
+# (knowledge/decisions/0199); those that take interrupts on the PLIC, then again on the AIA (boot.py --aia)
+RISCV_INTERRUPT_TESTS = [
+    ("boots and halts", 0, ["--expect-line=[info] boot memory reclaimed", f"--expect-line={RISCV_HARDENING_LINE}"]),
+    ("starts every hart", 0, ["--expect-line=[info] 4 of 4 CPUs online", "--expect-line=[info] boot memory reclaimed",
+        "--", "-smp", "4"]),
+    ("keeps time with the counter", 0, ["--command-line=test_exit test_clock",
+        "--expect-line=[info] test_clock: 1 test: 1 passed, 0 failed"]),
+    ("lets idle harts other than the boot hart stop ticking", 0, ["--command-line=test_exit test_tickless",
+        "--expect-line=[info] test_tickless: 1 test: 1 passed, 0 failed", "--", "-smp", "4"]),
+    ("shoots down TLB entries on every hart", 0, ["--command-line=test_exit test_shootdown",
+        "--expect-line=[info] test_shootdown: 1 test: 1 passed, 0 failed", "--", "-smp", "4"]),
+    ("reads a binding slot whole on other harts while it's made anew", 0, ["--command-line=test_exit test_binding_reuse",
+        "--expect-line=[info] test_binding_reuse: 1 test: 1 passed, 0 failed", "--", "-smp", "2"]),
+    ("moves an object to another owner on one hart while another destroys it, and leaves it on neither list", 0, [
+        "--command-line=test_exit test_ownership_race",
+        "--expect-line=[info] test_ownership_race: 1 test: 1 passed, 0 failed", "--", "-smp", "2"]),
+    ("routes a device's interrupts through the wired controller", 0, ["--command-line=test_exit test_ioapic",
+        "--expect-line=[info] test_ioapic: test the_test_device_is_routed_to_the_boot_cpu ... ok",
+        "--expect-line=[info] test_ioapic: test the_test_devices_interrupts_arrive ... ok"]),
+]
+RISCV_TESTS = [(f"RISC-V: {name}", expected, arguments) for name, expected, arguments in RISCV_INTERRUPT_TESTS] + [
+    (f"RISC-V AIA: {name}", expected, ["--aia", *arguments]) for name, expected, arguments in RISCV_INTERRUPT_TESTS] + [
     ("RISC-V: reports a kernel fault", 1, ["--command-line=test_exit test_fault",
         "--expect-line-start=[fatal] kernel fault: invalid instruction at "]),
     ("RISC-V: reports a failed assertion", 3, ["--command-line=test_exit test_assert"]),

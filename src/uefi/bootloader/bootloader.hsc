@@ -1,6 +1,7 @@
 /**
  * SlopOS's bootloader (roadmap B, decisions/0131, 0133, 0134, 0135): a UEFI application, BOOTX64.EFI, BOOTAA64.EFI or
- * BOOTRISCV64.EFI on the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations), boots the newest,
+ * BOOTRISCV64.EFI on the ESP of a disk or an ISO's El Torito image. It reads the ESP's generations (src/generations),
+ * boots the newest,
  * each of its files checked against its hash, and hands the kernel SlopOS's own boot protocol (src/boot_protocol): the
  * kernel loaded and relocated at a random place, every module in its own pages, a direct map at a random offset, the
  * memory map, the firmware's tables and the framebuffer, then the firmware's boot services left and the kernel

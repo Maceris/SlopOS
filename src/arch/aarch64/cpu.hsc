@@ -303,6 +303,7 @@ devicetree_address :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_of
  *
  * @param system The shared state init_system set up, which must outlive the CPU.
  * @param cpu This CPU's state to fill, L2's, which must not move afterwards.
+ * @param hardware_id Unused: the CPU reads its own.
  * @param carrier The CPU's carrier block, kept in cpu for entries; it must outlive the CPU.
  * @param context The context entries push, kept in cpu; it must outlive the CPU.
  * @param stacks The CPU's stacks: only the kernel stack is used, since AArch64 has no separate stacks for
@@ -311,6 +312,7 @@ devicetree_address :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_of
 init_cpu :: fn(
     system : ptr[ArchSystem],
     cpu : ptr[mut ArchCpu],
+    hardware_id : u64,
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
     stacks : ptr[arch_interface.CpuStacks]

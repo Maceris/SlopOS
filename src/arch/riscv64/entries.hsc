@@ -29,9 +29,11 @@ SOFTWARE_CHECK_SHADOW_STACK : u64 : 3
  *
  * From user mode it runs on the kernel stack's top, never returning: a system call, a fault or an interrupt for
  * kernel_entry. From the kernel it changes only the frame, and returns: the generated code then restores the
- * interrupted registers but the stack pointer, the program counter and a0 to a2, and its sret goes to kernel_trap,
- * still in supervisor mode with interrupts off, on the trap stack, with the cause, stval and where it was taken. The
- * interrupted s0 and ra stay, so the stack trace goes on through the code that faulted.
+ * interrupted registers but the stack pointer, the program counter and a0 to a2, and its sret goes on in supervisor
+ * mode with interrupts off. An exception goes to kernel_trap, on the trap stack, with the cause, stval and where it was
+ * taken; the interrupted s0 and ra stay, so the stack trace goes on through the code that faulted. An interrupt, which
+ * the kernel takes only while idle (or with interrupts unmasked, which is taken as idle, as on x86-64), goes to
+ * idle_interrupt on the kernel stack's top, as an entry from idle starts there.
  *
  * @param frame The interrupted code's registers, saved by the generated code; for an entry from user mode, the
  *     thread's UserRegisters, which kernel_entry may change.
@@ -45,23 +47,92 @@ trap_entry #calling_convention(.entry) :: fn(frame : ptr[mut riscv64.RegisterFra
             from_user(frame)
         }
     }
+    // A page fault on a mapping this hart hadn't seen made yet: fenced, and the access made again
+    if stale_fault(cpu, frame.scause, frame.stval) {
+        riscv64.sfence_vma_address(cast[rawptr](frame.stval))
+        return void
+    }
     frame.x[10] = frame.scause
     frame.x[11] = frame.stval
     frame.x[12] = frame.sepc
-    frame.x[2] = cpu.trap_stack_top
-    frame.sepc = cast[u64](kernel_trap)
+    if frame.scause & riscv64.CAUSE_INTERRUPT != 0 {
+        frame.x[2] = cpu.kernel_stack_top
+        frame.sepc = cast[u64](idle_interrupt)
+    }
+    else {
+        frame.x[2] = cpu.trap_stack_top
+        frame.sepc = cast[u64](kernel_trap)
+    }
     // Interrupts stay off after the sret, which sets SIE from SPIE
     frame.sstatus = frame.sstatus & ~riscv64.SSTATUS_SPIE
+}
+
+/**
+ * Tell whether a page fault in the kernel is only stale: the active tables, satp's, map the address with a leaf that
+ * allows the access, so the hart faulted on an entry it walked before another hart made it valid, which a hart may
+ * keep until Svvptc's bounded time has passed. The kernel never touches user pages, so a leaf with U set doesn't count.
+ *
+ * Runs in the trap entry, before there's a context, on whatever stack the kernel was on, so it calls nothing that
+ * needs one.
+ *
+ * @param cpu The calling hart's state, for the direct map's offset.
+ * @param cause scause at the trap.
+ * @param address stval at the trap, the faulting address for a page fault.
+ * @return True for a load, store or instruction page fault whose access the tables now allow; false for anything else.
+ */
+stale_fault #no_context :: fn(cpu : ptr[ArchCpu], cause : u64, address : u64) -> bool {
+    needed := cast[u64](0)
+    if cause == riscv64.CAUSE_LOAD_PAGE_FAULT {
+        needed = ENTRY_READ
+    }
+    else if cause == riscv64.CAUSE_STORE_PAGE_FAULT {
+        needed = ENTRY_WRITE
+    }
+    else if cause == riscv64.CAUSE_INSTRUCTION_PAGE_FAULT {
+        needed = ENTRY_EXECUTE
+    }
+    else {
+        return false
+    }
+    offset :: cast[ptr[ArchSystem]](cpu.system).direct_map_offset
+    table := ((riscv64.csrr(.SATP) & SATP_PPN_MASK) << 12)
+    level := TOP_LEVEL
+    loop {
+        entry :: cast[ptr[u64]](offset + table + ((address >> (12 + 9 * level)) & 511) * 8)^
+        if entry & ENTRY_VALID == 0 {
+            return false
+        }
+        if entry & ENTRY_LEAF != 0 {
+            return entry & ENTRY_USER == 0 && entry & needed != 0
+        }
+        if level == 0 {
+            return false
+        }
+        table = ((entry >> PPN_SHIFT) & PPN_MASK) << 12
+        level -= 1
+    }
+}
+
+/**
+ * Take an interrupt that came in supervisor mode, on the kernel stack's top, where trap_entry's sret sent it: as one
+ * from idle, for kernel_entry.interrupt, which never returns.
+ *
+ * @param cause scause at the trap: CAUSE_INTERRUPT and the interrupt's number.
+ */
+idle_interrupt #calling_convention(.c) #no_context :: fn(cause : u64) #never_returns {
+    cpu :: cast[ptr[ArchCpu]](riscv64.read_tp())
+    cpu.carrier.stack_limit = cpu.kernel_stack_limit
+    intrinsics.set_carrier(cpu.carrier)
+    push_context entry from cpu.context^ {
+        kernel_entry.interrupt(.Idle, interrupt_source(cause))
+    }
 }
 
 /**
  * Report an exception in the kernel, on the hart's trap stack, where trap_entry's sret sent it: a hardware error as a
  * fatal MachineCheck, anything else as the fault it is, with kernel_entry.kernel_fault, which never returns.
  *
- * Interrupts are off in the kernel, and sie has none on until R4, so an interrupt here is reported as a Protection
- * fault.
- *
- * @param cause scause at the trap: an exception's code, or CAUSE_INTERRUPT and an interrupt's.
+ * @param cause scause at the trap: an exception's code.
  * @param value stval at the trap, like the faulting address.
  * @param pc sepc at the trap, the instruction that faulted.
  */
@@ -71,9 +142,6 @@ kernel_trap #calling_convention(.c) #no_context :: fn(cause : u64, value : u64, 
     intrinsics.set_carrier(cpu.carrier)
     push_context entry from cpu.context^ {
         instruction :: cast[arch_interface.VirtualAddress](pc)
-        if cause & riscv64.CAUSE_INTERRUPT != 0 {
-            kernel_entry.kernel_fault(.Protection, instruction)
-        }
         if cause == CAUSE_HARDWARE_ERROR {
             kernel_entry.fatal_critical(.MachineCheck)
         }
@@ -82,17 +150,15 @@ kernel_trap #calling_convention(.c) #no_context :: fn(cause : u64, value : u64, 
 }
 
 /**
- * Hand a trap from user mode to kernel_entry, which never returns: an ecall is a system call, a hardware error a fatal
- * MachineCheck, any other exception the thread's fault.
- *
- * Nothing enables an interrupt until R4, so one that comes anyway is taken as spurious.
+ * Hand a trap from user mode to kernel_entry, which never returns: an interrupt is decoded (interrupt_source), an ecall
+ * is a system call, a hardware error a fatal MachineCheck, any other exception the thread's fault.
  *
  * @param frame The thread's registers, as the generated code saved them on the kernel stack.
  */
 from_user :: fn(frame : ptr[mut riscv64.RegisterFrame]) #never_returns {
     registers :: cast[ptr[mut UserRegisters]](frame)
     if frame.scause & riscv64.CAUSE_INTERRUPT != 0 {
-        kernel_entry.interrupt(.User(registers), .Spurious)
+        kernel_entry.interrupt(.User(registers), interrupt_source(frame.scause))
     }
     if frame.scause == riscv64.CAUSE_USER_ECALL {
         kernel_entry.syscall(registers)

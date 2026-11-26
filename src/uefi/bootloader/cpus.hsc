@@ -282,21 +282,62 @@ import boot_protocol from "../../boot_protocol"
     }
 }
 #else_if TARGET_ARCH == .riscv64 {
+    import riscv64 from "base:intrinsics/riscv64"
+    import devicetree from "../../devicetree"
+
     /*
-     * RISC-V's: the boot hart alone, until M19's R4 starts the others through the SBI's HSM (decisions/0199). They stay
-     * stopped in the SBI firmware, where the firmware leaves every hart but the one it booted on.
+     * RISC-V's: the harts from the device tree's cpu nodes, each started by the SBI's HSM hart_start at the trampoline,
+     * in supervisor mode with translation off, its mailbox's physical address in a1. The trampoline loads the
+     * bootloader's satp, takes its stack and waits on its mailbox as x86-64's does, then jumps with tp cleared, as the
+     * kernel reads tp for its early console. Its words are its instructions, then satp's value at DATA_AT.
+     *
+     * SPEC: RISC-V Supervisor Binary Interface Specification 2.0, §9 (the hart state management extension, HSM)
      */
 
-    /** What starting the other harts needs, made before the boot services are left: nothing yet. */
-    Starting :: struct {}
+    /** The offset in bytes in the trampoline's page of satp's value, which it loads. */
+    DATA_AT : u64 : 0x80
+    /** The SBI's hart state management extension's ID, "HSM". */
+    SBI_HSM : u64 : 0x48534d
+    /** HSM's sbi_hart_start function. */
+    SBI_HART_START : u64 : 0
+
+    /** The RISC-V trampoline's instructions, copied to the start of its page, with satp's value at DATA_AT. */
+    TRAMPOLINE :: u32.[
+        0x00000297, // auipc t0, 0
+        0x0802b303, // ld t1, 0x80(t0)
+        0x18031073, // csrw satp, t1
+        0x12000073, // sfence.vma
+        0x0085b103, // ld sp, 8(a1)
+        0x0005b383, // 0x14: ld t2, 0(a1)
+        0x00039663, // bnez t2, 0x24
+        0x0100000f, // pause
+        0xff5ff06f, // j 0x14
+        0x0220000f, // 0x24: fence r, r
+        0x0105b503, // ld a0, 16(a1)
+        0x00000413, // li s0, 0
+        0x00000093, // li ra, 0
+        0x00000213, // li tp, 0
+        0x00038067 // jr t2
+    ]
+
+    /** What starting the other harts needs, made before the boot services are left. */
+    Starting :: struct {
+        /** The trampoline page's physical address, 4096-aligned, where hart_start starts each hart. */
+        trampoline : u64,
+    }
 
     /**
-     * Prepare to start the other harts: list the boot hart alone in the handoff, which runs on the bootloader's stack.
+     * Prepare to start the other harts: list them in the handoff, give each a stack, and write the trampoline.
      *
-     * @param handoff The handoff, whose cpus and cpu_count are written: one CPU, the boot hart, by its hart ID.
-     * @param tables Unused until the others are started.
-     * @param direct_map_offset Unused until the others are started.
-     * @return What start_cpus needs, always.
+     * The harts come from the device tree's cpu nodes, by their reg, their hart IDs; without a device tree, the boot
+     * hart alone is listed. Boot services have to be running.
+     *
+     * @param handoff The handoff, whose cpus and cpu_count are written, each hart but the boot hart with a stack of
+     *     BOOT_STACK_SIZE bytes; harts past what cpus holds are left out.
+     * @param tables The page tables the trampoline loads, mapping the trampoline and the handoff where they are and
+     *     the stacks in the direct map.
+     * @param direct_map_offset The direct map's offset, which each stack_top is a virtual address in.
+     * @return What start_cpus needs; null if a page for the trampoline or a stack couldn't be had.
      */
     prepare_cpus :: fn(
         handoff : ptr[mut boot_protocol.Handoff],
@@ -305,16 +346,70 @@ import boot_protocol from "../../boot_protocol"
     ) -> Starting? {
         handoff.cpu_count = 1
         handoff.cpus[0] = boot_protocol.Cpu.{hardware_id = boot_cpu_id()}
-        return Starting.{}
+        trampoline :: allocate_pages(LOADER_DATA, 4096) or_return null
+        for word, i in TRAMPOLINE {
+            cast[ptr[mut u32]](cast[rawptr](trampoline + cast[u64](i) * 4))^ = word
+        }
+        cast[ptr[mut u64]](cast[rawptr](trampoline + DATA_AT))^ = satp_value(tables)
+        starting :: Starting.{trampoline = trampoline}
+        tree := devicetree.open(handoff.devicetree) or_return starting
+        ids : u64[boot_protocol.MAX_CPUS]
+        count :: devicetree.cpus(&tree, ids)
+        boot :: handoff.cpus[0].hardware_id
+        for id, i in ids {
+            if i >= count || handoff.cpu_count >= cast[u64](handoff.cpus.count) {
+                break
+            }
+            if id == boot {
+                continue
+            }
+            stack :: allocate_pages(LOADER_DATA, boot_protocol.BOOT_STACK_SIZE) or_return null
+            at :: cast[usize](handoff.cpu_count)
+            if at < handoff.cpus.count {
+                handoff.cpus[at] = boot_protocol.Cpu.{
+                    hardware_id = id,
+                    stack_top = direct_map_offset + stack + boot_protocol.BOOT_STACK_SIZE,
+                }
+                handoff.cpu_count += 1
+            }
+        }
+        return starting
     }
 
     /**
-     * Start every hart but the boot hart, after the boot services are left: none yet, so cpu_count stays 1.
+     * Start every hart but the boot hart, after the boot services are left, by the SBI's hart_start.
      *
-     * @param handoff Unused.
-     * @param starting Unused.
+     * The trampoline's words are fenced into this hart's instruction fetches first. One the SBI won't start is left out
+     * of the handoff, the harts after it moved down. hart_start returns once the hart is starting, not once it's
+     * waiting on its mailbox. Runs on the boot hart, interrupts off.
+     *
+     * @param handoff The handoff, whose cpus are those prepare_cpus listed; cpu_count becomes how many the SBI started,
+     *     the boot hart included.
+     * @param starting What prepare_cpus made.
      */
-    start_cpus :: fn(handoff : ptr[mut boot_protocol.Handoff], starting : Starting) {}
+    start_cpus :: fn(handoff : ptr[mut boot_protocol.Handoff], starting : Starting) {
+        riscv64.fence_i()
+        started := cast[u64](1)
+        for i in cast[u64](1)..<handoff.cpu_count {
+            if i >= cast[u64](handoff.cpus.count) {
+                break
+            }
+            cpu :: handoff.cpus[cast[usize](i)]
+            slot :: cast[usize](started)
+            if slot >= handoff.cpus.count {
+                break
+            }
+            handoff.cpus[slot] = cpu
+            mailbox :: cast[u64](cast[rawptr](&handoff.cpus[slot]))
+            // The mailbox written before the hart reads it
+            riscv64.fence(riscv64.FENCE_WRITE, riscv64.FENCE_READ | riscv64.FENCE_WRITE)
+            result :: riscv64.sbi_call(SBI_HSM, SBI_HART_START, cpu.hardware_id, starting.trampoline, mailbox)
+            if result.error == 0 {
+                started += 1
+            }
+        }
+        handoff.cpu_count = started
+    }
 }
 #else {
     import aarch64 from "base:intrinsics/aarch64"

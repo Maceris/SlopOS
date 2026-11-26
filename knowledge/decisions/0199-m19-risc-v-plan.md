@@ -178,3 +178,35 @@ In seven stages:
   hand: the firmware then goes on to its next boot option, so a test could only wait out its timeout.
 - **Left for R4:** another hart may fault on a kernel mapping just made, before Svvptc's bounded time; R4 retries such
   a fault rather than stopping.
+
+## As Built: R4 (2026-11-25)
+- **Both controllers, found in the device tree:** the AIA where there's an IMSIC with supervisor files (`riscv,imsics`
+  taking external interrupt 9) and the APLIC whose `msi-parent` it is; else a PLIC. Each hart is found by its interrupt
+  controller's cpu node (the device tree package's new `parent_reg_of`).
+  - **With the AIA every interrupt is a message**, as on x86-64: the kernel's device interrupt IDs are each hart's IMSIC
+    identities (16 up), claimed through `stopei`; MSIs are the hart's file and the ID, with nothing kept per device; the
+    APLIC delivers its lines by message, its target the hart's IMSIC index and the ID; and IPIs are identities 1 to 3
+    written to the target's file.
+  - **With the PLIC** the IDs are the kernel's own (32 to 255), routed from lines as AArch64 routes SPIs; the claimed
+    line is completed at `end_of_interrupt`; there are no MSIs; and IPIs are the SBI's `sbi_send_ipi`, their kinds kept
+    in the target's `ArchCpu`, each taken as an interrupt of its own.
+- **The arch interface's one change: `init_cpu` takes the CPU's hardware ID.** Supervisor mode can't read its hart's
+  ID, which the PLIC's contexts and the IMSIC's files are by. x86-64 and AArch64 read theirs and ignore it.
+- **Timer:** Sstc's `stimecmp`, at `/cpus`' `timebase-frequency`.
+- **Idle:** `sstatus.SIE` and `wfi`. An interrupt in supervisor mode only comes while idle, and its entry, like an
+  exception's, rewrites the frame and returns, its `sret` landing in `idle_interrupt` on the kernel stack's top, as an
+  entry from idle starts on x86-64's IST.
+- **The other harts:** the bootloader starts every cpu node's hart by the SBI's HSM at a trampoline, which loads
+  `satp`, takes its stack, clears `tp` and waits on its mailbox, as the other two park their CPUs.
+- **Stale page faults** (R3's leftover): a kernel page fault on an address the tables now allow is fenced and retried,
+  as another hart may have made the mapping after this one walked it. The check runs in the entry, before there's a
+  context.
+- **The test device:** with the AIA, the APLIC's last source, pended through `setipnum`; with the PLIC, which can't pend
+  a line in software, the UART's transmitter interrupt, armed at each tick and taken back at `end_of_interrupt`.
+- **Tests:** `boot.py --aia` boots `virt,aia=aplic-imsic`. `boot_tests.py` runs 21 RISC-V tests: on the PLIC and again
+  on the AIA, booting and halting with boot memory reclaimed, every hart started (4), the clock, idle harts' ticks
+  stopping, TLB shootdown, a binding slot read while it's remade, an object's ownership raced, and the test device's
+  interrupts routed through the wired controller; and R3's five (a kernel fault, a failed assertion, read-only code, the
+  heap, a CPU without V) once.
+- **Left for R5:** device interrupts reach drivers through user space, so MSIs and wired lines from real devices are
+  first used there; and the stale-fault retry for user pages, which return through `return_to_user`.

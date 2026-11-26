@@ -410,7 +410,9 @@ boot #never_returns :: fn(info : ptr[boot_info.BootInfo]) {
     intrinsics.set_carrier(&cpu.carrier)
     arch.init_system(&kernel.arch, &info.firmware_tables, info.direct_map_offset)
     arch.set_kernel_pointer_key(&kernel.arch, u64.[random_bits(kernel), random_bits(kernel)])
-    arch.init_cpu(&kernel.arch, &cpu.arch, &cpu.carrier, &cpu.context, &cpu.stacks)
+    boot_cpus :: info.cpus
+    boot_hardware_id :: if boot_cpus.count > 0 { boot_cpus[0].hardware_id } else { cast[u64](0) }
+    arch.init_cpu(&kernel.arch, &cpu.arch, boot_hardware_id, &cpu.carrier, &cpu.context, &cpu.stacks)
     arch.log_hardening(&features)
     runtime.log_info("boot CPU set up: its entries and its own state")
     start_address_space(kernel, info)

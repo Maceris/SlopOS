@@ -121,6 +121,112 @@ find_compatible_even_disabled :: fn(tree : ptr[Tree], compatible : string) -> No
 }
 
 /**
+ * Find a later node that lists a compatible string and isn't disabled, past the first few that do.
+ *
+ * For a device the tree has more than one of, like RISC-V's IMSICs, one for machine mode and one for supervisor mode.
+ *
+ * @param tree The tree, from open; only read, its blob walked from the structure block's start.
+ * @param compatible The compatible string to look for, matched whole; not "".
+ * @param skip How many of those nodes to pass over, in the tree's order: 0 gives what find_compatible does.
+ * @return The node, or null if there aren't more than skip of them or the tree is malformed before one is found.
+ */
+find_compatible_after :: fn(tree : ptr[Tree], compatible : string, skip : u32) -> Node? {
+    return find_node(tree, compatible, 0, skip = skip)
+}
+
+/**
+ * Find the first node, in the tree's order, whose name is a string and which isn't disabled, like "cpus".
+ *
+ * @param tree The tree, from open; only read, its blob walked from the structure block's start.
+ * @param name The node's whole name, its unit address included if it has one ("memory@80000000"); not "".
+ * @return The node, or null if none has it, every one that does is disabled, or the tree is malformed or nests deeper
+ *     than MAX_DEPTH before one is found.
+ */
+find_node_named :: fn(tree : ptr[Tree], name : string) -> Node? {
+    return find_node(tree, "", 0, node_name = name)
+}
+
+/**
+ * Read the reg address of the node a phandle's node is a child of, as a RISC-V hart's interrupt controller is its cpu
+ * node's, whose reg is the hart's ID.
+ *
+ * @param tree The tree, from open; only read, its blob walked from the structure block's start.
+ * @param phandle The child's phandle; 0 is never a node's.
+ * @return The parent's reg's first address, of its own parent's #address-cells; null if no node has the phandle, it's
+ *     the root, its parent has no reg that long, or the tree is malformed or nests deeper than MAX_DEPTH first.
+ */
+parent_reg_of :: fn(tree : ptr[Tree], phandle : u32) -> u64? {
+    if phandle == 0 {
+        return null
+    }
+    // Each depth's #address-cells, for its children, and each open node's reg
+    address_cells : u32[MAX_DEPTH]
+    regs : Property[MAX_DEPTH]
+    depth : usize = 0
+    offset := cast[u64](0)
+    loop {
+        if offset + 4 > tree.structure_size {
+            return null
+        }
+        token :: big_endian_u32(tree.structure + offset)
+        offset += 4
+        if token == TOKEN_BEGIN_NODE {
+            if depth + 1 >= MAX_DEPTH {
+                return null
+            }
+            depth += 1
+            if depth < MAX_DEPTH {
+                address_cells[depth] = 2
+                regs[depth] = Property.{}
+            }
+            offset = align4(offset + name_length(tree, offset) + 1)
+        }
+        else if token == TOKEN_END_NODE {
+            if depth == 0 {
+                return null
+            }
+            depth -= 1
+        }
+        else if token == TOKEN_PROPERTY {
+            if offset + 8 > tree.structure_size {
+                return null
+            }
+            length :: cast[u64](big_endian_u32(tree.structure + offset))
+            name :: string_at(tree, cast[u64](big_endian_u32(tree.structure + offset + 4)))
+            value :: Property.{address = tree.structure + offset + 8, size = length}
+            if depth < MAX_DEPTH {
+                if name == "#address-cells" && length == 4 {
+                    address_cells[depth] = big_endian_u32(value.address)
+                }
+                else if name == "reg" {
+                    regs[depth] = value
+                }
+                else if name == "phandle" && length == 4 && big_endian_u32(value.address) == phandle {
+                    // The parent's reg, in its own parent's cells
+                    if depth < 2 {
+                        return null
+                    }
+                    parent :: depth - 1
+                    cells :: address_cells[parent - 1]
+                    reg :: regs[parent]
+                    if reg.size < cast[u64](cells) * 4 || cells == 0 || cells > 2 {
+                        return null
+                    }
+                    return read_cells(reg.address, cells)
+                }
+            }
+            offset = align4(offset + 8 + length)
+        }
+        else if token == TOKEN_END {
+            return null
+        }
+        else if token != TOKEN_NOP {
+            return null
+        }
+    }
+}
+
+/**
  * Find the node with a phandle, as another node's property refers to it (like iommu-map's).
  *
  * @param tree The tree, from open; only read, its blob walked from the structure block's start unless phandle
@@ -159,8 +265,10 @@ find_device_type :: fn(tree : ptr[Tree], device_type : string) -> Node? {
  * @param cell_name A property whose first cell is cell_value, as gpio-keys' "linux,code", or "" not to match by one.
  * @param cell_value The value cell_name's first cell has to be.
  * @param device_type The node's device_type property, matched whole, or "" not to match by it.
- * @return The first matching node, or null if none matches, or the walk meets a malformed token, the structure
- *     block's end, or nesting deeper than MAX_DEPTH first.
+ * @param node_name The node's whole name, its unit address included, or "" not to match by it.
+ * @param skip How many matching nodes to pass over first, in the tree's order: 0 for the first.
+ * @return The first matching node past skip of them, or null if there's none, or the walk meets a malformed token,
+ *     the structure block's end, or nesting deeper than MAX_DEPTH first.
  */
 find_node :: fn(
     tree : ptr[Tree],
@@ -169,8 +277,11 @@ find_node :: fn(
     even_disabled : bool = false,
     cell_name : string = "",
     cell_value : u32 = 0,
-    device_type : string = ""
+    device_type : string = "",
+    node_name : string = "",
+    skip : u32 = 0
 ) -> Node? {
+    skipped := cast[u32](0)
     // The cells each depth gives its children: 2 and 1 by default
     address_cells : u32[MAX_DEPTH]
     size_cells : u32[MAX_DEPTH]
@@ -189,7 +300,10 @@ find_node :: fn(
         if token == TOKEN_BEGIN_NODE || token == TOKEN_END_NODE || token == TOKEN_END {
             // The node before is done: it's the one, if it matched and isn't disabled
             if matched && (!disabled || even_disabled) {
-                return current
+                if skipped >= skip {
+                    return current
+                }
+                skipped += 1
             }
             matched = false
             disabled = false
@@ -208,7 +322,11 @@ find_node :: fn(
             parent_address : u32 = if parent > 0 && parent < MAX_DEPTH { address_cells[parent] } else { 2 }
             parent_size : u32 = if parent > 0 && parent < MAX_DEPTH { size_cells[parent] } else { 1 }
             current = Node.{offset = offset, address_cells = parent_address, size_cells = parent_size}
-            offset = align4(offset + name_length(tree, offset) + 1)
+            length :: name_length(tree, offset)
+            if node_name != "" && length == cast[u64](node_name.count) && matches(tree.structure + offset, node_name) {
+                matched = true
+            }
+            offset = align4(offset + length + 1)
         }
         else if token == TOKEN_END_NODE {
             if depth == 0 {

@@ -12,7 +12,8 @@ and the miscellaneous functions (roadmap M1), paging (M2), wired interrupts (M3)
 state (M4). On AArch64 (`src/arch/aarch64`): CPU setup, entry, paging and the miscellaneous functions
 (roadmap A3), interrupts, wired interrupts and the timer (A4), user and vector state (A5), and MSIs through the
 GICv3's ITS (M7); an NMI comes later. On RISC-V (`src/arch/riscv64`): CPU setup, entry, paging and the miscellaneous
-functions (M19's R3); the rest comes with R4 to R6. Choices and alternatives are in
+functions (M19's R3), and interrupts, wired interrupts, MSIs and the timer, on the PLIC and on the AIA (R4); user and
+vector state come with R5. Choices and alternatives are in
 `../../knowledge/decisions/0032-arch-interface.md`. Four-digit numbers like `0023` refer
 to decision records in `../../knowledge/decisions/`.
 
@@ -151,9 +152,11 @@ init_system : fn(system: ptr[mut ArchSystem], firmware: ptr[boot_info.FirmwareTa
  * Records carrier and context in cpu, and cpu in the architecture's per-CPU register
  * (x86-64: the gs base while in the kernel; AArch64: TPIDR_EL1; RISC-V: tp, and sscratch in user mode), for entry stubs.
  */
+// hardware_id is the CPU's BootCpu.hardware_id, for an architecture whose CPUs can't read their own (RISC-V's harts).
 init_cpu : fn(
     system: ptr[ArchSystem],
     cpu: ptr[mut ArchCpu],
+    hardware_id: u64,
     carrier: ptr[mut runtime.CarrierBlock],
     context: ptr[runtime.Context],
     stacks: ptr[CpuStacks],
@@ -830,22 +833,22 @@ virtual timer's interrupt and the PL011.
 
 ## RISC-V
 
-How `arch/riscv64` meets the interface so far (M19's R3, `../../knowledge/decisions/0199-m19-risc-v-plan.md`,
-`../../knowledge/design/arch-riscv64.md`). It finds its devices and its features in the device tree. Until R4 it doesn't
-take interrupts (`TAKES_INTERRUPTS` false), and the kernel stops once its own address space, heap and console are up.
+How `arch/riscv64` meets the interface so far (M19's R3 and R4, `../../knowledge/decisions/0199-m19-risc-v-plan.md`,
+`../../knowledge/design/arch-riscv64.md`). It finds its devices and its features in the device tree: the 16550, and the
+PLIC, or the AIA's IMSIC and APLIC.
 
 | Interface | RISC-V |
 |---|---|
-| `ArchSystem` | The early console's word, the harts' features, the ASID bits `satp` keeps, and the device blocks L1 maps |
+| `ArchSystem` | The early console's word, the harts' features, the ASID bits `satp` keeps, the device blocks L1 maps, the timebase, which controller the harts have and each hart's place on it (its PLIC context, or its IMSIC file and index), the PLIC's or the APLIC's registers, and the routes from PLIC lines to the kernel's IDs |
 | `UserRegisters` | `riscv64.RegisterFrame` |
-| `ArchCpu` | `riscv64.TrapScratch` first (`tp` points here in the kernel, `sscratch` in user mode), then the carrier block and context for entries, the kernel stack's limit and top, the trap stack's top and limit, the early console's word and the `ArchSystem` |
+| `ArchCpu` | `riscv64.TrapScratch` first (`tp` points here in the kernel, `sscratch` in user mode), then the carrier block and context for entries, the kernel stack's limit and top, the trap stack's top and limit, the early console's word, the `ArchSystem`, the hart's ID (`init_cpu`'s `hardware_id`), its PLIC context or IMSIC file, the PLIC line it claimed, and the kinds of the SBI's IPIs sent it |
 | `detect_features` | The device tree's first cpu node: its `riscv,isa-extensions`, or its `riscv,isa` string, and its `mmu-type`. The baseline is RVA23 as the kernel and programs are built for it, with Sv48 |
-| `init_system` | The early console's registers kept for the kernel's own tables; the features; the ASID bits, found by writing all ones to `satp`'s ASID field and reading it back |
-| `init_cpu` | `tp` at the `ArchCpu`; `sscratch` 0; `stvec` at the entry, direct mode; `sstatus.SIE` and `sie` clear; `sstatus.SUM`, `FS` and `VS` clear |
+| `init_system` | The early console's registers kept for the kernel's own tables; the features; the ASID bits, found by writing all ones to `satp`'s ASID field and reading it back; `/cpus`' `timebase-frequency`; and the controller, mapped through the direct map: an IMSIC with supervisor files (`riscv,imsics`, external interrupt 9) and the APLIC whose `msi-parent` it is, else a PLIC (`sifive,plic-1.0.0`), each hart by its interrupt controller's cpu node |
+| `init_cpu` | `tp` at the `ArchCpu`; `sscratch` 0; `stvec` at the entry, direct mode; `sstatus.SIE` clear but `sie`'s software, timer and external interrupts on; `stimecmp` at its largest; `sstatus.SUM`, `FS` and `VS` clear; the hart's IMSIC file delivering every identity (`eidelivery`, `eithreshold`, `eie`, through `siselect`), or its PLIC context's threshold 0 and every line disabled there |
 | `AddressSpaceTag` | ASID: as many as `satp` keeps bits for, up to 65536 |
 | Paging | Sv48, one root for both halves, as on x86-64: the kernel's table gets all 256 tables of the kernel half up front, and other address spaces copy its top-level entries. A non-leaf entry has no bits to spare, so `unmap` looks for a second valid entry to know a table emptied. Every leaf has A and D set, as Svade faults on a clear one; `take_accessed` is always false. Kernel mappings are global, user ones `U` with their ASID. Svpbmt: `WriteBack` is the physical memory attributes (0), `WriteCombining` NC, `Device` IO; a changed memory type is taken out and fenced before the new one goes in. A shadow stack's page is W alone, Zicfiss's encoding |
 | TLB | `sfence.vma` by address and ASID for user pages, by address alone for the kernel's global ones, by ASID for a tag, and whole for everything. `map` fences the new entry on the calling hart, which may have walked it while it was invalid. The first `activate` on a hart flushes everything |
-| Entry | One `.entry` function, which `stvec` points at. From user mode it runs on the kernel stack's top and never returns: `ecall` is a system call, a hardware error (code 19) a machine check, any other exception the thread's fault. An exception in the kernel is moved, by the entry's `sret`, to `kernel_trap` on the CPU's DoubleFault critical stack, since the trap's frame is on the stack it came from, which may be the one the stack check found full; the interrupted `s0` and `ra` stay, so the stack trace goes on through the faulting code. A page fault is `present` if the active tables map the address |
+| Entry | One `.entry` function, which `stvec` points at. From user mode it runs on the kernel stack's top and never returns: `ecall` is a system call, a hardware error (code 19) a machine check, an interrupt decoded, any other exception the thread's fault. In the kernel, the entry only rewrites the frame and returns, its `sret` landing on a fresh stack: an exception in `kernel_trap` on the CPU's DoubleFault critical stack, since the frame is on the stack the trap came from, which may be the one the stack check found full; an interrupt, which comes only while idle, in `idle_interrupt` on the kernel stack's top. The interrupted `s0` and `ra` stay, so a stack trace goes on through the faulting code. A page fault on a kernel mapping the tables now allow, which a hart may have walked before another made it, is fenced and retried. A page fault is `present` if the active tables map the address |
 | Stacks | A stack's limit leaves room below it for the guard and for a trap's frame (288 bytes), since a trap in the kernel builds its frame wherever the stack pointer is |
 | `counter` | The `time` CSR |
 | `hardware_entropy` | Zkr's `seed`, 16 bits at a time, where the harts have Zkr; null before `init_cpu` |
@@ -854,7 +857,13 @@ take interrupts (`TAKES_INTERRUPTS` false), and the kernel stops once its own ad
 | `reset` and `power_off` | The SBI's system reset extension, a warm reboot and a shutdown; `can_power_off` is true where the SBI has it |
 | `send_nmi`, `nmi_register_name` | RISC-V's supervisor has no NMI: false, and `"?"` |
 | `log_hardening` | Zicfilp and Zicfiss, neither used yet; nothing in the ISA says which transient-execution issues apply |
-| Not yet | Interrupts, the timer, IPIs and MSIs (R4); user mode, system calls, debugging and vector state (R5); interrupt remapping and control-flow integrity (R6); `test_nmi` (there's no NMI) |
+| Interrupts | With the AIA every interrupt is a message: the kernel's device IDs are each hart's IMSIC identities, 16 up to `riscv,num-ids`, claimed through `stopei`, and IPIs are identities 1 to 3 written to the target's file. With a PLIC the device IDs are the kernel's own, 32 to 255, translated through routes from the line a hart claims, which `end_of_interrupt` completes; IPIs are the SBI's `sbi_send_ipi`, their kinds in the target's `ArchCpu` |
+| Wired interrupts | The PLIC (`ControllerKind.Plic`), every line at priority 1 and disabled in every supervisor context, enabled in its routed hart's; or the APLIC (`Aplic`), delivering by message, each source inactive until it's routed, its target the hart's IMSIC index and the ID as its identity, masked through `clrienum` and `setienum` |
+| MSIs | Straight to the IMSIC, which keeps nothing per device: `route_msi`'s message is the hart's file's `seteipnum_le` and the ID. A PLIC takes none (`msi_device_memory` is null). `msi_doorbell` is null until the IOMMU comes with R6 |
+| Timer | Sstc's `stimecmp`, at `/cpus`' `timebase-frequency` |
+| `idle` | `sstatus.SIE` set, then `wfi` in a loop: the interrupt's entry starts again at the kernel stack's top |
+| `test_device` | With the AIA, the APLIC's last source, pended through `setipnum`; with a PLIC, the UART's line, its transmitter's interrupt armed. Either is pended again at each tick of the hart that started it |
+| Not yet | User mode, system calls, debugging and vector state (R5); interrupt remapping and control-flow integrity (R6); `test_nmi` (there's no NMI) |
 
 ## Not Covered
 

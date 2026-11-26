@@ -118,6 +118,8 @@ init_system : fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmware
  *
  * @param system The shared state init_system set up.
  * @param cpu The calling CPU's architecture state, in L2's memory; it must not move afterwards.
+ * @param hardware_id The calling CPU's hardware ID (BootCpu.hardware_id), for an architecture whose CPUs can't read
+ *     their own, like RISC-V's harts; x86-64 and AArch64 read theirs and ignore it.
  * @param carrier The carrier block entries run with; it's kept, so it has to stay valid while the CPU runs.
  * @param context The context entries run with; it's kept, so it has to stay valid while the CPU runs.
  * @param stacks The stacks entries run on; the stacks themselves have to stay while the CPU runs.
@@ -125,6 +127,7 @@ init_system : fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmware
 init_cpu : fn(
     system : ptr[ArchSystem],
     cpu : ptr[mut ArchCpu],
+    hardware_id : u64,
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
     stacks : ptr[CpuStacks]

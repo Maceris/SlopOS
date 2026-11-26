@@ -12,16 +12,17 @@ package arch_riscv64
 
 import riscv64 from "base:intrinsics/riscv64"
 import runtime from "base:runtime"
+import concurrency from "std:concurrency"
 import slop_os from "std:os/slop_os"
 import arch_interface from "../../arch_interface"
 import boot_info from "../../boot_info"
 import devicetree from "../../devicetree"
 
 /**
- * Whether the kernel goes on past its own address space on RISC-V: not yet, until R4 brings the interrupt
- * controllers, the timer and the other harts (the kernel's stop_before_interrupts).
+ * Whether the kernel goes on past its own address space on RISC-V: true since R4, it takes interrupts, starts the timer
+ * and the other harts (the kernel's stop_before_interrupts).
  */
-TAKES_INTERRUPTS :: false
+TAKES_INTERRUPTS :: true
 
 /**
  * One hart's architecture state (arch_interface.ArchCpu).
@@ -55,13 +56,30 @@ ArchCpu :: struct #align(64) {
     system : u64,
     /** Whether the hart is still on the bootloader's page tables, until the first activate flushes its TLB. */
     bootloader_tables : bool,
+    /** The hart's ID, its mhartid, as L2 gave it to init_cpu: supervisor mode can't read it. */
+    hart_id : u64,
+    /** The hart's supervisor context on the PLIC, its claim and threshold registers', or NO_CONTEXT without one. */
+    plic_context : u32,
+    /** The hart's supervisor interrupt file on the IMSIC, through the direct map, or 0 without an IMSIC. */
+    imsic : u64,
+    /**
+     * The PLIC source this hart claimed and hasn't completed, which end_of_interrupt completes; NO_ACTIVE_LINE when
+     * there's none.
+     */
+    active_line : u32,
+    /**
+     * The IPIs sent to this hart by the SBI and not yet taken, a bit for each IpiKind, set atomically by the senders.
+     */
+    ipis : u32,
 }
 
 /**
- * The most 2 MiB blocks of device registers the kernel maps for L1 itself: the console's, and from R4 the interrupt
+ * The most 2 MiB blocks of device registers the kernel maps for L1 itself: the console's and the interrupt
  * controllers'.
  */
 MAX_DEVICE_BLOCKS :: 16
+/** The most harts the kernel knows of, as the boot protocol's MAX_CPUS. */
+MAX_HARTS :: 64
 
 /**
  * State shared by every hart (arch_interface.ArchSystem).
@@ -87,6 +105,38 @@ ArchSystem :: struct {
     device_block_count : u32,
     /** Where physical address 0 is in the bootloader's and the kernel's direct map. */
     direct_map_offset : u64,
+    /** The time CSR's frequency in Hz, the device tree's timebase-frequency; 0 if it doesn't say. */
+    timebase : u64,
+    /** Which interrupt controller the harts have, found in the device tree (interrupts.hsc). */
+    controller : Controller,
+    /** The harts the device tree lists, by hart ID, with their place on the interrupt controller (interrupts.hsc). */
+    harts : Hart[MAX_HARTS],
+    /** How many of harts are used, at most MAX_HARTS. */
+    hart_count #at_most(harts.count) : u32,
+    /** The PLIC's registers, through the direct map, or 0 without a PLIC. */
+    plic : u64,
+    /** The PLIC's registers' physical address, which test_device reports; 0 without a PLIC. */
+    plic_physical : u64,
+    /**
+     * How many identities each hart's supervisor interrupt file has, the device tree's riscv,num-ids; 0 without one.
+     */
+    imsic_ids : u32,
+    /** The supervisor-level APLIC's registers, through the direct map, or 0 without one. */
+    aplic : u64,
+    /** The supervisor-level APLIC's registers' physical address, which test_device reports; 0 without one. */
+    aplic_physical : u64,
+    /** How many sources the supervisor-level APLIC has, the device tree's riscv,num-sources. */
+    aplic_sources : u32,
+    /** The PLIC lines routed to the kernel's device interrupt IDs (interrupts.hsc), under routes_lock. */
+    routes : Route[MAX_ROUTES],
+    /** The lock that guards routes. */
+    routes_lock : concurrency.SpinLock,
+    /** Whether test_device_interrupts is on: each tick on the hart that started it pends the test line again. */
+    test_interrupts : bool,
+    /** The hart test_device_interrupts was started on, whose ticks pend the test line. */
+    test_hart : u64,
+    /** The UART's line on the PLIC, the test device on a machine with a PLIC; 0 if the device tree doesn't say. */
+    uart_line : u32,
 }
 
 /** User-mode registers saved at kernel entry (arch_interface.UserRegisters): what the entry function saves. */
@@ -166,7 +216,8 @@ stack_limit_of :: fn(stack : arch_interface.StackRange) -> rawptr {
 
 /**
  * Set up the state every hart shares (arch_interface.init_system): the early console's registers, kept for the
- * kernel's own tables, the features from the device tree, and how many ASID bits satp keeps.
+ * kernel's own tables, the features from the device tree, how many ASID bits satp keeps, the time CSR's frequency, and
+ * the interrupt controller, the PLIC or the AIA, with its registers mapped through the direct map (interrupts.hsc).
  *
  * Called once, on the boot hart, before init_cpu, on the bootloader's page tables.
  *
@@ -183,6 +234,39 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
     }
     system.features = detect_features(firmware, direct_map_offset)
     system.asid_bits = probe_asid_bits()
+    tree := devicetree.open(devicetree_address(firmware, direct_map_offset)) or_return void
+    cpus := devicetree.find_node_named(&tree, "cpus") or_else devicetree.Node.{}
+    if cpus.offset != 0 {
+        match devicetree.property(&tree, &cpus, "timebase-frequency") {
+            case Some(value) => system.timebase = cast[u64](devicetree.cell(value, 0) or_else 0)
+            case None => {}
+        }
+    }
+    init_controller(system, &tree)
+}
+
+/**
+ * Map device registers through the direct map: in the bootloader's tables now (map_early_device), and in the kernel's
+ * own once it's made, each 2 MiB block of them kept for init_kernel_page_table.
+ *
+ * Stops at the first block that can't be mapped, with the blocks before it mapped and kept.
+ *
+ * @param system The shared state, with the direct map's offset, whose device_blocks grows.
+ * @param physical The registers' physical address.
+ * @param size Their size in bytes; at least the block holding physical is mapped, even for 0.
+ * @return True if every block was mapped; false if one couldn't be.
+ */
+map_device_range :: fn(system : ptr[mut ArchSystem], physical : u64, size : u64) -> bool {
+    block := physical & ~(BLOCK_2M - 1)
+    loop {
+        if !map_early_device(system.direct_map_offset, block) {
+            return false
+        }
+        add_device_block(system, block)
+        block += BLOCK_2M
+    }
+    while block < physical + size
+    return true
 }
 
 /**
@@ -222,15 +306,16 @@ devicetree_address :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_of
 
 /**
  * Set the calling hart up (arch_interface.init_cpu): tp at its ArchCpu, sscratch 0 for the kernel, stvec at the trap
- * entry in direct mode, interrupts off (sstatus.SIE, and sie), user memory unreachable (SUM clear), and floating point
- * and vectors off, which the kernel doesn't use.
+ * entry in direct mode, interrupts off in sstatus.SIE but its software, timer and external ones enabled in sie, the
+ * timer's compare at its largest, user memory unreachable (SUM clear), floating point and vectors off, which the kernel
+ * doesn't use, and its part of the interrupt controller (interrupts.hsc).
  *
  * Runs in supervisor mode, on each hart once, after init_system on the boot hart. tp no longer holds the early
- * console's
- * word afterwards; the console is found through the ArchCpu instead.
+ * console's word afterwards; the console is found through the ArchCpu instead.
  *
  * @param system The shared state init_system set up, which must outlive the hart.
  * @param cpu This hart's state to fill, L2's, which must not move afterwards.
+ * @param hardware_id The hart's ID, which supervisor mode can't read for itself, kept in cpu.
  * @param carrier The hart's carrier block, kept in cpu for entries; it must outlive the hart.
  * @param context The context entries push, kept in cpu; it must outlive the hart.
  * @param stacks The hart's stacks: the kernel stack, for traps from user mode, and the DoubleFault critical stack, for
@@ -239,6 +324,7 @@ devicetree_address :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_of
 init_cpu :: fn(
     system : ptr[ArchSystem],
     cpu : ptr[mut ArchCpu],
+    hardware_id : u64,
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
     stacks : ptr[arch_interface.CpuStacks]
@@ -254,10 +340,22 @@ init_cpu :: fn(
     cpu.console = system.console
     cpu.system = cast[u64](system)
     cpu.bootloader_tables = true
+    cpu.hart_id = hardware_id
+    cpu.active_line = NO_ACTIVE_LINE
     _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SIE)
     riscv64.csrw(.SIE, 0)
     riscv64.write_tp(cast[rawptr](cpu))
     riscv64.csrw(.SSCRATCH, 0)
     riscv64.csrw(.STVEC, cast[u64](trap_entry))
     _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SUM | riscv64.SSTATUS_FS | riscv64.SSTATUS_VS)
+    riscv64.csrw(.STIMECMP, NO_DEADLINE)
+    init_hart_controller(system, cpu)
+    riscv64.csrw(.SIE, SIE_SOFTWARE | SIE_TIMER | SIE_EXTERNAL)
 }
+
+/** sie's SSIE (bit 1): supervisor software interrupts, the SBI's IPIs. */
+SIE_SOFTWARE : u64 : 1 << 1
+/** sie's STIE (bit 5): supervisor timer interrupts, from stimecmp. */
+SIE_TIMER : u64 : 1 << 5
+/** sie's SEIE (bit 9): supervisor external interrupts, from the PLIC or the IMSIC. */
+SIE_EXTERNAL : u64 : 1 << 9

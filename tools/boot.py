@@ -359,6 +359,9 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     return returncode >> 1 if returncode % 2 == 1 else NO_EXIT_CODE
 
 
+# Whether RISC-V's virt has the AIA, an IMSIC for each hart and an APLIC, rather than the PLIC (--aia, decisions/0199)
+RISCV_AIA = False
+
 # QEMU's CPU for RISC-V when --cpu is left as it is: RVA23's supervisor profile, SlopOS's baseline (decisions/0199),
 # with Sv48 and Zkr, which the profile leaves optional and QEMU's model leaves out
 RISCV_DEFAULT_CPU = "rva23s64,sv48=on,zkr=on"
@@ -368,7 +371,7 @@ def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
                 folder: Path, keys: "SerialKeys | None" = None, reboot: bool = False) -> int:
     """
     Boots the image, or with none the drive in extra, on QEMU's RISC-V virt machine through edk2 over OpenSBI, with
-    the device tree rather than ACPI, and gives the code the kernel ended with. The firmware's variables are a copy in
+    the device tree rather than ACPI, and the PLIC, or with --aia the AIA, and gives the code the kernel ended with. The firmware's variables are a copy in
     folder, made on the first boot and kept for the boots after it.
     """
     cd = ["-device", "virtio-scsi-pci", "-device", "scsi-cd,drive=cd", "-drive", f"if=none,id=cd,media=cdrom,format=raw,file={image}"] \
@@ -378,7 +381,7 @@ def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     if not variables.exists():
         shutil.copy(code.parent / "edk2-riscv-vars.fd", variables)
     command = [
-        str(qemu), "-M", "virt,acpi=off,pflash0=code,pflash1=variables", "-m", "512M",
+        str(qemu), "-M", "virt,acpi=off,pflash0=code,pflash1=variables" + (",aia=aplic-imsic" if RISCV_AIA else ""), "-m", "512M",
         "-cpu", RISCV_DEFAULT_CPU if cpu == DEFAULT_CPU else cpu,
         "-blockdev", f"node-name=code,driver=file,filename={code},read-only=on",
         "-blockdev", f"node-name=variables,driver=file,filename={variables}", *cd,
@@ -2535,14 +2538,17 @@ def main() -> int:
     parser.add_argument("--allow-reboot", action="store_true",
                         help="let the first boot reset the machine and boot again in the same QEMU, which keeps RAM, as a warm "
                              "reset does, rather than ending QEMU (the panic record, decisions/0134)")
+    parser.add_argument("--aia", action="store_true",
+                        help="with --arch riscv64: give virt the AIA, an IMSIC for each hart and an APLIC, rather than the PLIC")
     parser.add_argument("--efi",
                         help="boot a UEFI program of SlopOS's build (src/uefi), NAME.efi, by itself under the firmware, rather than "
                              "the kernel: as EFI/BOOT/BOOTX64.EFI (or BOOTAA64.EFI) on a FAT drive; turning the machine off is "
                              "exit code 0 (roadmap B1, decisions/0132)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
-    global KVM_HOST
+    global KVM_HOST, RISCV_AIA
     KVM_HOST = arguments.kvm
+    RISCV_AIA = arguments.aia
     if KVM_HOST is not None and arguments.arch != "x86_64":
         sys.exit("boot.py: --kvm boots x86-64 only")
     if arguments.end_when_done and (arguments.shut_down_when_done or arguments.restart_when_done

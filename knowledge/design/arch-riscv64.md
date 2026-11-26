@@ -1,12 +1,13 @@
 # Arch Notes: RISC-V
 
 What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x86-64.md` does for x86-64. The plan is
-`../decisions/0199` (M19); this note says what's built (R3) and what each later stage adds.
+`../decisions/0199` (M19); this note says what's built (R3 and R4) and what each later stage adds.
 
 ## Target Environment
 
 - **Development target:** QEMU's `virt` machine with the device tree (`acpi=off`), edk2's RISC-V firmware over
-  OpenSBI, virtio devices. `tools/boot.py --arch riscv64`.
+  OpenSBI, virtio devices; the PLIC by default, the AIA with `virt,aia=aplic-imsic`. `tools/boot.py --arch riscv64`,
+  with `--aia` for the second.
 - **CPU baseline:** RVA23 (RVA23U64 and RVA23S64), as the kernel and programs are built for it, and **Sv48**, which
   RVA23S64 leaves optional: QEMU's `rva23s64` model has only Sv39, so the tests run `rva23s64,sv48=on,zkr=on`. The
   kernel checks the extensions the code uses (M, A, F, D, C, V, Zba, Zbb, Zbs, Zicond, Zcb, Zfa, Zfhmin, Zicboz,
@@ -32,15 +33,26 @@ What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x8
   the physical memory attributes give (RAM's); devices aren't mapped, as on AArch64. `riscv64.enter` sets `satp`,
   flushes, and jumps to the kernel with the handoff in `a0`, after `fence.i` for the kernel's code and with interrupts
   off (`sstatus.SIE`, `sie`).
-- **Only the boot hart** is in the handoff until R4 starts the others through the SBI's HSM; they stay stopped in
-  OpenSBI.
+- **The other harts** are the device tree's cpu nodes, started after the boot services are left by the SBI's HSM
+  `hart_start` at a trampoline (machine code, as on the other two), translation off and the mailbox in `a1`: it loads
+  the bootloader's `satp`, takes its stack, clears `tp` and waits on its mailbox.
 - The panic record's page is at `0x80400000`, past OpenSBI's 2 MiB at the start of RAM.
 
 ## What `arch/riscv64` Implements
 
 - **Per-hart state:** `tp` is the `ArchCpu` in the kernel; in user mode `sscratch` is, so a trap swaps them (Hemera's
   `riscv64.TrapScratch`, which the `ArchCpu` starts with). Before `init_cpu`, `tp` holds the early console's word,
-  which is odd, so the two are told apart.
+  which is odd, so the two are told apart. Supervisor mode can't read its hart ID, so `init_cpu` takes it from L2.
+- **Interrupts:** the AIA where the device tree has an IMSIC with supervisor files, else the PLIC. With the AIA every
+  interrupt is a message, as x86-64's are: the kernel's device IDs are the IMSIC's identities, MSIs and the APLIC's
+  lines name them directly, and IPIs are identities written to a hart's file. With the PLIC the IDs are the kernel's
+  own, routed from lines as AArch64 routes SPIs, there are no MSIs, and IPIs are the SBI's, their kinds kept in the
+  target's `ArchCpu`. An interrupt only comes while idle, and its entry is moved to the kernel stack's top, as x86-64's
+  IST does. The test device is the APLIC's last source, pended in software, or with a PLIC the UART's transmitter
+  interrupt, armed at each tick.
+- **Timer:** Sstc's `stimecmp`.
+- **Stale page faults:** a hart may keep an invalid entry it walked before another hart made it valid, until Svvptc's
+  bounded time; a kernel page fault on an address the tables now allow is fenced and retried.
 - **Traps:** one `.entry` function in `stvec`, direct mode. From user mode the frame is on the kernel stack's top.
   From the kernel it's on whatever stack the kernel was on, which may be the one the stack check (`ebreak`) found
   full, so the entry only rewrites the frame and returns: its `sret` lands in `kernel_trap` on the hart's DoubleFault
@@ -56,9 +68,7 @@ What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x8
 
 ## Later Stages
 
-- **R4:** the AIA and the PLIC, Sstc's `stimecmp`, the other harts through HSM, IPIs, TLB shootdown by IPI; then
-  `TAKES_INTERRUPTS` is true. Another hart may take a page fault on a kernel mapping `map` just made, before Svvptc's
-  bounded time has passed; R4 retries such a fault rather than stopping.
-- **R5:** user mode, `ecall` system calls, floating-point and vector state, the debug triggers, virtio over PCI.
+- **R5:** user mode, `ecall` system calls, floating-point and vector state, the debug triggers, virtio over PCI, and
+  the stale-fault retry for user pages too.
 - **R6:** the RISC-V IOMMU, Zicfiss shadow stacks and Zicfilp landing pads; QEMU's CPU then needs `zicfilp=on` and
   `zicfiss=on`, which `rva23s64` leaves out.

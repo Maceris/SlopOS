@@ -148,6 +148,7 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
  *
  * @param system The shared state init_system set up, whose IDT this CPU loads.
  * @param cpu This CPU's state, which mustn't move afterwards: the GDT, TSS and gs base point into it.
+ * @param hardware_id Unused: the CPU reads its own.
  * @param carrier The CPU's carrier block, which entries load; kept, so it has to outlive the CPU's running.
  * @param context The context entries push; kept, so it has to outlive the CPU's running.
  * @param stacks The kernel stack and the critical events' stacks, their tops put in the TSS.
@@ -155,6 +156,7 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
 init_cpu :: fn(
     system : ptr[ArchSystem],
     cpu : ptr[mut ArchCpu],
+    hardware_id : u64,
     carrier #escaping : ptr[mut runtime.CarrierBlock],
     context #escaping : ptr[runtime.Context],
     stacks : ptr[arch_interface.CpuStacks]
