@@ -257,7 +257,12 @@ linker found beside the compiler before the PATH, Hemera's build putting its own
 compiler load, so its `bin` folder is the whole toolchain (`decisions/0200`). M20 (2026-11-27, `decisions/0201`): 20g's
 `RiscvSdtrig` CPU feature; 20k's callbacks from C on SlopOS, the runtime pointing each thread's thread pointer (fs
 base through the new `thread_set_pointer`, `TPIDR_EL0`, `tp`) at a word holding its carrier block, which the callback
-shim reads, as it reads its thread-local slot on Windows and Linux.
+shim reads, as it reads its thread-local slot on Windows and Linux. 20i and 20j's indexes and queries in std's
+SlopOS packages: dir's `DeclareIndex`, `DropIndex`, `Indexes`, `Query` and `LiveQuery`, files' `IndexOf`, `Index`,
+`IndexedKind` and `Features.indexes`, a `query` protocol package (a live query's channel, and a predicate's terms),
+and os's typed API over them (`declare_index[T]`, `where_number[T]`, `where_text[T]`, `both`, `either`, `negate`,
+`query_in`, `open_live_query`, `next_live_event`). A predicate's `Term` holds its kind and comparison as `u32`s, as a
+Relative's items are plain data, no enums (friction: the server checks each one by hand that the validator would).
 
 ## 4. Features That Look Like a Strong Fit
 

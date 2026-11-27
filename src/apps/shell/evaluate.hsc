@@ -420,6 +420,9 @@ call :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, 
     if tree.text == "grants" {
         return kept_grants(shell, tree)
     }
+    if tree.text == "query" {
+        return query_files(shell, tree)
+    }
     if tree.text == "trace" {
         return trace_system(shell, tree)
     }

@@ -81,6 +81,7 @@ ORDER :: string.[
     "the_system_volume_reads_writes_and_moves_files",
     "typed_files_keep_their_type",
     "transactions_replace_commit_conflict_and_undo",
+    "indexes_answer_queries_and_live_queries_follow_commits",
     "time_zones_read_from_the_system_volume",
     "the_sealed_volume_opens_only_with_its_passphrase",
     "links_reach_another_volume_and_grant_nothing_further",

@@ -20,6 +20,10 @@
  * Snapshots (decisions/0179) are in snapshots.hsc: taken, listed and opened through dir, on its own volume's
  * connection to the container service, and a snapshot's tree served read only beside the live one, with its keys.
  *
+ * Indexes and queries (decisions/0201's 20i and 20j) are in indexes.hsc and queries.hsc: indexes declared through dir
+ * and kept by slopfs in the volume's tree, made again for what each commit changed, and queries over them, a page at a
+ * time or live, on a connection of their own that each commit feeds.
+ *
  * Loans (Perf's Pc, decisions/0037, 0127, 0130): a client may lend a dir connection a CPU budget (Lend), which what's
  * opened through it has too. Requests are served one at a time, always from the connection whose loan has the highest
  * priority of those with one waiting, the server's thread running on that loan while it serves it; a connection
@@ -36,6 +40,7 @@ import file from "std:os/slop_os/file"
 import file_set from "std:os/slop_os/file_set"
 import files from "std:os/slop_os/files"
 import grant from "std:os/slop_os/grant"
+import query from "std:os/slop_os/query"
 import read_only_dir from "std:os/slop_os/read_only_dir"
 import read_only_file from "std:os/slop_os/read_only_file"
 import log_line from "../../log_line"
@@ -89,6 +94,8 @@ Kind :: enum {
     Claim,
     /** Its connection to the storage manager for stored links (links.hsc). */
     Links,
+    /** A live query, speaking query (queries.hsc). */
+    LiveQuery,
 }
 
 /** A connection: the object it's to, its informational name (a set's pattern), and a file's buffer, mapped here. */
@@ -140,6 +147,8 @@ Connection :: struct {
     loan : slop_os.CpuBudget,
     /** The loan's priority, which orders whose request is served next; 0 without one. */
     priority : u32,
+    /** A live query's slot in the server's lives (queries.hsc). */
+    live : usize,
 }
 
 /**
@@ -221,6 +230,14 @@ Server :: struct {
     resealing : u32,
     /** Where the next step of sealing again walks from. */
     reseal_from : slopfs.Key,
+    /** The live queries (queries.hsc), by slot. */
+    lives : Live[MAX_LIVE],
+    /** The objects the commit being made changed, the first committed_count, kept for the live queries. */
+    committed : u64[slopfs.MAX_CHANGED],
+    /** How many of committed are kept; 0 when no live query is open. */
+    committed_count : usize,
+    /** Whether the commit being made changed more than was noted, or moved a directory, so live queries resync. */
+    committed_all : bool,
 }
 
 /**
@@ -524,11 +541,15 @@ release :: fn(context : rawptr, address : u64, blocks : u64, owner : u64, birth 
  * Make what's changed durable: the volume's dirty nodes written, every write done, then its record committed by the
  * container service, which makes it durable with a checkpoint.
  *
+ * What it changed is indexed again as it's written (slopfs.write_volume), and once it's committed, each live query is
+ * given what changed (queries.hsc).
+ *
  * @param server The server, whose commit_at is cleared and whose next transaction is the one the container gives.
  * @return Whether it was committed; a failure marks the volume failed, logged, and every later commit fails too.
  */
 commit :: fn(server : ptr[mut Server]) -> bool {
     server.commit_at = 0
+    keep_committed(server)
     record := slopfs.VolumeRecord.{}
     match slopfs.write_volume(server.volume) {
         case Ok(written) => record = written
@@ -541,6 +562,7 @@ commit :: fn(server : ptr[mut Server]) -> bool {
     match ask(server, .Commit(record)) {
         case Committed(next) => {
             server.nodes.transaction = next
+            feed_lives(server)
             return true
         }
         case _ => {
@@ -837,6 +859,9 @@ drop :: fn(server : ptr[mut Server], index : usize) {
     else if kind == .Replacement {
         _ = slopfs.release_orphan(server.volume, object)
     }
+    else if kind == .LiveQuery {
+        end_live(server, connection.live)
+    }
     else if kind == .File || kind == .ReadOnlyFile {
         release_if_unused(server, object, index)
     }
@@ -994,6 +1019,9 @@ serve :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incoming]
     }
     else if kind == .Links {
         serve_links(server, index, into)
+    }
+    else if kind == .LiveQuery {
+        serve_live(server, index, into)
     }
 }
 
@@ -1567,6 +1595,11 @@ serve_dir :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incom
                 }
             }
             case Indexes(cursor) => response^ = index_listed(volume, cursor, &out)
+            // Queries over the indexes, of what's beneath this directory (queries.hsc)
+            case Query(ask) => response^ = query_answer(server, directory, into, ask, &out)
+            case LiveQuery(predicate) => {
+                response^ = live_query(server, directory, into, predicate, name_of(&server.connections[index]))
+            }
         }
         _ = dir.send_response(end, server.port, &out)
     }
