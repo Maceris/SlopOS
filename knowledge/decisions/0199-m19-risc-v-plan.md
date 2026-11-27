@@ -264,3 +264,59 @@ In seven stages:
   its input stopping after the terminal started, just after `device interrupt 16 arrived, routed from nothing`, and
   SSH, whose scp never connected after sftp. Both look like a device's interrupt lost under load; x86-64's KVM audio
   test logged the same warning once when it was flaky. R7 looks for why an MSI comes to a hart with no route.
+
+## As Built: R6 (2026-11-26)
+- **The RISC-V IOMMU** (`src/iommu/riscv`), as SMMUv3's is: first-stage Sv48 tables for each domain, iohgatp Bare,
+  the domain ID its PSCID; 47-bit I/O addresses, Sv48's lower half, as a device's addresses aren't sign-extended; a
+  two-level device directory, its leaves made as devices are attached; the command queue (`IOTINVAL.VMA`,
+  `IODIR.INVAL_DDT`, `IOFENCE.C`) and the fault queue, which L2 reads at CPU 0's ticks. It remaps no interrupts:
+  MSIs are translated as other DMA (msiptp Off), and L2 maps the harts' supervisor interrupt files into each domain.
+- **`arch_interface.msi_doorbell` gives pages** (`MsiDoorbell`, an address and a count): RISC-V's are the IMSIC's
+  files, from the lowest hart's to the highest's, where AArch64's ITS has one page. A device behind the IOMMU can
+  still raise any identity on any hart, as the IMSIC keeps nothing per device; only the IOMMU's MRIF mode would, which
+  isn't driven.
+- **The platform service** takes a RISC-V IOMMU from the host bridge's `iommu-map` as it takes an SMMUv3, a platform
+  device (`riscv,iommu`) by its reg or a PCI function (`riscv,pci-iommu`) by its BAR 0, which it makes the function
+  decode and master, and gives no client.
+- **QEMU's IOMMU**, three things found:
+  - `virt`'s `iommu-sys` is turned off whenever there's a dynamic sysbus device, as `ramfb` is, after the device was
+    made, so it's there but left out of the device tree. `boot.py` gives `virt` the PCI one (`riscv-iommu-pci`, at slot
+    0x1f, so no other device moves), on in bare mode at reset (`off=false`), as edk2 doesn't drive it.
+  - Its walk (11.1) checks U on every entry, a table's too, as a request without a process ID is user mode's; so the
+    tables' entries have U set, which the privileged spec reserves, and later QEMUs ignore. It also takes a page's PPN
+    with its PBMT bits, so the pages have no PBMT, the PMAs making the interrupt files device memory.
+  - Its translation cache keeps a page with the permission of the access that first used it, so a device that read a
+    page first had its writes to it dropped: `boot.py` turns the cache off (`ioatc-limit=0`).
+- **Zicfilp's landing pads**, in Hemera: `lpad 0` at every function's entry that can be reached indirectly and after
+  every call, the call aligned so its landing pad is at a 4-byte boundary (Hemera's LLVM patch 0010, from LLVM's own
+  `returns_twice` call), and in the generated assembly: the switches' entries, the foreign shims', morestack's, and
+  where the resume loop re-enters. In the kernel from `init_cpu`, the SBI's FWFT `LANDING_PAD`; in user mode for each
+  thread whose program has them (`senvcfg.LPE`).
+- **Zicfiss's shadow stacks**, in Hemera: `sspush ra` and `sspopchk ra` in every function that saves its return
+  address (LLVM's `hw-shadow-stack`); the fiber switches keep `ssp`, as AArch64's keep the GCS, and `fiber_reenter`
+  pushes the loop's return. In the kernel, a shadow stack for each hart from L2, turned on (FWFT `SHADOW_STACK`) at its
+  first idle or return to user mode, in those functions' own bodies, since a function that returned across it would
+  check a return that was never pushed; user mode's for each thread (`senvcfg.SSE`). A hart has one `ssp` for every
+  mode, so the trap entry keeps user mode's in the `TrapScratch` and starts the kernel's from its top, and returning
+  puts it back (Hemera's `TrapScratch.kernel_shadow_stack` and `user_shadow_stack`).
+- **QEMU's `sspopchk`** (11.1) is run wrongly: its translation updates the pc it tracks only where the check fails,
+  so after one that passes the rest of the translation block takes its pc from the wrong instruction, a pc-relative
+  branch's or `auipc`'s, or the block's own end where it doesn't end in a jump. The supervisor's `start_terminal`,
+  whose epilogue ended at a page boundary, was found running that epilogue a second time, reading its caller's frame,
+  and stopped by its shadow stack; the services crashed so in most boots. QEMU has since updated the pc where the check
+  passes too. Every RISC-V target with shadow stacks is built with Hemera's LLVM's `branch-to-sspopchk`
+  (`build.hsc`'s `RISCV_FEATURES`; LLVM patch 0011), a `beq zero, zero, .+4` to each epilogue's `sspopchk`, which ends
+  QEMU's block so the `sspopchk` begins the next. An earlier reading blamed `c.sspush` and built without Zcmop, which
+  only moved code until the bug hid; that's undone.
+- **Budgets:** std's `slop_os.shadow_stacks_budget`, which a launcher adds to the budget it was asked for, counted
+  CET's and the GCS's shadow stacks but not Zicfiss's, so on RISC-V every program had 76 KiB a thread less than it
+  was given: the disk check's clone test ran out growing a file's bytes past 128 KiB. It counts Zicfiss now.
+- **The linker:** RISC-V's property note (`CFI_LP_UNLABELED`, `CFI_SS`), which the ELF loader reads to give a process
+  its landing pads and shadow stacks, is kept by lld only where it knows it: lld 19, Visual Studio's, drops it, and the
+  program then runs without either. The lld Hemera's own LLVM builds (its `lld` target) keeps it; it has to be the
+  `ld.lld` on the PATH for RISC-V builds. Hemera's build cache now keys a program by the linker it finds too, as one
+  built with the other lld was taken from the cache.
+- **Not yet:** the IOMMU's interrupt remapping (MRIF), and hardware debugging (the SBI's debug triggers).
+- **Tests:** the DMA test runs on RISC-V; the kernel's three control-flow tests (a tampered return refused by the
+  shadow stack, a branch to no landing pad, a write to its shadow stack, an access fault on RISC-V) and a boot on a CPU
+  without either; and `test_control`'s three in user mode, its hardware debugger test skipped on RISC-V.

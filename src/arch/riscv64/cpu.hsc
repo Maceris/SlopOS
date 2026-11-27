@@ -71,6 +71,14 @@ ArchCpu :: struct #align(64) {
      * The IPIs sent to this hart by the SBI and not yet taken, a bit for each IpiKind, set atomically by the senders.
      */
     ipis : u32,
+    /** Whether the kernel's landing pads are on, from init_cpu (hardening.hsc, enable_landing_pads). */
+    landing_pads : bool,
+    /** The top of the hart's kernel shadow stack, from set_kernel_shadow_stack; 0 until then, or without one. */
+    kernel_shadow_top : u64,
+    /** Whether the kernel's shadow stacks are on, from the hart's first idle or return to user mode. */
+    shadow_stacks_on : bool,
+    /** senvcfg for the thread returning to user mode: its landing pads and shadow stack (load_user_control_flow). */
+    user_envcfg : u64,
     /** The kernel's deadline on this hart, a time CSR value (set_deadline), or NO_DEADLINE when it has none. */
     deadline : u64,
     /**
@@ -116,6 +124,8 @@ ArchSystem :: struct {
     timebase : u64,
     /** The vector registers' length in bytes, vlenb, read once by init_system; 0 without V. */
     vlenb : u64,
+    /** Whether the kernel and user threads can have shadow stacks: Zicfiss, and FWFT's SHADOW_STACK (hardening.hsc). */
+    shadow_stacks : bool,
     /** Which interrupt controller the harts have, found in the device tree (interrupts.hsc). */
     controller : Controller,
     /** The harts the device tree lists, by hart ID, with their place on the interrupt controller (interrupts.hsc). */
@@ -246,6 +256,7 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
     }
     system.features = detect_features(firmware, direct_map_offset)
     system.asid_bits = probe_asid_bits()
+    find_shadow_stacks(system)
     if has(&system.features, .RiscvV) {
         // vlenb, which only reads with sstatus.VS on
         _ = riscv64.csrrs(.SSTATUS, SSTATUS_VS_INITIAL)
@@ -362,7 +373,7 @@ init_cpu :: fn(
     cpu.active_line = NO_ACTIVE_LINE
     cpu.deadline = NO_DEADLINE
     cpu.test_deadline = NO_DEADLINE
-    _ =riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SIE)
+    _ = riscv64.csrrc(.SSTATUS, riscv64.SSTATUS_SIE)
     riscv64.csrw(.SIE, 0)
     riscv64.write_tp(cast[rawptr](cpu))
     riscv64.csrw(.SSCRATCH, 0)
@@ -372,6 +383,8 @@ init_cpu :: fn(
     // User mode reads the time CSR, until a recorded process's thread runs (set_counter_trap)
     riscv64.csrw(.SCOUNTEREN, COUNTEREN_TIME)
     init_hart_controller(system, cpu)
+    enable_landing_pads(system, cpu)
+    riscv64.csrw(.SENVCFG, 0)
     riscv64.csrw(.SIE, SIE_SOFTWARE | SIE_TIMER | SIE_EXTERNAL)
 }
 

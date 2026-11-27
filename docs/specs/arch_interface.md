@@ -377,12 +377,16 @@ route_msi : fn(source: u32, event: u32, cpu_hardware_id: u64, id: InterruptId) -
 // Source's event no longer delivered.
 unroute_msi : fn(source: u32, event: u32) : ---
 
+// The pages msi_doorbell gives: the first's physical address, 4 KiB aligned, and how many, at least 1.
+MsiDoorbell :: struct { address: PhysicalAddress, pages: u32 }
+
 /*
- * The page devices write their MSIs to as memory, which an IOMMU translating their DMA must map into each of their
- * domains, at its own address, for the MSIs to arrive (AArch64: the ITS's GITS_TRANSLATER); null where MSIs aren't
- * DMA an IOMMU translates (x86-64, whose interrupt range VT-d takes as interrupts).
+ * The pages devices write their MSIs to as memory, which an IOMMU translating their DMA must map into each of their
+ * domains, at their own addresses, for the MSIs to arrive (AArch64: the ITS's GITS_TRANSLATER's page; RISC-V: the
+ * IMSIC's supervisor interrupt files, from the lowest hart's to the highest's); null where MSIs aren't DMA an IOMMU
+ * translates (x86-64, whose interrupt range VT-d takes as interrupts, and RISC-V with a PLIC).
  */
-msi_doorbell : fn() -> PhysicalAddress? : ---
+msi_doorbell : fn() -> MsiDoorbell? : ---
 
 // Acknowledge id to the interrupt controller.
 end_of_interrupt : fn(id: InterruptId) : ---
@@ -823,7 +827,7 @@ virtual timer's interrupt and the PL011.
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, so codes read as the debug exit device's do |
 | `reset` and `power_off` | PSCI's `SYSTEM_RESET` and `SYSTEM_OFF`, by HVC or SMC as the device tree's `psci` node's method says; `can_power_off` is true with one |
 | `test_device` | SPI line 100 of the distributor, which nothing on QEMU `virt` uses, edge-triggered; `test_device_interrupts` pends it through `GICD_ISPENDR`, and again each time it's acknowledged and at every timer interrupt, until it's stopped |
-| `msi_doorbell` | The page of the ITS's `GITS_TRANSLATER`, which an SMMU maps into each domain |
+| `msi_doorbell` | One page, the ITS's `GITS_TRANSLATER`'s, which an SMMU maps into each domain |
 | MSIs | Through the GICv3's ITS, found in the device tree (`arm,gic-v3-its`): `init_msi` gives it flat device and collection tables and a command queue, and every redistributor the one LPI property table and a pending table of its own, with LPIs on; each redistributor is a collection. `add_msi_device` maps a device's translation table (`MAPD`); `route_msi` gives the event an LPI of its own (8192 of them, from 8192), enabled, mapped to the CPU's collection (`MAPTI`, `INV`), and routes it to the kernel's ID as an SPI is. The message is the event's number, to `GITS_TRANSLATER` |
 | Interrupt masking | In the kernel, `ICC_PMR_EL1` at `0x80` with PSTATE's I clear, so only the pseudo-NMI's priority (`0x20`) passes; in user mode and idle, `0xf0`, letting every interrupt's (`0xa0`) through. Each exception takes an IRQ's ID from `ICC_IAR1_EL1` first, which the kernel's mask would hide, then sets that mask and clears I; every `eret` to user mode or idle sets I and the mask back to `0xf0` first (`0185`) |
 | `send_nmi` | SGI 4, the pseudo-NMI, at priority `0x20`; its entry returns to what it interrupted, kernel code included, the interrupted mask restored |
@@ -841,12 +845,12 @@ PLIC, or the AIA's IMSIC and APLIC.
 |---|---|
 | `ArchSystem` | The early console's word, the harts' features, the ASID bits `satp` keeps, the device blocks L1 maps, the timebase, which controller the harts have and each hart's place on it (its PLIC context, or its IMSIC file and index), the PLIC's or the APLIC's registers, and the routes from PLIC lines to the kernel's IDs |
 | `UserRegisters` | `riscv64.RegisterFrame` |
-| `ArchCpu` | `riscv64.TrapScratch` first (`tp` points here in the kernel, `sscratch` in user mode), then the carrier block and context for entries, the kernel stack's limit and top, the trap stack's top and limit, the early console's word, the `ArchSystem`, the hart's ID (`init_cpu`'s `hardware_id`), its PLIC context or IMSIC file, the PLIC line it claimed, and the kinds of the SBI's IPIs sent it |
+| `ArchCpu` | `riscv64.TrapScratch` first (`tp` points here in the kernel, `sscratch` in user mode), then the carrier block and context for entries, the kernel stack's limit and top, the trap stack's top and limit, the early console's word, the `ArchSystem`, the hart's ID (`init_cpu`'s `hardware_id`), its PLIC context or IMSIC file, the PLIC line it claimed, and the kinds of the SBI's IPIs sent it, the kernel's deadline and the test device's, and its control-flow integrity: its landing pads, its kernel shadow stack's top and whether shadow stacks are on, and the `senvcfg` the thread returning to user mode gets |
 | `detect_features` | The device tree's first cpu node: its `riscv,isa-extensions`, or its `riscv,isa` string, and its `mmu-type`. The baseline is RVA23 as the kernel and programs are built for it, with Sv48 |
 | `init_system` | The early console's registers kept for the kernel's own tables; the features; the ASID bits, found by writing all ones to `satp`'s ASID field and reading it back; `/cpus`' `timebase-frequency`; and the controller, mapped through the direct map: an IMSIC with supervisor files (`riscv,imsics`, external interrupt 9) and the APLIC whose `msi-parent` it is, else a PLIC (`sifive,plic-1.0.0`), each hart by its interrupt controller's cpu node |
-| `init_cpu` | `tp` at the `ArchCpu`; `sscratch` 0; `stvec` at the entry, direct mode; `sstatus.SIE` clear but `sie`'s software, timer and external interrupts on; `stimecmp` at its largest; `sstatus.SUM`, `FS` and `VS` clear; the hart's IMSIC file delivering every identity (`eidelivery`, `eithreshold`, `eie`, through `siselect`), or its PLIC context's threshold 0 and every line disabled there |
+| `init_cpu` | `tp` at the `ArchCpu`; `sscratch` 0; `stvec` at the entry, direct mode; `sstatus.SIE` clear but `sie`'s software, timer and external interrupts on; `stimecmp` at its largest; `sstatus.SUM`, `FS` and `VS` clear; `scounteren`'s `TM`; the hart's IMSIC file delivering every identity (`eidelivery`, `eithreshold`, `eie`, through `siselect`), or its PLIC context's threshold 0 and every line disabled there; the kernel's landing pads on, the SBI's FWFT `LANDING_PAD` |
 | `AddressSpaceTag` | ASID: as many as `satp` keeps bits for, up to 65536 |
-| Paging | Sv48, one root for both halves, as on x86-64: the kernel's table gets all 256 tables of the kernel half up front, and other address spaces copy its top-level entries. A non-leaf entry has no bits to spare, so `unmap` looks for a second valid entry to know a table emptied. Every leaf has A and D set, as Svade faults on a clear one; `take_accessed` is always false. Kernel mappings are global, user ones `U` with their ASID. Svpbmt: `WriteBack` is the physical memory attributes (0), `WriteCombining` NC, `Device` IO; a changed memory type is taken out and fenced before the new one goes in. A shadow stack's page is W alone, Zicfiss's encoding |
+| Paging | Sv48, one root for both halves, as on x86-64: the kernel's table gets all 256 tables of the kernel half up front, and other address spaces copy its top-level entries. A non-leaf entry has no bits to spare, so `unmap` looks for a second valid entry to know a table emptied. Every leaf has D set; A is kept by software, as Svade faults on a clear one: a kernel leaf's is set, a user leaf's is cleared by `take_accessed`, and the entry sets it again on the fault the next access takes, and retries it. Kernel mappings are global, user ones `U` with their ASID. Svpbmt: `WriteBack` is the physical memory attributes (0), `WriteCombining` NC, `Device` IO; a changed memory type is taken out and fenced before the new one goes in. A shadow stack's page is W alone, Zicfiss's encoding |
 | TLB | `sfence.vma` by address and ASID for user pages, by address alone for the kernel's global ones, by ASID for a tag, and whole for everything. `map` fences the new entry on the calling hart, which may have walked it while it was invalid. The first `activate` on a hart flushes everything |
 | Entry | One `.entry` function, which `stvec` points at. From user mode it runs on the kernel stack's top and never returns: `ecall` is a system call, a hardware error (code 19) a machine check, an interrupt decoded, any other exception the thread's fault. In the kernel, the entry only rewrites the frame and returns, its `sret` landing on a fresh stack: an exception in `kernel_trap` on the CPU's DoubleFault critical stack, since the frame is on the stack the trap came from, which may be the one the stack check found full; an interrupt, which comes only while idle, in `idle_interrupt` on the kernel stack's top. The interrupted `s0` and `ra` stay, so a stack trace goes on through the faulting code. A page fault on a kernel mapping the tables now allow, which a hart may have walked before another made it, is fenced and retried. A page fault is `present` if the active tables map the address |
 | Stacks | A stack's limit leaves room below it for the guard and for a trap's frame (288 bytes), since a trap in the kernel builds its frame wherever the stack pointer is |
@@ -856,14 +860,18 @@ PLIC, or the AIA's IMSIC and APLIC.
 | `test_exit` | QEMU's semihosting, `SYS_EXIT` with `(code << 1) \| 1`, as on AArch64 |
 | `reset` and `power_off` | The SBI's system reset extension, a warm reboot and a shutdown; `can_power_off` is true where the SBI has it |
 | `send_nmi`, `nmi_register_name` | RISC-V's supervisor has no NMI: false, and `"?"` |
-| `log_hardening` | Zicfilp and Zicfiss, neither used yet; nothing in the ISA says which transient-execution issues apply |
+| `log_hardening` | Zicfilp and Zicfiss, and whether the firmware's FWFT lets the kernel have each; nothing in the ISA says which transient-execution issues apply |
+| User mode | `ecall` system calls, the number in `a7`, arguments in `a0` to `a5`, results in `a0` to `a2`; `sepc` moved past the `ecall` (4 bytes) before the call. `return_to_user` through `riscv64.return_to_user`, `sscratch` the hart's `TrapScratch`. A debugger's 33 registers are `x0` to `x31`, then `pc`. A trapped `rdtime` (`scounteren.TM` clear) is a Protection fault, which `emulate_counter_read` answers |
+| Vector state | Eager, by `riscv64.save_floating` and `save_vector`: `f0` to `f31` and `fcsr`, then `v0` to `v31` and `vstart`, `vtype`, `vl` and `vcsr`. `sstatus.FS` and `VS` are off in the kernel, Initial in user mode |
+| `set_debug` | Takes no slots and no stepping yet: the SBI's debug triggers aren't driven |
+| Control-flow integrity | Zicfilp's landing pads and Zicfiss's shadow stacks, supervisor mode's turned on by the SBI's FWFT (`LANDING_PAD` at `init_cpu`, `SHADOW_STACK` at the hart's first idle or return to user mode, in those functions' own bodies, which never return), user mode's by `senvcfg`'s `LPE` and `SSE` for each thread. One `ssp` serves every mode: a trap from user mode keeps user mode's in the `TrapScratch` and starts the kernel's shadow stack from its top, and a return to user mode puts it back. A shadow-stack fault and a branch to no landing pad are software-check exceptions (18); an ordinary store to a shadow stack's page is an access fault, a Protection fault |
 | Interrupts | With the AIA every interrupt is a message: the kernel's device IDs are each hart's IMSIC identities, 16 up to `riscv,num-ids`, claimed through `stopei`, and IPIs are identities 1 to 3 written to the target's file. With a PLIC the device IDs are the kernel's own, 32 to 255, translated through routes from the line a hart claims, which `end_of_interrupt` completes; IPIs are the SBI's `sbi_send_ipi`, their kinds in the target's `ArchCpu` |
 | Wired interrupts | The PLIC (`ControllerKind.Plic`), every line at priority 1 and disabled in every supervisor context, enabled in its routed hart's; or the APLIC (`Aplic`), delivering by message, each source inactive until it's routed, its target the hart's IMSIC index and the ID as its identity, masked through `clrienum` and `setienum` |
-| MSIs | Straight to the IMSIC, which keeps nothing per device: `route_msi`'s message is the hart's file's `seteipnum_le` and the ID. A PLIC takes none (`msi_device_memory` is null). `msi_doorbell` is null until the IOMMU comes with R6 |
-| Timer | Sstc's `stimecmp`, at `/cpus`' `timebase-frequency` |
-| `idle` | `sstatus.SIE` set, then `wfi` in a loop: the interrupt's entry starts again at the kernel stack's top |
-| `test_device` | With the AIA, the APLIC's last source, pended through `setipnum`; with a PLIC, the UART's line, its transmitter's interrupt armed. Either is pended again at each tick of the hart that started it |
-| Not yet | User mode, system calls, debugging and vector state (R5); interrupt remapping and control-flow integrity (R6); `test_nmi` (there's no NMI) |
+| MSIs | Straight to the IMSIC, which keeps nothing per device: `route_msi`'s message is the hart's file's `seteipnum_le` and the ID. A PLIC takes none (`msi_device_memory` is null). `msi_doorbell` is the harts' supervisor interrupt files, from the lowest's to the highest's, which the RISC-V IOMMU translates as other DMA; it remaps none, so `route_wired_remapped` does nothing |
+| Timer | Sstc's `stimecmp`, at `/cpus`' `timebase-frequency`, holding the earlier of the kernel's deadline and the test device's |
+| `idle` | The kernel shadow stack from its top, then `sstatus.SIE` set and `wfi` in a loop: the interrupt's entry starts again at the kernel stack's top |
+| `test_device` | With the AIA, the APLIC's last source, pended through `setipnum`; with a PLIC, the UART's line, its transmitter's interrupt armed. Either is pended again a hundred times a second, by a deadline of its own on the hart that started it, as the kernel's stop while it's idle |
+| Not yet | Hardware breakpoints, steps and watchpoints (the SBI's debug triggers); `test_nmi` (there's no NMI) |
 
 ## Not Covered
 

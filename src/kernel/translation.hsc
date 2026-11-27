@@ -363,43 +363,51 @@ translate_device :: fn(
 }
 
 /**
- * Map the MSI doorbell into a new domain at its own address, where MSIs are writes the IOMMU translates.
+ * Map the MSI doorbell's pages into a new domain at their own addresses, where MSIs are writes the IOMMU translates.
  *
- * It's mapped writable device memory, its tables charged to the domain, and its page is kept out of the domain's other
- * addresses.
+ * They're mapped writable device memory, their tables charged to the domain, and their pages are kept out of the
+ * domain's other addresses.
  *
  * @param kernel The kernel, whose frame cache gives the tables, charged to the domain.
  * @param registered The IOMMU, whose lock the caller holds.
- * @param domain The domain, made on the IOMMU just now; its reserved is set to the doorbell's page.
- * @return Null once it's mapped, or when the architecture has no doorbell to map; InvalidAddress if the doorbell is
- *     past the domain's addresses; the IOMMU's error, NeedFrames among them when no frame or budget was left.
+ * @param domain The domain, made on the IOMMU just now; its reserved and reserved_bytes are set to the doorbell's
+ *     pages.
+ * @return Null once they're mapped, or when the architecture has no doorbell to map; InvalidAddress if the doorbell
+ *     reaches past the domain's addresses; the IOMMU's error, NeedFrames among them when no frame or budget was left,
+ *     with the pages before it left mapped, as the domain is released whole.
  */
 map_doorbell :: fn(
     kernel : ptr[mut Kernel],
     registered : ptr[mut RegisteredIommu],
     domain : ptr[mut DmaDomain]
 ) -> iommu_interface.MapError? {
-    doorbell :: cast[u64](arch.msi_doorbell() or_return null)
-    if doorbell >= domain.address_limit {
+    doorbell :: arch.msi_doorbell() or_return null
+    first :: cast[u64](doorbell.address)
+    bytes :: cast[u64](doorbell.pages) * frames.FRAME_SIZE
+    if first >= domain.address_limit || bytes > domain.address_limit - first {
         return iommu_interface.MapError.InvalidAddress
     }
-    domain.reserved = doorbell
+    domain.reserved = first
+    domain.reserved_bytes = bytes
     tables : iommu_interface.TableFrames
     defer give_back_iommu_tables(kernel, &tables, cast[u64](domain))
-    loop {
-        match iommu_unit.map(
-            &registered.unit,
-            &domain.unit,
-            doorbell,
-            cast[iommu_interface.PhysicalAddress](doorbell),
-            true,
-            true,
-            &tables
-        ) {
-            case Ok => break
-            case Error(error) => {
-                if error != .NeedFrames || !refill_iommu_tables(kernel, &tables, cast[u64](domain)) {
-                    return error
+    for page in 0..<cast[u64](doorbell.pages) {
+        at :: first + page * frames.FRAME_SIZE
+        loop {
+            match iommu_unit.map(
+                &registered.unit,
+                &domain.unit,
+                at,
+                cast[iommu_interface.PhysicalAddress](at),
+                true,
+                true,
+                &tables
+            ) {
+                case Ok => break
+                case Error(error) => {
+                    if error != .NeedFrames || !refill_iommu_tables(kernel, &tables, cast[u64](domain)) {
+                        return error
+                    }
                 }
             }
         }
@@ -792,11 +800,11 @@ take_device_addresses :: fn(domain : ptr[mut DmaDomain], size : u64, top : u64) 
             return range.start
         }
     }
-    // Past the doorbell's page, if it's in the way
+    // Past the doorbell's pages, if they're in the way
     if domain.reserved != 0
-        && domain.next_address < domain.reserved + frames.FRAME_SIZE
+        && domain.next_address < domain.reserved + domain.reserved_bytes
         && domain.next_address + size > domain.reserved {
-        domain.next_address = domain.reserved + frames.FRAME_SIZE
+        domain.next_address = domain.reserved + domain.reserved_bytes
     }
     // Below the high range, if there is one: it's handed out from its free range
     ceiling :: if domain.high_start != 0 && domain.high_start < top { domain.high_start } else { top }

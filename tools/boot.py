@@ -364,10 +364,20 @@ ARCHITECTURE = "x86_64"
 
 # Whether RISC-V's virt has the AIA, an IMSIC for each hart and an APLIC, rather than the PLIC (--aia, decisions/0199)
 RISCV_AIA = False
+# Whether RISC-V's virt has a RISC-V IOMMU, which the PCI host's iommu-map names; on but with --no-iommu. It's the PCI
+# one, not virt's iommu-sys, which virt turns off whenever there's a dynamic sysbus device, as ramfb is, and then leaves
+# out of the device tree though it's there
+RISCV_IOMMU = True
+# Where the PCI IOMMU is, its own slot, so the other devices' don't move from where they are without it; and its
+# translation cache off (ioatc-limit=0), as QEMU 11.1's caches a page with the access that first used it, so a device
+# that read a page first has its writes to it dropped; and on at reset in bare mode (off=false), passing DMA through
+# until the kernel turns its translation on, as edk2 doesn't drive it and couldn't read a boot disk otherwise
+RISCV_IOMMU_DEVICE = ["-device", "riscv-iommu-pci,addr=0x1f,ioatc-limit=0,off=false"]
 
 # QEMU's CPU for RISC-V when --cpu is left as it is: RVA23's supervisor profile, SlopOS's baseline (decisions/0199),
-# with Sv48 and Zkr, which the profile leaves optional and QEMU's model leaves out
-RISCV_DEFAULT_CPU = "rva23s64,sv48=on,zkr=on"
+# with Sv48 and Zkr, and Zicfilp's landing pads and Zicfiss's shadow stacks, which the profile leaves optional and
+# QEMU's model leaves out
+RISCV_DEFAULT_CPU = "rva23s64,sv48=on,zkr=on,zicfilp=on,zicfiss=on"
 
 
 def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, extra: list[str],
@@ -384,7 +394,8 @@ def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     if not variables.exists():
         shutil.copy(code.parent / "edk2-riscv-vars.fd", variables)
     command = [
-        str(qemu), "-M", "virt,acpi=off,pflash0=code,pflash1=variables" + (",aia=aplic-imsic" if RISCV_AIA else ""), "-m", "512M",
+        str(qemu), "-M", "virt,acpi=off,pflash0=code,pflash1=variables" + (",aia=aplic-imsic" if RISCV_AIA else "")
+, "-m", "512M",
         "-cpu", RISCV_DEFAULT_CPU if cpu == DEFAULT_CPU else cpu,
         "-blockdev", f"node-name=code,driver=file,filename={code},read-only=on",
         "-blockdev", f"node-name=variables,driver=file,filename={variables}", *cd,
@@ -395,6 +406,7 @@ def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
         # A framebuffer, through QEMU's ramfb, as x86-64's q35 has its VGA: edk2 draws its console there too, which makes the
         # console wider than the serial terminal's 80 columns alone, where long lines would wrap
         "-device", "ramfb",
+        *(RISCV_IOMMU_DEVICE if RISCV_IOMMU else []),
     ]
     if keys is not None:
         keys.thread.start()
@@ -1420,9 +1432,13 @@ class GuiLoginTest(CompositorTest):
             if not self.after(since, "[user] greeter: chose kept.txt for test_kept_grant", "choosing the file") \
                     or not self.run_form_and_close(since, "writing the file chosen"):
                 return
-            # The terminal: found by name, and Enter, its shell reading lines
+            # The terminal: found by name, and Enter, its shell reading lines. Its own focus and shell, after the find:
+            # test_kept_grant's form ran in a terminal too, whose lines would match at once and let the line typed
+            # next reach the launcher
+            since = self.mark()
             if not self.find("terminal", "[user] terminal_window: serving its shell", "starting the terminal") \
-                    or not self.after(0, "[user] compositor: focused 'Terminal'", "the terminal's window focused"):
+                    or not self.after(since, "[user] compositor: focused 'Terminal'", "the terminal's window focused") \
+                    or not self.after(since, "[user] shell: reading commands", "the terminal's shell reading"):
                 return
             # The user's keys listed at once, without the prompt (16e)
             since = self.mark()
@@ -2423,7 +2439,8 @@ def main() -> int:
                         help="the architecture to build and boot for")
     parser.add_argument("--no-kaslr", action="store_true", help="the same addresses every boot: no random kernel base or direct map")
     parser.add_argument("--no-iommu", action="store_true",
-                        help="no IOMMU: by default q35 has VT-d and virt an SMMUv3, and virtio devices this adds go through it")
+                        help="no IOMMU: by default q35 has VT-d, AArch64's virt an SMMUv3 and RISC-V's its RISC-V IOMMU, and "
+                             "virtio devices this adds go through it")
     parser.add_argument("--serial", type=Path, help="also keep the serial output in this file")
     parser.add_argument("--console-input", action="append", default=[],
                         help="a line to type into a virtio console, which this adds, once it shows its banner; may be repeated. "
@@ -2554,9 +2571,10 @@ def main() -> int:
                              "exit code 0 (roadmap B1, decisions/0132)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
-    global KVM_HOST, RISCV_AIA, ARCHITECTURE
+    global KVM_HOST, RISCV_AIA, RISCV_IOMMU, ARCHITECTURE
     KVM_HOST = arguments.kvm
     RISCV_AIA = arguments.aia
+    RISCV_IOMMU = not arguments.no_iommu
     ARCHITECTURE = arguments.arch
     if KVM_HOST is not None and arguments.arch != "x86_64":
         sys.exit("boot.py: --kvm boots x86-64 only")

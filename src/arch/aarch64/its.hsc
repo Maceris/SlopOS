@@ -411,15 +411,18 @@ init_msi :: fn(memory : arch_interface.PhysicalAddress) {
  * Give the page devices write their MSIs to (arch_interface.msi_doorbell), which an IOMMU translating their DMA
  * must map for the MSIs to arrive.
  *
- * @return The physical address of the 4 KiB page holding GITS_TRANSLATER, which a device's MSI is a write to; null
- *     until init_msi has set an ITS up.
+ * @return One page: the 4 KiB page holding GITS_TRANSLATER, which a device's MSI is a write to; null until init_msi
+ *     has set an ITS up.
  */
-msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
+msi_doorbell :: fn() -> arch_interface.MsiDoorbell? {
     its :: &current_system().its
     if !its.ready {
         return null
     }
-    return cast[arch_interface.PhysicalAddress]((its.physical + GITS_TRANSLATER) & ~cast[u64](0xfff))
+    return arch_interface.MsiDoorbell.{
+        address = cast[arch_interface.PhysicalAddress]((its.physical + GITS_TRANSLATER) & ~cast[u64](0xfff)),
+        pages = 1,
+    }
 }
 
 /**

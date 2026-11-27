@@ -13,12 +13,16 @@ import pci from "../../pci"
  * On x86-64 they're ACPI's DMAR's DMA remapping hardware units (DRHDs): one for all of a segment's devices but those
  * another covers (INCLUDE_PCI_ALL), or for its device scopes, each an endpoint or a bridge with everything behind it.
  * Scopes of I/O APICs and HPETs are for interrupt remapping (roadmap Dc). On AArch64 they're the SMMUv3s the host
- * bridge's iommu-map refers to: each entry a range of requester IDs, and the stream IDs they are to its SMMU.
+ * bridge's iommu-map refers to, and on RISC-V the RISC-V IOMMUs: each entry a range of requester IDs, and the stream
+ * IDs (an SMMU's) or device IDs (a RISC-V IOMMU's) they are to it. A RISC-V IOMMU may be a platform device, its
+ * registers its reg, or a PCI function on the host's bus (riscv,pci-iommu), its registers its BAR 0, which the
+ * function is made to decode, and to master its own DMA to its tables and queues, and which no client is given.
  */
 /*
  * SPEC: Intel Virtualization Technology for Directed I/O, Architecture Specification 4.1, §8.1 (DMAR), §8.3 (DRHD),
  * §8.3.1 (device scope)
- * SPEC: Linux's pci-iommu binding (iommu-map); its arm,smmu-v3 binding
+ * SPEC: Linux's pci-iommu binding (iommu-map); its arm,smmu-v3 and riscv,iommu bindings (riscv,iommu and
+ * riscv,pci-iommu); IEEE 1275's PCI bus binding, for a PCI node's reg
  */
 
 /** The byte offset of the DMAR's first remapping structure, past its header. */
@@ -256,11 +260,12 @@ on_host :: fn(host : ptr[pci.Host], bus : u8) -> bool {
 }
 
 /**
- * Register the SMMUv3s the host bridge's iommu-map refers to, each entry's requester IDs as streams from its base.
+ * Register the IOMMUs the host bridge's iommu-map refers to, SMMUv3s (arm,smmu-v3) and RISC-V IOMMUs (riscv,iommu),
+ * each entry's requester IDs as streams from its base.
  *
- * @param to The debug log, NO_HANDLE for none; an entry referring to no SMMUv3, and a range the kernel didn't take,
+ * @param to The debug log, NO_HANDLE for none; an entry referring to neither kind, and a range the kernel didn't take,
  *     are logged.
- * @param platform The platform capability, which each SMMU's registers are made and registered with.
+ * @param platform The platform capability, which each IOMMU's registers are made and registered with.
  * @param state The platform service's state, for the host bridge's segment.
  * @param blob Where the device tree blob is mapped, in the firmware tables' copy.
  * @return How many ranges of requester IDs the kernel took; 0 if the tree, a pci-host-ecam-generic bridge or its
@@ -276,17 +281,87 @@ from_iommu_map :: fn(to : slop_os.DebugLog, platform : slop_os.Platform, state :
         rid :: devicetree.cell(map, start) or_else 0
         stream :: devicetree.cell(map, start + 2) or_else 0
         count :: devicetree.cell(map, start + 3) or_else 0
-        smmu := devicetree.find_phandle(&tree, devicetree.cell(map, start + 1) or_else 0) or_else devicetree.Node.{}
-        compatible :: devicetree.property(&tree, &smmu, "compatible") or_else devicetree.Property.{}
-        if smmu.offset == 0 || !devicetree.lists(compatible, "arm,smmu-v3") {
-            log_line.write(to, "platform: iommu-map entry % refers to no SMMUv3", entry)
+        iommu := devicetree.find_phandle(&tree, devicetree.cell(map, start + 1) or_else 0) or_else devicetree.Node.{}
+        compatible :: devicetree.property(&tree, &iommu, "compatible") or_else devicetree.Property.{}
+        kind :: mapped_kind(compatible)
+        if iommu.offset == 0 || kind == null {
+            log_line.write(to, "platform: iommu-map entry % refers to no SMMUv3 or RISC-V IOMMU", entry)
             continue
         }
-        region :: devicetree.reg(&tree, &smmu, 0) or_else devicetree.Region.{}
+        region :: if devicetree.lists(compatible, "riscv,pci-iommu") {
+            pci_iommu_registers(to, state, &tree, &iommu)
+        }
+        else { devicetree.reg(&tree, &iommu, 0) or_else devicetree.Region.{} }
+        if region.size == 0 {
+            continue
+        }
         first :: cast[u32](state.host.segment) << 16 | (rid & 0xffff)
-        registered += register(to, platform, .Smmuv3, region.address, region.size, first, count, stream)
+        registered += register(to, platform, kind or_else .Smmuv3, region.address, region.size, first, count, stream)
     }
     return registered
+}
+
+/**
+ * Say which kind of IOMMU an iommu-map entry refers to, by its node's compatible.
+ *
+ * @param compatible The node's compatible property; an empty one is neither kind.
+ * @return Smmuv3 for arm,smmu-v3, RiscV for riscv,iommu and riscv,pci-iommu; null for anything else.
+ */
+mapped_kind :: fn(compatible : devicetree.Property) -> slop_os.IommuKind? {
+    if devicetree.lists(compatible, "arm,smmu-v3") {
+        return slop_os.IommuKind.Smmuv3
+    }
+    if devicetree.lists(compatible, "riscv,iommu") || devicetree.lists(compatible, "riscv,pci-iommu") {
+        return slop_os.IommuKind.RiscV
+    }
+    return null
+}
+
+/**
+ * Find a PCI IOMMU's registers: its function's BAR 0, as the firmware placed it, and make the function decode it and
+ * master its own DMA. The function is marked claimed, so no client is given it.
+ *
+ * @param to The debug log, NO_HANDLE for none; a node whose function isn't found, or has no BAR 0 placed, is logged.
+ * @param state The platform service's state: its functions, scanned and their BARs sized, and the host's windows.
+ * @param tree The device tree.
+ * @param node The IOMMU's node, a child of the host bridge's, whose reg's first cell is the function's phys.hi: its
+ *     bus in bits 23:16, its device in 15:11 and its function in 10:8.
+ * @return Its BAR 0 where the CPU sees it, and its size; size 0 when it isn't found or placed.
+ */
+pci_iommu_registers :: fn(
+    to : slop_os.DebugLog,
+    state : ptr[mut Platform],
+    tree : ptr[devicetree.Tree],
+    node : ptr[devicetree.Node]
+) -> devicetree.Region {
+    reg :: devicetree.property(tree, node, "reg") or_else devicetree.Property.{}
+    high :: devicetree.cell(reg, 0) or_else 0
+    bus :: cast[u8]((high >> 16) & 0xff)
+    device :: cast[u8]((high >> 11) & 0x1f)
+    function :: cast[u8]((high >> 8) & 7)
+    for i in 0..<state.count {
+        if i >= state.functions.count {
+            break
+        }
+        found :: &state.functions[i]
+        if found.bus != bus || found.device != device || found.function != function {
+            continue
+        }
+        bar :: found.bars[0]
+        if bar.pci == 0 || bar.size < 4096 {
+            log_line.write(to, "platform: the PCI IOMMU at %:%.% has no BAR 0 placed", bus, device, function)
+            return devicetree.Region.{}
+        }
+        found.claimed = true
+        pci.write_u16(
+            found.config,
+            pci.COMMAND,
+            pci.read_u16(found.config, pci.COMMAND) | pci.COMMAND_MEMORY | pci.COMMAND_BUS_MASTER
+        )
+        return devicetree.Region.{address = cpu_address(&state.host, bar.pci), size = bar.size}
+    }
+    log_line.write(to, "platform: the PCI IOMMU at %:%.% isn't on the host's buses", bus, device, function)
+    return devicetree.Region.{}
 }
 
 /**
@@ -296,7 +371,7 @@ from_iommu_map :: fn(to : slop_os.DebugLog, platform : slop_os.Platform, state :
  *
  * @param to The debug log, NO_HANDLE for none; registers that aren't device memory, or a range not taken, are logged.
  * @param platform The platform capability, which the registers' memory is made and registered with.
- * @param kind Which kind of IOMMU it is: VT-d or SMMUv3.
+ * @param kind Which kind of IOMMU it is: VT-d, SMMUv3 or the RISC-V IOMMU.
  * @param registers The IOMMU's registers' physical address.
  * @param size The IOMMU's registers' size in bytes.
  * @param first The range's first requester ID, its segment in the top 16 bits (slop_os.device_address).

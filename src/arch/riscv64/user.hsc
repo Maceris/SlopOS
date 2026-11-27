@@ -42,19 +42,26 @@ init_user_registers :: fn(registers : ptr[mut UserRegisters], start : ptr[arch_i
 
 /**
  * Make the sstatus a thread returns to user mode with: the hart's own, but for SPP clear (user mode), SPIE set (its
- * interrupts on), SIE and SUM clear, and floating point and vectors on.
+ * interrupts on), SIE and SUM clear, floating point and vectors on, and the thread's own SPELP.
  *
- * @param saved The thread's sstatus as saved, unused but for its record; what user mode may change of sstatus is none
- *     of
- *     these bits.
+ * @param saved The thread's sstatus as saved; only its SPELP is kept, whether it was trapped between an indirect
+ *     branch and the landing pad it must reach, which it's to reach still. User mode may change none of the rest.
  * @return The value for the frame's sstatus.
  */
 user_status :: fn(saved : u64) -> u64 {
     status :: riscv64.csrr(.SSTATUS)
     kept :: status
-        & ~(riscv64.SSTATUS_SPP | riscv64.SSTATUS_SIE | riscv64.SSTATUS_SUM | riscv64.SSTATUS_FS | riscv64.SSTATUS_VS)
-    return kept | riscv64.SSTATUS_SPIE | SSTATUS_FS_INITIAL | SSTATUS_VS_INITIAL
+        & ~(riscv64.SSTATUS_SPP
+            | riscv64.SSTATUS_SIE
+            | riscv64.SSTATUS_SUM
+            | riscv64.SSTATUS_FS
+            | riscv64.SSTATUS_VS
+            | SSTATUS_SPELP)
+    return kept | riscv64.SSTATUS_SPIE | SSTATUS_FS_INITIAL | SSTATUS_VS_INITIAL | (saved & SSTATUS_SPELP)
 }
+
+/** sstatus's SPELP (Zicfilp): a trap was taken expecting a landing pad, which sret expects again. */
+SSTATUS_SPELP : u64 : 1 << 23
 
 /**
  * Read which system call a thread made (arch_interface.syscall_number).
@@ -240,7 +247,8 @@ emulate_counter_read :: fn(registers : ptr[mut UserRegisters], instruction : u32
 
 /**
  * Return to user mode (arch_interface.return_to_user): sstatus made a user one (user_status), sscratch the hart's
- * TrapScratch, with the kernel stack's top for the next trap, then every register loaded and sret.
+ * TrapScratch, with the kernel stack's top for the next trap, and its kernel shadow stack's, turned on the first time
+ * (hardening.hsc), the thread's senvcfg set, then every register loaded, user mode's ssp put back, and sret.
  *
  * @param registers The thread's registers.
  */
@@ -249,6 +257,18 @@ return_to_user :: fn(registers : ptr[UserRegisters]) #never_returns {
     frame := registers.frame
     frame.sstatus = user_status(frame.sstatus)
     cpu.scratch.kernel_stack = cpu.kernel_stack_top
+    /*
+     * The kernel shadow stack from its top, turned on the first time, here rather than in a function: one returning
+     * across it would check, against the new stack, a return pushed before it (hardening.hsc)
+     */
+    if cpu.kernel_shadow_top != 0 && !cpu.shadow_stacks_on {
+        cpu.shadow_stacks_on = riscv64.sbi_call(SBI_FWFT, SBI_FWFT_SET, FWFT_SHADOW_STACK, 1, 0).error == 0
+    }
+    if cpu.shadow_stacks_on {
+        riscv64.csrw(.SSP, cpu.kernel_shadow_top)
+        cpu.scratch.kernel_shadow_stack = cpu.kernel_shadow_top
+    }
+    riscv64.csrw(.SENVCFG, cpu.user_envcfg)
     riscv64.return_to_user(&frame, &cpu.scratch)
 }
 

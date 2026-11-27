@@ -28,6 +28,9 @@ import runtime from "base:runtime"
 #if TARGET_ARCH == .arm64 {
     import aarch64 from "base:intrinsics/aarch64"
 }
+#else_if TARGET_ARCH == .riscv64 {
+    import riscv64 from "base:intrinsics/riscv64"
+}
 import slop_os from "std:os/slop_os"
 import testing from "std:testing"
 import log_line from "../log_line"
@@ -302,7 +305,8 @@ TAMPERING_FRAME_REACH : u64 : 64 * 1024
 /**
  * Change this function's own saved return address, where its frame keeps it, and return through it, which the
  * hardware's control-flow integrity refuses (decisions/0186). On AArch64 a bit of its pointer authentication code is
- * flipped, so it fails to authenticate; on x86-64 the address is moved on by one, which the shadow stack doesn't hold.
+ * flipped, so it fails to authenticate; on x86-64 and RISC-V the address is moved on by one, which the shadow stack
+ * doesn't hold.
  * Its return address is found with capture_stack_trace, which gives it without its authentication code, and its saved
  * copy by looking up from a local for the word whose address bits match, in a frame record: after a frame pointer to a
  * little further up, its caller's, so a copy of the address among its locals isn't taken for it.
@@ -343,7 +347,8 @@ MIDDLE_OFFSET : u64 : 8
 /**
  * Branch, through a function value, into the middle of landing_target, where there's no landing pad, which the
  * hardware's control-flow integrity refuses (decisions/0186): AArch64's branch target identification on its guarded
- * pages, or x86-64's indirect branch tracking. Without them, what it runs is undefined, so only where they're on.
+ * pages, x86-64's indirect branch tracking, or RISC-V's Zicfilp. Without them, what it runs is undefined, so only where
+ * they're on.
  *
  * @param data Nothing.
  */
@@ -367,7 +372,8 @@ landing_target : runtime.ThreadFunction : fn(data #escaping : any) {
 
 /**
  * Write to this thread's own shadow stack with an ordinary store, which its pages refuse (decisions/0186): on AArch64,
- * where GCSPR_EL0 says where its Guarded Control Stack is; nothing elsewhere, or without one.
+ * where GCSPR_EL0 says where its Guarded Control Stack is; on RISC-V, where ssp says where its Zicfiss shadow stack is,
+ * which only a thread with one may read; nothing elsewhere, or without one.
  *
  * @param data Nothing.
  */
@@ -375,6 +381,12 @@ write_own_shadow_stack : runtime.ThreadFunction : fn(data #escaping : any) {
     #if TARGET_ARCH == .arm64 {
         // GCSPR_EL0 (S3_3_C2_C5_1), which EL0 reads where its GCS is on
         pointer :: aarch64.read_system_register_encoded(3, 3, 2, 5, 1)
+        if pointer != 0 {
+            intrinsics.volatile_store_u64(cast[ptr[mut u64]](cast[rawptr](cast[uintptr](pointer))), 0)
+        }
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        pointer :: riscv64.csrr(.SSP)
         if pointer != 0 {
             intrinsics.volatile_store_u64(cast[ptr[mut u64]](cast[rawptr](cast[uintptr](pointer))), 0)
         }

@@ -237,7 +237,14 @@ on for their own instructions in a kernel built without them; SlopOS's runtime i
 `ecall`, typed libraries as `EM_RISCV` with `R_RISCV_RELATIVE`) and `std/os/slop_os`'s system calls and 33
 `THREAD_REGISTERS`; a fiber's first segment 1536 bytes on RISC-V, whose frames are bigger, as 1 KiB overflowed in a
 kernel fiber that can't grow; and the UEFI runtime starting a program's first output on a line of its own when the
-firmware left the console's cursor mid-line.
+firmware left the console's cursor mid-line. R6 (2026-11-26): control-flow integrity on RISC-V, Zicfilp's `lpad 0` at
+entries and after every call (LLVM patch 0010, the call aligned so its landing pad is) and Zicfiss's `sspush` and
+`sspopchk` (LLVM's `hw-shadow-stack`), with the fiber switches keeping `ssp` and the module assembly's landing pads;
+`riscv64.TrapScratch`'s `kernel_shadow_stack` and `user_shadow_stack`, for the one `ssp` a hart has for every mode;
+LLVM patch 0011's `branch-to-sspopchk`, a branch to each epilogue's `sspopchk` for QEMU 11.1, which loses the pc
+after one that passes; `slop_os.shadow_stacks_budget` counting Zicfiss's shadow stacks, as it did CET's and the
+GCS's; and the build cache keyed by the linker it finds on the PATH, as an lld that drops RISC-V's property note had
+linked a program the cache then gave back.
 
 ## 4. Features That Look Like a Strong Fit
 

@@ -271,11 +271,11 @@ move_msi :: fn(
 unroute_msi :: fn(source : u32, event : u32) {}
 
 /**
- * Give the page devices write their MSIs to as memory, for an IOMMU to map.
+ * Give the pages devices write their MSIs to as memory, for an IOMMU to map.
  *
  * @return Null: MSIs are writes to the interrupt range, which VT-d takes as interrupts, not DMA it translates.
  */
-msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
+msi_doorbell :: fn() -> arch_interface.MsiDoorbell? {
     return null
 }
 

@@ -537,15 +537,25 @@ move_msi : fn(source : u32, event : u32, cpu_hardware_id : u64, id : InterruptId
  */
 unroute_msi : fn(source : u32, event : u32) : ---
 
+/** The pages devices write their MSIs to as memory (msi_doorbell). */
+MsiDoorbell :: struct {
+    /** The first page's physical address, 4 KiB aligned. */
+    address : PhysicalAddress,
+    /** How many 4 KiB pages there are, from address on, at least 1. */
+    pages : u32,
+}
+
 /**
- * Give the page devices write their MSIs to as memory.
+ * Give the pages devices write their MSIs to as memory.
  *
- * An IOMMU translating their DMA must map it into each of their domains, at its own address, for the MSIs to arrive.
+ * An IOMMU translating their DMA must map them into each of their domains, at their own addresses, for the MSIs to
+ * arrive.
  *
- * @return The page's physical address (AArch64: the ITS's GITS_TRANSLATER); null where MSIs aren't DMA an IOMMU
- *     translates (x86-64, whose interrupt range VT-d takes as interrupts).
+ * @return The pages: AArch64's one, the ITS's GITS_TRANSLATER's; RISC-V's, the IMSIC's supervisor interrupt files,
+ *     from the lowest hart's to the highest's. Null where MSIs aren't DMA an IOMMU translates (x86-64, whose interrupt
+ *     range VT-d takes as interrupts, and RISC-V without an IMSIC).
  */
-msi_doorbell : fn() -> PhysicalAddress? : ---
+msi_doorbell : fn() -> MsiDoorbell? : ---
 
 /**
  * Acknowledge a device interrupt to the interrupt controller, once L2 has masked a level-triggered line.

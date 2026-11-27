@@ -56,6 +56,13 @@ DEFAULT_PROGRAMS :: "../../build/programs"
 DEFAULT_TESTS :: "../../build/tests"
 /** The hosted tools' folder, without tools_output. */
 DEFAULT_TOOLS :: "../../build/tools"
+/**
+ * What every RISC-V target that has shadow stacks adds to RVA23: Hemera's LLVM's branch-to-sspopchk, a branch to each
+ * epilogue's sspopchk, which QEMU 11.1 otherwise runs wrongly: after one that passes, the rest of its translation block
+ * takes its pc from the wrong instruction, so an epilogue ending at a page boundary was found run twice, its second
+ * time reading its caller's frame (decisions/0199's R6). It costs a taken branch an epilogue.
+ */
+RISCV_FEATURES :: "+branch-to-sspopchk"
 
 /**
  * Add every target the targets setting asks for, and the checks every target's program goes through: the house
@@ -293,8 +300,11 @@ add_kernel :: fn() {
     }
     if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
         kernel.target_options.architecture = .riscv64
-        // RVA23 without floating point or any vector extension, which trap in the kernel with sstatus.FS and VS off
-        kernel.target_options.cpu_features = "-f,-d,-zve32x,-zvl32b"
+        /*
+         * RVA23 without floating point or any vector extension, which trap in the kernel with sstatus.FS and VS off, and
+         * with RISCV_FEATURES
+         */
+        kernel.target_options.cpu_features = "-f,-d,-zve32x,-zvl32b,+branch-to-sspopchk"
         // medany: the kernel is linked in the top 2 GiB, and code reaches it relative to itself
         kernel.target_options.code_model = .Medium
         kernel.target_options.linker_script = "../boot/slopos/riscv64.ld"
@@ -336,8 +346,9 @@ add_programs :: fn(folder : string) {
         }
         if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
             program.target_options.architecture = .riscv64
-            // RVA23U64, which Hemera gives RISC-V without a CPU
+            // RVA23U64, which Hemera gives RISC-V without a CPU, but RISCV_FEATURES
             program.target_options.cpu = ""
+            program.target_options.cpu_features = RISCV_FEATURES
         }
         program.target_options.relocation_model = .Default
         program.target_options.startup_code = true
@@ -420,6 +431,7 @@ add_libraries :: fn(folder : string) {
         if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
             library.target_options.architecture = .riscv64
             library.target_options.cpu = ""
+            library.target_options.cpu_features = RISCV_FEATURES
         }
         library.target_options.relocation_model = .Default
         library.target_options.control_flow_integrity = true
@@ -472,7 +484,7 @@ add_uefi_programs :: fn(folder : string) {
         if compiler.target_setting("arch", default = "x86_64") == "riscv64" {
             program.target_options.architecture = .riscv64
             program.target_options.cpu = ""
-            // RVA23 without its vector extensions, as the firmware leaves sstatus.VS off
+            // RVA23 without its vector extensions, as the firmware leaves sstatus.VS off; no shadow stack is on there
             program.target_options.cpu_features = "-zve32x,-zvl32b"
         }
         program.target_options.startup_code = true

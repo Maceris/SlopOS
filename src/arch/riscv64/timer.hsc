@@ -99,9 +99,23 @@ arm_test_line :: fn(cpu : ptr[mut ArchCpu], system : ptr[ArchSystem], now : u64)
  * Wait for an interrupt with interrupts enabled (arch_interface.idle).
  *
  * The interrupt enters kernel_entry.interrupt from Idle on the kernel stack's top: an interrupt in supervisor mode is
- * moved there by the trap entry's sret (entries.hsc), so the frames of this wait are left behind. This never returns.
+ * moved there by the trap entry's sret (entries.hsc), so the frames of this wait are left behind, and the kernel
+ * shadow stack starts from its top too, turned on the first time (hardening.hsc). This never returns.
  */
 idle :: fn() #never_returns {
+    cpu :: current_cpu()
+    /*
+     * The kernel shadow stack from its top, turned on the first time, here rather than in a function: one returning
+     * across it would check, against the new stack, a return pushed before it (hardening.hsc)
+     */
+    if cpu.kernel_shadow_top != 0 && !cpu.shadow_stacks_on {
+        cpu.shadow_stacks_on = riscv64.sbi_call(SBI_FWFT, SBI_FWFT_SET, FWFT_SHADOW_STACK, 1, 0).error == 0
+    }
+    if cpu.shadow_stacks_on {
+        riscv64.csrw(.SSP, cpu.kernel_shadow_top)
+        cpu.scratch.kernel_shadow_stack = cpu.kernel_shadow_top
+    }
+    riscv64.csrw(.SENVCFG, cpu.user_envcfg)
     _ = riscv64.csrrs(.SSTATUS, riscv64.SSTATUS_SIE)
     loop {
         riscv64.wfi()

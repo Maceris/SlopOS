@@ -575,6 +575,26 @@ init_interrupt_controller :: fn(
 }
 
 /**
+ * Route a line through an IOMMU's interrupt remapping (arch_interface.route_wired_remapped): nothing, as AArch64's,
+ * since the RISC-V IOMMU here remaps no interrupts (its info.interrupts is 0), so L2 never asks.
+ *
+ * @param controller Unused.
+ * @param line Unused.
+ * @param message Unused.
+ * @param id Unused.
+ * @param trigger Unused.
+ * @param polarity Unused.
+ */
+route_wired_remapped :: fn(
+    controller : ptr[mut InterruptController],
+    line : u32,
+    message : arch_interface.MsiMessage,
+    id : arch_interface.InterruptId,
+    trigger : arch_interface.Trigger,
+    polarity : arch_interface.Polarity
+) {}
+
+/**
  * Deliver a line to a hart as the kernel's ID there, still masked (arch_interface.route_wired).
  *
  * On a PLIC the line is disabled in every context and the route kept, replacing any for the same line or the same ID
@@ -790,14 +810,36 @@ move_msi :: fn(
 unroute_msi :: fn(source : u32, event : u32) {}
 
 /**
- * Give the page devices write their MSIs to (arch_interface.msi_doorbell): none yet, as the IOMMU, which would map the
- * harts' interrupt files into each domain, comes with R6.
+ * Give the pages devices write their MSIs to (arch_interface.msi_doorbell): the harts' supervisor interrupt files on
+ * the IMSIC, which an IOMMU maps into each domain. A device can then raise any identity on any hart, as without an
+ * IOMMU: the IMSIC keeps nothing per device, and only the IOMMU's MRIF mode, not driven, would.
  *
- * @return Null.
+ * @return From the lowest hart's file to the highest's, every page between them included, at most MAX_DOORBELL_PAGES;
+ *     null with a PLIC, which takes no MSIs, or when the files are further apart than that.
  */
-msi_doorbell :: fn() -> arch_interface.PhysicalAddress? {
-    return null
+msi_doorbell :: fn() -> arch_interface.MsiDoorbell? {
+    system :: current_system()
+    if system.controller != .Aia || system.hart_count == 0 {
+        return null
+    }
+    lowest := ~cast[u64](0)
+    highest := cast[u64](0)
+    for i in 0..<cast[usize](system.hart_count) {
+        file :: system.harts[i].imsic_file
+        lowest = if file < lowest { file } else { lowest }
+        highest = if file > highest { file } else { highest }
+    }
+    pages :: (highest - lowest) / IMSIC_FILE_BYTES + 1
+    if pages > MAX_DOORBELL_PAGES {
+        return null
+    }
+    return arch_interface.MsiDoorbell.{address = cast[arch_interface.PhysicalAddress](lowest), pages = cast[u32](pages)}
 }
+
+/** The bytes of one interrupt file on the IMSIC, and of an IOMMU's page. */
+IMSIC_FILE_BYTES : u64 : 4096
+/** The most pages msi_doorbell gives: one for each of MAX_HARTS harts' files, with as many again for gaps. */
+MAX_DOORBELL_PAGES : u64 : 2 * MAX_HARTS
 
 /**
  * Say where the emulator's test device is (arch_interface.test_device): with the AIA, the APLIC's last source, which

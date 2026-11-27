@@ -111,8 +111,10 @@ DmaDomain :: struct #align(16) {
      * HIGH_DEVICE_BYTES).
      */
     high_start : u64,
-    /** The MSI doorbell's page, mapped at its own address, 0 for none. */
+    /** The MSI doorbell's first page, its pages mapped at their own addresses, 0 for none. */
     reserved : u64,
+    /** The bytes of the doorbell's pages from reserved, 0 for none. */
+    reserved_bytes : u64,
     /** Ranges of its I/O virtual addresses freed, kept for reuse; the first free_count are used. */
     free_ranges : AddressRange[MAX_FREE_RANGES],
     /** How many of free_ranges are used. */

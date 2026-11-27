@@ -1932,9 +1932,15 @@ def aarch64_tests(tests: list, own: bool = True) -> list:
 
 AARCH64_TESTS = aarch64_tests(TESTS)
 
-# What QEMU's RVA23 CPU has against exploits: neither of RISC-V's control-flow integrity extensions, both optional
-RISCV_HARDENING_LINE = ("[boot] cpu: control-flow integrity: landing pads (Zicfilp) no, shadow stacks (Zicfiss) no; "
-                        "neither is used yet")
+# What boot.py's RISC-V CPU has against exploits: both of RISC-V's control-flow integrity extensions, which OpenSBI
+# lets the kernel have (decisions/0199's R6)
+RISCV_HARDENING_LINE = ("[boot] cpu: control-flow integrity: landing pads (Zicfilp) yes, shadow stacks (Zicfiss) yes; "
+                        "for the kernel: yes, yes")
+# The RISC-V IOMMU, a PCI function whose BAR the firmware places by the other devices there, so its address varies
+RISCV_IOMMU_LINE_START = "[info] IOMMU 0: RISC-V IOMMU, 4 KiB of registers at "
+RISCV_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
+# test_control's tests on RISC-V: each control-flow test refused, the hardware debugger's skipped (decisions/0199)
+RISCV_CONTROL_TESTS = "8 tests: 7 passed, 0 failed, 1 skipped"
 # RISC-V's tests (tools/boot.py --arch riscv64), the kernel alone, as it has no user space until M19's R5
 # (knowledge/decisions/0199); those that take interrupts on the PLIC, then again on the AIA (boot.py --aia)
 RISCV_INTERRUPT_TESTS = [
@@ -1960,19 +1966,19 @@ RISCV_INTERRUPT_TESTS = [
 RISCV_CLOCK_LINE = "[user] platform: the real-time clock (Goldfish) claimed"
 # Every test again on RISC-V (tools/boot.py --arch riscv64), on virt with the AIA, whose IMSIC takes the PCI devices'
 # MSIs (the PLIC takes none); but those that can't apply there (knowledge/decisions/0199): x86-64's baseline; an NMI,
-# which RISC-V's supervisor hasn't, nor so the lockup detection that sends one; a power button, which virt hasn't; the
-# IOMMU's, until M19's R6; and hardware breakpoints, steps and watchpoints, RISC-V's being the SBI's debug triggers,
-# not driven yet
+# which RISC-V's supervisor hasn't, nor so the lockup detection that sends one; a power button, which virt hasn't;
+# hardware breakpoints, steps and watchpoints, RISC-V's being the SBI's debug triggers, not driven yet; and the
+# kernel's control-flow tests' skips, as its CPU has both extensions
 RISCV_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI",
                   "keeps a stuck CPU's registers and stack in the panic record",
                   "sees a stuck CPU from a CPU waiting for the lock it holds",
                   "shuts down and turns off when the power button's pressed",
-                  "stops a driver that DMAs outside its domain, until it's ended too often",
+                  "skips a tampered return in the kernel without signed returns or a shadow stack",
+                  "skips a branch to no landing pad in the kernel without landing pads",
+                  "skips a write to the kernel's shadow stack without one",
                   "debugs a program from the shell: a breakpoint by function, a step and its stack",
                   "debugs a program by its lines, and shows its values through their types",
                   "debugs a program's other threads and lists its fibers",
-                  "controls a process from a debugger in user mode, with breakpoints, steps and watchpoints, and a launch's "
-                  "intercept of its faults",
                   "draws the GUI on the firmware's framebuffer, and gives it back to the console"}
 # Without a power button, --end-when-done can't end a run early, so a run waits for the root task's settle: this much
 # past it, in seconds
@@ -1983,18 +1989,20 @@ RISCV_NAMES = {
 
 
 def riscv_tests(tests: list) -> list:
-    """The tests for RISC-V, named so, on the AIA, with RISC-V's own lines, but those RISCV_LEFT_OUT and the IOMMU's."""
+    """The tests for RISC-V, named so, on the AIA, with RISC-V's own lines, but those RISCV_LEFT_OUT."""
     lines = {f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={RISCV_CLOCK_LINE}",
              f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
-             f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={RISCV_HARDENING_LINE}"}
+             f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={RISCV_HARDENING_LINE}",
+             f"--expect-line={X86_IOMMU_LINE}": f"--expect-line-start={RISCV_IOMMU_LINE_START}",
+             f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={RISCV_TRANSLATING_LINE}",
+             f"--expect-line=[user] test_control: {X86_CONTROL_TESTS}": f"--expect-line=[user] test_control: {RISCV_CONTROL_TESTS}"}
     # The system volume's room for debug files, larger on RISC-V (boot.py's RISCV_DEBUG_FILES_SECTORS)
     debug_disk = {"serving 468992 blocks": "serving 796672 blocks",
                   "partitions on a disk of 468992 blocks": "partitions on a disk of 796672 blocks",
                   "SlopOS system, 327680 blocks": "SlopOS system, 655360 blocks"}
-    iommu = {f"--expect-line={X86_IOMMU_LINE}", f"--expect-line={X86_TRANSLATING_LINE}"}
     adapted = []
     for name, expected, arguments in tests:
-        if name in RISCV_LEFT_OUT or any(argument in iommu for argument in arguments):
+        if name in RISCV_LEFT_OUT:
             continue
         resized = [argument for argument in arguments]
         settle = max([int(word.split("=", 1)[1]) for argument in arguments if argument.startswith("--command-line=")
@@ -2016,6 +2024,22 @@ RISCV_TESTS = [(f"RISC-V PLIC: {name}", expected, arguments) for name, expected,
     # RVA23 but its vector extension, which the kernel doesn't use, so its own check is what refuses it
     ("RISC-V: refuses a CPU below RVA23", 2, ["--cpu=rva23s64,sv48=on,zkr=on,v=false",
         "--expect-line=[boot] SlopOS needs an RVA23 CPU, and this one lacks the vector extension (V)"]),
+    # The kernel's own control-flow integrity (decisions/0186, 0199's R6): Zicfiss and Zicfilp refuse each
+    ("RISC-V: stops at a tampered return in the kernel", 1, ["--command-line=test_exit test_tamper",
+        "--expect-line=[info] test_tamper: returning through a tampered return address",
+        "--expect-line-start=[fatal] kernel fault: shadow stack fault at "]),
+    ("RISC-V: stops at a branch to no landing pad in the kernel", 1, ["--command-line=test_exit test_branch",
+        "--expect-line=[info] test_branch: branching into the middle of a function",
+        "--expect-line-start=[fatal] kernel fault: branch to no landing pad at "]),
+    # An ordinary store to a shadow stack's page is an access fault on RISC-V
+    ("RISC-V: refuses a write to the kernel's shadow stack", 1, ["--command-line=test_exit test_shadow_write",
+        "--expect-line=[info] test_shadow_write: writing to the kernel's shadow stack",
+        "--expect-line-start=[fatal] kernel fault: protection fault at "]),
+    # Without Zicfilp and Zicfiss, which boot.py's CPU has, neither is used, and the kernel says so
+    ("RISC-V: boots on a CPU without control-flow integrity", 0, ["--cpu=rva23s64,sv48=on,zkr=on",
+        "--expect-line=[boot] cpu: control-flow integrity: landing pads (Zicfilp) no, shadow stacks (Zicfiss) no; "
+        "for the kernel: no, no",
+        "--expect-line=[info] boot memory reclaimed"]),
 ]
 
 # x86-64 through KVM on SLOPOS_KVM_HOST's Linux machine (user@address), with its CPU, which gives CET's shadow stacks

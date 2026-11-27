@@ -934,7 +934,8 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
  * Check that a tampered return address is caught (decisions/0186): P, a copy, changes its own on a thread of its own
  * and
  * returns through it, which stops it at a fault: on AArch64 with pointer authentication, its authentication failing; on
- * x86-64 with CET's shadow stacks, the shadow stack's. Where the CPU has none of it, the test is skipped.
+ * x86-64 with CET's shadow stacks and on RISC-V with Zicfiss, the shadow stack's. Where the CPU has none of it, the test
+ * is skipped.
  *
  * @param t The test's state.
  * @return Ok once it's run; Error if main wasn't given the process manager or its module, or the port, P or its
@@ -946,6 +947,11 @@ a_tampered_return_is_caught #test :: fn(t : ptr[mut testing.T]) -> testing.Outco
     #if TARGET_ARCH == .arm64 {
         if slop_os.has_feature(&block.cpu_features, .Aarch64PointerAuthentication) {
             expected = slop_os.FAULT_AUTHENTICATION
+        }
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        if slop_os.has_feature(&block.cpu_features, .RiscvZicfiss) {
+            expected = slop_os.FAULT_SHADOW_STACK
         }
     }
     #else {
@@ -968,7 +974,8 @@ a_tampered_return_is_caught #test :: fn(t : ptr[mut testing.T]) -> testing.Outco
 /**
  * Check that a branch to no landing pad is caught (decisions/0186): B, a copy, branches into a function's middle on a
  * thread of its own, which stops it at a fault: on AArch64 with branch target identification, as its program's code is
- * guarded. Where the CPU has none of it, the test is skipped.
+ * guarded; on x86-64 with indirect branch tracking; on RISC-V with Zicfilp. Where the CPU has none of it, the test is
+ * skipped.
  *
  * @param t The test's state.
  * @return Ok once it's run; Error as refused_in_role's.
@@ -978,6 +985,11 @@ a_branch_to_no_landing_pad_is_caught #test :: fn(t : ptr[mut testing.T]) -> test
     expected := cast[u32](0)
     #if TARGET_ARCH == .arm64 {
         if slop_os.has_feature(&block.cpu_features, .Aarch64Bti) {
+            expected = slop_os.FAULT_LANDING_PAD
+        }
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        if slop_os.has_feature(&block.cpu_features, .RiscvZicfilp) {
             expected = slop_os.FAULT_LANDING_PAD
         }
     }
@@ -1004,9 +1016,10 @@ a_branch_to_no_landing_pad_is_caught #test :: fn(t : ptr[mut testing.T]) -> test
 /**
  * Check that a shadow stack refuses an ordinary write (decisions/0186): S, a copy, writes where its shadow-stack
  * pointer
- * says, which stops it at a write fault: on AArch64, where the Guarded Control Stack is on. x86-64's is checked by a
- * tampered return, as its pointer takes an instruction Hemera has no intrinsic for; it's skipped there, and where the
- * CPU has neither.
+ * says, which stops it at a fault: on AArch64, where the Guarded Control Stack is on, a write fault; on RISC-V, with
+ * Zicfiss, a protection fault, as an ordinary store to a shadow stack's page is an access fault there. x86-64's is
+ * checked by a tampered return, as its pointer takes an instruction Hemera has no intrinsic for; it's skipped there,
+ * and where the CPU has neither.
  *
  * @param t The test's state.
  * @return Ok once it's run; Error as refused_in_role's.
@@ -1017,6 +1030,11 @@ a_shadow_stack_refuses_ordinary_writes #test :: fn(t : ptr[mut testing.T]) -> te
     #if TARGET_ARCH == .arm64 {
         if slop_os.has_feature(&block.cpu_features, .Aarch64Gcs) {
             expected = slop_os.FAULT_WRITE
+        }
+    }
+    #else_if TARGET_ARCH == .riscv64 {
+        if slop_os.has_feature(&block.cpu_features, .RiscvZicfiss) {
+            expected = slop_os.FAULT_PROTECTION
         }
     }
     if expected == 0 {
@@ -1099,13 +1117,17 @@ refused_in_role :: fn(
  * Check what a debugger does with a thread's debugging state (thread_set_debug, decisions/0183's 12b): E, a copy that
  * spins reading its page's SLOT_GO, is suspended and given a hardware breakpoint at the instruction it was at, which it
  * stops at as it runs it again; then it steps one instruction, which stops it after; then a watchpoint on SLOT_GO,
- * which its next read stops it at, reported at that address. Without them, it's told to end, and does.
+ * which its next read stops it at, reported at that address. Without them, it's told to end, and does. Skipped on
+ * RISC-V, whose hardware breakpoints, the SBI's debug triggers, the kernel doesn't drive yet (decisions/0199).
  *
  * @param t The test's state.
  * @return Ok once it's run; Error if main wasn't given the process manager or its module, or E, its report, the port
  *     or the intercept couldn't be had.
  */
 a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    if !has_hardware_debugging() {
+        return testing.skip(t, "no hardware breakpoints on RISC-V yet: the SBI's debug triggers aren't driven")
+    }
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
@@ -1209,6 +1231,20 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
         "E's budget is back to nothing once it has ended"
     )
     return .Ok
+}
+
+/**
+ * Tell whether threads can have hardware breakpoints, steps and watchpoints (thread_set_debug).
+ *
+ * @return False on RISC-V, whose SBI debug triggers the kernel doesn't drive yet (decisions/0199); true elsewhere.
+ */
+has_hardware_debugging :: fn() -> bool {
+    #if TARGET_ARCH == .riscv64 {
+        return false
+    }
+    #else {
+        return true
+    }
 }
 
 /**

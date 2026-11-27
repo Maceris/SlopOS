@@ -30,8 +30,8 @@ implementation doesn't do yet, it lists in `NOT_YET_IMPLEMENTED`, with stubs in 
 - **L2 picks domain IDs and device addresses.** Each domain on an IOMMU has an ID from 1 below `info.domain_ids`, and
   L2 allocates its I/O virtual addresses, below `1 << info.address_bits`.
 - **L2 maps the MSI doorbell.** Where MSIs are writes the IOMMU translates (`arch_interface.msi_doorbell`, AArch64's
-  ITS), L2 maps its page into each domain at its own address, as device memory, and keeps the domain's other
-  addresses clear of it.
+  ITS, RISC-V's IMSIC), L2 maps its pages into each domain at their own addresses, as device memory, and keeps the
+  domain's other addresses clear of them.
 - **L2 reads faults it isn't signalled.** An IOMMU whose `info.fault_messages` is false has its faults read at CPU 0's
   ticks, 100 a second.
 - **L2 invalidates.** `map` and `unmap` change tables only; L2 calls `invalidate` once a batch of them is done, and
@@ -259,9 +259,22 @@ the architecture programs the controller's entry from the message (`route_wired_
 | Faults | `next_fault` takes the next event queue record: its stream ID, and for `F_TRANSLATION` to `F_PERMISSION` the input address and whether it was a read |
 | Streams | The stream ID `iommu-map` gives a requester ID |
 
+| Interface | The RISC-V IOMMU (`src/iommu/riscv`) |
+|---|---|
+| `identify` | Version 1 with first-stage Sv48. 47-bit I/O addresses, Sv48's lower half, as a device's addresses aren't sign-extended; 65535 domain IDs, as PSCIDs; no interrupts remapped; faults read by L2. The device contexts are 64 bytes with `MSI_FLAT`, else 32 |
+| `enable` | The device directory off, then the command and fault queues (a page each: 256 commands, 128 records), then a two-level directory from an empty root, and every cached context and translation invalidated (`IODIR.INVAL_DDT`, `IOTINVAL.VMA`, `IOFENCE.C`) |
+| `attach` | The device's leaf of the directory made where there's none; its context: `iohgatp` Bare, `ta`'s PSCID the domain's ID, `fsc` Sv48 from the domain's root, `msiptp` Off; `tc`'s V written last, the context and the PSCID's translations invalidated |
+| `detach` | The context's V cleared, invalidated as `attach`'s is |
+| `map` | Sv48 entries: tables, and the 4 KiB page readable, writable if asked, with U, A and D set, and no PBMT, device memory being the PMAs' to say. U is set on the tables' entries too: QEMU 11.1's walk checks U on every entry, as a request without a process ID is user mode's, though the privileged spec reserves it there. QEMU's walk also takes a page's PBMT into its address, a second reason for none |
+| `invalidate` | `IOTINVAL.VMA` for the PSCID, after mapping as after unmapping, fenced |
+| Commands | At the queue's tail, waiting while it's full; `IOFENCE.C` is done when the head reaches the tail, or failed if `cqcsr` reports an error. A fence comes before the tail moves |
+| Faults | `next_fault` takes the next fault record: its device ID, its cause, the address (`iotval`), and whether it was a write (TTYP 3 or 7) |
+| Streams | The device ID `iommu-map` gives a requester ID. The IOMMU may be a platform device (`riscv,iommu`) or a PCI function (`riscv,pci-iommu`), whose registers are its BAR 0; QEMU's `virt` leaves its platform one out of the device tree whenever there's a dynamic sysbus device like `ramfb`, so `boot.py` gives it the PCI one, with its translation cache off, as QEMU 11.1's caches a page with the access that first used it |
 
 ## Not Covered
 
-- **AMD-Vi and the RISC-V IOMMU**: kinds the interface names, with no implementation yet.
+- **AMD-Vi**: a kind the interface names, with no implementation yet.
+- **The RISC-V IOMMU's MSI page tables**: MSIs are translated as other DMA, to the harts' interrupt files, so a device
+  can raise any identity on any hart; only its MRIF mode would keep that per device.
 - **Several IOMMU kinds on one architecture**: the kernel imports one IOMMU package for each architecture so far; one
   with VT-d and AMD-Vi both would choose by the registered kind.
