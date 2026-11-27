@@ -37,6 +37,14 @@ MAX_TUNED :: 16
 /** The largest memory budget a service is given, in bytes: 1 GiB. */
 MAX_BUDGET : u64 : 1024 * 1024 * 1024
 
+// ---- A USB class driver's usb_flags
+
+/** It's a USB class driver, which the supervisor starts for each interface it matches. */
+USB_CLASS_DRIVER : u8 : 1
+/** It takes an interface of any subclass, or any protocol, of its class. */
+USB_ANY_SUBCLASS : u8 : 1 << 1
+USB_ANY_PROTOCOL : u8 : 1 << 2
+
 // ---- Who starts a service, as system_config.Starter
 
 /** The root task starts it. */
@@ -105,7 +113,7 @@ ServiceRecord :: struct {
     device : u16,
     /** A driver's devices' class, the class register's top 24 bits, platform.ANY_CLASS for any; 0 for a non-driver. */
     class : u32,
-    /** Who starts it, a STARTER_ value; a driver's has to be STARTER_SUPERVISOR. */
+    /** Who starts it, a STARTER_ value; a driver's, or a USB class driver's, has to be STARTER_SUPERVISOR. */
     starter : u8,
     /** 1 if its starter asks the process manager to load it, 0 if it loads it itself. */
     by_manager : u8,
@@ -117,6 +125,14 @@ ServiceRecord :: struct {
     not_restarted : u8,
     /** 1 if the system is healthy without it (decisions/0115), 0 if not. */
     late : u8,
+    /**
+     * A USB class driver's interfaces (decisions/0201, 20e): their class, subclass and protocol, and which of those it
+     * takes any of (USB_ANY_SUBCLASS, USB_ANY_PROTOCOL), with USB_CLASS_DRIVER set; all 0 for a service that isn't one.
+     */
+    usb_class : u8,
+    usb_subclass : u8,
+    usb_protocol : u8,
+    usb_flags : u8,
     /** Zeros, to align what follows. */
     padding : u8[2],
     /** How long it has to be up, from boot, in milliseconds; 0 for the configuration's default. */
@@ -359,6 +375,12 @@ check :: fn(records : ptr[SystemRecords]) -> Problem? {
         }
         if is_driver(service) && service.starter != STARTER_SUPERVISOR {
             return Problem.{reason = "has a driver the supervisor doesn't start", service = at}
+        }
+        if service.usb_flags > 7 || (service.usb_flags != 0 && service.usb_flags & USB_CLASS_DRIVER == 0) {
+            return Problem.{reason = "has a service with USB flags that aren't", service = at}
+        }
+        if service.usb_flags & USB_CLASS_DRIVER != 0 && (service.starter != STARTER_SUPERVISOR || is_driver(service)) {
+            return Problem.{reason = "has a USB class driver the supervisor doesn't start, or that's a PCI driver too", service = at}
         }
         if cast[u64](service.first_parameter) + cast[u64](service.parameter_count)
             > cast[u64](records.parameter_count) {

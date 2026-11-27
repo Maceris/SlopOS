@@ -111,6 +111,8 @@ SupervisorGrants :: struct {
     ahci_module : slop_os.Memory?,
     /** The xHCI driver's module. */
     xhci_module : slop_os.Memory?,
+    /** The USB HID driver's module. */
+    usb_hid_module : slop_os.Memory?,
     /** The virtio console driver's module. */
     virtio_console_module : slop_os.Memory?,
     /** The virtio input driver's module. */
@@ -581,6 +583,7 @@ main :: fn(
         nvme_module = module_copy(root, "nvme", program_rights),
         ahci_module = module_copy(root, "ahci", program_rights),
         xhci_module = module_copy(root, "xhci", program_rights),
+        usb_hid_module = module_copy(root, "usb_hid", program_rights),
         virtio_console_module = module_copy(root, "virtio_console", program_rights),
         virtio_input_module = module_copy(root, "virtio_input", program_rights),
         virtio_rng_module = module_copy(root, "virtio_rng", program_rights),

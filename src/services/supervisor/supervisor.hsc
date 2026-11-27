@@ -74,6 +74,7 @@ import power_button from "../../drivers/power_button"
 import ahci from "../../drivers/ahci"
 import nvme from "../../drivers/nvme"
 import xhci from "../../drivers/xhci"
+import usb_hid from "../../drivers/usb_hid"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_gpu from "../../drivers/virtio_gpu"
@@ -86,6 +87,7 @@ import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import block from "../../protocols/block"
 import usb_bus from "../../protocols/usb_bus"
+import usb_device from "../../protocols/usb_device"
 import bundle_store from "../../protocols/bundle_store"
 import clock_setting from "../../protocols/clock_setting"
 import config as config_protocol from "../../protocols/config"
@@ -814,6 +816,8 @@ Modules :: struct {
     ahci : slop_os.Memory?,
     /** The xHCI driver's module. */
     xhci : slop_os.Memory?,
+    /** The USB HID driver's module. */
+    usb_hid : slop_os.Memory?,
     /** The virtio console driver's module. */
     virtio_console : slop_os.Memory?,
     /** The virtio input driver's module. */
@@ -881,6 +885,8 @@ Started :: struct {
     service : usize,
     /** A driver's device's PCI address, which the platform service reissues it by. */
     address : u32,
+    /** A USB class driver's interface, 1 more than its index in the supervisor's usb; 0 for anything else. */
+    usb_slot : usize,
     /** How many times it's been started again since restarts_since, 0 to RESTARTS. */
     restarts : u32,
     /** When its RESTART_WINDOW began, in nanoseconds of the monotonic clock. */
@@ -1242,6 +1248,11 @@ Service :: struct {
     boot_set : bool,
     /** Whether it isn't started again when it ends (decisions/0093). */
     not_restarted : bool,
+    /** A USB class driver's interfaces' class, subclass and protocol, and its system_records.USB_ flags; 0 for others. */
+    usb_class : u8,
+    usb_subclass : u8,
+    usb_protocol : u8,
+    usb_flags : u8,
 }
 
 /**
@@ -1266,6 +1277,10 @@ service_at :: fn(supervisor : ptr[Supervisor], index : usize) -> Service? {
         trusted_with_dma = record.trusted_with_dma == 1,
         boot_set = record.boot_set == 1,
         not_restarted = record.not_restarted == 1,
+        usb_class = record.usb_class,
+        usb_subclass = record.usb_subclass,
+        usb_protocol = record.usb_protocol,
+        usb_flags = record.usb_flags,
     }
 }
 
@@ -1345,6 +1360,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param nvme_module The NVMe driver's program.
  * @param ahci_module The AHCI driver's program.
  * @param xhci_module The xHCI driver's program.
+ * @param usb_hid_module The USB HID driver's program.
  * @param virtio_console_module The virtio console driver's program.
  * @param virtio_input_module The virtio input driver's program.
  * @param virtio_rng_module The virtio entropy driver's program.
@@ -1403,6 +1419,7 @@ main :: fn(
     nvme_module : slop_os.Memory?,
     ahci_module : slop_os.Memory?,
     xhci_module : slop_os.Memory?,
+    usb_hid_module : slop_os.Memory?,
     virtio_console_module : slop_os.Memory?,
     virtio_input_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
@@ -1528,6 +1545,7 @@ main :: fn(
         nvme = nvme_module,
         ahci = ahci_module,
         xhci = xhci_module,
+        usb_hid = usb_hid_module,
         virtio_console = virtio_console_module,
         virtio_input = virtio_input_module,
         virtio_rng = virtio_rng_module,
@@ -2058,7 +2076,12 @@ start_again :: fn(supervisor : ptr[mut Supervisor], index : usize, budget : u64)
     wait_for_budget(supervisor, budget)
     // The last process's binding still has the key, though it fired: the next is watched under it from its launch
     _ = slop_os.port_unbind(supervisor.port, cast[u64](index))
-    if !entry.driver || entry.clock || entry.acpi || entry.power_button {
+    if entry.usb_slot != 0 {
+        supervisor.relaunching = index
+        start_usb_driver(supervisor, entry.service, entry.usb_slot - 1, index)
+        supervisor.relaunching = NOWHERE
+    }
+    else if !entry.driver || entry.clock || entry.acpi || entry.power_button {
         supervisor.relaunching = index
         if entry.clock {
             start_clock(supervisor, index)
@@ -5202,6 +5225,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "xhci" {
         modules.xhci
     }
+    else if name == "usb_hid" {
+        modules.usb_hid
+    }
     else if name == "virtio_input" {
         modules.virtio_input
     }
@@ -5645,7 +5671,8 @@ start_usb :: fn(supervisor : ptr[mut Supervisor]) {
 }
 
 /**
- * Keep a USB interface a host controller's driver told of, and say it has no class driver yet.
+ * Keep a USB interface a host controller's driver told of, and start the class driver the system configuration has
+ * for it, the first whose class, subclass and protocol match; one without is logged.
  *
  * @param supervisor The supervisor, whose usb takes it.
  * @param controller The host controller's driver's entry in started.
@@ -5656,8 +5683,19 @@ keep_usb :: fn(supervisor : ptr[mut Supervisor], controller : usize, found : usb
         _ = slop_os.handle_close(cast[slop_os.Handle](found.device.end))
         return void
     }
-    supervisor.usb[supervisor.usb_count] = UsbInterface.{found = found, controller = controller}
+    usb :: supervisor.usb_count
+    supervisor.usb[usb] = UsbInterface.{found = found, controller = controller}
     supervisor.usb_count += 1
+    for index in 0..<cast[usize](supervisor.records.service_count) {
+        service :: service_at(supervisor, index) or_break
+        if service.usb_flags & system_records.USB_CLASS_DRIVER == 0 || service.usb_class != found.class
+            || (service.usb_flags & system_records.USB_ANY_SUBCLASS == 0 && service.usb_subclass != found.subclass)
+            || (service.usb_flags & system_records.USB_ANY_PROTOCOL == 0 && service.usb_protocol != found.protocol) {
+            continue
+        }
+        start_usb_driver(supervisor, index, usb, NOWHERE)
+        return void
+    }
     log_line.write(
         supervisor.log,
         "supervisor: USB interface %1:%2 (class %3, subclass %4, protocol %5) has no driver",
@@ -5667,6 +5705,88 @@ keep_usb :: fn(supervisor : ptr[mut Supervisor], controller : usize, found : usb
         found.subclass,
         found.protocol
     )
+}
+
+/** What a USB class driver's entry is given: its interface's connection, and a listener for its clients. */
+UsbGrants :: struct[P] {
+    /** A copy of the supervisor's debug log, or null if it couldn't be copied. */
+    log : slop_os.DebugLog?,
+    /** A connection to its interface, made through the host controller's driver's. */
+    device : os.Channel[usb_device.UsbDevice],
+    /** The listener for its clients; the supervisor keeps its other end, and dials it for connectors to it. */
+    clients : os.Listener[P],
+}
+
+/**
+ * Start a USB class driver for an interface, with a new connection to it and a listener for its clients, into a new
+ * entry or again into its own; its entry speaks its protocol, as a PCI driver's does, the first input device's
+ * becoming first_keyboard.
+ *
+ * @param supervisor The supervisor.
+ * @param index The class driver's service, by its index in the system configuration.
+ * @param usb The interface, by its index in usb.
+ * @param again The entry it's started again into, or NOWHERE for a first start.
+ */
+start_usb_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, usb : usize, again : usize) {
+    service :: service_at(supervisor, index) or_return void
+    if usb >= supervisor.usb_count || usb >= supervisor.usb.count {
+        return void
+    }
+    interface :: supervisor.usb[usb].found.device.end
+    port :: os.port_for(supervisor.block.budget, interface) or_return void
+    connection :: usb_device.connect(interface, port, supervisor.block.budget)
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    device :: connection or_return void
+    name := ""
+    speaks := Speaks.Nothing
+    listener := NONE
+    launched := cast[slop_os.Process](slop_os.NO_HANDLE)
+    if service.name == "usb_hid" {
+        name = "usb_hid"
+        speaks = .Input
+        pair :: os.channel_for[input.Input](supervisor.block.budget, 0) or_return void
+        listener = pair.b
+        grants := UsbGrants[input.Input].{
+            log = duplicate_log(supervisor),
+            device = device,
+            clients = os.Listener[input.Input].{end = pair.a},
+        }
+        match os.launch(
+            supervisor.manager,
+            supervisor.manager_port,
+            service.name,
+            module_of(supervisor, service.name),
+            service.budget,
+            type_of(usb_hid.main),
+            grants,
+            options_for(supervisor, service.name)
+        ) {
+            case Ok(made) => launched = kept(supervisor, made)
+            case Error(error) => failed(supervisor, service.name, error)
+        }
+    }
+    else {
+        _ = slop_os.handle_close(cast[slop_os.Handle](device.end))
+        return void
+    }
+    if cast[slop_os.Handle](launched) == slop_os.NO_HANDLE {
+        if cast[slop_os.Handle](listener) != slop_os.NO_HANDLE {
+            _ = slop_os.handle_close(cast[slop_os.Handle](listener))
+        }
+        return void
+    }
+    slot :: place(supervisor, name, launched, again)
+    if slot >= supervisor.started.count {
+        return void
+    }
+    entry :: &supervisor.started[slot]
+    entry.listener = listener
+    entry.speaks = speaks
+    entry.service = index
+    entry.usb_slot = usb + 1
+    if speaks == .Input && supervisor.first_keyboard == NOWHERE {
+        supervisor.first_keyboard = slot
+    }
 }
 
 /**

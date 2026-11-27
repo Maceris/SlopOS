@@ -381,6 +381,10 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
 
 # The architecture booted (--arch), for what differs by it, like the room debug files take
 ARCHITECTURE = "x86_64"
+# What --keyboard-input's keyboard is (--input-bus): a virtio keyboard, or a USB one on an xHCI controller
+INPUT_BUS = "virtio"
+# The seconds between a USB keyboard's key events, each down and up, as a fast typist's: 20 ms
+USB_KEY_GAP = 0.02
 
 # Whether RISC-V's virt has the AIA, an IMSIC for each hart and an APLIC, rather than the PLIC (--aia, decisions/0199)
 RISCV_AIA = False
@@ -552,8 +556,9 @@ def qcode_of(character: str) -> tuple[str, bool]:
 
 class Keyboard:
     """
-    A virtio keyboard, typed into through QEMU's machine protocol (QMP), which QEMU serves on a loopback socket: each
-    line, a key down and up at a time, with shift held where it's needed, and Enter at the end.
+    A virtio keyboard, or with --input-bus=usb a USB one, typed into through QEMU's machine protocol (QMP), which QEMU
+    serves on a loopback socket: each line, a key down and up at a time, with shift held where it's needed, and Enter at
+    the end.
     """
 
     def __init__(self):
@@ -562,8 +567,9 @@ class Keyboard:
         self.replies = b""
 
     def qemu_arguments(self) -> list[str]:
-        return ["-device", "virtio-keyboard-pci,disable-legacy=on,iommu_platform=on,id=keyboard",
-                "-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+        keyboard = ["-device", "qemu-xhci,id=usb", "-device", "usb-kbd,bus=usb.0,id=keyboard"] if INPUT_BUS == "usb" \
+            else ["-device", "virtio-keyboard-pci,disable-legacy=on,iommu_platform=on,id=keyboard"]
+        return keyboard + ["-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
 
     def command(self, name: str, arguments: dict | None = None) -> None:
         message = {"execute": name} | ({"arguments": arguments} if arguments is not None else {})
@@ -599,6 +605,10 @@ class Keyboard:
     def key(self, qcode: str, down: bool) -> None:
         self.command("input-send-event", {"events": [
             {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": qcode}}}]})
+        # QEMU's usb-kbd holds only 16 key events until the driver's next report, as a real keyboard's poll rate
+        # limits it too; typed at QMP's pace, the rest would be dropped. So a USB keyboard is typed at a person's pace
+        if INPUT_BUS == "usb":
+            time.sleep(USB_KEY_GAP)
 
     def type_line(self, line: str) -> None:
         for character in line + "\n":
@@ -1111,8 +1121,9 @@ class DisplayTest(Keyboard):
         self.thread = threading.Thread(target=self.drive, daemon=True)
 
     def qemu_arguments(self) -> list[str]:
-        return ["-device", "virtio-gpu-pci,disable-legacy=on,iommu_platform=on,id=gpu",
-                "-device", "virtio-tablet-pci,disable-legacy=on,iommu_platform=on,id=tablet",
+        # The tablet a virtio one, or with --input-bus=usb a USB one on an xHCI controller
+        tablet = ["-device", "qemu-xhci,id=usb", "-device", "usb-tablet,bus=usb.0,id=tablet"] if INPUT_BUS == "usb"             else ["-device", "virtio-tablet-pci,disable-legacy=on,iommu_platform=on,id=tablet"]
+        return ["-device", "virtio-gpu-pci,disable-legacy=on,iommu_platform=on,id=gpu", *tablet,
                 "-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
 
     def wait_for(self, start: str, deadline: float) -> bool:
@@ -2279,7 +2290,7 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 BOOT_DISK_SECTORS = 272384
 # The programs the bootloader loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
-BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "nvme", "ahci", "xhci", "storage_manager", "partition_server",
+BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "nvme", "ahci", "xhci", "usb_hid", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
 # The system configuration, which the build writes beside the programs
 SYSTEM_RECORDS = "system.records"
@@ -2554,6 +2565,8 @@ def main() -> int:
     parser.add_argument("--restart-when-done", action="store_true",
                         help="as --shut-down-when-done, but R, which restarts the system (decisions/0182); with test_power on "
                         "the command line the machine resets, which QEMU, without --allow-reboot, takes as its end")
+    parser.add_argument("--input-bus", choices=["virtio", "usb"], default="virtio",
+                        help="what --keyboard-input types on: a virtio keyboard, or a USB keyboard on an xHCI controller")
     parser.add_argument("--keyboard-input", action="append", default=[],
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
@@ -2613,8 +2626,9 @@ def main() -> int:
                              "exit code 0 (roadmap B1, decisions/0132)")
     parser.add_argument("qemu_arguments", nargs="*", help="more arguments for QEMU, after --")
     arguments = parser.parse_args()
-    global KVM_HOST, RISCV_AIA, RISCV_IOMMU, ARCHITECTURE
+    global KVM_HOST, RISCV_AIA, RISCV_IOMMU, ARCHITECTURE, INPUT_BUS
     KVM_HOST = arguments.kvm
+    INPUT_BUS = arguments.input_bus
     RISCV_AIA = arguments.aia
     RISCV_IOMMU = not arguments.no_iommu
     ARCHITECTURE = arguments.arch

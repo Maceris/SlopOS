@@ -20,6 +20,7 @@ import i6300esb from "../drivers/i6300esb"
 import power_button from "../drivers/power_button"
 import ahci from "../drivers/ahci"
 import nvme from "../drivers/nvme"
+import usb_hid from "../drivers/usb_hid"
 import xhci from "../drivers/xhci"
 import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
@@ -30,6 +31,7 @@ import virtio_rng from "../drivers/virtio_rng"
 import config from "../protocols/config"
 import connector from "../protocols/connector"
 import links from "../protocols/links"
+import usb_device from "../protocols/usb_device"
 import platform as platform_protocol from "../protocols/platform"
 import power from "../protocols/power"
 import powerbox from "../protocols/powerbox"
@@ -124,7 +126,7 @@ CpuShare :: struct {
  * An os.Channel[P] a service takes is required, and an optional one optional. What isn't late, and is started, has to
  * be up within its deadline, DEFAULT_DEADLINE_MS from boot unless it has its own, or the boot is degraded.
  */
-LATE :: string.["edu_dma", "virtio_input", "virtio_sound", "audio", "disk_check", "ssh"]
+LATE :: string.["edu_dma", "virtio_input", "usb_hid", "virtio_sound", "audio", "disk_check", "ssh"]
 
 /**
  * The system's installations (decisions/0113, 0117): each a name, which names its data directory and its
@@ -196,6 +198,11 @@ Service :: struct {
     by_manager : bool,
     /** Its memory budget, split off its starter's, in bytes. */
     budget : u64,
+    /**
+     * A USB class driver's: the interfaces it takes, one process each, which the supervisor starts it for as host
+     * controllers' drivers find them; a class of 0 for a service that isn't one.
+     */
+    usb : UsbMatch,
     /** Its entry's type, whose parameters are what it's given, each the grant of its name. */
     entry : type,
     /**
@@ -233,6 +240,19 @@ Service :: struct {
      */
     events_budget : u64,
 }
+
+/** USB interfaces a class driver takes: their class, and their subclass and protocol, either USB_ANY for any. */
+UsbMatch :: struct {
+    /** The interfaces' class, 1 to 255; 0 for none, a service that isn't a USB class driver. */
+    class : u16,
+    /** Their subclass, or USB_ANY. */
+    subclass : u16,
+    /** Their protocol, or USB_ANY. */
+    protocol : u16,
+}
+
+/** Any subclass, or any protocol, in a UsbMatch. */
+USB_ANY : u16 : 0xffff
 
 /**
  * Tell whether a service is a driver, with devices it takes.
@@ -691,6 +711,17 @@ SERVICES :: Service.[
         },
         trusted_with_dma = true,
     },
+    // A USB keyboard, mouse or tablet: an interface of HID's class (3), any subclass and protocol
+    Service.{
+        name = "usb_hid",
+        boot_set = true,
+        module = "usb_hid.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 2 * MIB,
+        entry = type_of(usb_hid.main),
+        usb = UsbMatch.{class = 3, subclass = USB_ANY, protocol = USB_ANY},
+    },
     // An AHCI controller, by its class (mass storage, SATA, AHCI 1.0); its buffers are its clients' DMA memory
     Service.{
         name = "ahci",
@@ -852,7 +883,9 @@ SUPERVISOR_SERVES :: type.[
     os.Listener[connector.Connector],
     os.Listener[session.Session],
     os.Listener[power.Power],
-    os.Listener[read_only_dir.ReadOnlyDir]
+    os.Listener[read_only_dir.ReadOnlyDir],
+    // Each USB class driver's interface, through the connection its host controller's driver gave
+    os.Listener[usb_device.UsbDevice]
 ]
 
 /**
@@ -930,6 +963,14 @@ make_records :: fn() -> system_records.SystemRecords {
         record.boot_set = if each.boot_set { 1 } else { 0 }
         record.not_restarted = if each.not_restarted { 1 } else { 0 }
         record.late = if is_late(each.name) { 1 } else { 0 }
+        if each.usb.class != 0 {
+            record.usb_class = cast[u8](each.usb.class)
+            record.usb_subclass = if each.usb.subclass == USB_ANY { 0 } else { cast[u8](each.usb.subclass) }
+            record.usb_protocol = if each.usb.protocol == USB_ANY { 0 } else { cast[u8](each.usb.protocol) }
+            record.usb_flags = system_records.USB_CLASS_DRIVER
+                | (if each.usb.subclass == USB_ANY { system_records.USB_ANY_SUBCLASS } else { cast[u8](0) })
+                | (if each.usb.protocol == USB_ANY { system_records.USB_ANY_PROTOCOL } else { cast[u8](0) })
+        }
         record.deadline_ms = each.deadline_ms
         record.events_budget = each.events_budget
         record.budget = each.budget

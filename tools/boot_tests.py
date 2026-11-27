@@ -253,7 +253,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 108 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 109 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -365,6 +365,13 @@ TESTS = [
         "--expect-line=[user] test_display: showed the cursor",
         "--expect-line=[user] test_display: clicked at 640, 400",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The same with a USB tablet (decisions/0201's 20e), its absolute axes read from its report descriptor
+    ("moves the cursor with a USB tablet", 7, [WITH_PROGRAMS, "--display", "--timeout=240", "--input-bus=usb",
+        "--command-line=test_exit test_services test_settle=120 test_display",
+        "--expect-line=[user] usb_hid: serving 1575:1 as a tablet",
+        "--expect-line=[user] test_display: showed the cursor",
+        "--expect-line=[user] test_display: clicked at 640, 400",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The compositor (decisions/0192, 15c): test_compositor's two clients' windows, the seat lent to the compositor by the
     # terminal service; keys only to the focused window, a click raising the window below, a drag of a band moving it,
     # and Ctrl+Shift+V pasting what the other client copied; the screen checked for each window where it ended up
@@ -471,6 +478,13 @@ TESTS = [
         "--command-line=test_exit test_services test_settle=4", "--end-when-done", "--keyboard-input=Hi there, 42!",
         "--expect-line=[user] virtio_input: serving", "--expect-line=[user] echo: read Hi there, 42!",
         "--expect-console-line=echo: Hi there, 42!", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The same on a USB keyboard (decisions/0201's 20e): the HID driver the supervisor starts for its interface, in the
+    # boot protocol, its reports' keys become the input protocol's
+    ("types on a USB keyboard into the console", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services test_settle=4", "--end-when-done", "--input-bus=usb",
+        "--keyboard-input=Hi there, 42!",
+        "--expect-line=[user] usb_hid: serving 1575:1 as a keyboard", "--expect-line=[user] echo: read Hi there, 42!",
+        "--expect-console-line=echo: Hi there, 42!", "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A keyboard that's new: what's typed on it before its code goes nowhere, the code on the status line typed on it
     # accepts it, and what's typed after reaches the program; Ctrl+Alt+Delete on it is the secure attention key
     ("accepts a new keyboard once the code on the console is typed on it", 7, [WITH_PROGRAMS,
@@ -520,7 +534,8 @@ TESTS = [
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # A USB host controller (decisions/0201's 20d): a keyboard on a root port, a hub on another with a mouse behind it,
-    # and a tablet; each device addressed, its descriptors read and its interfaces told to the supervisor. QEMU's USB 2
+    # and a tablet; each device addressed, its descriptors read and its interfaces told to the supervisor, which starts
+    # the HID driver for each, a tablet's report descriptor read for its absolute axes (20e). QEMU's USB 2
     # ports, which these are on, are the controller's 5 to 8, after its USB 3 ones; its IDs are logged in decimal
     ("finds USB devices on root ports and behind a hub", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services",
@@ -529,9 +544,9 @@ TESTS = [
         "--expect-line=[user] xhci: 1575:1 on port 6, behind a hub: interface 0, class 3, subclass 1, protocol 2",
         "--expect-line=[user] xhci: 1575:1 on port 7: interface 0, class 3, subclass 0, protocol 0",
         "--expect-line=[user] xhci: serving 8 ports, 3 devices found",
-        "--expect-line=[user] supervisor: USB interface 1575:1 (class 3, subclass 1, protocol 1) has no driver",
-        "--expect-line=[user] supervisor: USB interface 1575:1 (class 3, subclass 1, protocol 2) has no driver",
-        "--expect-line=[user] supervisor: USB interface 1575:1 (class 3, subclass 0, protocol 0) has no driver",
+        "--expect-line=[user] usb_hid: serving 1575:1 as a keyboard",
+        "--expect-line=[user] usb_hid: serving 1575:1 as a mouse",
+        "--expect-line=[user] usb_hid: serving 1575:1 as a tablet",
         "--expect-line=[info] root task ended with code 0", "--",
         "-device", "qemu-xhci,id=usb", "-device", "usb-kbd,bus=usb.0,port=1", "-device", "usb-hub,bus=usb.0,port=2",
         "-device", "usb-mouse,bus=usb.0,port=2.1", "-device", "usb-tablet,bus=usb.0,port=3"]),
