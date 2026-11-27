@@ -640,14 +640,20 @@ architecture (`0022`).
 
 Planned 2026-11-27 (`decisions/0200`), with the owner, after M19; ABI v1 (`0025`, `0027`) next.
 
+## M20 — The Rest of the Roadmap (L1 to L6, Hemera)
+
+- 20a: the ABI comparison, the ABI package's description and the changes 0025 forbids.
+- 20b to 20f: NVMe; AHCI; xHCI and hubs; USB keyboards and mice; USB mass storage, a stick's FAT untrusted.
+- 20g and 20h: RISC-V's debug triggers; an IMSIC in groups.
+- 20i and 20j: indexes in the volume server; queries and live queries beneath a handle.
+- 20k and 20l: C-callable exports in Hemera; a small libc in Hemera, Lua and zlib's `minigzip` ported.
+- 20m: a review. 20n: ABI v1.
+
+Planned 2026-11-27 (`decisions/0201`), with the owner, after Before ABI v1.
+
 ## Later
 
-- **Real hardware**: NVMe, xHCI (HID, mass storage, where a stick's FAT is untrusted input), AHCI.
-- **Indexing and live queries** over typed files' attributes (`0046`, BeOS).
-- **A POSIX personality**, a library over the native protocols for porting tools; optional, never in the core
-  (`problems-and-directions.md` §16).
-- **ABI v1** (`0025`, `0027`), once the system above runs on two architectures and the release tooling compares the
-  ABI package with its previous release.
+- **Real machines**: SlopOS booted on hardware, its devices those M20 drives.
 - **Not planned**: the Hemera compiler on SlopOS, while it depends on LLVM, which rule 6 keeps out.
 
 ---
@@ -690,3 +696,4 @@ Planned 2026-11-27 (`decisions/0200`), with the owner, after M19; ABI v1 (`0025`
 | Bounds Checker | built 2026-11-24 (`decisions/0198`), B1 to B4: if expressions' values, loops widened to the constants they compare against, stores keeping other fields; calls to functions that write nothing keeping what's known; `#at_most` field bounds, proven at every store; the sweep, 102 fields bounded and the workarounds they made needless taken out, the scan kept as `tools/bounds_workarounds.py` |
 | M19 | built 2026-11-27 (`decisions/0199`), R1 to R7: RISC-V on RVA23, Hemera hosted and for a kernel, the bootloader as a PE Hemera writes, the AIA and the PLIC, user mode and every boot test, the IOMMU and CFI, a review. R1 to R4 built 2026-11-25: Hemera on RISC-V hosted (83 of 83 Linux tests) and for a kernel; SlopOS booting through its bootloader, with interrupts on the PLIC and the AIA, the timer and every hart (21 boot tests). R5 built 2026-11-26: user mode, FP and vector state, virtio over PCI, and every boot test that applies on RISC-V. R6 built 2026-11-26: the RISC-V IOMMU, and Zicfilp's landing pads and Zicfiss's shadow stacks in the kernel and user mode. R7 built 2026-11-27: the review, its fixes, MRIFs for the RISC-V IOMMU, and the full suites on all three |
 | Before ABI v1 | built 2026-11-27 (`decisions/0200`), C1 and C2: the linker beside the compiler, its DLLs with it; the flaky boot tests fixed, two full runs with none; instruction caches synced for code mapped on RISC-V and AArch64 |
+| M20 | planned 2026-11-27 (`decisions/0201`), 20a to 20n: the ABI comparison, NVMe, AHCI, xHCI with hubs, HID and storage, RISC-V's debug triggers and IMSIC groups, indexes and live queries, C-callable exports and a libc, a review, ABI v1 |
