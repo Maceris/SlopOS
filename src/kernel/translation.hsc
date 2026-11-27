@@ -385,6 +385,8 @@ map_doorbell :: fn(
 ) -> iommu_interface.MapError? {
     first := cast[u64](0)
     pages := cast[u32](0)
+    groups := cast[u32](1)
+    group_stride := cast[u64](0)
     if registered.info.msi_window_pages != 0 {
         first = registered.info.msi_window
         pages = registered.info.msi_window_pages
@@ -393,17 +395,23 @@ map_doorbell :: fn(
         doorbell :: arch.msi_doorbell() or_return null
         first = cast[u64](doorbell.address)
         pages = doorbell.pages
+        if doorbell.groups > 1 {
+            groups = doorbell.groups
+            group_stride = doorbell.group_stride
+        }
     }
-    bytes :: cast[u64](pages) * frames.FRAME_SIZE
-    if first >= domain.address_limit || bytes > domain.address_limit - first {
+    // Every group's run reserved, and what's between them, which nothing else in the domain is given
+    run :: cast[u64](pages) * frames.FRAME_SIZE
+    bytes :: cast[u64](groups - 1) * group_stride + run
+    if (groups > 1 && group_stride < run) || first >= domain.address_limit || bytes > domain.address_limit - first {
         return iommu_interface.MapError.InvalidAddress
     }
     domain.reserved = first
     domain.reserved_bytes = bytes
     tables : iommu_interface.TableFrames
     defer give_back_iommu_tables(kernel, &tables, cast[u64](domain))
-    for page in 0..<cast[u64](pages) {
-        at :: first + page * frames.FRAME_SIZE
+    for each in 0..<cast[u64](groups) * cast[u64](pages) {
+        at :: first + (each / cast[u64](pages)) * group_stride + (each % cast[u64](pages)) * frames.FRAME_SIZE
         loop {
             match iommu_unit.map(
                 &registered.unit,

@@ -422,6 +422,7 @@ msi_doorbell :: fn() -> arch_interface.MsiDoorbell? {
     return arch_interface.MsiDoorbell.{
         address = cast[arch_interface.PhysicalAddress]((its.physical + GITS_TRANSLATER) & ~cast[u64](0xfff)),
         pages = 1,
+        groups = 1,
     }
 }
 

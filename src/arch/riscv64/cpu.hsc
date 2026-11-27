@@ -177,6 +177,12 @@ ArchSystem :: struct {
      * besides (riscv,guest-index-bits); 0 without an IMSIC.
      */
     imsic_stride : u64,
+    /**
+     * The IMSIC's groups (riscv,group-index-bits and riscv,group-index-shift), as harts on several sockets have: a
+     * file's group is its address's group_bits bits from group_shift; 0 bits for one group.
+     */
+    imsic_group_bits : u32,
+    imsic_group_shift : u32,
     /** The supervisor-level APLIC's registers, through the direct map, or 0 without one. */
     aplic : u64,
     /** The supervisor-level APLIC's registers' physical address, which test_device reports; 0 without one. */

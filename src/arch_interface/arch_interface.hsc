@@ -539,12 +539,19 @@ move_msi : fn(source : u32, event : u32, cpu_hardware_id : u64, id : InterruptId
  */
 unroute_msi : fn(source : u32, event : u32) : ---
 
-/** The pages devices write their MSIs to as memory (msi_doorbell). */
+/**
+ * The pages devices write their MSIs to as memory (msi_doorbell): a run of pages, or one for each of several groups,
+ * as a RISC-V IMSIC's harts on several sockets have, each group's run group_stride bytes past the one before.
+ */
 MsiDoorbell :: struct {
     /** The first page's physical address, 4 KiB aligned. */
     address : PhysicalAddress,
-    /** How many 4 KiB pages there are, from address on, at least 1. */
+    /** How many 4 KiB pages each group's run has, from its start on, at least 1. */
     pages : u32,
+    /** How many groups there are, at least 1; 0 is taken as 1. */
+    groups : u32,
+    /** The bytes from one group's run to the next's, past its pages; unused with one group. */
+    group_stride : u64,
 }
 
 /**

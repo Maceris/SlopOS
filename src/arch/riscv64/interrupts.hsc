@@ -176,41 +176,108 @@ init_aia :: fn(system : ptr[mut ArchSystem], tree : ptr[devicetree.Tree]) -> boo
         if (devicetree.cell(files, 1) or_else 0) != 9 {
             continue
         }
-        region :: devicetree.reg(tree, &node, 0) or_return false
-        if !map_device_range(system, region.address, region.size) {
+        // Every reg range, a group's (or with one group, the IMSIC's), each mapped
+        regions : devicetree.Region[MAX_IMSIC_RANGES]
+        region_count := cast[usize](0)
+        for i in cast[u32](0)..<cast[u32](MAX_IMSIC_RANGES) {
+            region :: devicetree.reg(tree, &node, i) or_break
+            if !map_device_range(system, region.address, region.size) {
+                return false
+            }
+            if region_count >= regions.count {
+                break
+            }
+            regions[region_count] = region
+            region_count += 1
+        }
+        if region_count == 0 {
             return false
         }
         guest_bits :: cell_property(tree, &node, "riscv,guest-index-bits", 0)
         stride :: cast[u64](1) << (12 + cast[u64](guest_bits))
+        count :: files.size / 8
+        // The binding's defaults: as many hart bits as the files need, no group bits, groups 16 MiB apart
+        hart_bits :: cell_property(tree, &node, "riscv,hart-index-bits", bits_for(count))
+        group_bits :: cell_property(tree, &node, "riscv,group-index-bits", 0)
+        group_shift :: cell_property(tree, &node, "riscv,group-index-shift", 24)
         system.imsic_ids = cell_property(tree, &node, "riscv,num-ids", 0)
         system.imsic_stride = stride
-        count :: files.size / 8
+        system.imsic_group_bits = group_bits
+        system.imsic_group_shift = group_shift
+        groups := cast[u64](0)
         for index in cast[u64](0)..<count {
             hart :: devicetree.parent_reg_of(tree, devicetree.cell(files, index * 2) or_else 0) or_continue
             at :: cast[usize](system.hart_count)
             if at >= system.harts.count {
                 break
             }
-            /*
-             * Its file within the reg range mapped: an IMSIC in groups has more ranges, which aren't read, and the
-             * harts past the first stay off
-             */
-            if region.size < IMSIC_FILE_BYTES || index > (region.size - IMSIC_FILE_BYTES) / stride {
-                runtime.log_warn("IMSIC: hart % has its file past the first reg range, which alone is used", hart)
+            // The files run on through the ranges in order, as Linux reads them: this one's the index-th
+            file :: file_at(regions, region_count, index * stride) or_else 0
+            if file == 0 {
+                runtime.log_warn("IMSIC: hart % has its file past every reg range", hart)
                 break
             }
+            // Its number, which the APLIC's targets name it by: its group, then its hart index within the group
+            hart_index :: (file >> (12 + cast[u64](guest_bits))) & ((cast[u64](1) << cast[u64](hart_bits)) - 1)
+            group :: (file >> cast[u64](group_shift)) & ((cast[u64](1) << cast[u64](group_bits)) - 1)
             system.harts[at] = Hart.{
                 id = hart,
                 plic_context = NO_CONTEXT,
-                imsic_file = region.address + index * stride,
-                imsic_index = cast[u32](index),
+                imsic_file = file,
+                imsic_index = cast[u32]((group << cast[u64](hart_bits)) | hart_index),
             }
             system.hart_count += 1
+            groups = if group + 1 > groups { group + 1 } else { groups }
         }
+        runtime.log_info("IMSIC: % supervisor interrupt files, in % groups", system.hart_count, groups)
         find_aplic(system, tree, cell_property(tree, &node, "phandle", 0))
         return system.hart_count > 0
     }
     return false
+}
+
+/** The most reg ranges an IMSIC's read for: one for each of its groups, as a board's sockets have. */
+MAX_IMSIC_RANGES :: 8
+
+/**
+ * Find a file among an IMSIC's ranges, the files running on through them in order, each range holding as many as fit.
+ *
+ * @param regions The ranges, in the device tree's order.
+ * @param count How many of them are read.
+ * @param offset The file's offset among them all, its index times the files' stride.
+ * @return The file's physical address; null if it's past every range.
+ */
+file_at :: fn(regions : devicetree.Region[MAX_IMSIC_RANGES], count : usize, offset : u64) -> u64? {
+    left := offset
+    for region, i in regions {
+        if i >= count {
+            break
+        }
+        if left + IMSIC_FILE_BYTES <= region.size {
+            return region.address + left
+        }
+        if left < region.size {
+            return null
+        }
+        left -= region.size
+    }
+    return null
+}
+
+/**
+ * How many bits number count things, from 0 to count - 1.
+ *
+ * @param count How many.
+ * @return The bits: 0 for 1 or none, 1 for 2, 2 for 3 or 4, and on.
+ */
+bits_for :: fn(count : u64) -> u32 {
+    bits := cast[u32](0)
+    loop {
+        if (cast[u64](1) << cast[u64](bits)) >= count || bits >= 32 {
+            return bits
+        }
+        bits += 1
+    }
 }
 
 /**
@@ -842,17 +909,30 @@ msi_doorbell :: fn() -> arch_interface.MsiDoorbell? {
         return null
     }
     lowest := ~cast[u64](0)
-    highest := cast[u64](0)
     for i in 0..<cast[usize](system.hart_count) {
         file :: system.harts[i].imsic_file
         lowest = if file < lowest { file } else { lowest }
-        highest = if file > highest { file } else { highest }
     }
-    pages :: (highest - lowest) / IMSIC_FILE_BYTES + 1
-    if pages > MAX_DOORBELL_PAGES {
+    // With groups, each group's files are as far past the lowest group's as its number says, group_stride each
+    group_stride :: if system.imsic_group_bits == 0 { cast[u64](0) } else { cast[u64](1) << cast[u64](system.imsic_group_shift) }
+    pages := cast[u64](1)
+    groups := cast[u64](1)
+    for i in 0..<cast[usize](system.hart_count) {
+        past :: system.harts[i].imsic_file - lowest
+        group :: if group_stride == 0 { cast[u64](0) } else { past / group_stride }
+        within :: if group_stride == 0 { past } else { past % group_stride }
+        pages = if within / IMSIC_FILE_BYTES + 1 > pages { within / IMSIC_FILE_BYTES + 1 } else { pages }
+        groups = if group + 1 > groups { group + 1 } else { groups }
+    }
+    if pages * groups > MAX_DOORBELL_PAGES || groups > cast[u64](MAX_IMSIC_RANGES) {
         return null
     }
-    return arch_interface.MsiDoorbell.{address = cast[arch_interface.PhysicalAddress](lowest), pages = cast[u32](pages)}
+    return arch_interface.MsiDoorbell.{
+        address = cast[arch_interface.PhysicalAddress](lowest),
+        pages = cast[u32](pages),
+        groups = cast[u32](groups),
+        group_stride = group_stride,
+    }
 }
 
 /** The bytes of one interrupt file on the IMSIC, and of an IOMMU's page. */

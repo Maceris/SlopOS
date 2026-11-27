@@ -2098,6 +2098,15 @@ def riscv_tests(tests: list) -> list:
 
 RISCV_TESTS = [(f"RISC-V PLIC: {name}", expected, arguments) for name, expected, arguments in RISCV_INTERRUPT_TESTS] \
     + riscv_tests(TESTS) + [
+    # An IMSIC in groups (decisions/0201's 20h): virt's two sockets, as NUMA nodes, each its own group of interrupt
+    # files 16 MiB apart; every hart's file found, the IPIs between them and the devices' MSIs reaching each
+    ("RISC-V: runs on harts in two IMSIC groups", 7, ["--aia", WITH_PROGRAMS, "--command-line=test_exit test_services",
+        "--expect-line=[boot] IMSIC: 4 supervisor interrupt files, in 2 groups",
+        "--expect-line=[user] virtio_rng: serving, a source of the entropy service's",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "4",
+        "-object", "memory-backend-ram,size=256M,id=m0", "-object", "memory-backend-ram,size=256M,id=m1",
+        "-numa", "node,memdev=m0,cpus=0-1,nodeid=0", "-numa", "node,memdev=m1,cpus=2-3,nodeid=1",
+        "-device", "virtio-rng-pci,disable-legacy=on,iommu_platform=on"]),
     # RVA23 but its vector extension, which the kernel doesn't use, so its own check is what refuses it
     ("RISC-V: refuses a CPU below RVA23", 2, ["--cpu=rva23s64,sv48=on,zkr=on,v=false",
         "--expect-line=[boot] SlopOS needs an RVA23 CPU, and this one lacks the vector extension (V)"]),
