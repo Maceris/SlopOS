@@ -1,6 +1,6 @@
 # 0199: M19, RISC-V, Planned
 
-Status: accepted
+Status: accepted; built
 Date: 2026-11-24
 Related: `0022` (RISC-V third), `0061` (A's plan, the pattern), `0135` (SlopOS's bootloader), `0026` (the carrier
 register), `0081` (VT-d), `0197` (RISC-V chosen next), `../hemera-proposals/kernel-entry.md`, `../roadmap.md`
