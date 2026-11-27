@@ -242,6 +242,7 @@ build :: fn(
     self :: slop_os.handle_duplicate(cast[slop_os.Handle](target.process), self_rights) or_return .Error(.Failed)
     remember(&made, self)
     budget_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_BUDGET_CHARGE)
+        | cast[u32](slop_os.RIGHT_BUDGET_WATCH)
         | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
     budget :: slop_os.handle_duplicate(cast[slop_os.Handle](target.budget), budget_rights) or_return .Error(.Failed)

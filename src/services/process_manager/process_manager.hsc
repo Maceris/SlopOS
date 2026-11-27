@@ -188,7 +188,7 @@ serve :: fn(manager : ptr[mut Manager], index : usize, into : ptr[mut os.Incomin
                 loading := request
                 out := os.Outgoing.{}
                 response :: os.begin[protocol.Response](&out)
-                response^ = load(manager, &loading)
+                response^ = load(manager, &loading, into)
                 /*
                  * Not sent, the program's handles are still the manager's: closed, which ends the program. A program
                  * that's ended already can't have its handles moved, so it's answered again without them: its end was
@@ -328,6 +328,7 @@ STEERING_INTERCEPT :: cast[u32](slop_os.RIGHT_INTERCEPT_STEER)
  *
  * @param manager The manager, whose entropy connection may be dialed again.
  * @param request The Load, whose handles are all gone from this process when it returns.
+ * @param into The message it came in, which holds its set of calls.
  * @return Loaded with the process, the intercept and its address space if asked, the first thread's ID, the image's
  *     address and the seeds, the handles the manager's until it's sent; or NotLoaded with BadRequest for
  *     more than MAX_GRANTS grants or an executable that's empty, larger than MAX_EXECUTABLE, or can't be read (its
@@ -336,7 +337,7 @@ STEERING_INTERCEPT :: cast[u32](slop_os.RIGHT_INTERCEPT_STEER)
  *     NotAProgram when it isn't an executable the loader takes, NoCpuBudget when the CPU budget couldn't be put on,
  *     NoWatch when the watch or the intercept couldn't be made, and Failed for any other failure building it.
  */
-load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol.Response {
+load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load], into : ptr[os.Incoming]) -> protocol.Response {
     defer close_all(request)
     grant_count :: cast[usize](request.grant_count)
     if grant_count > protocol.MAX_GRANTS {
@@ -418,8 +419,7 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
         return .NotLoaded(.NoWatch)
     }
     if cast[slop_os.Handle](request.intercept_port) != slop_os.NO_HANDLE {
-        // The protocol's calls are a set's first word, the first 64 calls; STOP_ALL_CALLS reaches the rest
-        calls :: u64.[request.intercept_calls]
+        calls :: os.items(into, request.intercept_calls)
         made.intercept = slop_os.intercept_attach(
             process,
             request.intercept_port,
@@ -447,8 +447,12 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
             // Kept for Steer and Identify while it runs: the process and space, the intercept, and the executable
             executable :: cast[slop_os.Memory](copy_of(cast[slop_os.Handle](request.executable)))
             faults :: slop_os.STOP_FAULT | slop_os.STOP_FAULT_LIMITED
+            any_call := false
+            for word in os.items(into, request.intercept_calls) {
+                any_call = any_call || word != 0
+            }
             stops :: cast[slop_os.Handle](made.intercept) != slop_os.NO_HANDLE
-                && (request.intercept_calls != 0 || (request.intercept_points & ~faults) != 0)
+                && (any_call || (request.intercept_points & ~faults) != 0)
             keep(manager, process, kept_space, made.intercept, executable, stops)
             if cast[slop_os.Handle](made.intercept) != slop_os.NO_HANDLE {
                 made.intercept = cast[slop_os.Intercept](

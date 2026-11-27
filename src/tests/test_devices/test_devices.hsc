@@ -208,6 +208,19 @@ device_memory_reads_its_device_and_false_iommus_are_refused #test :: fn(t : ptr[
     block :: slop_os.startup_block()
     space :: block.space
     hardware :: testing.require_some(t, given.platform, "the root task grants the platform capability")?
+    // Its copy has the hardware, not the power, and can't be copied on (decisions/0202, 21c)
+    testing.expect_error(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](hardware), slop_os.RIGHT_PLATFORM_DEVICES),
+        slop_os.HandleError.MissingRight,
+        "a copy of the platform without RIGHT_PLATFORM_DUPLICATE can't be copied"
+    )
+    testing.expect_error(
+        t,
+        slop_os.power_set_reset(hardware, 0xcf9, 6),
+        slop_os.DeviceError.MissingRight,
+        "nor say how the machine resets without RIGHT_PLATFORM_POWER"
+    )
     info :: info_of(t, given)?
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, 1 << 20), "a budget for the memory")?
     // Device memory: not over the kernel's RAM; the device's registers, read

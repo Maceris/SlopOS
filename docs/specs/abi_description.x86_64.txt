@@ -92,7 +92,7 @@ syscall 90 process_cpu_info : fn(process : Process) -> Result[ProcessCpu, Contro
 syscall 91 memory_budget_others : fn(budget : MemoryBudget) -> Result[u64, HandleError]
 syscall 92 thread_set_page : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
 syscall 93 process_set_control_flow : fn(process : Process, features : u32, region : u64, size : u64) -> Result[void, ControlError]
-syscall 94 coverage_take : fn(counters : u8[]) -> Result[u64, CoverageError]
+syscall 94 coverage_take : fn(log : DebugLog, counters : u8[]) -> Result[u64, CoverageError]
 syscall 95 memory_kind : fn(memory : Memory) -> Result[MemoryKind, HandleError]
 syscall 96 handle_same : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
 syscall 97 handle_restrict : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]
@@ -165,6 +165,7 @@ const REGISTER_RSP : u32 = 7
 const REGISTER_SP : u32 = 7
 const RIGHTS_ALL : Rights = 4294967295
 const RIGHT_BUDGET_CHARGE : Rights = 256
+const RIGHT_BUDGET_WATCH : Rights = 512
 const RIGHT_CHANNEL_MAP : Rights = 256
 const RIGHT_CPU_BUDGET_BIND : Rights = 1024
 const RIGHT_CPU_BUDGET_SET : Rights = 512
@@ -178,8 +179,12 @@ const RIGHT_IRQ_ACK : Rights = 256
 const RIGHT_MEMORY_EXECUTE : Rights = 1024
 const RIGHT_MEMORY_READ : Rights = 256
 const RIGHT_MEMORY_WRITE : Rights = 512
+const RIGHT_PLATFORM_DEVICES : Rights = 256
+const RIGHT_PLATFORM_DUPLICATE : Rights = 1024
+const RIGHT_PLATFORM_POWER : Rights = 512
 const RIGHT_PORT_BIND : Rights = 512
 const RIGHT_PORT_WAIT : Rights = 256
+const RIGHT_PORT_WAKE : Rights = 1024
 const RIGHT_PROCESS_INSPECT : Rights = 256
 const RIGHT_PROCESS_INTERCEPT : Rights = 2048
 const RIGHT_PROCESS_KILL : Rights = 4096
@@ -385,6 +390,10 @@ type ControllerKind member GicDistributor = 0x2
 type ControllerKind member Plic = 0x3
 type ControllerKind member Aplic = 0x4
 type CoverageError : enum u32
+type CoverageError member InvalidHandle = 0x1
+type CoverageError member ObjectGone = 0x2
+type CoverageError member MissingRight = 0x3
+type CoverageError member WrongKind = 0x4
 type CoverageError member NoSuchCall = 0x7
 type CoverageError member BadBuffer = 0xa
 type CoverageError member NotCounted = 0x30
@@ -842,7 +851,7 @@ type Syscalls field 0090 process_cpu_info offset 720 : fn(process : Process) -> 
 type Syscalls field 0091 memory_budget_others offset 728 : fn(budget : MemoryBudget) -> Result[u64, HandleError]
 type Syscalls field 0092 thread_set_page offset 736 : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
 type Syscalls field 0093 process_set_control_flow offset 744 : fn(process : Process, features : u32, region : u64, size : u64) -> Result[void, ControlError]
-type Syscalls field 0094 coverage_take offset 752 : fn(counters : u8[]) -> Result[u64, CoverageError]
+type Syscalls field 0094 coverage_take offset 752 : fn(log : DebugLog, counters : u8[]) -> Result[u64, CoverageError]
 type Syscalls field 0095 memory_kind offset 760 : fn(memory : Memory) -> Result[MemoryKind, HandleError]
 type Syscalls field 0096 handle_same offset 768 : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
 type Syscalls field 0097 handle_restrict offset 776 : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]

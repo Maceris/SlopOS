@@ -413,7 +413,7 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> t
     }
     // The kernel's counters, if it has them
     none : u8[0]
-    match slop_os.coverage_take(none) {
+    match slop_os.coverage_take(given.log, none) {
         case Ok(count) => {
             counters, failed :: runtime.new_array(u8, cast[usize](count))
             seen, seen_failed :: runtime.new_array(u8, cast[usize](count))
@@ -440,11 +440,11 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> t
         }
         choose_input(&fuzzer, &input)
         if fuzzer.counters.count > 0 {
-            _ = slop_os.coverage_take(none)
+            _ = slop_os.coverage_take(given.log, none)
         }
         run_input(&fuzzer, &input)
         if fuzzer.counters.count > 0 && fuzzer.counters.count <= fuzzer.seen.count {
-            _ = slop_os.coverage_take(fuzzer.counters)
+            _ = slop_os.coverage_take(given.log, fuzzer.counters)
             if reached_more(&fuzzer) {
                 keep(&fuzzer, &input)
             }

@@ -265,6 +265,10 @@ sys_handle_duplicate :: fn(
     if held & cast[u32](slop_os.RIGHT_DUPLICATE) == 0 || cast[u32](rights) & ~held != 0 {
         return .Error(.MissingRight)
     }
+    // The machine's hardware is copied only by a holder given the right to (decisions/0202, 21c)
+    if found.kind == .Platform && held & cast[u32](slop_os.RIGHT_PLATFORM_DUPLICATE) == 0 {
+        return .Error(.MissingRight)
+    }
     made :: install(per_cpu().kernel, &process.table, found.object, found.generation, found.kind, rights, false)?
     if found.kind == .Memory {
         hold_memory(found.object, found.generation)
@@ -772,13 +776,13 @@ sys_port_bind_wake :: fn(thread : ptr[mut Thread], port : slop_os.Port, key : u6
  *
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
  *     where the handles are looked up.
- * @param port The port, which needs RIGHT_PORT_BIND.
+ * @param port The port, which needs RIGHT_PORT_WAKE.
  * @param key A key port_bind_wake bound.
  * @param bits Bits for the packet's data[0], ORed with any raised since it was last taken.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The port was destroyed, or is being.
  * @error WrongKind Not a port's handle.
- * @error MissingRight The handle lacks RIGHT_PORT_BIND.
+ * @error MissingRight The handle lacks RIGHT_PORT_WAKE.
  * @error NoSuchKey No wake binding has the key.
  */
 sys_port_wake :: fn(
@@ -787,7 +791,7 @@ sys_port_wake :: fn(
     key : u64,
     bits : u64
 ) -> Result[void, slop_os.PortError] {
-    found :: port_of(thread, port, slop_os.RIGHT_PORT_BIND)?
+    found :: port_of(thread, port, slop_os.RIGHT_PORT_WAKE)?
     return port_done(port_wake(per_cpu().kernel, found, key, bits))
 }
 
@@ -983,9 +987,9 @@ sys_port_bind :: fn(
             )
         )
     }
-    // A budget's holder, who may charge it, watches it for pressure (decisions/0111)
+    // A budget's watcher, who needn't be able to charge it, watches it for pressure (decisions/0111, 0202's 21c)
     if found.kind == .MemoryBudget {
-        if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_BUDGET_CHARGE) == 0 {
+        if cast[u32](found.rights) & cast[u32](slop_os.RIGHT_BUDGET_WATCH) == 0 {
             return .Error(.MissingRight)
         }
         watched :: cast[ptr[mut MemoryBudget]](found.object)
@@ -1528,12 +1532,12 @@ sys_memory_budget_info :: fn(
  *
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
  *     where the handles are looked up.
- * @param budget The budget, which needs RIGHT_BUDGET_CHARGE.
+ * @param budget The budget, which needs RIGHT_BUDGET_WATCH.
  * @param threshold In bytes, or 0 for none.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The budget was destroyed.
  * @error WrongKind Not a memory budget's handle.
- * @error MissingRight The handle lacks RIGHT_BUDGET_CHARGE.
+ * @error MissingRight The handle lacks RIGHT_BUDGET_WATCH.
  */
 sys_memory_budget_set_threshold :: fn(
     thread : ptr[mut Thread],
@@ -1544,7 +1548,7 @@ sys_memory_budget_set_threshold :: fn(
         process_of(thread),
         cast[slop_os.Handle](budget),
         slop_os.ObjectKind.MemoryBudget,
-        slop_os.RIGHT_BUDGET_CHARGE
+        slop_os.RIGHT_BUDGET_WATCH
     )?
     set_threshold(cast[ptr[mut MemoryBudget]](object), threshold)
     return .Ok
@@ -2104,21 +2108,27 @@ sys_memory_create_window :: fn(
 // ---- Devices (irqs.hsc)
 
 /**
- * Find the platform capability a handle names, which device calls take as their authority; no right is needed.
+ * Find the platform capability a handle names, which device and power calls take as their authority.
  *
  * @param thread The calling thread, whose process's handle table the platform's handle is looked up in.
- * @param platform The platform's handle, as the caller passed it, untrusted, of any rights.
+ * @param platform The platform's handle, as the caller passed it, untrusted.
+ * @param right The right the call needs: slop_os.RIGHT_PLATFORM_DEVICES, or RIGHT_PLATFORM_POWER.
  * @return The Platform object's address.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The platform was destroyed.
  * @error WrongKind Not the platform's handle.
+ * @error MissingRight The handle lacks right.
  */
-platform_of :: fn(thread : ptr[mut Thread], platform : slop_os.Platform) -> Result[u64, slop_os.DeviceError] {
+platform_of :: fn(
+    thread : ptr[mut Thread],
+    platform : slop_os.Platform,
+    right : slop_os.Rights = slop_os.RIGHT_PLATFORM_DEVICES
+) -> Result[u64, slop_os.DeviceError] {
     return object_of[slop_os.DeviceError](
         process_of(thread),
         cast[slop_os.Handle](platform),
         slop_os.ObjectKind.Platform,
-        cast[slop_os.Rights](0)
+        right
     )
 }
 
@@ -2646,7 +2656,7 @@ sys_power_set_off :: fn(
     sleep_a : u32,
     sleep_b : u32
 ) -> Result[void, slop_os.DeviceError] {
-    _ = platform_of(thread, platform)?
+    _ = platform_of(thread, platform, slop_os.RIGHT_PLATFORM_POWER)?
     return set_power_off(per_cpu().kernel, control_a, control_b, sleep_a, sleep_b)
 }
 
@@ -2668,7 +2678,7 @@ sys_power_set_reset :: fn(
     port : u32,
     value : u32
 ) -> Result[void, slop_os.DeviceError] {
-    _ = platform_of(thread, platform)?
+    _ = platform_of(thread, platform, slop_os.RIGHT_PLATFORM_POWER)?
     return set_power_reset(per_cpu().kernel, port, value)
 }
 
@@ -2690,7 +2700,7 @@ sys_power_end_with :: fn(
     platform : slop_os.Platform,
     action : slop_os.PowerAction
 ) -> Result[void, slop_os.DeviceError] {
-    _ = platform_of(thread, platform)?
+    _ = platform_of(thread, platform, slop_os.RIGHT_PLATFORM_POWER)?
     return set_power_end(per_cpu().kernel, cast[u32](action))
 }
 

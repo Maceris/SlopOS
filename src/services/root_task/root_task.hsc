@@ -1006,7 +1006,13 @@ run_test :: fn(
     text_buffer.append(&module_name, name)
     text_buffer.append(&module_name, ".elf")
     module :: find_module(block, text_buffer.as_string(&module_name)) or_return 20
-    grants := TestGrants.{log = duplicate_log(root) or_return 21}
+    /*
+     * The system call fuzzer's log may trace, as coverage_take needs (decisions/0202, 21c); every other test's only
+     * writes
+     */
+    grants := TestGrants.{
+        log = (if name == "test_fuzz_syscalls" { tracing_log(root) } else { duplicate_log(root) }) or_return 21
+    }
     module_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
         | cast[u32](slop_os.RIGHT_DUPLICATE)
         | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -1033,7 +1039,10 @@ run_test :: fn(
     }
     // Only the devices tests are given the hardware, and the firmware tables that describe it
     if name == "test_devices" || name == "test_msi_dma" || name == "test_io_ports" {
-        platform_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+        // The hardware, not power, and no copying it on (decisions/0202, 21c)
+        platform_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE)
+            | cast[u32](slop_os.RIGHT_TRANSFER)
+            | cast[u32](slop_os.RIGHT_PLATFORM_DEVICES))
         match slop_os.handle_duplicate(cast[slop_os.Handle](platform), platform_rights) {
             case Ok(copy) => grants.platform = cast[slop_os.Platform](copy)
             case Error(error) => {}
@@ -1187,7 +1196,11 @@ start_platform :: fn(root : ptr[mut Root]) {
     module :: find_module(block, service.module) or_return void
     pair :: os.channel_for[platform_protocol.Platform](block.budget, 0) or_return void
     port :: os.port_for(block.budget, pair.b) or_return void
-    capability_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE) | cast[u32](slop_os.RIGHT_TRANSFER))
+    // The hardware and the machine's power, which it takes for its clients, but not the right to copy it on
+    capability_rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_DUPLICATE)
+        | cast[u32](slop_os.RIGHT_TRANSFER)
+        | cast[u32](slop_os.RIGHT_PLATFORM_DEVICES)
+        | cast[u32](slop_os.RIGHT_PLATFORM_POWER))
     grants := PlatformGrants.{
         log = duplicate_log(root),
         platform = cast[slop_os.Platform](slop_os.handle_duplicate(

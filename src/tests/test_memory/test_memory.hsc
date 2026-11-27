@@ -138,6 +138,49 @@ a_child_budget_pays_only_within_its_limit #test :: fn(t : ptr[mut testing.T]) ->
     )
     not_pages :: slop_os.memory_create(child, 1000)
     testing.expect_error(t, not_pages, slop_os.MemoryError.InvalidSize, "memory is made in whole pages")
+    // Watching a budget is a right of its own, apart from charging it (decisions/0202, 21c)
+    watcher :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](child), slop_os.RIGHT_BUDGET_WATCH),
+        "a copy of the child that may watch it"
+    )?
+    charger :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](child), slop_os.RIGHT_BUDGET_CHARGE),
+        "a copy of the child that may charge it"
+    )?
+    watch :: testing.require_ok(t, slop_os.port_create(budget), "a port to watch the child on")?
+    testing.expect_ok(
+        t,
+        slop_os.memory_budget_set_threshold(cast[slop_os.MemoryBudget](watcher), CHILD_LIMIT / 2),
+        "a watcher sets its threshold"
+    )
+    testing.expect_ok(
+        t,
+        slop_os.port_bind(watch, 1, watcher, slop_os.SIGNAL_PRESSURE, .Once),
+        "and binds a port to its pressure"
+    )
+    testing.expect_error(
+        t,
+        slop_os.memory_create(cast[slop_os.MemoryBudget](watcher), 4096),
+        slop_os.MemoryError.MissingRight,
+        "but can't pay for anything with it"
+    )
+    testing.expect_error(
+        t,
+        slop_os.memory_budget_set_threshold(cast[slop_os.MemoryBudget](charger), CHILD_LIMIT / 2),
+        slop_os.HandleError.MissingRight,
+        "a charger can't set its threshold"
+    )
+    testing.expect_error(
+        t,
+        slop_os.port_bind(watch, 2, charger, slop_os.SIGNAL_PRESSURE, .Once),
+        slop_os.PortError.MissingRight,
+        "nor watch it"
+    )
+    _ = slop_os.handle_close(cast[slop_os.Handle](watch))
+    _ = slop_os.handle_close(watcher)
+    _ = slop_os.handle_close(charger)
     _ = slop_os.handle_close(cast[slop_os.Handle](child))
     testing.expect(
         t,

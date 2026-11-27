@@ -296,7 +296,11 @@ taking a `u64[]`, `cpu_budget_cpus` appended (100), `add_cpu` and `has_cpu`; the
 each architecture's `REGISTER_` constants; `Protocol` and `Lending` moved to `os` (`slop_os_protocols.hsc`), which the
 protocol packages import already. Friction: a constant that's a cast of another package's constant (`PC_REGISTER :
 usize : cast[usize](slop_os.REGISTER_PC)`) isn't one a bounds check proves an index by, though a literal is, so
-crash_reports writes them out and asserts them against the package's.
+crash_reports writes them out and asserts them against the package's. 21c: `RIGHT_PORT_WAKE` split from
+`RIGHT_PORT_BIND`, `RIGHT_BUDGET_WATCH` from `RIGHT_BUDGET_CHARGE`, the Platform's `RIGHT_PLATFORM_DEVICES`,
+`RIGHT_PLATFORM_POWER` and `RIGHT_PLATFORM_DUPLICATE`; `coverage_take` taking the debug log, with `CoverageError`'s
+handle tags; the process manager's `Load` carrying its calls as a `Relative[u64]`, which the launcher fills with every
+call for a debugger; a launched program's budget with `RIGHT_BUDGET_WATCH`.
 
 ## 4. Features That Look Like a Strong Fit
 

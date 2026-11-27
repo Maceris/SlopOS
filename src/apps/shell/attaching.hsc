@@ -12,22 +12,29 @@ import shell_language as language from "../../shell_language"
  * session's powerbox, which asks the user on the trusted path, each time, or for another user's program the
  * administrator; once it's allowed, the session manager attaches an intercept of the program's faults on the shell's
  * port in place of its own, and gives the shell the program's process, address space and image. Its threads are
- * suspended, and the debugger's commands work as they do on a program it started; quit lets it go, running on.
+ * suspended, and the debugger's commands work as they do on a program it started, on the thread named after the
+ * program's name, by its ID, or without one its oldest (decisions/0202, 21c); quit lets it go, running on.
  */
 
 /**
  * Debug a program the session runs that the shell didn't start, for debug attach.
  *
  * @param shell The shell, whose session's powerbox is asked.
- * @param tree The Call node of debug, its first child "attach", its second the program's name as the session runs it.
- * @return Null once the debugger's let it go or it's ended; an error without a powerbox, if it's refused, or if
- *     there's no such program.
+ * @param tree The Call node of debug, its first child "attach", its second the program's name as the session runs it,
+ *     and a third, if there is one, the ID of the thread to look at, as threads lists them.
+ * @return Null once the debugger's let it go or it's ended; an error without a powerbox, if it's refused, if there's
+ *     no such program, or if it has no thread of the ID given, when it's let go at once.
  */
 attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Value, EvalError] {
-    if tree.children.count != 2 || tree.children[1].kind != .Word {
-        return error_at(tree.at, "debug attach takes the name of a program the session runs: debug attach name")
+    usage :: "debug attach takes the name of a program the session runs, and a thread's ID if not its oldest: debug attach name [thread]"
+    if tree.children.count < 2 || tree.children.count > 3 || tree.children[1].kind != .Word {
+        return error_at(tree.at, usage)
     }
     name :: tree.children[1].text
+    wanted := cast[u64](0)
+    if tree.children.count == 3 {
+        wanted = number_of(tree.children[2].text) or_return error_at(tree.children[2].at, usage)
+    }
     end :: powerbox_connection(shell, "shell")
         or_return error_at(tree.at, "debug attach needs the session's powerbox, which this session hasn't")
     defer slop_os.handle_close(cast[slop_os.Handle](end))
@@ -125,7 +132,11 @@ attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
     if has_file {
         session.file = &file
     }
-    suspended :: suspend_all(&session)
+    suspended :: suspend_all(&session, wanted)
+    if wanted != 0 && session.thread != wanted {
+        let_go(&session)
+        return error_at(tree.at, message("% has no thread %, so it's let go", name, wanted))
+    }
     say(
         shell,
         message(
@@ -156,12 +167,14 @@ attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
 }
 
 /**
- * Suspend every thread of an attached program, the first of them the one the debugger looks at.
+ * Suspend every thread of an attached program, one of them the one the debugger looks at.
  *
- * @param session The session, whose thread becomes the first suspended and which is marked suspended.
+ * @param session The session, whose thread becomes the one wanted, or the first suspended, and which is marked
+ *     suspended.
+ * @param wanted The ID of the thread to look at; 0, or one the program hasn't, for its oldest, the first suspended.
  * @return How many were suspended.
  */
-suspend_all :: fn(session : ptr[mut Debugging]) -> u32 {
+suspend_all :: fn(session : ptr[mut Debugging], wanted : u64 = 0) -> u32 {
     process :: session.call.launched.process
     ids : u64[64]
     count :: slop_os.process_threads(process, 0, ids) or_else 0
@@ -171,7 +184,7 @@ suspend_all :: fn(session : ptr[mut Debugging]) -> u32 {
             break
         }
         if slop_os.thread_suspend(process, id) is_ok {
-            if suspended == 0 {
+            if suspended == 0 || id == wanted {
                 session.thread = id
                 // Not a stop, but where and the rest read the thread from one
                 session.stop = slop_os.StopInfo.{thread = id}

@@ -45,8 +45,9 @@ each object is its owning one (`0008`).
   reused.
 - **Rights** (`slop_os.Rights`, `0010`): `RIGHT_DUPLICATE` and `RIGHT_TRANSFER` for every kind, then per
   kind: `RIGHT_SPACE_THREADS` and `RIGHT_SPACE_MAP` for an address space; `RIGHT_PORT_WAIT` and
-  `RIGHT_PORT_BIND` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE` for a memory
-  budget; `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
+  `RIGHT_PORT_BIND` and `RIGHT_PORT_WAKE` for a port; `RIGHT_CHANNEL_MAP` for a channel end; `RIGHT_BUDGET_CHARGE`
+  and `RIGHT_BUDGET_WATCH` for a memory budget; `RIGHT_PLATFORM_DEVICES`, `RIGHT_PLATFORM_POWER` and
+  `RIGHT_PLATFORM_DUPLICATE` (which copying it needs, with `RIGHT_DUPLICATE`) for the platform (`0202`, 21c); `RIGHT_MEMORY_READ`, `RIGHT_MEMORY_WRITE` and `RIGHT_MEMORY_EXECUTE` for a memory object;
   `RIGHT_IRQ_ACK` for an IRQ; `RIGHT_INTERCEPT_STEER` for an intercept (`0195`, 18b: without it, its holder
   reports faults and samples, and lets a thread go on only from a fault, or kills it); `RIGHT_PROCESS_INSPECT`,
   `_READ_MEMORY`, `_WRITE_STATE`, `_INTERCEPT`,
@@ -77,7 +78,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 7 | `clock_monotonic` | | the monotonic clock, in nanoseconds since the kernel's timer started (`0009`) |
 | 8 | `port_create` | budget | an owning handle to a new port |
 | 9 | `port_bind_wake` | port, key | nothing: a wake binding for key; needs `RIGHT_PORT_BIND` |
-| 10 | `port_wake` | port, key, bits | nothing: key's wake binding's packet, with bits ORed into it; needs `RIGHT_PORT_BIND` |
+| 10 | `port_wake` | port, key, bits | nothing: key's wake binding's packet, with bits ORed into it; needs `RIGHT_PORT_WAKE` |
 | 11 | `port_set_timer` | port, key, deadline | nothing: a timer packet for key at deadline (monotonic nanoseconds), binding key if it isn't yet; setting it again moves it. Needs `RIGHT_PORT_BIND` |
 | 12 | `port_unbind` | port, key | nothing: the binding goes, with a packet it had queued; needs `RIGHT_PORT_BIND` |
 | 13 | `port_wait` | port, packets (a slice), deadline | how many packets it wrote into packets, up to its count and 64: at once if any are queued, otherwise once one is, or 0 at deadline (`NO_DEADLINE` for none). Empty packets are refused with `BufferTooSmall`. Needs `RIGHT_PORT_WAIT` |
@@ -90,7 +91,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 20 | `channel_send_handles` | end, handles (a slice), batch | nothing: the handles (up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
 | 21 | `channel_take_handles` | end, batch, handles (a slice), count (a pointer, or null) | how many: the batch's handles, in the caller's table, written into handles, and how many there are at count too, also when handles is too small; `NO_HANDLE` for any whose object is gone |
 | 22 | `channel_notify_and_wait` | end, signals, port, packets (a slice), deadline | as `channel_notify`, then `port_wait`; a thread the notify wakes is made ready on the caller's CPU |
-| 23 | `port_bind` | port, key, object, signals, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread, a Device, a memory budget (with `RIGHT_BUDGET_CHARGE`) or a memory object (its owning handle), raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread, a Device, a memory budget or a memory object can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 23 | `port_bind` | port, key, object, signals, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread, a Device, a memory budget (with `RIGHT_BUDGET_WATCH`) or a memory object (its owning handle), raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread, a Device, a memory budget or a memory object can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `memory_budget_create` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `memory_budget_info` | budget | its limit, and how much of it is charged, in bytes |
 | 26 | `memory_create` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to the startup block's `max_memory_size` (1 GiB), charged for all of it |
@@ -140,7 +141,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 70 | `memory_write` | memory, offset, bytes | nothing: bytes copied into anonymous memory from offset, through the kernel; `RIGHT_MEMORY_WRITE` |
 | 71 | `cpu_budget_set_cpus` | budget, CPUs (`u64[]`) | nothing: the CPUs the budget's threads may run on, CPU n bit n % 64 of word n / 64, of any length, CPUs the kernel hasn't ignored (`0099`); `cpu_budget_cpus`, appended to the calls (`0202`, 21b), writes them into a `u64[]`, as many words as fit and zeros past them, and gives how many words the kernel's set has, 1 |
 | 72 | `irq_set_cpu` | IRQ, CPU | nothing: a message-signaled IRQ routed to the CPU with that index, one of the caller's CPU budget's CPUs (`0099`) |
-| 73 | `memory_budget_set_threshold` | budget, threshold | nothing: the budget's pressure threshold in bytes, 0 for none, `SIGNAL_PRESSURE` raised at once if it's reached; `RIGHT_BUDGET_CHARGE` (`0111`) |
+| 73 | `memory_budget_set_threshold` | budget, threshold | nothing: the budget's pressure threshold in bytes, 0 for none, `SIGNAL_PRESSURE` raised at once if it's reached; `RIGHT_BUDGET_WATCH` (`0111`) |
 | 74 | `memory_evict` | memory, offset | nothing: the supplied page at offset of paged memory given back, unmapped everywhere, freed and uncharged; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 75 | `memory_page_accessed` | memory, offset | true if any mapping touched the page at offset of paged memory since this last asked, false if not, the marks cleared; always false where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 76 | `thread_use_cpu_budget` | budget | the calling thread runs on the budget from now on, as a server does for a connection whose client lent it the budget, or on its process's again with `NO_HANDLE`; `RIGHT_CPU_BUDGET_BIND` (`0130`) |
@@ -161,11 +162,11 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 91 | `memory_budget_others` | budget | the bytes charged to the memory budget by objects of processes not on it, as a server's made for a client are; no right needed (`0185`) |
 | 92 | `thread_set_page` | memory, offset | none: the calling thread's per-thread page from its next scheduling point, a `ThreadPage` at offset in anonymous memory, which needs `RIGHT_MEMORY_READ` (`0041`, `0185`); `NO_HANDLE` for none |
 | 93 | `process_set_control_flow` | process, features, region, size | none: the hardware control-flow integrity the process's code was built for (`CONTROL_FLOW_` bits), and the region its threads' shadow stacks go in, each made and mapped by the kernel as a thread is made; needs `RIGHT_PROCESS_THREADS` (`0186`) |
-| 94 | `coverage_take` | counters | how many coverage counters the kernel has, copied into counters as far as it reaches, then zeroed; only in a kernel built with them (the build's `coverage=on`), for the system call fuzzer; no handle needed (`0186`) |
+| 94 | `coverage_take` | log, counters | (with the log's `RIGHT_DEBUG_LOG_TRACE`, as the trace needs, `0202` 21c) how many coverage counters the kernel has, copied into counters as far as it reaches, then zeroed; only in a kernel built with them (the build's `coverage=on`), for the system call fuzzer; no handle needed (`0186`) |
 
 Everything a call creates is owned by the calling thread's process. A budget argument is a memory budget
 handle with `RIGHT_BUDGET_CHARGE`, which pays for what's created. A platform argument is a handle to the
-platform capability.
+platform capability, with `RIGHT_PLATFORM_DEVICES`, or for the power calls `RIGHT_PLATFORM_POWER`.
 
 ## CPU Budgets
 

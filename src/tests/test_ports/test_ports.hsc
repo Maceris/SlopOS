@@ -98,6 +98,33 @@ wakes_of_a_bound_key_merge_into_one_packet #test :: fn(t : ptr[mut testing.T]) -
     testing.expect_eq(t, packets[0].key, PORT_KEY, "the packet carries the key it was raised for")
     testing.expect_eq(t, packets[0].kind, slop_os.PacketKind.User, "a wake raises a User packet")
     testing.expect_eq(t, packets[0].data[0], 3, "the merged packet's bits are both wakes' bits, or'd")
+    // Binding and waking are rights of their own (decisions/0202, 21c)
+    binder :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](port), slop_os.RIGHT_PORT_BIND),
+        "a copy of the port that may bind"
+    )?
+    waker :: testing.require_ok(
+        t,
+        slop_os.handle_duplicate(cast[slop_os.Handle](port), slop_os.RIGHT_PORT_WAKE),
+        "a copy of the port that may wake"
+    )?
+    testing.expect_error(
+        t,
+        slop_os.port_wake(cast[slop_os.Port](binder), PORT_KEY, 1),
+        slop_os.PortError.MissingRight,
+        "binding a port isn't waking it"
+    )
+    testing.expect_error(
+        t,
+        slop_os.port_bind_wake(cast[slop_os.Port](waker), PORT_KEY + 1),
+        slop_os.PortError.MissingRight,
+        "waking a port isn't binding it"
+    )
+    testing.expect_ok(t, slop_os.port_wake(cast[slop_os.Port](waker), PORT_KEY, 4), "a waker wakes it")
+    testing.expect_eq(t, slop_os.port_wait(port, packets, slop_os.NO_DEADLINE) or_else 0, 1, "its wake is taken")
+    _ = slop_os.handle_close(binder)
+    _ = slop_os.handle_close(waker)
     closed :: slop_os.handle_close(cast[slop_os.Handle](port))
     testing.expect_ok(t, closed, "the port closes")
     testing.expect(
