@@ -3,6 +3,7 @@ package kernel
 import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import concurrency from "std:concurrency"
+import slop_os from "std:os/slop_os"
 
 #if TARGET_ARCH == .x86_64 {
     import arch_x86_64 as arch from "../arch/x86_64"
@@ -683,35 +684,44 @@ destroy_cpu_budget :: fn(kernel : ptr[mut Kernel], budget : ptr[mut CpuBudget]) 
 release_cpu_budget :: fn(kernel : ptr[mut Kernel], budget : ptr[mut CpuBudget]) {}
 
 /**
- * Fill in what cpu_budget_info gives, in its order: priority, period_ns, time_ns, share, children's share, CPUs, and
- * the time run on it by others, in nanoseconds (decisions/0185, 12h).
+ * Describe a CPU budget, as cpu_budget_info gives it: its priority, period, time, share, children's share, and the
+ * time run on it by others and by its own, in nanoseconds (decisions/0185, 12h).
  *
- * Takes kernel.cpu_budgets_lock, so the words are of one moment.
+ * Takes kernel.cpu_budgets_lock, so its fields are of one moment.
  *
  * @param kernel The kernel, whose cpu_budgets_lock is taken at LockRank CpuBudgets. Runs in a system call, with no
  *     lock held.
  * @param budget The budget, looked up from the caller's handle, so its memory stays good for the call; read under
  *     the lock.
- * @param words Where they go, in the kernel's memory; past its count, they're left out.
+ * @return Its slop_os.CpuBudgetInfo, the whole of it, size its own.
  */
-cpu_budget_words :: fn(kernel : ptr[mut Kernel], budget : ptr[CpuBudget], words : mut u64[]) {
+cpu_budget_info_of :: fn(kernel : ptr[mut Kernel], budget : ptr[CpuBudget]) -> slop_os.CpuBudgetInfo {
     lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
     defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
-    lent :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.run_by_others))
-    ran :: nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.ran))
-    values :: u64.[
-        cast[u64](budget.time.priority),
-        budget.period_ns,
-        budget.time_ns,
-        budget.share,
-        budget.children_share,
-        budget.time.cpus,
-        lent,
-        ran
-    ]
-    for value, i in values {
-        if i < words.count {
-            words[i] = value
-        }
+    return slop_os.CpuBudgetInfo.{
+        size = slop_os.CPU_BUDGET_INFO_SIZE,
+        priority = cast[u64](budget.time.priority),
+        period = budget.period_ns,
+        time = budget.time_ns,
+        share = budget.share,
+        children_share = budget.children_share,
+        lent = nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.run_by_others)),
+        ran = nanoseconds_of(kernel, intrinsics.atomic_load_u64(&budget.ran)),
     }
+}
+
+/**
+ * Find the CPUs a CPU budget's threads may run on.
+ *
+ * Takes kernel.cpu_budgets_lock.
+ *
+ * @param kernel The kernel, whose cpu_budgets_lock is taken at LockRank CpuBudgets. Runs in a system call, with no
+ *     lock held.
+ * @param budget The budget, looked up from the caller's handle, so its memory stays good for the call.
+ * @return A bit per CPU's index, the root's all ones; its bits may include CPUs not online or not there.
+ */
+cpu_budget_cpus_of :: fn(kernel : ptr[mut Kernel], budget : ptr[CpuBudget]) -> u64 {
+    lock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    defer unlock_at(&kernel.cpu_budgets_lock, .CpuBudgets)
+    return budget.time.cpus
 }

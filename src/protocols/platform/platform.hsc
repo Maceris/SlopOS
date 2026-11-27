@@ -20,7 +20,7 @@ Platform :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the platform service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "platform", major_version = 3, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "platform", major_version = 3, lending = .Server}
 
 /** A DeviceMatch's vendor or device that matches any. */
 ANY_ID : u16 : 0xffff

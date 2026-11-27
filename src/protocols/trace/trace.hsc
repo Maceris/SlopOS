@@ -17,7 +17,7 @@ Trace :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the supervisor, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "trace", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "trace", major_version = 1, lending = .Server}
 
 /** The longest a trace is asked for, in milliseconds: 10 s. */
 MAX_MILLISECONDS :: 10_000

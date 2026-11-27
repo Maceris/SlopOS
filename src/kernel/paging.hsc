@@ -64,7 +64,7 @@ FaultOutcome :: enum {
  * @param budget The MemoryBudget it's charged to, as an address; 0 for the kernel's own.
  * @param port The pager's port, which has the wake binding.
  * @param key The key of the wake binding on port that's raised when a page is wanted.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @return The memory, the owner's (or the kernel's) until it's destroyed, its pages wanted from its pager as touched.
  * @error NoPager The port has no wake binding with that key, or is being destroyed.
  * @error InvalidSize The size is 0, not a whole number of pages, or more than MAX_MEMORY_SIZE.

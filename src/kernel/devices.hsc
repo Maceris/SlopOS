@@ -26,7 +26,7 @@ import frames from "frames"
  *
  * A Device is one PCIe function, made with the platform capability by whoever read the firmware tables and found
  * it: its address (segment and requester ID), and the source its message-signaled interrupts come from as the
- * interrupt controller sees them (the ITS's device ID on AArch64). It has up to slop_os.MAX_DEVICE_MSIS
+ * interrupt controller sees them (the ITS's device ID on AArch64). It has up to arch_interface.MAX_DEVICE_MSIS
  * message-signaled IRQs, each one of its events, routed to a CPU's device interrupt ID as a wired line's is
  * (interrupts.hsc). Destroying the device destroys its IRQs, as destroying memory destroys its windows.
  *
@@ -52,7 +52,7 @@ Device :: struct #align(16) {
     msi_source : u32,
     /** Its configuration space, mapped in the kernel's window, for turning its DMA off when it's destroyed. */
     config : u64,
-    /** Its events in use, a bit each, below slop_os.MAX_DEVICE_MSIS. */
+    /** Its events in use, a bit each, below arch_interface.MAX_DEVICE_MSIS. */
     events : u32,
     /** Its first message-signaled IRQ, as its address, 0 for none; the list is under lock. */
     first_irq : u64,
@@ -226,7 +226,7 @@ create_device :: fn(
         arch.add_msi_device(
             msi_source,
             cast[arch_interface.PhysicalAddress](device.msi_memory),
-            slop_os.MAX_DEVICE_MSIS
+            arch_interface.MAX_DEVICE_MSIS
         )
     }
     match adopt(owner, object) {
@@ -427,7 +427,7 @@ unlink_irq :: fn(device : ptr[mut Device], irq : ptr[mut Irq]) {
  * @error OutOfMemory No memory could be had for the object.
  * @error BudgetExceeded budget hadn't room for the object, or is closed.
  * @error ObjectGone The device, or owner, is being destroyed.
- * @error TooManyVectors Every one of the device's slop_os.MAX_DEVICE_MSIS events has an IRQ.
+ * @error TooManyVectors Every one of the device's arch_interface.MAX_DEVICE_MSIS events has an IRQ.
  * @error NoFreeInterrupt The CPU picked has no device interrupt ID free, or its IOMMU no remapped interrupt; the
  *     event is free again.
  */
@@ -456,9 +456,9 @@ create_msi_irq :: fn(
     irq.device = cast[u64](device)
     irq.msi_source = device.msi_source
     lock_at(&device.lock, .Device)
-    event : u32 = slop_os.MAX_DEVICE_MSIS
+    event : u32 = arch_interface.MAX_DEVICE_MSIS
     if !is_dying(cast[u64](device)) {
-        for bit in 0..<slop_os.MAX_DEVICE_MSIS {
+        for bit in 0..<arch_interface.MAX_DEVICE_MSIS {
             if device.events & (cast[u32](1) << bit) == 0 {
                 event = bit
                 break
@@ -466,7 +466,7 @@ create_msi_irq :: fn(
         }
     }
     gone :: is_dying(cast[u64](device))
-    if event < slop_os.MAX_DEVICE_MSIS {
+    if event < arch_interface.MAX_DEVICE_MSIS {
         device.events |= cast[u32](1) << event
         irq.line = event
         irq.device_previous = 0
@@ -478,7 +478,7 @@ create_msi_irq :: fn(
         irq.in_device = true
     }
     unlock_at(&device.lock, .Device)
-    if gone || event == slop_os.MAX_DEVICE_MSIS {
+    if gone || event == arch_interface.MAX_DEVICE_MSIS {
         release_object(kernel, object)
         return .Error(if gone { slop_os.DeviceError.ObjectGone } else { slop_os.DeviceError.TooManyVectors })
     }
@@ -713,7 +713,7 @@ release_dma_domain :: fn(kernel : ptr[mut Kernel], domain : ptr[mut DmaDomain]) 
  * @param owner The Process to own it, as its address, or 0 for the kernel.
  * @param budget The MemoryBudget it's charged to, the whole block, as its address, or 0 for the kernel's own.
  * @param domain The domain its devices reach it through.
- * @param size Its size in bytes: a whole number of pages, not 0, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, not 0, at most arch_interface.MAX_MEMORY_SIZE.
  * @param limit The address its device addresses end at or below, for a device that can't reach every address; 0
  *     for none. At least size.
  * @return The memory, owned by owner, which can be mapped readable and writable; device_address_of gives where its

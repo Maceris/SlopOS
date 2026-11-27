@@ -19,7 +19,7 @@ Scheduler :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the scheduler service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "scheduler", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "scheduler", major_version = 1, lending = .Server}
 
 /** What a client asks the scheduler service. */
 Request :: union {

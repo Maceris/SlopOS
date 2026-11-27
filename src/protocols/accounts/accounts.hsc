@@ -36,7 +36,7 @@ Accounts :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the account service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "accounts", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "accounts", major_version = 1, lending = .Server}
 
 /** An account's name and its password. */
 Credentials :: struct {

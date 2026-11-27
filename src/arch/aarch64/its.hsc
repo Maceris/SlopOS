@@ -439,7 +439,7 @@ msi_device_memory :: fn() -> u64? {
     return its.itt_entry_size * cast[u64](ITT_EVENTS)
 }
 
-/** The events a device's interrupt translation table has room for: slop_os.MAX_DEVICE_MSIS, a power of two. */
+/** The events a device's interrupt translation table has room for: arch_interface.MAX_DEVICE_MSIS, a power of two. */
 ITT_EVENTS : u32 : 32
 
 /**

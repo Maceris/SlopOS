@@ -23,7 +23,7 @@ Power :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the supervisor, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "power", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "power", major_version = 1, lending = .Server}
 
 /** What the terminal service, or what brings the power button, asks the supervisor. */
 Request :: union {

@@ -30,7 +30,7 @@ SETTLE_NANOSECONDS : u64 : 50_000_000
 COPY_BUDGET : u64 : 4 << 20
 /** The size of the page the copies count in, in bytes. */
 PAGE : u64 : 4096
-/** The CPU set of CPU 0 alone, as cpu_budget_set_cpus takes it: a bit for each CPU. */
+/** The first word of a CPU set of CPU 0 alone, as cpu_budget_set_cpus takes it: a bit for each CPU. */
 CPU_0 : u64 : 1
 /** The CPU set of CPU 1 alone. */
 CPU_1 : u64 : 2
@@ -117,8 +117,8 @@ threads_run_only_on_their_budget_cpus #test :: fn(t : ptr[mut testing.T]) -> tes
         slop_os.cpu_budget_create(root, memory, 10, 10 * MILLISECOND, 4 * MILLISECOND),
         "the counter's budget, at priority 10"
     )?
-    testing.require_ok(t, slop_os.cpu_budget_set_cpus(spinning, CPU_0), "the spinner's budget is kept to CPU 0")?
-    kept_to_0 :: slop_os.cpu_budget_set_cpus(budget, CPU_0)
+    testing.require_ok(t, slop_os.cpu_budget_set_cpus(spinning, u64.[CPU_0]), "the spinner's budget is kept to CPU 0")?
+    kept_to_0 :: slop_os.cpu_budget_set_cpus(budget, u64.[CPU_0])
     testing.expect_ok(t, kept_to_0, "a budget can be kept to an online CPU within its parent's")
     counts :: testing.require_ok(t, slop_os.memory_create(block.budget, PAGE), "the page the copies count in")?
     counts_at :: testing.require_some(t, runtime.reserve_addresses(cast[usize](PAGE)), "addresses to map the page at")?
@@ -142,7 +142,7 @@ threads_run_only_on_their_budget_cpus #test :: fn(t : ptr[mut testing.T]) -> tes
     // Kept to CPU 0 under the spinner, then on CPU 1
     pause(sleeper, SETTLE_NANOSECONDS)
     kept :: counted(sleeper, counts_at)
-    moved_to_1 :: slop_os.cpu_budget_set_cpus(budget, CPU_1)
+    moved_to_1 :: slop_os.cpu_budget_set_cpus(budget, u64.[CPU_1])
     testing.expect_ok(t, moved_to_1, "a budget with threads running on it can be moved to another CPU")
     pause(sleeper, SETTLE_NANOSECONDS)
     moved :: counted(sleeper, counts_at)
@@ -158,7 +158,7 @@ threads_run_only_on_their_budget_cpus #test :: fn(t : ptr[mut testing.T]) -> tes
     )
     testing.expect_eq(
         t,
-        (slop_os.cpu_budget_describe(budget) or_else slop_os.CpuBudgetInfo.{}).cpus,
+        cpus_of(budget),
         CPU_1,
         "a budget's CPUs are those it was last set to"
     )
@@ -190,11 +190,19 @@ cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t : ptr[mut
         slop_os.cpu_budget_create(root, memory, 10, 10 * MILLISECOND, 4 * MILLISECOND),
         "a budget at priority 10"
     )?
-    testing.require_ok(t, slop_os.cpu_budget_set_cpus(budget, CPU_1), "the budget is kept to CPU 1")?
+    testing.require_ok(t, slop_os.cpu_budget_set_cpus(budget, u64.[CPU_1]), "the budget is kept to CPU 1")?
     // Refused: none, none online; a child starts with its parent's, and is within it, and its parent over it
-    none :: slop_os.cpu_budget_set_cpus(budget, 0)
+    none :: slop_os.cpu_budget_set_cpus(budget, u64.[0])
     testing.expect_error(t, none, slop_os.HandleError.InvalidArgument, "a budget has to have a CPU to run on")
-    offline :: slop_os.cpu_budget_set_cpus(budget, cast[u64](1) << 40)
+    empty :: slop_os.cpu_budget_set_cpus(budget, u64.[])
+    testing.expect_error(t, empty, slop_os.HandleError.InvalidArgument, "an empty set has no CPU to run on")
+    // A set longer than the kernel's: the CPUs it hasn't are ignored
+    testing.expect_ok(t, slop_os.cpu_budget_set_cpus(budget, u64.[CPU_1, ~cast[u64](0)]), "a longer set is taken")
+    testing.expect_eq(t, cpus_of(budget), CPU_1, "and the CPUs past the kernel's ignored")
+    words : u64[3] = u64.[7, 7, 7]
+    testing.expect_eq(t, slop_os.cpu_budget_cpus(budget, words) or_else 0, 1, "the kernel's set is one word")
+    testing.expect(t, words[0] == CPU_1 && words[1] == 0 && words[2] == 0, "and the words past it are zeros")
+    offline :: slop_os.cpu_budget_set_cpus(budget, u64.[cast[u64](1) << 40])
     testing.expect_error(
         t,
         offline,
@@ -208,18 +216,18 @@ cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t : ptr[mut
     )?
     testing.expect_eq(
         t,
-        (slop_os.cpu_budget_describe(child) or_else slop_os.CpuBudgetInfo.{}).cpus,
+        cpus_of(child),
         CPU_1,
         "a child starts with its parent's CPUs"
     )
-    outside :: slop_os.cpu_budget_set_cpus(child, CPU_0)
+    outside :: slop_os.cpu_budget_set_cpus(child, u64.[CPU_0])
     testing.expect_error(
         t,
         outside,
         slop_os.HandleError.BudgetExceeded,
         "a child's CPUs have to be within its parent's"
     )
-    under :: slop_os.cpu_budget_set_cpus(budget, CPU_0)
+    under :: slop_os.cpu_budget_set_cpus(budget, u64.[CPU_0])
     testing.expect_error(
         t,
         under,
@@ -229,6 +237,18 @@ cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t : ptr[mut
     _ = slop_os.handle_close(cast[slop_os.Handle](child))
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
     return .Ok
+}
+
+/**
+ * Read a CPU budget's CPUs (cpu_budget_cpus).
+ *
+ * @param budget The budget.
+ * @return The first word of its set, CPUs 0 to 63; 0 if it couldn't be read.
+ */
+cpus_of :: fn(budget : slop_os.CpuBudget) -> u64 {
+    words : u64[1]
+    _ = slop_os.cpu_budget_cpus(budget, words) or_return 0
+    return words[0]
 }
 
 /**

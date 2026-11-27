@@ -45,7 +45,7 @@ leaves it) and the **startup block**'s address in its first argument register; e
 zero (`0026`). The startup code keeps the address, checks the block's version, sets up the thread's carrier
 block and its `Context`, finds `main`'s parameters among the grants (below), calls `main`, and ends the
 process with `process_exit` and `main`'s result as its code, or 0 for a `main` without one. A block of another
-version ends the process with `slop_os.EXIT_WRONG_ABI` (125) before anything reads it.
+version ends the process with `slop_os.EXIT_WRONG_ABI` (256) before anything reads it.
 
 `slop_os.StartupBlock`, written by the loader in memory it maps into the process, read-only, for the
 process's life:
@@ -78,7 +78,7 @@ main :: fn(log: slop_os.DebugLog?, manager: os.Channel[process_manager.ProcessMa
 A parameter is a handle type (`slop_os.DebugLog`, `slop_os.Memory`, `os.Channel[P]`, `os.Listener[P]`, ...) or
 an optional of one, which is `None` without its grant. A `Channel[P]` or `Listener[P]` needs a channel made with
 `P`'s tag (`0071`). Without a grant a required parameter needs, or with one of another kind or protocol, the process
-ends before `main` with `slop_os.EXIT_MISSING_GRANT` (126). Other grants, like boot
+ends before `main` with `slop_os.EXIT_MISSING_GRANT` (257). Other grants, like boot
 modules, are still found by label.
 
 **The entry's result** (`0179`): an integer is the exit code. Any other type `main` gives back, most usefully a

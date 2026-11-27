@@ -26,17 +26,17 @@ freestanding **ABI package** (`0025`). If it's not in this table, it isn't stabl
 | Surface | What is frozen at v1 | Defined in | Designed in |
 |---|---|---|---|
 | **ABI version** | The version number and how it's checked | ABI package | §5 |
-| **Syscall table** | Numbers, argument names and types, result types, the register convention | ABI package (typed declarations; stubs and dispatch generated) | §4 |
+| **Syscall table** | Numbers, argument names and types, result types, the register convention and its version (`CALLING_CONVENTION_VERSION`) | ABI package (typed declarations; stubs and dispatch generated) | §4 |
 | **Handles and rights** | The 32-bit handle encoding as user space sees it (opaque), `NO_HANDLE`, rights bit values (`RIGHT_*`, `RIGHTS_ALL`), handle kinds | ABI package | `0008`, `0010`, `0015` |
 | **Error types** | Each syscall's error enum: data-less, its tags, one value one name across every enum, `NoSuchCall` (7) in each | ABI package | §4 |
-| **Call structs** | What calls take and give by pointer or in registers: `HandleInfo`, `ThreadDebug` and `DebugSlot` (size-prefixed), `StopInfo`, `Sample`, `TraceEvent`, `MsiMessage`, `ProcessCpu`, `CpuBudgetInfo`'s words; the `FAULT_`, `STOP_`, `TRAP_` and `PROTECTION_` values; `THREAD_REGISTERS` and the register order on each architecture | ABI package | §4 |
+| **Call structs** | What calls take and give by pointer or in registers: `HandleInfo`, `ThreadDebug`, `StopInfo` and `CpuBudgetInfo` (size-prefixed), `DebugSlot`, `Sample`, `TraceEvent`, `MsiMessage`, `ProcessCpu`; sets of calls and of CPUs (`u64[]`, any length); the `FAULT_`, `STOP_`, `TRAP_` and `PROTECTION_` values; `THREAD_REGISTERS` and the register order on each architecture, as `REGISTER_` constants | ABI package | §4 |
 | **Per-thread page** | `ThreadPage`'s layout, which the kernel reads at its scheduling points | ABI package | `0041`, `0185` |
 | **Channel rings** | `RingIndices`, `MessageHeader`, alignment, the wake (event-suppression) protocol, handle-batch numbering | ABI package | `ipc.md` §2 |
 | **Port packets** | `Packet`, `PacketKind` and its tags, `Signals` bits, `EXIT_KILLED` | ABI package | `ipc.md` §3 |
-| **Protocol messages** | How a message carries variable-size data and handles: `Relative[T]` (offset and count from the message's start), `NO_HANDLE_INDEX`; `Protocol` and `Lending` | ABI package | `0040`, `0071` |
-| **Startup block** | `StartupBlock`'s layout, size-prefixed, the ABI-version field, the grants (an offset from the block, then `Grant`s), the grant "arguments"' format (`ArgumentsHeader`, `ArgumentHeader`, `ARGUMENTS_MAGIC`), and the exit codes of a program that can't start (`EXIT_WRONG_ABI`, `EXIT_MISSING_GRANT`) | ABI package | §6 |
+| **Protocol messages** | How a message carries variable-size data and handles: `Relative[T]` (offset and count from the message's start), `NO_HANDLE_INDEX`. A protocol's `Protocol` and `Lending` are `std`'s `os`, not the ABI's | ABI package | `0040`, `0071` |
+| **Startup block** | `StartupBlock`'s layout, size-prefixed, the ABI-version field, the grants (an offset from the block, then `Grant`s), the grant "arguments"' format (`ArgumentsHeader`, `ArgumentHeader`, `ARGUMENTS_MAGIC`), the kernel's limits (`max_memory_size`, `max_device_msis`, `cpu_count`), read there rather than built into programs, and the exit codes of a program that can't start (`EXIT_WRONG_ABI` 256, `EXIT_MISSING_GRANT` 257, above any C program's own) | ABI package | §6 |
 | **Firmware grant** | The root task's "firmware" grant: `FirmwareTables`, `FirmwareTable`, `PhysicalRange`, `FramebufferLayout`, `FIRMWARE_MAGIC` | ABI package | `0070`, `0073` |
-| **`CpuFeatures`** | Feature enum values | ABI package | `0019` |
+| **`CpuFeatures`** | Feature enum values, 1024 bits: x86-64 0–255, AArch64 256–511, RISC-V 512–767; only what the CPU can do | ABI package | `0019` |
 | **Process start** | Initial registers: entry, stack pointer, startup-block argument; everything else zeroed (`0026`) | ABI package (documented with the startup block) | §6 |
 | **Calling convention version** | The pinned Hemera convention version, for separately compiled libraries | Hemera's `calling_convention.md`, pinned by version (not frozen, `0027`) | §7 |
 
@@ -148,6 +148,8 @@ function:
   manager into a memory object mapped into the new process. It holds:
   - the ABI version, and its own size;
   - `CpuFeatures` (`0019`);
+  - the kernel's limits: the most bytes a memory object may have, the most MSIs a device may have, and how many CPUs
+    there are;
   - the startup grants (`0009`), with their handle kinds and labels: `grant_count` `Grant`s at `grants`, an offset in
     bytes from the block's start;
   - through the grant "arguments", the typed arguments of the exported entry point that aren't handles (`0018`,

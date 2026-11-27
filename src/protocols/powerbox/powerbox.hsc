@@ -37,7 +37,7 @@ Powerbox :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the powerbox, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "powerbox", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "powerbox", major_version = 1, lending = .Server}
 
 /** The most bytes of a request's purpose: 96. */
 PURPOSE_BYTES :: 96

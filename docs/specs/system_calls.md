@@ -93,7 +93,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 23 | `port_bind` | port, key, object, signals, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread, a Device, a memory budget (with `RIGHT_BUDGET_CHARGE`) or a memory object (its owning handle), raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread, a Device, a memory budget or a memory object can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `memory_budget_create` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `memory_budget_info` | budget | its limit, and how much of it is charged, in bytes |
-| 26 | `memory_create` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
+| 26 | `memory_create` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to the startup block's `max_memory_size` (1 GiB), charged for all of it |
 | 27 | `memory_map` | memory, address space, address, offset, size, protection | nothing: size bytes of the memory from offset, mapped at address, page-aligned, with protection (`PROTECTION_READ`, `_WRITE`, `_EXECUTE`; never writable and executable). Needs the memory rights the protection asks for, and `RIGHT_SPACE_MAP` |
 | 28 | `memory_unmap` | address space, address | nothing: the mapping that starts at address, unmapped; needs `RIGHT_SPACE_MAP` |
 | 29 | `controller_register` | platform, kind, registers | the interrupt controller's number, and how many lines it has: kind is a `ControllerKind`, registers its physical address, from the firmware tables. The same controller registered again gives the same number |
@@ -109,7 +109,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 39 | `thread_read_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's `THREAD_REGISTERS` registers (one suspended while it waits too, as it began the wait), as u64s, written at registers. Needs `RIGHT_PROCESS_INSPECT` |
 | 40 | `thread_write_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's registers, set from registers. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 41 | `intercept_attach` | process, port, key, calls (a slice of words), points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls in calls, call n bit n % 64 of word n / 64, of any length (words past the kernel's calls ignored), or every call with `STOP_ALL_CALLS`, at faults (`STOP_FAULT`), and at a new thread's start (`STOP_THREAD_START`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
-| 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
+| 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, size-prefixed, written at stop as far as its size has room |
 | 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill`; but for `Continue` from a fault, and `Kill`, it needs `RIGHT_INTERCEPT_STEER` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
 | 45 | `process_exit` | code (u32) | never returns: the calling process is destroyed, with its subtree, and its end gives code (`0059`) |
@@ -120,7 +120,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 50 | `channel_tag` | end | the tag its channel was made with (`0071`); `channel_peer_owned_by`, appended to the calls (`0195`, 18d), says whether a process given, with `RIGHT_PROCESS_INSPECT`, holds the other end's owning handle itself, and no other process has mapped it, written on it or sent handles on it (18e), so a server whose end has moved to it learns which program it's speaking with, and that nothing on it is an earlier holder's; nothing else of either is said |
 | 51 | `device_create` | platform, budget, address, MSI source, configuration space | an owning handle to a Device: the PCIe function at address (`slop_os.device_address`: segment, bus, device, function), whose MSIs the interrupt controller knows as the MSI source (on AArch64, the ITS's device ID, from the device tree's `msi-map`; unused on x86-64), and whose 4 KiB of configuration space is at the physical address given, page-aligned and not RAM (`BadAddress` otherwise). Destroying it clears the function's Bus Master Enable first, so a driver that ends leaves no DMA running into memory that went with it. No other device may have the address, nor on AArch64 the source (`0073`) |
 | 52 | `device_attach` | platform, device, domain | nothing: the device's DMA, in the domain, which an IOMMU will confine it to. The first device attached binds the domain to the IOMMU it's behind, or to none; a device behind another is refused (`WrongIommu`) |
-| 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to `MAX_DEVICE_MSIS` (32), routed to a CPU the kernel picks |
+| 53 | `irq_create_msi` | device, budget | an owning handle to an IRQ for one of the device's message-signaled interrupts, up to the startup block's `max_device_msis` (32), routed to a CPU the kernel picks |
 | 54 | `irq_message` | irq | its `MsiMessage`, the address and data the device writes to raise it, for its MSI or MSI-X entry: behind an IOMMU that remaps interrupts, a remappable message the IOMMU takes only from the device |
 | 55 | `dma_domain_create` | platform, budget, flags | an owning handle to a new DMA domain; with `DMA_DOMAIN_TRUSTED` in flags, one that may have DMA memory where no IOMMU translates it, for a trusted driver (`0084`) |
 | 56 | `dma_memory_create` | domain, budget, size, limit | an owning handle to DMA memory in the domain: pinned, in one block of frames, zeroed, ending at or below limit (0 for none), charged for its whole block |
@@ -128,7 +128,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 58 | `iommu_register` | platform, kind, registers, first, count, stream | the IOMMU's number: kind is an `IommuKind`, registers its registers as device memory (not a window), from the firmware tables, and it covers count requester IDs from first (`slop_os.device_address`, in one segment), which it knows as stream IDs from stream (on VT-d, the requester IDs themselves). The same IOMMU registered again, of the same kind at the same place, gives the same number and covers those requester IDs too (`0079`) |
 | 59 | `cpu_budget_create` | parent, budget, priority, period, time | an owning handle to a child CPU budget of parent: its threads get time ns every period ns at priority (at most the parent's), its share (time over period) out of the parent's, which its children's together can't pass (`0093`) |
 | 60 | `cpu_budget_set` | budget, priority, period, time | the budget's parameters changed, within its parent's share and priority and above its own children's; the root's can't be |
-| 61 | `cpu_budget_info` | budget, info | `CPU_BUDGET_INFO_WORDS` words into info: priority, period, time, share and children's share, in millionths of a CPU, CPUs, and the time run on it by threads of processes not on it, a loan's, and the time run on it by any thread, its loans' included, not its children's (`0187`), both in nanoseconds (`slop_os.cpu_budget_describe`) |
+| 61 | `cpu_budget_info` | budget, info (a pointer) | nothing: a `CpuBudgetInfo`, size-prefixed, written at info as far as its size has room: priority, period, time, share and children's share, in millionths of a CPU, and the time run on it by threads of processes not on it, a loan's, and the time run on it by any thread, its loans' included, not its children's (`0187`), both in nanoseconds (`slop_os.cpu_budget_describe`) |
 | 62 | `process_set_cpu_budget` | process, budget | the process, and every thread of its, now and later, run on the budget; the process needs `RIGHT_PROCESS_THREADS`, the budget `RIGHT_CPU_BUDGET_BIND` |
 | 63 | `io_ports_create` | platform, budget, first, count | an owning handle to the I/O ports first to first + count - 1, on an architecture that has them (x86-64) |
 | 64 | `io_port_read` | ports, offset, width | width bytes (1, 2 or 4) read from the port at offset in the range |
@@ -138,7 +138,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 68 | `memory_supply` | memory, offset, source, source offset | nothing: the page at offset, a copy of source's page at source offset, unless it's there already, charged to the memory's budget (`BudgetExceeded` if it can't take it), and whoever waited for it woken; needs `RIGHT_MEMORY_WRITE` on the memory, `RIGHT_MEMORY_READ` on source |
 | 69 | `memory_read` | memory, offset, buffer | nothing: bytes of anonymous memory from offset copied into buffer through the kernel, with no mapping, its untouched pages zeros; `RIGHT_MEMORY_READ`. For memory another process owns, whose end is `ObjectGone`, never a fault (`0098`) |
 | 70 | `memory_write` | memory, offset, bytes | nothing: bytes copied into anonymous memory from offset, through the kernel; `RIGHT_MEMORY_WRITE` |
-| 71 | `cpu_budget_set_cpus` | budget, CPUs | nothing: the CPUs the budget's threads may run on, a bit per CPU's index (`0099`) |
+| 71 | `cpu_budget_set_cpus` | budget, CPUs (`u64[]`) | nothing: the CPUs the budget's threads may run on, CPU n bit n % 64 of word n / 64, of any length, CPUs the kernel hasn't ignored (`0099`); `cpu_budget_cpus`, appended to the calls (`0202`, 21b), writes them into a `u64[]`, as many words as fit and zeros past them, and gives how many words the kernel's set has, 1 |
 | 72 | `irq_set_cpu` | IRQ, CPU | nothing: a message-signaled IRQ routed to the CPU with that index, one of the caller's CPU budget's CPUs (`0099`) |
 | 73 | `memory_budget_set_threshold` | budget, threshold | nothing: the budget's pressure threshold in bytes, 0 for none, `SIGNAL_PRESSURE` raised at once if it's reached; `RIGHT_BUDGET_CHARGE` (`0111`) |
 | 74 | `memory_evict` | memory, offset | nothing: the supplied page at offset of paged memory given back, unmapped everywhere, freed and uncharged; `RIGHT_MEMORY_WRITE` (`0111`) |
@@ -149,7 +149,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 79 | `power_set_reset` | platform, port, value | nothing: the FADT's reset register, an I/O port, and the byte that resets, replacing what was set; without it x86-64 resets through 0xcf9 (`0182`) |
 | 80 | `power_end_with` | platform, action | nothing: what the kernel does once the root task ends, a `PowerAction`: `Halt`, `Off` or `Restart`, done after every other CPU has stopped and the objects left are logged; under `test_exit`, only with `test_power` too (`0182`) |
 | 81 | `controller_set_source` | platform, controller, source | nothing: the requester ID, with its segment, a controller's interrupts come from, as the IOMMU that remaps them sees it; once an IOMMU remaps, a controller's lines are routed through it with one, and `irq_create` refuses them without (`NoController`) (`0182`) |
-| 82 | `thread_set_debug` | process, thread ID, debug (a pointer) | nothing: a parked thread's debugging state, a `ThreadDebug`, size-prefixed (its size and slot count first, read as far as size says, so it can grow): whether it single-steps, and up to `DEBUG_SLOTS` hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes), each a fault stop when hit (`FAULT_SINGLE_STEP`, `FAULT_BREAKPOINT`, `FAULT_WATCHPOINT`). Needs `RIGHT_PROCESS_WRITE_STATE`; `BadRegisters` for a slot the CPU can't set, more than `DEBUG_SLOTS` slots, or reserved bytes that aren't zero; `BadBuffer` for a size too small for its slots (`0183`) |
+| 82 | `thread_set_debug` | process, thread ID, debug (a pointer) | nothing: a parked thread's debugging state, a `ThreadDebug`, size-prefixed (its size and slot count first, read as far as size says, so it can grow): whether it single-steps, and up to `DEBUG_SLOTS` hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes), each a fault stop when hit (`FAULT_SINGLE_STEP`, `FAULT_BREAKPOINT`, `FAULT_WATCHPOINT`). Needs `RIGHT_PROCESS_WRITE_STATE`; `BadRegisters` for a slot the CPU can't set (every slot, on RISC-V, where the SBI has no debug triggers), more than `DEBUG_SLOTS` slots, or reserved bytes that aren't zero; `BadBuffer` for a size too small for its slots (`0183`) |
 | 83 | `intercept_set` | intercept, calls, points | nothing: where the intercept stops threads from now, as `intercept_attach`'s calls and points; threads stopped already stay so (`0183`); needs `RIGHT_INTERCEPT_STEER` |
 | 84 | `process_set_traps` | process, traps | nothing: what the process's threads trap on from their next return from the kernel: `TRAP_COUNTER` for user mode's counter reads, which the kernel runs and then reports as a fault stop, `FAULT_COUNTER`, the value in the instruction's register. Needs `RIGHT_PROCESS_WRITE_STATE` (`0183`) |
 | 85 | `trace_set` | log, on | nothing: the kernel's trace on or off: each CPU's ring of its last `TRACE_EVENTS` scheduler events, a switch or a wake (`TraceEvent`); needs the debug log with `RIGHT_DEBUG_LOG_TRACE`, which the root task gives the supervisor alone (`0183`) |
@@ -284,9 +284,11 @@ exception port. Each stop adds one to the count in the intercept's `Stop` packet
 
 | `StopInfo` field | |
 |---|---|
-| `thread: u64` | The thread's ID |
+| `size: u32` | The bytes the caller has room for (`STOP_INFO_SIZE`, 32); then how many the kernel wrote |
 | `point: StopPoint` (u32) | `SyscallEntry` (1), `SyscallExit` (2), `Fault` (3), `ThreadStart` (4): a new thread before its first instruction, with `STOP_THREAD_START` |
 | `number: u32` | The call's number; for a fault, its kind: `FAULT_READ` (0), `FAULT_WRITE` (1) and `FAULT_EXECUTE` (2) for a page fault, or `FAULT_INVALID_INSTRUCTION` (3), `FAULT_BREAKPOINT` (4), `FAULT_SINGLE_STEP` (5), `FAULT_ARITHMETIC` (6), `FAULT_ALIGNMENT` (7), `FAULT_PROTECTION` (8), `FAULT_FLOATING_POINT` (9), `FAULT_WATCHPOINT` (10), at the address accessed, `FAULT_COUNTER` (11), the value a trapped counter read gave |
+| `thread: u64` | The thread's ID |
+| `reserved: u32` | Zero |
 | `address: u64` | For a page fault, the address it touched; 0 for the other kinds |
 
 With `STOP_FAULT_LIMITED` among the points, a thread stopped at a fault that isn't let go within a second ends its
@@ -423,7 +425,7 @@ Calls on a memory budget or a memory object fail with `slop_os.MemoryError`:
 |---|---|---|
 | 1 to 7, 25 | as above | |
 | 18 | `BadAddress` | Not a page-aligned user address range, or it overlaps a mapping or a channel's rings |
-| 24 | `InvalidSize` | Not a whole number of pages, none, more than `MAX_MEMORY_SIZE`, or past the memory's end |
+| 24 | `InvalidSize` | Not a whole number of pages, none, more than the startup block's `max_memory_size`, or past the memory's end |
 | 26 | `NotMapped` | No mapping starts at that address |
 | 27 | `BadProtection` | Writable and executable at once, or no access at all |
 | 49 | `NoPager` | `memory_create_paged`: the port has no wake binding with that key, or is gone |
@@ -471,7 +473,7 @@ Devices, MSIs and DMA memory fail with `slop_os.DeviceError` too:
 | 33 | `NoFreeInterrupt` | The CPU picked has every device interrupt taken |
 | 38 | `NotDmaMemory` | `memory_device_address`: not DMA memory, or its domain is gone |
 | 39 | `NoMsi` | No interrupt controller here takes MSIs; or `irq_message` on a wired line's IRQ |
-| 40 | `TooManyVectors` | The device has `MAX_DEVICE_MSIS` IRQs already |
+| 40 | `TooManyVectors` | The device has the startup block's `max_device_msis` IRQs already |
 | 41 | `DeviceExists` | Another device has that address, or on AArch64 that MSI source |
 | 42 | `NoIommu` | `iommu_register`: no IOMMU of that kind at those registers, or none the kernel drives on this architecture, or one without the translation domains use |
 | 43 | `TooManyIommus` | `iommu_register`: the kernel has every IOMMU (8) or range of requester IDs (32) it takes |

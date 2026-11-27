@@ -1557,13 +1557,13 @@ sys_memory_budget_set_threshold :: fn(
  * @param thread The calling thread, which doesn't block here: its process owns what's made, the handles are looked up
  *     in its process's table, and the new handle goes there, any new page of the table charged to the process's budget.
  * @param budget The memory budget that pays for it, which needs RIGHT_BUDGET_CHARGE.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @return An owning handle to it, with every right.
  * @error InvalidHandle The budget isn't a handle in the caller's table.
  * @error ObjectGone The budget was destroyed, or the caller's process is being destroyed.
  * @error WrongKind The budget is another kind of handle.
  * @error MissingRight The budget lacks RIGHT_BUDGET_CHARGE.
- * @error InvalidSize The size isn't a whole number of pages, is 0, or is more than slop_os.MAX_MEMORY_SIZE.
+ * @error InvalidSize The size isn't a whole number of pages, is 0, or is more than arch_interface.MAX_MEMORY_SIZE.
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
  * @error OutOfMemory No slot or page list for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
@@ -1744,14 +1744,14 @@ sys_memory_map :: fn(
  * @param budget The memory budget that pays for it and, as they're supplied, its pages; needs RIGHT_BUDGET_CHARGE.
  * @param port The pager's port, which needs RIGHT_PORT_BIND.
  * @param key A wake binding on port.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @return An owning handle to the memory.
  * @error InvalidHandle The budget or the port isn't a handle in the caller's table.
  * @error ObjectGone The budget or the port was destroyed, or the caller's process is being destroyed.
  * @error WrongKind A handle of another kind.
  * @error MissingRight The port lacks RIGHT_PORT_BIND, or the budget RIGHT_BUDGET_CHARGE.
  * @error NoPager The port has no wake binding with that key, or is being destroyed.
- * @error InvalidSize Not a whole number of pages, none, or more than slop_os.MAX_MEMORY_SIZE.
+ * @error InvalidSize Not a whole number of pages, none, or more than arch_interface.MAX_MEMORY_SIZE.
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
  * @error OutOfMemory No slot or page list for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
@@ -3123,12 +3123,12 @@ steers :: fn(thread : ptr[mut Thread], intercept : slop_os.Intercept) -> bool {
  *
  * @param thread The calling thread, into whose memory the stop is written.
  * @param intercept The intercept; no right is needed.
- * @param stop A user virtual address where the slop_os.StopInfo is written.
+ * @param stop A user virtual address where the slop_os.StopInfo is written, size-prefixed (intercept_next).
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The intercept was destroyed.
  * @error WrongKind Not an intercept's handle.
  * @error Empty No stop left to report.
- * @error BadBuffer The stop isn't writable user memory.
+ * @error BadBuffer The stop isn't readable and writable user memory, or its size is less than 8.
  */
 sys_intercept_next :: fn(
     thread : ptr[mut Thread],
@@ -3424,18 +3424,21 @@ sys_cpu_budget_set :: fn(
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
  *     where the handles are looked up.
  * @param budget The budget, which needs RIGHT_CPU_BUDGET_SET.
- * @param cpus A bit per CPU's index: at least one of them online, within its parent's, and over each of its children's.
+ * @param cpus A set of CPUs, CPU n bit n % 64 of word n / 64: its first word is read, as the kernel has at most
+ *     boot_protocol.MAX_CPUS (64) CPUs, and any after it ignored; at least one of them online, within its parent's,
+ *     and over each of its children's.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The budget was destroyed.
  * @error WrongKind Not a CPU budget's handle.
  * @error MissingRight The handle lacks RIGHT_CPU_BUDGET_SET.
- * @error InvalidArgument None of the CPUs online.
+ * @error InvalidArgument None of the CPUs online, as for an empty set.
  * @error BudgetExceeded CPUs outside its parent's, or not covering one of its children's.
+ * @error BadBuffer cpus isn't readable user memory.
  */
 sys_cpu_budget_set_cpus :: fn(
     thread : ptr[mut Thread],
     budget : slop_os.CpuBudget,
-    cpus : u64
+    cpus : slop_os.UserBuffer
 ) -> Result[void, slop_os.HandleError] {
     object :: object_of[slop_os.HandleError](
         process_of(thread),
@@ -3443,27 +3446,32 @@ sys_cpu_budget_set_cpus :: fn(
         slop_os.ObjectKind.CpuBudget,
         slop_os.RIGHT_CPU_BUDGET_SET
     )?
-    match set_cpu_budget_cpus(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), cpus) {
+    word := cast[u64](0)
+    if cpus.count > 0 && !copy_from_user(per_cpu().kernel, thread.space, cpus.address, cast[u64](&word), 8) {
+        return .Error(.BadBuffer)
+    }
+    match set_cpu_budget_cpus(per_cpu().kernel, cast[ptr[mut CpuBudget]](object), word) {
         case Ok => return .Ok
         case Error(error) => return .Error(cpu_budget_failure(error))
     }
 }
 
 /**
- * Describe a CPU budget, as words in slop_os.CpuBudgetInfo's fields' order.
+ * Describe a CPU budget, as a size-prefixed slop_os.CpuBudgetInfo.
  *
- * @param thread The calling thread, into whose memory they're written.
+ * @param thread The calling thread, into whose memory it's written.
  * @param budget The budget; no right is needed.
- * @param info Where the words go in the caller's memory: at least slop_os.CPU_BUDGET_INFO_WORDS of them.
+ * @param info A user virtual address where it's written: its size, read first, the bytes the caller has room for, at
+ *     least 8; as many of the kernel's CpuBudgetInfo's are written as fit, size set to how many.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The budget was destroyed.
  * @error WrongKind Not a CPU budget's handle.
- * @error BadBuffer Fewer than slop_os.CPU_BUDGET_INFO_WORDS words, or not writable user memory.
+ * @error BadBuffer Not readable and writable user memory, or a size less than 8.
  */
 sys_cpu_budget_info :: fn(
     thread : ptr[mut Thread],
     budget : slop_os.CpuBudget,
-    info : slop_os.UserBuffer
+    info : u64
 ) -> Result[void, slop_os.HandleError] {
     kernel :: per_cpu().kernel
     object :: object_of[slop_os.HandleError](
@@ -3472,21 +3480,55 @@ sys_cpu_budget_info :: fn(
         slop_os.ObjectKind.CpuBudget,
         cast[slop_os.Rights](0)
     )?
-    if info.count < cast[u64](slop_os.CPU_BUDGET_INFO_WORDS) {
+    room := cast[u32](0)
+    if !copy_from_user(kernel, thread.space, info, cast[u64](&room), 4) || room < 8 {
         return .Error(.BadBuffer)
     }
-    words : u64[slop_os.CPU_BUDGET_INFO_WORDS]
-    cpu_budget_words(kernel, cast[ptr[CpuBudget]](object), words)
-    if !copy_to_user(
-        kernel,
-        thread.space,
-        info.address,
-        cast[u64](&words[0]),
-        cast[u64](size_of(u64[slop_os.CPU_BUDGET_INFO_WORDS]))
-    ) {
+    described := cpu_budget_info_of(kernel, cast[ptr[CpuBudget]](object))
+    if room < described.size {
+        described.size = room
+    }
+    if !copy_to_user(kernel, thread.space, info, cast[u64](&described), cast[u64](described.size)) {
         return .Error(.BadBuffer)
     }
     return .Ok
+}
+
+/**
+ * Tell which CPUs a CPU budget's threads may run on.
+ *
+ * @param thread The calling thread, into whose memory the set is written.
+ * @param budget The budget; no right is needed.
+ * @param cpus Where the set goes, CPU n bit n % 64 of word n / 64: the kernel's one word, those of its CPUs the
+ *     budget has, then zeros in any words past it.
+ * @return 1, the words the kernel's set has.
+ * @error InvalidHandle Not a handle in the caller's table.
+ * @error ObjectGone The budget was destroyed.
+ * @error WrongKind Not a CPU budget's handle.
+ * @error BadBuffer cpus isn't writable user memory.
+ */
+sys_cpu_budget_cpus :: fn(
+    thread : ptr[mut Thread],
+    budget : slop_os.CpuBudget,
+    cpus : slop_os.UserBuffer
+) -> Result[u32, slop_os.HandleError] {
+    kernel :: per_cpu().kernel
+    object :: object_of[slop_os.HandleError](
+        process_of(thread),
+        cast[slop_os.Handle](budget),
+        slop_os.ObjectKind.CpuBudget,
+        cast[slop_os.Rights](0)
+    )?
+    count :: kernel.cpus.count
+    known :: if count >= 64 { ~cast[u64](0) } else { (cast[u64](1) << cast[u64](count)) - 1 }
+    zero :: cast[u64](0)
+    for i in 0..<cpus.count {
+        word :: if i == 0 { cpu_budget_cpus_of(kernel, cast[ptr[CpuBudget]](object)) & known } else { zero }
+        if !copy_to_user(kernel, thread.space, cpus.address + i * 8, cast[u64](&word), 8) {
+            return .Error(.BadBuffer)
+        }
+    }
+    return .Ok(1)
 }
 
 /**

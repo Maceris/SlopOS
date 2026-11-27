@@ -13,6 +13,18 @@ import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
 import boot_info from "../boot_info"
 
+/**
+ * The most bytes one memory object may have, 1 GiB: the kernel's limit, which every process's startup block gives as
+ * max_memory_size, so a later kernel may raise it without a program built against this one's.
+ */
+MAX_MEMORY_SIZE : u64 : 1 << 30
+
+/**
+ * The most message-signaled IRQs one device has at once, 32: the kernel's limit, which every process's startup block
+ * gives as max_device_msis; a power of two, as AArch64's interrupt translation tables are sized by it.
+ */
+MAX_DEVICE_MSIS : u32 : 32
+
 /** A physical address, as BootInfo gives them. */
 PhysicalAddress :: boot_info.PhysicalAddress
 /** A virtual address, in the kernel's half or a user address space. */

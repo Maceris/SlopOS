@@ -279,7 +279,11 @@ build :: fn(
     block.stack_size = STACK_SIZE
     block.grants = grants_at
     block.seed = seed
+    // The kernel's features and limits, as its own block has them
     block.cpu_features = slop_os.startup_block().cpu_features
+    block.max_memory_size = slop_os.startup_block().max_memory_size
+    block.max_device_msis = slop_os.startup_block().max_device_msis
+    block.cpu_count = slop_os.startup_block().cpu_count
     written :: view_of(cast[ptr[mut slop_os.Grant]](block_staging + grants_at), grants.count)
     for &grant, i in written {
         if OWN_HANDLES + i < given.count {

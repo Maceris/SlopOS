@@ -2,9 +2,9 @@
  * test_exits (decisions/0068, 0098): how a program ends when it can't start, seen by whoever started it. Copies of
  * the program, each watched until it ends:
  * - one launched through the process manager as if its entry took nothing, given no grants, ends with
- *   EXIT_MISSING_GRANT (126), as its real entry requires its debug log;
+ *   EXIT_MISSING_GRANT (257), as its real entry requires its debug log;
  * - two built with the process builder directly: one whose startup block says an ABI version earlier than the
- *   program's ends with EXIT_WRONG_ABI (125) before its entry runs; one whose says a later one starts, and ends as the
+ *   program's ends with EXIT_WRONG_ABI (256) before its entry runs; one whose says a later one starts, and ends as the
  *   first does, its entry finding no grants.
  * Three copies in all, then.
  * What each had comes back to its budget. And a launch refused, its watch's key still the first copy's, gives back
@@ -62,7 +62,7 @@ Given :: struct {
  * @return Ok once it's run; Error if main wasn't given the process manager or its module, or a port or the first
  *     launch couldn't be made, or the budget couldn't be read.
  */
-a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn(
+a_copy_missing_a_grant_ends_with_257_and_a_refused_launch_gives_back #test :: fn(
     t : ptr[mut testing.T]
 ) -> testing.Outcome {
     given :: test_kit.given(t, Given)?
@@ -132,7 +132,7 @@ a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn
  * @param t The test's state.
  * @return Ok once it's run; Error if the copy couldn't be built and watched (built_with).
  */
-a_copy_told_an_earlier_abi_version_ends_with_125 #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+a_copy_told_an_earlier_abi_version_ends_with_256 #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     code :: built_with(t, slop_os.ABI_VERSION - 1)?
     testing.expect_eq(
         t,

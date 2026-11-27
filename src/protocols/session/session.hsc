@@ -29,7 +29,7 @@ Session :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the session manager, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "session", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "session", major_version = 1, lending = .Server}
 
 /** The most programs one Programs lists: 16. */
 MAX_PROGRAMS :: 16

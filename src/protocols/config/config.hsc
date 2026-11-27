@@ -28,7 +28,7 @@ ConfigValue :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the config store, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "config", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "config", major_version = 1, lending = .Server}
 
 /**
  * A program's connection to its value of type T, as its entry takes it: one end, speaking ConfigValue.

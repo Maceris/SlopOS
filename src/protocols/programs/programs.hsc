@@ -36,7 +36,7 @@ Programs :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the session manager, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "programs", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "programs", major_version = 1, lending = .Server}
 
 /** The longest name Find takes, in bytes: 64. A longer name, or an empty one, is answered Missing. */
 MAX_NAME :: 64

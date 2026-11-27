@@ -33,7 +33,7 @@ Prompt :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the terminal service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "prompt", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "prompt", major_version = 1, lending = .Server}
 
 /** What a program asks the user for. */
 Kind :: enum #backed_by(u32) {

@@ -114,7 +114,7 @@ main :: fn(
                 service.budgets[at] = Split.{name = name, budget = made, splits = own.splits == 1}
                 service.count = at + 1
                 if own.cpus != 0 {
-                    match slop_os.cpu_budget_set_cpus(made, own.cpus) {
+                    match slop_os.cpu_budget_set_cpus(made, u64.[own.cpus]) {
                         case Ok => {}
                         case Error(
                             error

@@ -21,7 +21,7 @@ Supervision :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the root task, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "supervision", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "supervision", major_version = 1, lending = .Server}
 
 /** What happened to one service or driver: which, and a code whose meaning is the report's. */
 Report :: struct {

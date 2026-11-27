@@ -15,7 +15,7 @@ import usb_device from "../usb_device"
 UsbBus :: struct {}
 
 /** What the protocol says of itself: its name, its major version, and that the client's budget is lent per connection. */
-PROTOCOL :: slop_os.Protocol.{name = "usb_bus", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "usb_bus", major_version = 1, lending = .PerConnection}
 
 /** An interface found. */
 Interface :: struct {

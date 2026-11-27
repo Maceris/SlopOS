@@ -210,8 +210,8 @@ COUNT_USER : u64 : 1 << 6
 COUNT_ONE : u64 : 1 << 10
 
 /**
- * Find how many triggers the SBI's debug triggers extension has, and note Sdtrig among the features if it has address
- * match triggers (find_shadow_stacks' sibling, from init_system).
+ * Find how many triggers the SBI's debug triggers extension has (find_shadow_stacks' sibling, from init_system); with
+ * none, thread_set_debug refuses every slot.
  *
  * @param system The ArchSystem, whose match_triggers and count_triggers are set, 0 without the extension.
  */
@@ -219,9 +219,6 @@ find_debug_triggers :: fn(system : ptr[mut ArchSystem]) {
     counts :: debug_trigger_counts()
     system.match_triggers = counts[0]
     system.count_triggers = counts[1]
-    if system.match_triggers > 0 {
-        slop_os.add_feature(&system.features, .RiscvSdtrig)
-    }
 }
 
 /**

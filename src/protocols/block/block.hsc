@@ -21,7 +21,7 @@ Block :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * client's budget is lent for each of its connections, which pays for the server's work on it.
  */
-PROTOCOL :: slop_os.Protocol.{name = "block", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "block", major_version = 1, lending = .PerConnection}
 
 /** The bytes of the blocks Read and Write count, and Info's block_count: 512. */
 BLOCK_BYTES : u64 : 512

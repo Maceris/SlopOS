@@ -29,9 +29,10 @@ import abi_describe from "../../abi_describe"
 
 /**
  * The structs that may grow after v1, as 0025 allows a size-prefixed struct to: each says in a field how much of it
- * its writer wrote (StartupBlock's size, ThreadDebug's size), and its reader takes the rest as zeros.
+ * its writer wrote (StartupBlock's size, ThreadDebug's size), and its reader takes the rest as zeros; StopInfo and
+ * CpuBudgetInfo, which the kernel writes, say how much the caller has room for, and how much it wrote.
  */
-GROWABLE :: string.["StartupBlock", "ThreadDebug"]
+GROWABLE :: string.["StartupBlock", "ThreadDebug", "StopInfo", "CpuBudgetInfo"]
 
 /** The struct whose members are the system calls, which grows by a field for each call appended. */
 CALL_TABLE :: "Syscalls"

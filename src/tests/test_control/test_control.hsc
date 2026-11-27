@@ -1133,16 +1133,14 @@ refused_in_role :: fn(
  * spins reading its page's SLOT_GO, is suspended and given a hardware breakpoint at the instruction it was at, which it
  * stops at as it runs it again; then it steps one instruction, which stops it after; then a watchpoint on SLOT_GO,
  * which its next read stops it at, reported at that address. Without them, it's told to end, and does. Skipped on
- * RISC-V where the SBI has no debug triggers (decisions/0201, 20g).
+ * RISC-V where the SBI has no debug triggers, as thread_set_debug's refusal of the breakpoint says (decisions/0201,
+ * 20g; 0202, 21b).
  *
  * @param t The test's state.
  * @return Ok once it's run; Error if main wasn't given the process manager or its module, or E, its report, the port
  *     or the intercept couldn't be had.
  */
 a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
-    if !has_hardware_debugging() {
-        return testing.skip(t, "no hardware breakpoints: the SBI has no debug triggers")
-    }
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     manager :: testing.require_some(t, given.manager, "the root task grants the process manager")?
@@ -1189,7 +1187,29 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
     spinning_at :: registers[crash_reports.PC_REGISTER]
     debug := slop_os.ThreadDebug.{}
     debug.slots[0] = slop_os.DebugSlot.{address = spinning_at, kind = .Execute}
-    testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "D sets a breakpoint where E's spinning")
+    set :: slop_os.thread_set_debug(target, thread, &debug)
+    // RISC-V's triggers are the SBI's, which may have none: the breakpoint is refused, and E told to end
+    #if TARGET_ARCH == .riscv64 {
+        refused := false
+        match set {
+            case Error(error) => refused = error == .BadRegisters
+            case Ok => {}
+        }
+        if refused {
+            one : u64 = 1
+            _ = slop_os.process_write_memory(target, space, found.page + SLOT_GO * 8, os.bytes_of(&one))
+            _ = slop_os.thread_resume(target, thread)
+            for handle in slop_os.Handle.[
+                cast[slop_os.Handle](intercept),
+                cast[slop_os.Handle](space),
+                cast[slop_os.Handle](port)
+            ] {
+                _ = slop_os.handle_close(handle)
+            }
+            return testing.skip(t, "no hardware breakpoints: the SBI has no debug triggers")
+        }
+    }
+    testing.expect_ok(t, set, "D sets a breakpoint where E's spinning")
     testing.expect_ok(t, slop_os.thread_resume(target, thread), "D resumes E")
     stop := slop_os.StopInfo.{}
     next_stop(port, intercept, &stop)
@@ -1271,20 +1291,6 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
         "E's budget is back to nothing once it has ended"
     )
     return .Ok
-}
-
-/**
- * Tell whether threads can have hardware breakpoints, steps and watchpoints (thread_set_debug).
- *
- * @return On RISC-V, whether the SBI has debug triggers, as Sdtrig among the CPU's features says; true elsewhere.
- */
-has_hardware_debugging :: fn() -> bool {
-    #if TARGET_ARCH == .riscv64 {
-        return slop_os.has_feature(&slop_os.startup_block().cpu_features, .RiscvSdtrig)
-    }
-    #else {
-        return true
-    }
 }
 
 /**

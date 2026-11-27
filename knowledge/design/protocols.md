@@ -84,7 +84,7 @@ package block
 // Protocol and Lending live next to the ABI package (see Open Questions)
 import slop_os from "std:os/slop_os"
 
-PROTOCOL :: slop_os.Protocol.{
+PROTOCOL :: os.Protocol.{
     name = "block",
     major_version = 1,
     // Who pays for the server's work (../decisions/0037, scheduling.md §4)

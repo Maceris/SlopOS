@@ -25,7 +25,7 @@ Net :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * client's budget is lent for each of its connections, which pays for the driver's work on it.
  */
-PROTOCOL :: slop_os.Protocol.{name = "net", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "net", major_version = 1, lending = .PerConnection}
 
 /** How many receive slots a connection's buffer has, and how many send slots after them: 64 each. */
 SLOTS : u32 : 64

@@ -20,7 +20,7 @@ Entropy :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the entropy service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "entropy", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "entropy", major_version = 1, lending = .Server}
 
 /** The most bytes one Filled has, and so the most one Fill is answered with: 256. */
 MAX_BYTES :: 256

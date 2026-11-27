@@ -18,7 +18,7 @@ import slop_os from "std:os/slop_os"
 UsbDevice :: struct {}
 
 /** What the protocol says of itself: its name, its major version, and that the client's budget is lent for each connection. */
-PROTOCOL :: slop_os.Protocol.{name = "usb_device", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "usb_device", major_version = 1, lending = .PerConnection}
 
 /** The most endpoints an interface's Info lists: 4, as the class drivers here use two at most. */
 MAX_ENDPOINTS :: 4

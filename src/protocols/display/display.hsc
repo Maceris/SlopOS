@@ -26,7 +26,7 @@ Display :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the driver, pays for its work, and its buffers, from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "display", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "display", major_version = 1, lending = .Server}
 
 /**
  * The format of 32-bit pixels of blue, green, red then a byte not shown, in memory order: DRM's XRGB8888, its

@@ -41,7 +41,7 @@ Sound :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * client's budget is lent for each of its connections.
  */
-PROTOCOL :: slop_os.Protocol.{name = "sound", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "sound", major_version = 1, lending = .PerConnection}
 
 /** How many periods a stream's ring has. */
 PERIODS : u32 : 8

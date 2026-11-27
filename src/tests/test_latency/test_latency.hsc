@@ -159,7 +159,7 @@ run :: fn(t : ptr[mut testing.T], given : ptr[Given], what : string, cpus : u64 
     )?
     defer slop_os.handle_close(cast[slop_os.Handle](waking))
     if cpus != 0 {
-        testing.require_ok(t, slop_os.cpu_budget_set_cpus(waking, cpus), "the waker's budget is kept to its CPUs")?
+        testing.require_ok(t, slop_os.cpu_budget_set_cpus(waking, u64.[cpus]), "the waker's budget is kept to its CPUs")?
     }
     testing.require_ok(t, slop_os.thread_use_cpu_budget(waking), "the waker runs on its budget")?
     late, made :: runtime.new_array(u64, WAKES)

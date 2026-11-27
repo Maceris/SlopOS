@@ -31,7 +31,7 @@ Storage :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the storage manager, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "storage", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "storage", major_version = 1, lending = .Server}
 
 /** A partition, and which disk it's on, from 0, and which of that disk's it is. */
 Partition :: struct {

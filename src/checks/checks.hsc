@@ -269,7 +269,7 @@ check_protocols :: fn(program : ptr[compiler.ProgramInfo]) -> bool {
                 #package_name,
                 "E0004",
                 candidate.location,
-                "% is a protocol, so it declares PROTOCOL, a slop_os.Protocol (decisions/0040)",
+                "% is a protocol, so it declares PROTOCOL, a os.Protocol (decisions/0040)",
                 candidate.name
             )
             holds = false

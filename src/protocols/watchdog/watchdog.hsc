@@ -19,7 +19,7 @@ Watchdog :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the driver, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "watchdog", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "watchdog", major_version = 1, lending = .Server}
 
 /** What the supervisor asks a watchdog's driver. */
 Request :: union {

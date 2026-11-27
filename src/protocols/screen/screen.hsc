@@ -23,7 +23,7 @@ Screen :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the framebuffer display, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "screen", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "screen", major_version = 1, lending = .Server}
 
 /** The framebuffer, lent. */
 Lent :: struct {

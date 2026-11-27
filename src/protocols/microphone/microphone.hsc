@@ -26,7 +26,7 @@ Microphone :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the audio service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "microphone", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "microphone", major_version = 1, lending = .Server}
 
 /** The bytes of a connection's channel's ring: a grant's answer and a released one for each client the service has. */
 RING_BYTES : u32 : 4096

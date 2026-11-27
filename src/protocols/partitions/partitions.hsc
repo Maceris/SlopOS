@@ -20,7 +20,7 @@ Partitions :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the partition server, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "partitions", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "partitions", major_version = 1, lending = .Server}
 
 /**
  * The most bytes of a partition's GPT name, as UTF-8: 108, enough for the GPT's 36 UTF-16 code units, each at most 3

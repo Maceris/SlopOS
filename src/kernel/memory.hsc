@@ -56,7 +56,7 @@ Memory :: struct #align(16) {
     header : ObjectHeader,
     /** Held for its lists of mappings and windows: level Memory, or MemoryParent when a window's is taken after it. */
     lock : concurrency.SpinLock,
-    /** Its size in bytes, a whole number of pages, at most slop_os.MAX_MEMORY_SIZE except for a boot module's. */
+    /** Its size in bytes, a whole number of pages, at most arch_interface.MAX_MEMORY_SIZE except for a boot module's. */
     size : u64,
     /**
      * Its frames, for anonymous and paged memory: a directory frame of leaf frames' addresses in the direct map, each
@@ -204,7 +204,7 @@ page_array_bytes :: fn(size : u64) -> u64 {
  * @param kernel The kernel, whose pools and frames it's made from.
  * @param owner The Process that owns it, as an address; 0 for the kernel.
  * @param budget The MemoryBudget it's charged to, as an address; 0 for the kernel's own.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @return The memory, the owner's (or the kernel's) until it's destroyed.
  * @error InvalidSize The size is 0, not a whole number of pages, or more than MAX_MEMORY_SIZE.
  * @error BudgetExceeded The budget can't pay for it; nothing is made.
@@ -228,7 +228,7 @@ create_memory :: fn(
  * @param kernel The kernel, whose pools and frames it's made from.
  * @param owner The Process that owns it, as an address; 0 for the kernel.
  * @param budget The MemoryBudget it's charged to, as an address; 0 for the kernel's own.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @param charged The bytes charged for its pages, besides its slot and page array: its size, or for paged memory, 0,
  *     each page being charged as it's supplied.
  * @return The memory, the owner's (or the kernel's) until it's destroyed.
@@ -244,7 +244,7 @@ create_memory_charging :: fn(
     size : u64,
     charged : u64
 ) -> Result[ptr[mut Memory], slop_os.MemoryError] {
-    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
+    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > arch_interface.MAX_MEMORY_SIZE {
         return .Error(.InvalidSize)
     }
     object := cast[u64](0)
@@ -295,7 +295,7 @@ create_memory_charging :: fn(
  * @param owner The Process that owns it, as an address; 0 for the kernel.
  * @param budget The MemoryBudget its slot is charged to, as an address; 0 for the kernel's own.
  * @param physical Its first physical address: page aligned, not 0, and not overlapping RAM the kernel owns.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @param cache The cache mode its pages are mapped with.
  * @return The memory, the owner's (or the kernel's) until it's destroyed.
  * @error InvalidSize The size is 0, not a whole number of pages, or more than MAX_MEMORY_SIZE.
@@ -312,7 +312,7 @@ create_device_memory :: fn(
     size : u64,
     cache : arch_interface.CacheMode
 ) -> Result[ptr[mut Memory], slop_os.DeviceError] {
-    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > slop_os.MAX_MEMORY_SIZE {
+    if size == 0 || size & (frames.FRAME_SIZE - 1) != 0 || size > arch_interface.MAX_MEMORY_SIZE {
         return .Error(.InvalidSize)
     }
     if physical == 0
@@ -770,7 +770,7 @@ create_module_memory :: fn(
  * @param kernel The kernel: its Memory pool gives the slot, and its frame allocator the block.
  * @param owner The Process that owns it, as an address; 0 for the kernel.
  * @param budget The MemoryBudget it's charged to, as an address; 0 for the kernel's own.
- * @param size Its size in bytes: a whole number of pages, at least one, at most slop_os.MAX_MEMORY_SIZE.
+ * @param size Its size in bytes: a whole number of pages, at least one, at most arch_interface.MAX_MEMORY_SIZE.
  * @param limit The physical address the block has to end at or below, for devices that reach only so far; 0 for none.
  * @param allowed How it can be mapped, slop_os.PROTECTION_* bits.
  * @return The memory, the owner's (or the kernel's) until it's destroyed.
@@ -789,7 +789,7 @@ create_contiguous_memory :: fn(
 ) -> Result[ptr[mut Memory], slop_os.DeviceError] {
     if size == 0
         || size & (frames.FRAME_SIZE - 1) != 0
-        || size > slop_os.MAX_MEMORY_SIZE
+        || size > arch_interface.MAX_MEMORY_SIZE
         || (limit != 0 && limit < size) {
         return .Error(.InvalidSize)
     }

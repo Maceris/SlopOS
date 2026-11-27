@@ -29,7 +29,7 @@ Volume :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the volume server, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "volume", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "volume", major_version = 1, lending = .Server}
 
 /** A grant's ticket, from its Claim, and the volume the link is for, by its container and ID. */
 IssueTo :: struct {

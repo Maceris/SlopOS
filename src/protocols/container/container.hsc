@@ -31,7 +31,7 @@ Container :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the container service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "container", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "container", major_version = 1, lending = .Server}
 
 /** An extent a volume gives back: its first 4 KiB block, its length, and the transaction it was written in. */
 Released :: struct {

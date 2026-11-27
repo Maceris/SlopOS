@@ -287,7 +287,16 @@ addresses, `reserve_addresses` moves its offset only past what fits (a compare-a
 back the last taken, so an allocation the budget or the range can't give leaves later mappings working (the libc's
 check against the budget is gone); and the build cache keys a program by the bytes of each library it links found in
 its library folders, and a target's record by those folders' files, so a changed C library relinks its programs
-(`tools/c_libraries.py`'s keyed folders are gone).
+(`tools/c_libraries.py`'s keyed folders are gone). 21b, in the ABI package and base: `CpuFeatures` 1024 bits, 256 an
+architecture (AArch64's from 256, RISC-V's from 512), `RiscvSdtrig` gone; `StopInfo` and `CpuBudgetInfo`
+size-prefixed (`STOP_INFO_SIZE`, `CPU_BUDGET_INFO_SIZE`), `CpuBudgetInfo` without its CPUs; `cpu_budget_set_cpus`
+taking a `u64[]`, `cpu_budget_cpus` appended (100), `add_cpu` and `has_cpu`; the startup block's `max_memory_size`,
+`max_device_msis` and `cpu_count` (base's `SlopOsStartup` mirrors them) in place of `MAX_MEMORY_SIZE` and
+`MAX_DEVICE_MSIS`; `SLOP_OS_EXIT_WRONG_ABI` 256 and `SLOP_OS_EXIT_MISSING_GRANT` 257; `CALLING_CONVENTION_VERSION`;
+each architecture's `REGISTER_` constants; `Protocol` and `Lending` moved to `os` (`slop_os_protocols.hsc`), which the
+protocol packages import already. Friction: a constant that's a cast of another package's constant (`PC_REGISTER :
+usize : cast[usize](slop_os.REGISTER_PC)`) isn't one a bounds check proves an index by, though a literal is, so
+crash_reports writes them out and asserts them against the package's.
 
 ## 4. Features That Look Like a Strong Fit
 

@@ -21,7 +21,7 @@ Connector :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the supervisor or root task, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "connector", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "connector", major_version = 1, lending = .Server}
 
 /** What a client asks of its connector. */
 Request :: union {

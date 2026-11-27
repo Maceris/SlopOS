@@ -28,7 +28,7 @@ Surface :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * client's budget is lent for each of its connections, which pays for the compositor's work on its surfaces.
  */
-PROTOCOL :: slop_os.Protocol.{name = "surface", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "surface", major_version = 1, lending = .PerConnection}
 
 /** Pixels of blue, green, red then a byte not shown, in memory order: DRM's XRGB8888, "XR24". */
 FORMAT_XRGB8888 : u32 : 0x34325258

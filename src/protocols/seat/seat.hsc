@@ -28,7 +28,7 @@ Seat :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the input service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "seat", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "seat", major_version = 1, lending = .Server}
 
 /** The most events one Input has: 32. */
 MAX_EVENTS :: 32

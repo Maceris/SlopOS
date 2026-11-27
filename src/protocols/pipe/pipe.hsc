@@ -20,7 +20,7 @@ Pipe :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "pipe", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "pipe", major_version = 1, lending = .Server}
 
 /** The ring every pipe is made with, 16 KiB, several messages of CHUNK_BYTES. */
 RING_BYTES : u32 : 16384

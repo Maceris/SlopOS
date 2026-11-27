@@ -465,9 +465,10 @@ report_stop :: fn(kernel : ptr[mut Kernel], intercept : ptr[mut Intercept]) {
  * @param kernel The kernel, for the direct map the StopInfo is written through.
  * @param intercept The intercept; its lock is taken, so the caller holds none of rank Intercept or above.
  * @param space The caller's address space.
- * @param buffer The user address the StopInfo is written at, in space.
- * @return Null once written; Empty if every stop has been reported; BadBuffer if the buffer isn't writable user
- *     memory, when the stop counts as reported all the same.
+ * @param buffer The user address the StopInfo is written at, in space: size-prefixed, its size the bytes the caller
+ *     has room for, at least 8; as many of the kernel's StopInfo's are written as fit, size set to how many.
+ * @return Null once written; Empty if every stop has been reported; BadBuffer if the buffer isn't readable and
+ *     writable user memory or its size is less than 8, when the stop counts as reported all the same.
  */
 intercept_next :: fn(
     kernel : ptr[mut Kernel],
@@ -489,6 +490,7 @@ intercept_next :: fn(
         if !thread.stop_reported {
             thread.stop_reported = true
             info = slop_os.StopInfo.{
+                size = slop_os.STOP_INFO_SIZE,
                 thread = thread.id,
                 point = cast[slop_os.StopPoint](thread.stop_point),
                 number = thread.stop_number,
@@ -503,7 +505,14 @@ intercept_next :: fn(
     if !found {
         return slop_os.ControlError.Empty
     }
-    if !copy_to_user(kernel, space, buffer, cast[u64](&info), cast[u64](size_of(slop_os.StopInfo))) {
+    room := cast[u32](0)
+    if !copy_from_user(kernel, space, buffer, cast[u64](&room), 4) || room < 8 {
+        return slop_os.ControlError.BadBuffer
+    }
+    if room < info.size {
+        info.size = room
+    }
+    if !copy_to_user(kernel, space, buffer, cast[u64](&info), cast[u64](info.size)) {
         return slop_os.ControlError.BadBuffer
     }
     return null

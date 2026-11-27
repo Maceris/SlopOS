@@ -27,7 +27,7 @@ BundleStore :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the bundle store, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "bundle_store", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "bundle_store", major_version = 1, lending = .Server}
 
 /** An object to put: its hash, and the memory holding its bytes. */
 PutOf :: struct {

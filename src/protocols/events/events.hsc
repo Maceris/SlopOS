@@ -26,7 +26,7 @@ Events :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the events service, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "events", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "events", major_version = 1, lending = .Server}
 
 /** A program's ring for its records (base's runtime.SlopOsEventsRing), and the doorbell base's logger rings. */
 Source :: struct {

@@ -478,6 +478,9 @@ write_startup_block :: fn(
     block.stack_size = ROOT_STACK_SIZE
     block.seed = kernel.boot_seed
     block.cpu_features = kernel.features
+    block.max_memory_size = arch_interface.MAX_MEMORY_SIZE
+    block.max_device_msis = arch_interface.MAX_DEVICE_MSIS
+    block.cpu_count = cast[u32](kernel.cpus.count)
     block.grants = (cast[u64](size_of(slop_os.StartupBlock)) + 7) & ~cast[u64](7)
     grants :: view_of(cast[ptr[mut slop_os.Grant]](cast[u64](buffer.data) + block.grants), MAX_ROOT_GRANTS)
     count : usize = 0

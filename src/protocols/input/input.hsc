@@ -20,7 +20,7 @@ Input :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the driver, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "input", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "input", major_version = 1, lending = .Server}
 
 /** The most events one Events has: 16, which fit half a channel's default ring with room to spare. */
 MAX_EVENTS :: 16

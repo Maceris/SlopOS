@@ -27,7 +27,7 @@ NAME :: "test_protocols"
 Probe :: struct {}
 
 /** What Probe says of itself: its name, which its channels' tag is made from, and its major version. */
-PROTOCOL :: slop_os.Protocol.{name = "probe", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "probe", major_version = 1, lending = .Server}
 
 /** An enum a message carries, whose 0 isn't a member, so a message with 0 or 7 in its place is refused. */
 Shade :: enum #backed_by(u8) {

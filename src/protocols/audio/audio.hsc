@@ -32,7 +32,7 @@ Audio :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * client's budget is lent for each of its connections, which pays for the driver's work on it.
  */
-PROTOCOL :: slop_os.Protocol.{name = "audio", major_version = 1, lending = .PerConnection}
+PROTOCOL :: os.Protocol.{name = "audio", major_version = 1, lending = .PerConnection}
 
 /** The stream's rate: 48 kHz. */
 RATE : u32 : 48000

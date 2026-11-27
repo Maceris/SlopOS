@@ -27,13 +27,32 @@ MAX_STOPS : usize : 8
 /** How far a frame pointer may be above the one before it, in bytes, before the walk takes the chain as broken. */
 MAX_FRAME_SIZE : u64 : 1 << 20
 
+/*
+ * Where the program counter, the frame pointer and the stack pointer are among thread_read_registers' registers, as
+ * the ABI package's REGISTER_ constants say: written out, as a cast of another package's constant isn't one a bounds
+ * check proves an index by (hemera-feedback.md), and asserted against them
+ */
 #if TARGET_ARCH == .arm64 {
-    /** Where the program counter is among thread_read_registers' registers. */
     PC_REGISTER : usize : 32
-    /** Where the frame pointer (x29) is among them. */
     FRAME_REGISTER : usize : 29
-    /** Where the stack pointer is among them. */
     STACK_REGISTER : usize : 31
+}
+#else_if TARGET_ARCH == .riscv64 {
+    PC_REGISTER : usize : 32
+    FRAME_REGISTER : usize : 8
+    STACK_REGISTER : usize : 2
+}
+#else {
+    PC_REGISTER : usize : 16
+    FRAME_REGISTER : usize : 6
+    STACK_REGISTER : usize : 7
+}
+
+#assert PC_REGISTER == cast[usize](slop_os.REGISTER_PC)
+#assert FRAME_REGISTER == cast[usize](slop_os.REGISTER_FP)
+#assert STACK_REGISTER == cast[usize](slop_os.REGISTER_SP)
+
+#if TARGET_ARCH == .arm64 {
     /**
      * How far below the frame pointer its frame record is: at it, the caller's frame pointer then the return address.
      */
@@ -44,12 +63,6 @@ MAX_FRAME_SIZE : u64 : 1 << 20
     FIBER_FRAME_AT : u64 : 0
 }
 #else_if TARGET_ARCH == .riscv64 {
-    /** Where the program counter is among thread_read_registers' registers, after x0 to x31. */
-    PC_REGISTER : usize : 32
-    /** Where the frame pointer (s0, x8) is among them. */
-    FRAME_REGISTER : usize : 8
-    /** Where the stack pointer (sp, x2) is among them. */
-    STACK_REGISTER : usize : 2
     /**
      * How far below the frame pointer its frame record is: RISC-V's s0 is the stack pointer at the frame's entry, the
      * caller's s0 then the return address just below it.
@@ -61,12 +74,6 @@ MAX_FRAME_SIZE : u64 : 1 << 20
     FIBER_FRAME_AT : u64 : 0
 }
 #else {
-    /** Where the program counter (rip) is among thread_read_registers' registers. */
-    PC_REGISTER : usize : 16
-    /** Where the frame pointer (rbp) is among them. */
-    FRAME_REGISTER : usize : 6
-    /** Where the stack pointer (rsp) is among them. */
-    STACK_REGISTER : usize : 7
     /**
      * How far below the frame pointer its frame record is: at it, the caller's frame pointer then the return address.
      */

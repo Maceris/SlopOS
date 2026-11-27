@@ -19,7 +19,7 @@ Serial :: struct {}
  * What the protocol says of itself: its name, which its channels' tag is made from, its major version, and that the
  * server, here the driver, pays for its work from its own budget.
  */
-PROTOCOL :: slop_os.Protocol.{name = "serial", major_version = 1, lending = .Server}
+PROTOCOL :: os.Protocol.{name = "serial", major_version = 1, lending = .Server}
 
 /** The most bytes one Write or Data has, 256, so a message fits the default 1 KiB ring. */
 MAX_BYTES :: 256
