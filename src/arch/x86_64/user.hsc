@@ -236,6 +236,7 @@ DebugRegisters :: struct {
  * @param registers The thread's saved registers, whose TF is set or cleared.
  * @param step Whether it single-steps.
  * @param slots At most four.
+ * @param instruction Unused: a step needs no decoding here.
  * @return False, changing nothing, for more than four slots, an address outside user memory, or a data slot whose
  *     size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it.
  */
@@ -243,7 +244,8 @@ set_debug :: fn(
     debug : ptr[mut DebugRegisters],
     registers : ptr[mut UserRegisters],
     step : bool,
-    slots : slop_os.DebugSlot[]
+    slots : slop_os.DebugSlot[],
+    instruction : u32
 ) -> bool {
     made := DebugRegisters.{}
     low, high :: user_address_range()

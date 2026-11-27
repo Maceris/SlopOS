@@ -250,6 +250,7 @@ DebugRegisters :: struct {
  * @param registers Not changed here: debug_on marks them to step as it returns.
  * @param step Whether it single-steps.
  * @param slots At most four.
+ * @param instruction Unused: a step needs no decoding here.
  * @return False, changing nothing, for a slot past the CPU's breakpoints or watchpoints, an address outside user
  *     memory, or a data slot whose size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it.
  */
@@ -257,7 +258,8 @@ set_debug :: fn(
     debug : ptr[mut DebugRegisters],
     registers : ptr[mut UserRegisters],
     step : bool,
-    slots : slop_os.DebugSlot[]
+    slots : slop_os.DebugSlot[],
+    instruction : u32
 ) -> bool {
     made := DebugRegisters.{step = step, used = step}
     features :: aarch64.read_system_register_encoded(3, 0, 0, 5, 0)

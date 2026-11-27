@@ -188,7 +188,44 @@ from_user :: fn(frame : ptr[mut riscv64.RegisterFrame]) #never_returns {
     if frame.scause == CAUSE_HARDWARE_ERROR {
         kernel_entry.fatal_critical(.MachineCheck)
     }
-    kernel_entry.user_fault(registers, decode_fault(frame.scause, frame.stval))
+    kernel_entry.user_fault(registers, trigger_fault(decode_fault(frame.scause, frame.stval), frame.stval, frame.sepc))
+}
+
+/**
+ * Tell a breakpoint exception a trigger raised from an ebreak: with the thread's triggers installed, a watched
+ * address in stval, other than the instruction's, is a Watchpoint there, as a data trigger reports the address it
+ * hit; else, while it steps, a SingleStep; otherwise a Breakpoint, an Execute trigger's or an ebreak's.
+ *
+ * @param fault The fault decode_fault made of the exception.
+ * @param value stval.
+ * @param pc sepc, the instruction the exception was taken at.
+ * @return The fault, Watchpoint or SingleStep in place of a Breakpoint a trigger raised.
+ */
+trigger_fault :: fn(fault : arch_interface.Fault, value : u64, pc : u64) -> arch_interface.Fault {
+    match fault {
+        case Breakpoint => {}
+        case _ => return fault
+    }
+    cpu :: current_cpu()
+    if cpu.installed_count == 0 {
+        return fault
+    }
+    for trigger, i in cpu.loaded.triggers {
+        if trigger & (MATCH_LOAD | MATCH_STORE) == 0 || i >= cpu.loaded.addresses.count {
+            continue
+        }
+        // mcontrol6's size back to bytes: 1, 2, 4, or 8 for 5
+        encoded :: (trigger >> MATCH_SIZE_SHIFT) & 7
+        bytes :: if encoded == 5 { cast[u64](8) } else if encoded == 3 { cast[u64](4) } else { encoded }
+        start :: cpu.loaded.addresses[i]
+        if value != pc && value >= start && value < start + bytes {
+            return .Watchpoint(value)
+        }
+    }
+    if cpu.loaded.step {
+        return .SingleStep
+    }
+    return fault
 }
 
 /**

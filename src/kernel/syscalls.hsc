@@ -3706,7 +3706,13 @@ sys_thread_set_debug :: fn(
     if !found.parked {
         return .Error(.NotStopped)
     }
-    if !arch.set_debug(&found.debug, &found.registers, given.step, given.slots) {
+    // The instruction it's at, for an architecture that decodes where a step goes
+    pc :: cast[u64](arch.instruction_pointer(&found.registers))
+    instruction : u32 = 0
+    if given.step && !copy_from_user(per_cpu().kernel, found.space, pc, cast[u64](&instruction), 4) {
+        _ = copy_from_user(per_cpu().kernel, found.space, pc, cast[u64](&instruction), 2)
+    }
+    if !arch.set_debug(&found.debug, &found.registers, given.step, given.slots, instruction) {
         return .Error(.BadRegisters)
     }
     found.stepping = given.step
@@ -3789,7 +3795,7 @@ sys_process_set_debug :: fn(
     // Made apart from any thread's registers, which a process's slots don't step
     made := arch.DebugRegisters.{}
     scratch := arch.UserRegisters.{}
-    if given.step || !arch.set_debug(&made, &scratch, false, given.slots) {
+    if given.step || !arch.set_debug(&made, &scratch, false, given.slots, 0) {
         return .Error(.BadRegisters)
     }
     any := false

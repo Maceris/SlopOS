@@ -1074,6 +1074,19 @@ set_slots :: fn(session : ptr[mut Debugging]) {
     }
 }
 
+#if TARGET_ARCH == .riscv64 {
+    /** The carrier register's index among a thread's registers as a debugger sees them: s11, x27. */
+    CARRIER_REGISTER : usize : 27
+}
+#else_if TARGET_ARCH == .arm64 {
+    /** The carrier register's index among a thread's registers as a debugger sees them: x28. */
+    CARRIER_REGISTER : usize : 28
+}
+#else {
+    /** The carrier register's index among a thread's registers as a debugger sees them: r14. */
+    CARRIER_REGISTER : usize : 14
+}
+
 /** The most fibers fibers lists; past it, it says how many more. */
 MAX_FIBERS_SHOWN :: 16
 /** The most frames of each suspended fiber's stack said. */
@@ -1082,7 +1095,7 @@ FIBER_FRAMES :: 4
 /**
  * Say the fibers of the pool the stopped thread is a carrier of (decisions/0185, 12f): each one, running, suspended
  * or not started, and a suspended one's stack, its frames named. The pool is found from the thread's carrier register
- * (r14, x28), whose carrier block's scheduler data is the pool's part for that carrier, laid out by the named types'
+ * (r14, x28, s11), whose carrier block's scheduler data is the pool's part for that carrier, laid out by the named types'
  * schemas in the debug file; the pool keeps every fiber that hasn't finished on one list.
  *
  * @param session The session, stopped.
@@ -1096,7 +1109,8 @@ say_fibers :: fn(session : ptr[mut Debugging]) {
         say(shell, "nothing's stopped")
         return void
     }
-    carrier_index : usize = if crash_reports.PC_REGISTER == 32 { 28 } else { 14 }
+    // Hemera's carrier register (docs/calling_convention.md): x86-64's r14, AArch64's x28, RISC-V's s11, which is x27
+    carrier_index : usize = CARRIER_REGISTER
     carrier :: if carrier_index < registers.count { registers[carrier_index] } else { 0 }
     scheduler_at :: member_offset(file, "runtime.CarrierBlock", "scheduler_data")
         or_return say(shell, "the debug file hasn't the carrier block's type")

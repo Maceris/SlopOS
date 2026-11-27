@@ -1118,7 +1118,7 @@ refused_in_role :: fn(
  * spins reading its page's SLOT_GO, is suspended and given a hardware breakpoint at the instruction it was at, which it
  * stops at as it runs it again; then it steps one instruction, which stops it after; then a watchpoint on SLOT_GO,
  * which its next read stops it at, reported at that address. Without them, it's told to end, and does. Skipped on
- * RISC-V, whose hardware breakpoints, the SBI's debug triggers, the kernel doesn't drive yet (decisions/0199).
+ * RISC-V where the SBI has no debug triggers (decisions/0201, 20g).
  *
  * @param t The test's state.
  * @return Ok once it's run; Error if main wasn't given the process manager or its module, or E, its report, the port
@@ -1126,7 +1126,7 @@ refused_in_role :: fn(
  */
 a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     if !has_hardware_debugging() {
-        return testing.skip(t, "no hardware breakpoints on RISC-V yet: the SBI's debug triggers aren't driven")
+        return testing.skip(t, "no hardware breakpoints: the SBI has no debug triggers")
     }
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
@@ -1236,11 +1236,11 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
 /**
  * Tell whether threads can have hardware breakpoints, steps and watchpoints (thread_set_debug).
  *
- * @return False on RISC-V, whose SBI debug triggers the kernel doesn't drive yet (decisions/0199); true elsewhere.
+ * @return On RISC-V, whether the SBI has debug triggers, as Sdtrig among the CPU's features says; true elsewhere.
  */
 has_hardware_debugging :: fn() -> bool {
     #if TARGET_ARCH == .riscv64 {
-        return false
+        return slop_os.has_feature(&slop_os.startup_block().cpu_features, .RiscvSdtrig)
     }
     #else {
         return true

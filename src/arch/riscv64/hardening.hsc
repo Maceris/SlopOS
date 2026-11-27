@@ -65,6 +65,11 @@ log_hardening :: fn(features : ptr[slop_os.CpuFeatures]) {
     runtime.log_info(
         "cpu: transient execution: the ISA reports nothing, so Spectre v1 and v2 are assumed; mitigations on: SUM clear"
     )
+    runtime.log_info(
+        "cpu: debug triggers, the SBI's: % address match, % instruction count",
+        system.match_triggers,
+        system.count_triggers
+    )
 }
 
 /**

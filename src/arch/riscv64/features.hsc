@@ -110,8 +110,8 @@ has :: fn(features : ptr[slop_os.CpuFeatures], feature : slop_os.CpuFeature) -> 
  *
  * @param firmware The firmware's tables, which say where the device tree is.
  * @param direct_map_offset Where physical address 0 is in the bootloader's direct map; 0 means there's none.
- * @return Every feature of EXTENSIONS the node lists, and the paging modes; none without a direct map, a device tree or
- *     a cpu node.
+ * @return Every feature of EXTENSIONS the node lists, the paging modes, and Sdtrig where the SBI's debug triggers
+ *     extension has address match triggers; none without a direct map, a device tree or a cpu node.
  */
 detect_features :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offset : u64) -> slop_os.CpuFeatures {
     features : slop_os.CpuFeatures
@@ -146,6 +146,9 @@ detect_features :: fn(firmware : ptr[boot_info.FirmwareTables], direct_map_offse
             }
         }
         case None => {}
+    }
+    if debug_trigger_counts()[0] > 0 {
+        slop_os.add_feature(&features, .RiscvSdtrig)
     }
     return features
 }

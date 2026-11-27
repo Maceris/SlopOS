@@ -171,44 +171,315 @@ set_user_register :: fn(registers : ptr[mut UserRegisters], index : u32, value :
     return true
 }
 
+// ---- Hardware debugging, through the SBI's debug triggers extension (decisions/0201, 20g)
+
+/** The SBI's debug triggers extension, "DBTR", and its functions (SBI 2.0 §19). */
+SBI_DBTR : u64 : 0x44425452
+DBTR_NUM_TRIGGERS : u64 : 0
+DBTR_SET_SHMEM : u64 : 1
+DBTR_INSTALL : u64 : 3
+DBTR_UNINSTALL : u64 : 5
+/** tdata1's type, in bits 63:60: an address match trigger (mcontrol6), an instruction count trigger (icount). */
+TRIGGER_MATCH : u64 : 6 << 60
+TRIGGER_COUNT : u64 : 3 << 60
+/** mcontrol6's bits: U (3), EXECUTE (2), STORE (1), LOAD (0), and its size (18:16), 0 for any. */
+MATCH_USER : u64 : 1 << 3
+MATCH_EXECUTE : u64 : 1 << 2
+MATCH_STORE : u64 : 1 << 1
+MATCH_LOAD : u64 : 1
+MATCH_SIZE_SHIFT : u64 : 16
+/** icount's U (6), and a count of 1 (bits 23:10): it fires once one user instruction has run. */
+COUNT_USER : u64 : 1 << 6
+COUNT_ONE : u64 : 1 << 10
+
 /**
- * Set a thread's debugging state (arch_interface.set_debug): only none yet. RISC-V's triggers are the SBI's debug
- * triggers extension's to give, which isn't used, and it has no single step for supervisor mode to ask for.
+ * Find how many triggers the SBI's debug triggers extension has, and note Sdtrig among the features if it has address
+ * match triggers (find_shadow_stacks' sibling, from init_system).
  *
- * @param debug The thread's state, cleared when this succeeds.
- * @param registers Unused.
- * @param step Whether it should step; it can't.
- * @param slots The breakpoints and watchpoints; every one has to be Off.
- * @return True, the state cleared, if nothing is asked; false, nothing changed, for a step or any slot that isn't Off.
+ * @param system The ArchSystem, whose match_triggers and count_triggers are set, 0 without the extension.
+ */
+find_debug_triggers :: fn(system : ptr[mut ArchSystem]) {
+    counts :: debug_trigger_counts()
+    system.match_triggers = counts[0]
+    system.count_triggers = counts[1]
+    if system.match_triggers > 0 {
+        slop_os.add_feature(&system.features, .RiscvSdtrig)
+    }
+}
+
+/**
+ * Ask the SBI's debug triggers extension how many triggers of each kind a hart has.
+ *
+ * @return Its address match triggers' count, then its instruction count triggers'; both 0 without the extension.
+ */
+debug_trigger_counts :: fn() -> u64[2] {
+    probed :: riscv64.sbi_call(SBI_BASE, SBI_PROBE_EXTENSION, SBI_DBTR)
+    if probed.error != 0 || probed.value == 0 {
+        return u64.[0, 0]
+    }
+    matching :: riscv64.sbi_call(SBI_DBTR, DBTR_NUM_TRIGGERS, TRIGGER_MATCH)
+    counting :: riscv64.sbi_call(SBI_DBTR, DBTR_NUM_TRIGGERS, TRIGGER_COUNT)
+    return u64.[
+        if matching.error == 0 { matching.value } else { cast[u64](0) },
+        if counting.error == 0 { counting.value } else { cast[u64](0) },
+    ]
+}
+
+/**
+ * Set a thread's debugging state (arch_interface.set_debug): each slot an address match trigger for user mode, an
+ * Execute slot's on the instruction, a data slot's on its bytes' loads and stores or stores; a step an instruction
+ * count trigger of 1, or where the SBI has none, an execute trigger on each place the instruction at the thread's pc
+ * can go next (step_targets): its successor, a jump's target, or a branch's two. They're the SBI's debug triggers
+ * extension's to give, installed as the thread returns to user mode (debug_on).
+ *
+ * @param debug The thread's state, replaced whole when this succeeds.
+ * @param registers The thread's saved registers: its pc, and a register jump's register, for a step.
+ * @param step Whether it stops after each instruction it runs in user mode.
+ * @param slots The breakpoints and watchpoints, slop_os.DEBUG_SLOTS at most.
+ * @param instruction The instruction at its pc, for a step without an instruction count trigger.
+ * @return True once it's set; false, nothing changed, for a slot whose address isn't a user one, a data slot whose
+ *     size isn't 1, 2, 4 or 8 or whose address isn't a multiple of it, more slots and a step than the SBI has triggers
+ *     for, or a step without an instruction count trigger whose instruction couldn't be read.
  */
 set_debug :: fn(
     debug : ptr[mut DebugRegisters],
     registers : ptr[mut UserRegisters],
     step : bool,
-    slots : slop_os.DebugSlot[]
+    slots : slop_os.DebugSlot[],
+    instruction : u32
 ) -> bool {
-    if step {
-        return false
-    }
-    for slot in slots {
-        if slot.kind != .Off {
+    system :: current_system()
+    made := DebugRegisters.{step = step}
+    used := cast[u64](0)
+    for slot, i in slots {
+        if slot.kind == .Off {
+            continue
+        }
+        if i >= made.triggers.count || slot.address < USER_LOW || slot.address >= USER_HIGH {
             return false
         }
+        if slot.kind == .Execute {
+            made.triggers[i] = TRIGGER_MATCH | MATCH_USER | MATCH_EXECUTE
+        }
+        else {
+            // mcontrol6's size: 1 for a byte, 2 for 2, 3 for 4, 5 for 8
+            encoded :: match slot.size {
+                case 1 => cast[u64](1)
+                case 2 => cast[u64](2)
+                case 4 => cast[u64](3)
+                case 8 => cast[u64](5)
+                case _ => return false
+            }
+            if slot.address % cast[u64](slot.size) != 0 {
+                return false
+            }
+            access :: if slot.kind == .Write { MATCH_STORE } else { MATCH_STORE | MATCH_LOAD }
+            made.triggers[i] = TRIGGER_MATCH | MATCH_USER | access | (encoded << MATCH_SIZE_SHIFT)
+        }
+        made.addresses[i] = slot.address
+        used += 1
     }
-    debug^ = DebugRegisters.{}
+    // A step without an instruction count trigger takes an address match trigger for each place it can go
+    if step && system.count_triggers == 0 {
+        if instruction == 0 {
+            return false
+        }
+        made.step_targets = step_targets(registers, instruction)
+        used += if made.step_targets[1] != 0 { cast[u64](2) } else { cast[u64](1) }
+    }
+    if used > system.match_triggers {
+        return false
+    }
+    debug^ = made
     return true
 }
 
 /**
- * Load a thread's debugging state (arch_interface.debug_on): nothing, as set_debug only ever sets none.
+ * Find where an instruction can go next, for a step's execute triggers: a conditional branch's target and its
+ * successor; a jump's target, a register's from the registers; anything else's successor. RV64GC's: JAL, JALR and the
+ * branches, and C.J, C.JR, C.JALR, C.BEQZ and C.BNEZ.
  *
- * @param debug Unused.
+ * @param registers The thread's registers: its pc, and a register jump's register.
+ * @param instruction The instruction at its pc: four bytes, or two for a compressed one, little-endian.
+ * @return Where it goes, and where else it can for a branch; 0 for none, and the second 0 too when both are one.
+ */
+step_targets :: fn(registers : ptr[UserRegisters], instruction : u32) -> u64[2] {
+    pc :: registers.frame.sepc
+    if instruction & 3 != 3 {
+        // Compressed: its quadrant (bits 1:0) and funct3 (15:13)
+        quadrant :: instruction & 3
+        funct3 :: (instruction >> 13) & 7
+        if quadrant == 1 && funct3 == 5 {
+            return u64.[pc + cj_offset(instruction), 0]
+        }
+        if quadrant == 1 && (funct3 == 6 || funct3 == 7) {
+            return both(pc + 2, pc + cb_offset(instruction))
+        }
+        rs1 :: (instruction >> 7) & 0x1f
+        rs2 :: (instruction >> 2) & 0x1f
+        if quadrant == 2 && funct3 == 4 && rs1 != 0 && rs2 == 0 {
+            return u64.[register_of(registers, rs1) & ~cast[u64](1), 0]
+        }
+        return u64.[pc + 2, 0]
+    }
+    opcode :: instruction & 0x7f
+    if opcode == 0x6f {
+        // JAL: imm[20|10:1|11|19:12] in bits 31:12
+        offset :: (((instruction >> 31) & 1) << 20)
+            | (((instruction >> 21) & 0x3ff) << 1)
+            | (((instruction >> 20) & 1) << 11)
+            | (((instruction >> 12) & 0xff) << 12)
+        return u64.[pc + extended(offset, 21), 0]
+    }
+    if opcode == 0x67 {
+        // JALR: rs1 plus imm[11:0], its low bit cleared
+        rs1 :: (instruction >> 15) & 0x1f
+        return u64.[(register_of(registers, rs1) + extended(instruction >> 20, 12)) & ~cast[u64](1), 0]
+    }
+    if opcode == 0x63 {
+        // A branch: imm[12|10:5] in bits 31:25, imm[4:1|11] in 11:7
+        offset :: (((instruction >> 31) & 1) << 12)
+            | (((instruction >> 25) & 0x3f) << 5)
+            | (((instruction >> 8) & 0xf) << 1)
+            | (((instruction >> 7) & 1) << 11)
+        return both(pc + 4, pc + extended(offset, 13))
+    }
+    return u64.[pc + 4, 0]
+}
+
+/**
+ * Two places a step can go, as step_targets gives them.
+ *
+ * @param first One.
+ * @param second The other.
+ * @return Both, or the first alone when they're one.
+ */
+both :: fn(first : u64, second : u64) -> u64[2] {
+    return if first == second { u64.[first, 0] } else { u64.[first, second] }
+}
+
+/**
+ * C.J's offset: offset[11|4|9:8|10|6|7|3:1|5] in bits 12:2.
+ *
+ * @param instruction The instruction.
+ * @return The offset, sign-extended.
+ */
+cj_offset :: fn(instruction : u32) -> u64 {
+    offset :: (((instruction >> 12) & 1) << 11)
+        | (((instruction >> 11) & 1) << 4)
+        | (((instruction >> 9) & 3) << 8)
+        | (((instruction >> 8) & 1) << 10)
+        | (((instruction >> 7) & 1) << 6)
+        | (((instruction >> 6) & 1) << 7)
+        | (((instruction >> 3) & 7) << 1)
+        | (((instruction >> 2) & 1) << 5)
+    return extended(offset, 12)
+}
+
+/**
+ * C.BEQZ's and C.BNEZ's offset: offset[8|4:3] in bits 12:10, offset[7:6|2:1|5] in bits 6:2.
+ *
+ * @param instruction The instruction.
+ * @return The offset, sign-extended.
+ */
+cb_offset :: fn(instruction : u32) -> u64 {
+    offset :: (((instruction >> 12) & 1) << 8)
+        | (((instruction >> 10) & 3) << 3)
+        | (((instruction >> 5) & 3) << 6)
+        | (((instruction >> 3) & 3) << 1)
+        | (((instruction >> 2) & 1) << 5)
+    return extended(offset, 9)
+}
+
+/**
+ * Sign-extend a field.
+ *
+ * @param value The field, in its low bits.
+ * @param bits How many bits it has, its top one its sign.
+ * @return It as a 64-bit two's complement value.
+ */
+extended :: fn(value : u32, bits : u32) -> u64 {
+    shift :: cast[u64](64 - bits)
+    return bit_cast[u64](bit_cast[i64](cast[u64](value) << shift) >> shift)
+}
+
+/**
+ * Read a thread's integer register.
+ *
+ * @param registers The thread's registers.
+ * @param number Which, 0 to 31; x0 is 0.
+ * @return Its value.
+ */
+register_of :: fn(registers : ptr[UserRegisters], number : u32) -> u64 {
+    return if number == 0 { cast[u64](0) } else { registers.frame.x[cast[usize](number) % 32] }
+}
+
+/**
+ * Load a thread's debugging state (arch_interface.debug_on): its triggers installed on this hart through the SBI, the
+ * hart's trigger memory given it the first time. One with none installs nothing; one the SBI refuses is left off.
+ *
+ * @param debug The thread's state.
  * @param registers Unused.
  */
-debug_on :: fn(debug : ptr[DebugRegisters], registers : ptr[mut UserRegisters]) {}
+debug_on :: fn(debug : ptr[DebugRegisters], registers : ptr[mut UserRegisters]) {
+    cpu :: current_cpu()
+    count := cast[usize](0)
+    for trigger, i in debug.triggers {
+        if trigger != 0 && count < cpu.trigger_memory.count {
+            cpu.trigger_memory[count] = TriggerEntry.{tdata1 = trigger, tdata2 = debug.addresses[i]}
+            count += 1
+        }
+    }
+    if debug.step && count < cpu.trigger_memory.count {
+        cpu.trigger_memory[count] = if current_system().count_triggers > 0 {
+            TriggerEntry.{tdata1 = TRIGGER_COUNT | COUNT_USER | COUNT_ONE}
+        }
+        else {
+            TriggerEntry.{tdata1 = TRIGGER_MATCH | MATCH_USER | MATCH_EXECUTE, tdata2 = debug.step_targets[0]}
+        }
+        count += 1
+        if current_system().count_triggers == 0 && debug.step_targets[1] != 0 && count < cpu.trigger_memory.count {
+            cpu.trigger_memory[count] = TriggerEntry.{tdata1 = TRIGGER_MATCH | MATCH_USER | MATCH_EXECUTE, tdata2 = debug.step_targets[1]}
+            count += 1
+        }
+    }
+    if count == 0 {
+        return void
+    }
+    if !cpu.trigger_memory_given {
+        // ArchCpu is in the direct map, so its physical address is its address less the map's offset
+        physical :: cast[u64](&cpu.trigger_memory[0]) - current_system().direct_map_offset
+        if riscv64.sbi_call(SBI_DBTR, DBTR_SET_SHMEM, physical, 0, 0).error != 0 {
+            return void
+        }
+        cpu.trigger_memory_given = true
+    }
+    if riscv64.sbi_call(SBI_DBTR, DBTR_INSTALL, cast[u64](count)).error != 0 {
+        return void
+    }
+    // Each entry's tstate is its trigger's index now
+    for i in 0..<count {
+        if i < cpu.installed.count {
+            cpu.installed[i] = cpu.trigger_memory[i].tstate
+        }
+    }
+    cpu.installed_count = count
+    cpu.loaded = debug^
+}
 
-/** Turn the hart's breakpoints and watchpoints off (arch_interface.debug_off): there are none loaded. */
-debug_off :: fn() {}
+/**
+ * Turn the hart's breakpoints, watchpoints and step off (arch_interface.debug_off): each installed trigger uninstalled
+ * through the SBI. Nothing's done when there are none.
+ */
+debug_off :: fn() {
+    cpu :: current_cpu()
+    for i in 0..<cpu.installed_count {
+        if i < cpu.installed.count {
+            _ = riscv64.sbi_call(SBI_DBTR, DBTR_UNINSTALL, cpu.installed[i], 1)
+        }
+    }
+    cpu.installed_count = 0
+}
 
 /** scounteren's TM (bit 1): user mode reads the time CSR. */
 COUNTEREN_TIME : u64 : 1 << 1

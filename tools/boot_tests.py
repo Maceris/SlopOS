@@ -2019,7 +2019,7 @@ RISCV_HARDENING_LINE = ("[boot] cpu: control-flow integrity: landing pads (Zicfi
 RISCV_IOMMU_LINE_START = "[info] IOMMU 0: RISC-V IOMMU, 4 KiB of registers at "
 RISCV_TRANSLATING_LINE = "[info] IOMMU 0: translating, 128 interrupts remapped, its faults read at CPU 0's ticks"
 # test_control's tests on RISC-V: each control-flow test refused, the hardware debugger's skipped (decisions/0199)
-RISCV_CONTROL_TESTS = "8 tests: 7 passed, 0 failed, 1 skipped"
+RISCV_CONTROL_TESTS = "8 tests: 8 passed, 0 failed"
 # RISC-V's tests (tools/boot.py --arch riscv64), the kernel alone, as it has no user space until M19's R5
 # (knowledge/decisions/0199); those that take interrupts on the PLIC, then again on the AIA (boot.py --aia)
 RISCV_INTERRUPT_TESTS = [
@@ -2055,9 +2055,6 @@ RISCV_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI",
                   "skips a tampered return in the kernel without signed returns or a shadow stack",
                   "skips a branch to no landing pad in the kernel without landing pads",
                   "skips a write to the kernel's shadow stack without one",
-                  "debugs a program from the shell: a breakpoint by function, a step and its stack",
-                  "debugs a program by its lines, and shows its values through their types",
-                  "debugs a program's other threads and lists its fibers",
                   "draws the GUI on the firmware's framebuffer, and gives it back to the console"}
 # Without a power button, --end-when-done can't end a run early, so a run waits for the root task's settle: this much
 # past it, in seconds

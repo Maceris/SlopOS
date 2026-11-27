@@ -440,6 +440,7 @@ type CpuFeature member RiscvSvadu = 0xa5
 type CpuFeature member RiscvSstc = 0xa6
 type CpuFeature member RiscvSscofpmf = 0xa7
 type CpuFeature member RiscvSsaia = 0xa8
+type CpuFeature member RiscvSdtrig = 0xa9
 type CpuFeatures : struct size 32 align 8
 type CpuFeatures field 0000 bits offset 0 : u64[4]
 type DebugLog = distinct Handle

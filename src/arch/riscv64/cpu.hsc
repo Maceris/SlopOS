@@ -86,6 +86,32 @@ ArchCpu :: struct #align(64) {
      * (test_device_interrupts). stimecmp holds the earlier of it and deadline.
      */
     test_deadline : u64,
+    /**
+     * The memory the SBI's debug triggers extension reads triggers from and writes their indexes to, the hart's own,
+     * reached by its physical address (ArchCpu is in the direct map); a trigger for each slot and the step's.
+     */
+    trigger_memory : TriggerEntry[TRIGGER_ENTRIES],
+    /** Whether trigger_memory has been given to the SBI on this hart. */
+    trigger_memory_given : bool,
+    /** The triggers installed for the thread in user mode, by the SBI's indexes, installed_count of them. */
+    installed : u64[TRIGGER_ENTRIES],
+    installed_count : usize,
+    /** The thread's debugging state they're from, which a breakpoint exception is decoded by (entries.hsc). */
+    loaded : DebugRegisters,
+}
+
+/** How many triggers a thread may have at once: one for each of slop_os.DEBUG_SLOTS, and its step's. */
+TRIGGER_ENTRIES :: 5
+
+/**
+ * One trigger in the memory the SBI's debug triggers extension shares with a hart: for an install, tdata1 to tdata3
+ * in, and the trigger's index out in place of tstate.
+ */
+TriggerEntry :: struct #align(32) {
+    tstate : u64,
+    tdata1 : u64,
+    tdata2 : u64,
+    tdata3 : u64,
 }
 
 /**
@@ -126,6 +152,12 @@ ArchSystem :: struct {
     vlenb : u64,
     /** Whether the kernel and user threads can have shadow stacks: Zicfiss, and FWFT's SHADOW_STACK (hardening.hsc). */
     shadow_stacks : bool,
+    /**
+     * How many address match triggers (mcontrol6) and instruction count triggers (icount) the SBI's debug triggers
+     * extension has for each hart, 0 without it (user.hsc, find_debug_triggers).
+     */
+    match_triggers : u64,
+    count_triggers : u64,
     /** Which interrupt controller the harts have, found in the device tree (interrupts.hsc). */
     controller : Controller,
     /** The harts the device tree lists, by hart ID, with their place on the interrupt controller (interrupts.hsc). */
@@ -194,6 +226,11 @@ DebugRegisters :: struct {
     triggers : u64[4],
     /** Each trigger's tdata2, the address it matches. */
     addresses : u64[4],
+    /**
+     * Where its step stops, without an instruction count trigger: an execute trigger on each place its instruction can
+     * go next (user.hsc, step_targets); the second 0 when there's one.
+     */
+    step_targets : u64[2],
 }
 
 /** One wired interrupt controller the platform service registered (arch_interface.InterruptController), from R4. */
@@ -262,6 +299,7 @@ init_system :: fn(system : ptr[mut ArchSystem], firmware : ptr[boot_info.Firmwar
     system.features = detect_features(firmware, direct_map_offset)
     system.asid_bits = probe_asid_bits()
     find_shadow_stacks(system)
+    find_debug_triggers(system)
     if has(&system.features, .RiscvV) {
         // vlenb, which only reads with sstatus.VS on
         _ = riscv64.csrrs(.SSTATUS, SSTATUS_VS_INITIAL)

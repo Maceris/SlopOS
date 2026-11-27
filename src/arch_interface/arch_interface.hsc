@@ -842,13 +842,17 @@ set_user_register : fn(registers : ptr[mut UserRegisters], index : u32, value : 
  * @param registers The thread's saved registers, off its CPU, whose flags say whether it steps.
  * @param step Whether it stops after each instruction it runs in user mode.
  * @param slots The breakpoints and watchpoints, slop_os.DEBUG_SLOTS of them at most.
- * @return True once it's set; false, with nothing changed, if a slot is one the CPU can't set.
+ * @param instruction The first four bytes at the thread's pc, little-endian, read from its memory, or the two there are
+ *     at a page's end; 0 if they couldn't be read. RISC-V decodes where a step goes from it, where the SBI has no
+ *     instruction count trigger.
+ * @return True once it's set; false, with nothing changed, if a slot is one the CPU can't set, or a step one it can't.
  */
 set_debug : fn(
     debug : ptr[mut DebugRegisters],
     registers : ptr[mut UserRegisters],
     step : bool,
-    slots : slop_os.DebugSlot[]
+    slots : slop_os.DebugSlot[],
+    instruction : u32
 ) -> bool : ---
 
 /**
