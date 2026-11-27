@@ -1,11 +1,37 @@
 /**
  * What drivers share (decisions/0074, 0075): mapping what they're given of their device, its configuration space and
- * its BARs, into their own address space.
+ * its BARs, into their own address space; and the barrier before telling a device to look at memory.
  */
 package driver_kit
 
+import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
+
+#if TARGET_ARCH == .arm64 {
+    import aarch64 from "base:intrinsics/aarch64"
+}
+#else_if TARGET_ARCH == .riscv64 {
+    import riscv64 from "base:intrinsics/riscv64"
+}
+
+/**
+ * Order the process's writes to memory before its next write to a device's registers, as ringing a doorbell for what
+ * it just wrote needs: on RISC-V fence w,o, as a memory fence orders no device output; on AArch64 dmb oshst, as a
+ * device is in the outer shareable domain, which dmb ish doesn't reach (Linux's writel does the same); on x86-64 a
+ * full fence, uncached writes being ordered after earlier ones anyway.
+ */
+before_device_write :: fn() {
+    #if TARGET_ARCH == .riscv64 {
+        riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_OUTPUT | riscv64.FENCE_WRITE)
+    }
+    #else_if TARGET_ARCH == .arm64 {
+        aarch64.dmb(.OSHST)
+    }
+    #else {
+        intrinsics.fence_sequentially_consistent()
+    }
+}
 
 /**
  * Map device memory read/write into the process's own address space, as it is.

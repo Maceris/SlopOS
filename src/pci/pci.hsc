@@ -466,3 +466,73 @@ find_capability :: fn(config : u64, id : u8, after : u64 = 0) -> u64? {
     }
     return null
 }
+
+/** The PCI capability ID of MSI-X (PCIe 5.0 §7.7.2). */
+CAPABILITY_MSIX : u8 : 0x11
+/** MSI-X's Message Control: its Enable bit (15) and Function Mask bit (14). */
+MSIX_ENABLE : u16 : 1 << 15
+MSIX_FUNCTION_MASK : u16 : 1 << 14
+
+/** A function's MSI-X: where its capability is, and its table, mapped. */
+Msix :: struct {
+    /** The capability's offset in configuration space. */
+    capability : u64,
+    /** Where the table is mapped: its BAR's mapping and the table's offset in it. */
+    table : u64,
+    /** How many entries it has, 1 to 2048. */
+    entries : u32,
+}
+
+/**
+ * Find a function's MSI-X table, in the BAR its capability names.
+ *
+ * @param config Where the function's configuration space is mapped, readable.
+ * @param bars Where each of its BARs is mapped, 0 for one that isn't (driver_kit.map_bars).
+ * @return Its MSI-X; null if it has none, or its table's BAR isn't mapped.
+ */
+find_msix :: fn(config : u64, bars : u64[6]) -> Msix? {
+    capability :: find_capability(config, CAPABILITY_MSIX) or_return null
+    table :: read_u32(config, capability + 4)
+    bar :: cast[usize](table & 7)
+    if bar >= bars.count || bars[bar] == 0 {
+        return null
+    }
+    return Msix.{
+        capability = capability,
+        table = bars[bar] + cast[u64](table & ~cast[u32](7)),
+        entries = cast[u32](read_u16(config, capability + 2) & 0x7ff) + 1,
+    }
+}
+
+/**
+ * Point an MSI-X entry at a message, and unmask it.
+ *
+ * @param msix The function's MSI-X, from find_msix.
+ * @param entry The entry, below msix.entries.
+ * @param address The message's address, as the kernel gave it (slop_os.irq_message).
+ * @param data The message's data.
+ * @return False, nothing written, for an entry past the table.
+ */
+set_msix_entry :: fn(msix : ptr[Msix], entry : u32, address : u64, data : u32) -> bool {
+    if entry >= msix.entries {
+        return false
+    }
+    at :: msix.table + cast[u64](entry) * 16
+    write_u32(at, 0, cast[u32](address))
+    write_u32(at, 4, cast[u32](address >> 32))
+    write_u32(at, 8, data)
+    // Vector Control: unmasked
+    write_u32(at, 12, 0)
+    return true
+}
+
+/**
+ * Turn a function's MSI-X on, its function mask off, so its unmasked entries send their messages.
+ *
+ * @param config Where the function's configuration space is mapped, writable.
+ * @param msix The function's MSI-X, from find_msix.
+ */
+enable_msix :: fn(config : u64, msix : ptr[Msix]) {
+    control :: read_u16(config, msix.capability + 2)
+    write_u16(config, msix.capability + 2, (control | MSIX_ENABLE) & ~MSIX_FUNCTION_MASK)
+}

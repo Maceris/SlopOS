@@ -508,6 +508,12 @@ TESTS = [
     # loading only the boot set; the storage stack finding its partitions and its SlopOS
     # container, every other program read from the system volume, and the disk check passing on it as on the test disk
     ("boots from a disk the image builder made", 7, BOOT_DISK_ARGUMENTS),
+    # The same disk on an NVMe controller (decisions/0201's 20b): the firmware booting from it, the NVMe driver serving
+    # it to the storage stack in place of virtio-blk's, and the disk check passing on it
+    ("boots from a disk on an NVMe controller", 7, ["--disk-bus=nvme"] + [
+        argument.replace("[user] virtio_blk: serving 272384 blocks",
+                         "[user] nvme: serving 272384 blocks, 512 bytes each on the namespace, with a write cache")
+        for argument in BOOT_DISK_ARGUMENTS]),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
         "--command-line=test_exit test_services test_reassign", "--expect-line=[user] platform: 1:0.0 (6900 4164) claimed",

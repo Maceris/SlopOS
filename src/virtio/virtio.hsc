@@ -17,6 +17,7 @@
 package virtio
 
 import intrinsics from "base:intrinsics"
+import driver_kit from "../driver_kit"
 import pci from "../pci"
 
 // ---- The vendor capability, and the configuration structures it points at (virtio 1.2 §4.1.4)
@@ -497,7 +498,7 @@ notify :: fn(queue : ptr[mut Queue]) {
     }
     queue.unnotified = 0
     // The index is where the device reads it before it's told
-    intrinsics.fence_sequentially_consistent()
+    driver_kit.before_device_write()
     intrinsics.volatile_store_u16(cast[ptr[mut u16]](queue.notify), bit_cast[u16](cast[u16le](queue.index)))
 }
 

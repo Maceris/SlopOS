@@ -506,6 +506,21 @@ class SerialKeys:
 # On q35, VT-d with interrupt remapping (decisions/0079): before every other PCI device, as QEMU wants it
 X86_IOMMU = ["-device", "intel-iommu,intremap=on"]
 
+# What --disk-bus attaches the disk (drive disk) through: QEMU's devices for each, as arguments
+DISK_BUSES = {
+    "virtio": ["-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"],
+    "nvme": ["-device", "nvme,drive=disk,serial=slopos-disk"],
+}
+
+
+def disk_device(bus: str, boot: bool) -> list[str]:
+    """QEMU's arguments for the disk on bus, the firmware booting from it first where boot."""
+    device = list(DISK_BUSES[bus])
+    if boot:
+        device[-1] += ",bootindex=0"
+    return device
+
+
 # The virtio console's banner, which says it's ready for what's typed into it (src/services/terminal_service)
 CONSOLE_BANNER = "SlopOS console"
 
@@ -2262,7 +2277,7 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 BOOT_DISK_SECTORS = 272384
 # The programs the bootloader loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
-BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "storage_manager", "partition_server",
+BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "nvme", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
 # The system configuration, which the build writes beside the programs
 SYSTEM_RECORDS = "system.records"
@@ -2541,6 +2556,8 @@ def main() -> int:
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
     parser.add_argument("--disk", help="add a virtio block device, a GPT disk image with this mark in its SlopOS check partition's block 0 (make_disk)")
+    parser.add_argument("--disk-bus", choices=list(DISK_BUSES), default="virtio",
+                        help="what --disk or --boot-disk is attached through: a virtio block device, or an NVMe controller")
     parser.add_argument("--boot-disk", action="store_true",
                         help="boot from a disk the image builder makes rather than from the ISO (make_boot_disk), the --disk mark in "
                              "its SlopOS check partition")
@@ -2685,12 +2702,11 @@ def main() -> int:
                            command_line, not arguments.no_kaslr, arguments.disk or "", arguments.stage_generation,
                            (programs_folder / "hello_next.elf").resolve() if arguments.stage_next_hello else None,
                            development=not arguments.release_generation, debug_files=arguments.debug_files)
-            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw",
-                      "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on,bootindex=0"]
+            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", *disk_device(arguments.disk_bus, True)]
             phases.append(("making the disk", time.monotonic() - phase_started))
         elif arguments.disk is not None:
             make_disk(disk, arguments.disk)
-            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", "-device", "virtio-blk-pci,drive=disk,disable-legacy=on,iommu_platform=on"]
+            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", *disk_device(arguments.disk_bus, False)]
         if arguments.power_button_after is not None:
             button = PowerButton(serial, arguments.power_button_after)
             extra += button.qemu_arguments()
