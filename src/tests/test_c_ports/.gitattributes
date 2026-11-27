@@ -1,0 +1,2 @@
+# The C ports test's scripts are written byte for byte, so their size and minigzip's output are the same on every checkout
+* text eol=lf

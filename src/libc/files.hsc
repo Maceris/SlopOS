@@ -29,6 +29,13 @@ O_TRUNC : i32 : 0o1000
 /** open's O_APPEND: every write at the end. */
 O_APPEND : i32 : 0o2000
 
+/** fcntl's commands, as fcntl.h has them, and F_SETFD's one flag. */
+F_GETFD : i32 : 1
+F_SETFD : i32 : 2
+F_GETFL : i32 : 3
+F_SETFL : i32 : 4
+FD_CLOEXEC : i64 : 1
+
 /** lseek's SEEK_SET: from the start. */
 SEEK_SET : i32 : 0
 /** lseek's SEEK_CUR: from where it's at. */
@@ -320,6 +327,44 @@ slopos_libc_open #export #calling_convention(.c) :: fn(path : ptr[u8], flags : i
     }
     runtime.array_add(&state.descriptors, made)
     return cast[i32](state.descriptors.count - 1)
+}
+
+/**
+ * Ask about or change a descriptor, as C's fcntl, called by it (c/files.c) with its argument read.
+ *
+ * @param fd The descriptor.
+ * @param command F_GETFD, F_SETFD, F_GETFL or F_SETFL.
+ * @param argument For F_SETFD, FD_CLOEXEC or 0; for F_SETFL, flags whose O_APPEND is kept and the rest dropped, as
+ *     the access mode can't change and files never block. Unread otherwise.
+ * @return F_GETFD: FD_CLOEXEC or 0. F_GETFL: O_RDONLY, O_WRONLY or O_RDWR, with O_APPEND if it has it; stdin's is
+ *     O_RDONLY, stdout's and stderr's O_WRONLY. 0 for the others. -1, errno EBADF for a descriptor that isn't open,
+ *     or EINVAL for another command.
+ */
+slopos_libc_fcntl #export #calling_convention(.c) :: fn(fd : i32, command : i32, argument : i64) -> i32 {
+    state :: state_of() or_return failed(E_BADF)
+    descriptor :: descriptor_of(state, fd) or_return failed(E_BADF)
+    if command == F_GETFD {
+        return if descriptor.close_on_exec { cast[i32](FD_CLOEXEC) } else { 0 }
+    }
+    if command == F_SETFD {
+        descriptor.close_on_exec = (argument & FD_CLOEXEC) != 0
+        return 0
+    }
+    if command == F_GETFL {
+        access :: match descriptor.kind {
+            case .Input => cast[i32](0)
+            case .Output => O_WRONLY
+            case _ => if descriptor.readable && descriptor.writable { O_RDWR } else if descriptor.writable { O_WRONLY } else { cast[i32](0) }
+        }
+        return access | (if descriptor.append { O_APPEND } else { cast[i32](0) })
+    }
+    if command == F_SETFL {
+        if descriptor.kind == .File {
+            descriptor.append = (argument & cast[i64](O_APPEND)) != 0
+        }
+        return 0
+    }
+    return failed(E_INVAL)
 }
 
 /**

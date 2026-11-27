@@ -94,6 +94,8 @@ Descriptor :: struct {
     writable : bool,
     /** O_APPEND: every write goes to the file's end, wherever it's at. */
     append : bool,
+    /** FD_CLOEXEC, as fcntl's F_SETFD sets it; it changes nothing, as there's no exec. */
+    close_on_exec : bool,
 }
 
 /** An open directory's listing, from opendir: its names, read a name at a time. */

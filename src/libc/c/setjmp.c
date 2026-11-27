@@ -167,11 +167,11 @@ __asm__(".text\n"
         "    fsd fs9, 184(a0)\n"
         "    fsd fs10, 192(a0)\n"
         "    fsd fs11, 200(a0)\n"
-        /* ssrdp, 0 without a shadow stack; C's own frames push nothing on it */
-        "    .option push\n"
-        "    .option arch, +zicfiss\n"
-        "    ssrdp t0\n"
-        "    .option pop\n"
+        /*
+         * ssrdp t0, 0 without a shadow stack; C's own frames push nothing on it. Its encoding, a Zimop instruction
+         * (mop.r.28), as an assembler that holds Zicfiss experimental, as LLVM 23's does, won't take the mnemonic
+         */
+        "    .4byte 0xcdc042f3\n"
         "    sd t0, 208(a0)\n"
         "    li a0, 0\n"
         "    ret\n"

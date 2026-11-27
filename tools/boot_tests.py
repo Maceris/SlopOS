@@ -1460,6 +1460,28 @@ TESTS = [
         "--expect-console-line=      3 libc_words.txt", "--expect-console-line=wc: nothing.txt: No such file or directory",
         "--expect-console-line=      3 total", "--expect-console-line=error: wc ended with 1",
         "--expect-console-line=error: test_libc_files ended with 255"])),
+    # C ports from the shell (decisions/0202, 21g): test_c_ports' files beneath the shell's directory; Lua's checks,
+    # given arguments, an error nothing catches (its message and 1), and -e; then minigzip compressing a file, its .gz
+    # the same bytes on every architecture, and giving it back, the bytes it was
+    ("runs Lua and minigzip from the shell, C ports on the libc", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=240")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\w\\>test_c_ports\\r\\>"
+        "lua [\"checks.lua\", \"one\", \"two\"]\\r\\>"
+        "lua [\"fails.lua\"]\\r\\>"
+        "lua [\"-e\", \"print(6 * 7)\"]\\r\\>"
+        "minigzip [\"gzip_input.txt\"]\\r\\>"
+        "lua [\"compare.lua\", \"gz\"]\\r\\>"
+        "minigzip [\"-d\", \"gzip_input.txt.gz\"]\\r\\>"
+        "lua [\"compare.lua\", \"back\"]\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        "--expect-console-line=lua checks: 39 of 39 passed",
+        "--expect-console-line=lua: fails.lua:3: on purpose", "--expect-console-line=error: lua ended with 1",
+        "--expect-console-line=42",
+        "--expect-console-line=gz: 1865 bytes, hash dd37d4ba",
+        "--expect-console-line=gunzipped: true, 4373 bytes"])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then

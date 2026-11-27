@@ -27,7 +27,21 @@ extern "C" {
 #define O_CLOEXEC 02000000
 #define O_BINARY 0
 
+/* fcntl's commands, Linux's values: F_GETFD and F_SETFD keep FD_CLOEXEC, which changes nothing, as there's no exec */
+#define F_DUPFD 0
+#define F_GETFD 1
+#define F_SETFD 2
+#define F_GETFL 3
+#define F_SETFL 4
+#define FD_CLOEXEC 1
+
 int open(const char *path, int flags, ...);
+/*
+ * Ask about or change a descriptor: F_GETFD and F_SETFD its FD_CLOEXEC, F_GETFL its access mode and O_APPEND
+ * (O_NONBLOCK, which F_SETFL takes and drops, never), and F_SETFL its O_APPEND. -1, errno EBADF for one that isn't
+ * open, or EINVAL for another command, F_DUPFD's among them.
+ */
+int fcntl(int fd, int command, ...);
 int creat(const char *path, mode_t mode);
 
 #ifdef __cplusplus

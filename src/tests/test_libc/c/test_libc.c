@@ -612,7 +612,15 @@ static void files_test(void) {
     CHECK(file != NULL && ftell(file) == 17);
     CHECK(file != NULL && fputs("\nappended", file) == 0 && ftell(file) == 26 && fclose(file) == 0);
     int appending = open(FOLDER "/streams.txt", O_WRONLY | O_APPEND);
-    CHECK(appending >= 3 && lseek(appending, 0, SEEK_CUR) == 26 && close(appending) == 0);
+    CHECK(appending >= 3 && lseek(appending, 0, SEEK_CUR) == 26);
+    /* fcntl: the access mode and O_APPEND, which F_SETFL changes, and FD_CLOEXEC kept */
+    CHECK(fcntl(appending, F_GETFL) == (O_WRONLY | O_APPEND) && fcntl(appending, F_GETFD) == 0);
+    CHECK(fcntl(appending, F_SETFL, O_NONBLOCK) == 0 && fcntl(appending, F_GETFL) == O_WRONLY);
+    CHECK(fcntl(appending, F_SETFL, O_APPEND) == 0 && fcntl(appending, F_GETFL) == (O_WRONLY | O_APPEND));
+    CHECK(fcntl(appending, F_SETFD, FD_CLOEXEC) == 0 && fcntl(appending, F_GETFD) == FD_CLOEXEC);
+    CHECK(fcntl(0, F_GETFL) == O_RDONLY && fcntl(1, F_GETFL) == O_WRONLY);
+    CHECK(fcntl(appending, F_DUPFD, 0) == -1 && errno == EINVAL && fcntl(99, F_GETFL) == -1 && errno == EBADF);
+    CHECK(close(appending) == 0);
     CHECK(read_whole(FOLDER "/streams.txt", text, sizeof text) == 26);
     CHECK_TEXT(text, "line 1\nline two\n3\nappended");
     file = fopen(FOLDER "/streams.txt", "r+");

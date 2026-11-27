@@ -8,14 +8,17 @@ stdarg.h, limits.h, float.h, stdbool.h), and no others.
 
     python -I tools/c_libraries.py <programs folder> <architecture>
 
-The architecture is x86_64, aarch64 or riscv64. clang and llvm-ar are CLANG and LLVM_AR if set, else found on the PATH,
-else beside Visual Studio's LLVM. A clang without the architecture's backend, as Visual Studio's has no RISC-V, gives
-LLVM bitcode instead, which llc compiles: LLC if set, else the one built in Hemera's LLVM beside the hemera on the PATH.
+The architecture is x86_64, aarch64 or riscv64. clang is CLANG if set; else the first that has the architecture's
+backend of: an LLVM release's (LLVM, its folder or its bin, if set; then LLVM_RELEASES, the newest first), the PATH's,
+and Visual Studio's. llvm-ar is LLVM_AR if set, else beside that clang. Only where no clang has the backend, as Visual
+Studio's has no RISC-V, is the first found made to give LLVM bitcode, which llc compiles: LLC if set, else the one
+built in Hemera's LLVM beside the hemera on the PATH.
 Nothing's built, and it succeeds, where no program has C. A c/key.txt and keyed folders an earlier version left are
 removed. It ends with 1 if a source doesn't compile or the tools aren't found.
 
 Environment:
     CLANG     clang, or its folder
+    LLVM      an LLVM release's folder, or its bin, whose clang is taken before the PATH's
     LLVM_AR   llvm-ar, or its folder (default: beside clang)
     LLC       llc, or its folder, for an architecture clang has no backend for
 """
@@ -32,6 +35,9 @@ PROGRAM_FOLDERS = [ROOT / "src" / "services", ROOT / "src" / "apps", ROOT / "src
 C_PACKAGES = [ROOT / "src" / "libc"]
 # The libc's headers, which every C source is compiled with (decisions/0201, 20l)
 LIBC_HEADERS = ROOT / "src" / "libc" / "include"
+# Where LLVM releases are unpacked, each a glob of their bin folders: an installer's, and a release's archive unpacked
+# beside the other tools (decisions/0202, 21g); the newest version first
+LLVM_RELEASES = ["C:/Program Files/LLVM/bin", "D:/Programs/System Tools/llvm-*-download/clang+llvm-*/bin"]
 # Visual Studio's LLVM, where a Windows machine with it has clang
 VISUAL_STUDIO_LLVM = Path("C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin")
 # Each architecture's target and flags: the programs' baseline, and the control-flow integrity they're built with
@@ -70,6 +76,45 @@ def find_tool(variable: str, name: str, beside: Path | None = None) -> Path | No
     return candidate if candidate.exists() else None
 
 
+def version_key(folder: Path) -> list[int]:
+    """The version in an LLVM release's folder name, like clang+llvm-23.1.5-..., as numbers to sort by; [] for none."""
+    for part in folder.parent.name.split("-"):
+        if part[:1].isdigit():
+            return [int(n) for n in part.split(".") if n.isdigit()]
+    return []
+
+
+def clang_candidates() -> list[Path]:
+    """Every clang that might be used, in the order they're preferred: LLVM's, LLVM_RELEASES', the PATH's, VS's."""
+    folders = []
+    given = os.environ.get("LLVM")
+    if given:
+        folders += [Path(given) / "bin", Path(given)]
+    for pattern in LLVM_RELEASES:
+        anchor = Path(pattern[:3])
+        found = [Path(match) for match in anchor.glob(pattern[3:])] if "*" in pattern else [Path(pattern)]
+        folders += sorted(found, key=version_key, reverse=True)
+    name = "clang.exe" if os.name == "nt" else "clang"
+    candidates = [folder / name for folder in folders if (folder / name).is_file()]
+    on_path = shutil.which("clang")
+    if on_path:
+        candidates.append(Path(on_path))
+    if (VISUAL_STUDIO_LLVM / "clang.exe").is_file():
+        candidates.append(VISUAL_STUDIO_LLVM / "clang.exe")
+    return candidates
+
+
+def find_clang(architecture: str) -> Path | None:
+    """CLANG's clang; else the first candidate with the architecture's backend; else the first found; else None."""
+    if os.environ.get("CLANG"):
+        return find_tool("CLANG", "clang")
+    candidates = clang_candidates()
+    for candidate in candidates:
+        if has_backend(candidate, architecture):
+            return candidate
+    return candidates[0] if candidates else None
+
+
 def has_backend(clang: Path, architecture: str) -> bool:
     """Whether clang can make objects for the architecture itself, as -print-targets lists its backend."""
     listed = subprocess.run([str(clang), "-print-targets"], capture_output=True, text=True).stdout
@@ -104,9 +149,9 @@ def main() -> int:
     forget_keys(output)
     if not programs:
         return 0
-    clang = find_tool("CLANG", "clang")
+    clang = find_clang(architecture)
     if clang is None:
-        print("c_libraries.py: no clang: set CLANG, or put it on the PATH", file=sys.stderr)
+        print("c_libraries.py: no clang: set CLANG or LLVM, or put it on the PATH", file=sys.stderr)
         return 1
     archiver = find_tool("LLVM_AR", "llvm-ar", clang.parent)
     if archiver is None:
