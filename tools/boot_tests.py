@@ -1503,7 +1503,7 @@ TESTS = [
         "--expect-console-line=42",
         "--expect-console-line=gz: 1865 bytes, hash dd37d4ba",
         "--expect-console-line=gunzipped: true, 4373 bytes",
-        "--expect-console-line=big: 6270000 bytes, 3300 pieces"])),
+        "--expect-console-line=big: 9600000 bytes, 2400 pieces"])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then
