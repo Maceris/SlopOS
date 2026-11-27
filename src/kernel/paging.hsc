@@ -467,6 +467,8 @@ evict_page :: fn(kernel : ptr[mut Kernel], memory : ptr[mut Memory], offset : u6
         flush.tag = each.tag
         flush.count = 1
         flush.addresses[0] = cast[arch_interface.VirtualAddress](each.address)
+        // Tables freed: the whole space, as an architecture may flush by address only the page's own entry (RISC-V)
+        flush.all = each.freed.count > 0
         shootdown(kernel, &flush)
         uncharge(each.space, each.generation, cast[u64](each.freed.count) * frames.FRAME_SIZE)
         free_tables(kernel, &each.freed)

@@ -80,6 +80,10 @@ Irq :: struct #align(16) {
     remap_iommu : u32,
     /** Its entry's index in that IOMMU's remapping table; meaningless when remap_iommu is 0. */
     remap_index : u32,
+    /** The index of the CPU its retired route is on (ROUTE_RETIRED), from its last move; meaningless without one. */
+    retired_cpu : u32,
+    /** Its retired route's slot on retired_cpu; MAX_DEVICE_INTERRUPTS for none. */
+    retired_slot : u32,
 }
 
 /**
@@ -130,6 +134,7 @@ create_irq :: fn(
     irq.line = line
     irq.trigger = trigger
     irq.slot = cast[u32](MAX_DEVICE_INTERRUPTS)
+    irq.retired_slot = cast[u32](MAX_DEVICE_INTERRUPTS)
     /*
      * Once an IOMMU remaps interrupts, a line's would be blocked as a forged message would be (translation.hsc), unless
      * it's remapped too, from its controller's requester ID (decisions/0182)

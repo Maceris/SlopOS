@@ -140,6 +140,11 @@ ArchSystem :: struct {
      * How many identities each hart's supervisor interrupt file has, the device tree's riscv,num-ids; 0 without one.
      */
     imsic_ids : u32,
+    /**
+     * The bytes from one hart's supervisor interrupt file to the next, a page for each of the guest files it has
+     * besides (riscv,guest-index-bits); 0 without an IMSIC.
+     */
+    imsic_stride : u64,
     /** The supervisor-level APLIC's registers, through the direct map, or 0 without one. */
     aplic : u64,
     /** The supervisor-level APLIC's registers' physical address, which test_device reports; 0 without one. */
@@ -383,6 +388,7 @@ init_cpu :: fn(
     // User mode reads the time CSR, until a recorded process's thread runs (set_counter_trap)
     riscv64.csrw(.SCOUNTEREN, COUNTEREN_TIME)
     init_hart_controller(system, cpu)
+    check_shadow_stacks(cast[ptr[mut ArchSystem]](system))
     enable_landing_pads(system, cpu)
     riscv64.csrw(.SENVCFG, 0)
     riscv64.csrw(.SIE, SIE_SOFTWARE | SIE_TIMER | SIE_EXTERNAL)

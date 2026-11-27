@@ -1042,15 +1042,15 @@ TESTS = [
         "--expect-console-line=called with after, 3, loud false, speed none, wait none, tags none, place none"])),
     # The microphone (decisions/0196, 17f): capture asks the powerbox for it, the secure attention key shows what it
     # asks, and Enter allows it; while capture holds it the status line says so, and M on the secure attention key's
-    # screen takes it back, the grant's connection closed, capture keeping what it had, and the status line no longer
-    # saying so.
+    # screen takes it back, once the audio service has recorded a period, the grant's connection closed, capture
+    # keeping what it had, and the status line no longer saying so.
     # Then play plays it through the session's sound (17g), and - on the secure attention key's screen, five times,
     # turns the session's volume down to half
     ("records once the user allows the microphone, shows it held, takes it back, and plays it at the session's volume", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=60").replace("--timeout=120", "--timeout=180")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done", "--audio-none",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
-        "\\w\\>capture 30 note.wav\\r\\s{ asks }\\e[3;7~\\w\\r\\s{microphone: capture}\\e[3;7~\\wm\\S{microphone}\\e\\S{secure attention}crashes\\r\\>play note.wav\\r\\>\\e[3;7~\\w-----\\e",
+        "\\w\\>capture 30 note.wav\\r\\s{ asks }\\e[3;7~\\w\\r\\s{microphone: capture}\\l{recorded its first period}\\e[3;7~\\wm\\S{microphone}\\e\\S{secure attention}crashes\\r\\>play note.wav\\r\\u{underruns: }\\>\\e[3;7~\\w-----\\e",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--console-input-after=  Use the microphone", "--console-input-after=  M takes the microphone back from capture.",
@@ -1938,7 +1938,7 @@ RISCV_HARDENING_LINE = ("[boot] cpu: control-flow integrity: landing pads (Zicfi
                         "for the kernel: yes, yes")
 # The RISC-V IOMMU, a PCI function whose BAR the firmware places by the other devices there, so its address varies
 RISCV_IOMMU_LINE_START = "[info] IOMMU 0: RISC-V IOMMU, 4 KiB of registers at "
-RISCV_TRANSLATING_LINE = "[info] IOMMU 0: translating, 0 interrupts remapped, its faults read at CPU 0's ticks"
+RISCV_TRANSLATING_LINE = "[info] IOMMU 0: translating, 128 interrupts remapped, its faults read at CPU 0's ticks"
 # test_control's tests on RISC-V: each control-flow test refused, the hardware debugger's skipped (decisions/0199)
 RISCV_CONTROL_TESTS = "8 tests: 7 passed, 0 failed, 1 skipped"
 # RISC-V's tests (tools/boot.py --arch riscv64), the kernel alone, as it has no user space until M19's R5

@@ -115,6 +115,8 @@ SOURCE_EDGE_RISING  : u32 : 4
 SOURCE_EDGE_FALLING : u32 : 5
 SOURCE_LEVEL_HIGH   : u32 : 6
 SOURCE_LEVEL_LOW    : u32 : 7
+/** sourcecfg's SM, its source mode, bits 0 to 2, where D (bit 10) is clear. */
+SOURCE_MODE_MASK : u32 : 7
 
 // IMSIC: a file's seteipnum_le, and the indirect registers siselect reaches
 /** seteipnum_le, at an interrupt file's start: writing an identity makes it pending there. */
@@ -181,11 +183,20 @@ init_aia :: fn(system : ptr[mut ArchSystem], tree : ptr[devicetree.Tree]) -> boo
         guest_bits :: cell_property(tree, &node, "riscv,guest-index-bits", 0)
         stride :: cast[u64](1) << (12 + cast[u64](guest_bits))
         system.imsic_ids = cell_property(tree, &node, "riscv,num-ids", 0)
+        system.imsic_stride = stride
         count :: files.size / 8
         for index in cast[u64](0)..<count {
             hart :: devicetree.parent_reg_of(tree, devicetree.cell(files, index * 2) or_else 0) or_continue
             at :: cast[usize](system.hart_count)
             if at >= system.harts.count {
+                break
+            }
+            /*
+             * Its file within the reg range mapped: an IMSIC in groups has more ranges, which aren't read, and the
+             * harts past the first stay off
+             */
+            if region.size < IMSIC_FILE_BYTES || index > (region.size - IMSIC_FILE_BYTES) / stride {
+                runtime.log_warn("IMSIC: hart % has its file past the first reg range, which alone is used", hart)
                 break
             }
             system.harts[at] = Hart.{
@@ -695,7 +706,10 @@ mask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
 
 /**
  * Unmask a line (arch_interface.unmask_wired): on a PLIC enabled in its routed hart's supervisor context, on the APLIC
- * through setienum.
+ * through setienum, and a level-sensitive line pended again through setipnum: in MSI delivery mode its pending bit
+ * was cleared when its message was sent, and isn't set again while the line stays asserted, so a device that kept it
+ * asserted would never be heard again (the AIA's 4.9.2). setipnum pends a level-sensitive source only while it's
+ * asserted, so one that isn't stays quiet.
  *
  * @param controller The controller, from init_interrupt_controller.
  * @param line The line, from 1, below controller's lines, routed already (route_wired); a PLIC line without a route
@@ -704,6 +718,10 @@ mask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
 unmask_wired :: fn(controller : ptr[mut InterruptController], line : u32) {
     if controller.kind == .Aplic {
         write_u32(controller.registers, APLIC_SETIENUM, line)
+        mode :: read_u32(controller.registers, APLIC_SOURCECFG + cast[u64](line - 1) * 4) & SOURCE_MODE_MASK
+        if mode == SOURCE_LEVEL_HIGH || mode == SOURCE_LEVEL_LOW {
+            write_u32(controller.registers, APLIC_SETIPNUM, line)
+        }
         return void
     }
     system :: current_system()
@@ -815,11 +833,12 @@ unroute_msi :: fn(source : u32, event : u32) {}
  * IOMMU: the IMSIC keeps nothing per device, and only the IOMMU's MRIF mode, not driven, would.
  *
  * @return From the lowest hart's file to the highest's, every page between them included, at most MAX_DOORBELL_PAGES;
- *     null with a PLIC, which takes no MSIs, or when the files are further apart than that.
+ *     null with a PLIC, which takes no MSIs, when the files are further apart than that, or when the IMSIC has guest
+ *     files between them, which the range would give devices too, so devices behind an IOMMU get no MSIs then.
  */
 msi_doorbell :: fn() -> arch_interface.MsiDoorbell? {
     system :: current_system()
-    if system.controller != .Aia || system.hart_count == 0 {
+    if system.controller != .Aia || system.hart_count == 0 || system.imsic_stride != IMSIC_FILE_BYTES {
         return null
     }
     lowest := ~cast[u64](0)

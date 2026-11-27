@@ -1,6 +1,7 @@
 package iommu_vtd
 
 import intrinsics from "base:intrinsics"
+import runtime from "base:runtime"
 import x86_64 from "base:intrinsics/x86_64"
 import iommu_interface from "../../iommu_interface"
 
@@ -295,6 +296,9 @@ identify :: fn(
             domain_ids = if ids > 0xffff { 0xffff } else { cast[u32](ids) },
             interrupts = if iommu.remaps { INTERRUPT_ENTRIES } else { 0 },
             fault_messages = true,
+            wired_lines_remapped = iommu.remaps,
+            msi_window = 0,
+            msi_window_pages = 0,
         }
     )
 }
@@ -374,7 +378,8 @@ enable :: fn(
  * @param cpu_hardware_id The CPU's APIC ID: its x2APIC ID in extended interrupt mode, otherwise its xAPIC ID, of
  *     which the low 8 bits are used.
  * @param vector The vector, an InterruptId; the low 8 bits are used.
- *  * @param level Whether it's level-triggered: the entry's TM, for a wired line's.
+ * @param level Whether it's level-triggered: the entry's TM, for a wired line's.
+ * @param direct Unused: the entry delivers the vector itself.
  * @return The message stream's device writes to raise it: a remappable-format address carrying index as its handle,
  *     and data 0.
  */
@@ -384,7 +389,8 @@ remap_interrupt :: fn(
     stream : u32,
     cpu_hardware_id : u64,
     vector : u32,
-    level : bool
+    level : bool,
+    direct : iommu_interface.MsiMessage
 ) -> iommu_interface.MsiMessage {
     // One index for the entry, its invalidation and its handle, so they never disagree
     slot :: index % INTERRUPT_ENTRIES
@@ -424,14 +430,15 @@ unmap_interrupt :: fn(iommu : ptr[mut Iommu], index : u32) {
 }
 
 /**
- * Invalidate one interrupt remapping entry's cached copy, and wait for it. A wait that fails is ignored.
+ * Invalidate one interrupt remapping entry's cached copy, and wait for it. A wait that fails stops the kernel (an
+ * assertion), as the old entry may still be in use.
  *
  * @param iommu The unit, its invalidation queue on; the descriptor and a wait are put on it.
  * @param index The entry's index, below INTERRUPT_ENTRIES, as remap_interrupt and unmap_interrupt pass it.
  */
 invalidate_interrupt :: fn(iommu : ptr[mut Iommu], index : u32) {
     submit(iommu, DESCRIPTOR_INTERRUPT_ENTRY | INTERRUPT_ENTRY_ONE | cast[u64](index) << 32, 0)
-    _ = wait(iommu)
+    runtime.assert(wait(iommu), "the VT-d unit didn't finish an invalidation, stopped or slow")
 }
 
 /**
@@ -613,7 +620,9 @@ unmap :: fn(iommu : ptr[Iommu], domain : ptr[mut Domain], address : u64) {
  * Make the unit see a domain's tables as they are, waiting for it.
  *
  * The domain's IOTLB entries and cached tables are invalidated by its ID; after mapping, only in caching mode, and
- * otherwise the write buffer is flushed where the unit needs it. A wait or flush that fails is ignored.
+ * otherwise the write buffer is flushed where the unit needs it. A wait that fails stops the kernel (an assertion),
+ * as the old translations may still be in use; a flush after mapping that fails is ignored, as it only delays the
+ * new ones.
  *
  * @param iommu The unit, enabled, its invalidation queue on.
  * @param domain The domain whose tables changed; only its ID, whose IOTLB entries go, is read.
@@ -627,7 +636,7 @@ invalidate :: fn(iommu : ptr[mut Iommu], domain : ptr[Domain], mapped : bool) {
         return void
     }
     submit(iommu, DESCRIPTOR_IOTLB | DOMAIN | cast[u64](domain.id) << 16, 0)
-    _ = wait(iommu)
+    runtime.assert(wait(iommu), "the VT-d unit didn't finish an invalidation, stopped or slow")
 }
 
 /**
@@ -797,7 +806,8 @@ flush_range :: fn(iommu : ptr[Iommu], at : u64, size : u64) {
 }
 
 /**
- * Invalidate the whole context cache and one domain's IOTLB entries, and wait for it. A wait that fails is ignored.
+ * Invalidate the whole context cache and one domain's IOTLB entries, and wait for it. A wait that fails stops the
+ * kernel (an assertion), as the old contexts may still be in use.
  *
  * @param iommu The unit, enabled.
  * @param id The ID of the domain whose IOTLB entries go, from 1 to identify's domain_ids.
@@ -805,7 +815,7 @@ flush_range :: fn(iommu : ptr[Iommu], at : u64, size : u64) {
 invalidate_context :: fn(iommu : ptr[mut Iommu], id : u32) {
     submit(iommu, DESCRIPTOR_CONTEXT | GLOBAL, 0)
     submit(iommu, DESCRIPTOR_IOTLB | DOMAIN | cast[u64](id) << 16, 0)
-    _ = wait(iommu)
+    runtime.assert(wait(iommu), "the VT-d unit didn't finish an invalidation, stopped or slow")
 }
 
 /**

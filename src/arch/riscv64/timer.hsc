@@ -1,6 +1,7 @@
 package arch_riscv64
 
 import riscv64 from "base:intrinsics/riscv64"
+import runtime from "base:runtime"
 
 /*
  * The timer (decisions/0199, R4): Sstc's stimecmp, the supervisor's own compare, which raises the timer interrupt once
@@ -110,6 +111,8 @@ idle :: fn() #never_returns {
      */
     if cpu.kernel_shadow_top != 0 && !cpu.shadow_stacks_on {
         cpu.shadow_stacks_on = riscv64.sbi_call(SBI_FWFT, SBI_FWFT_SET, FWFT_SHADOW_STACK, 1, 0).error == 0
+        // check_shadow_stacks found it on every hart, so threads may have shadow stacks; it has to go on here too
+        runtime.assert(cpu.shadow_stacks_on || !current_system().shadow_stacks, "FWFT didn't turn shadow stacks on")
     }
     if cpu.shadow_stacks_on {
         riscv64.csrw(.SSP, cpu.kernel_shadow_top)

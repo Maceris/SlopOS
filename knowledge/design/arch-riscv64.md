@@ -85,18 +85,21 @@ What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x8
   (`crash_reports.FRAME_RECORD_BELOW`), and a suspended fiber's continuation is at 104.
 - **Devices:** virtio over PCI, the ECAM from the device tree, as on AArch64; their MSIs go to the IMSIC, so programs
   need the AIA. The RTC is Goldfish's, which the platform service finds and the clock service drives.
-- **The IOMMU:** the RISC-V IOMMU (`src/iommu/riscv`), first-stage Sv48 domains, MSIs translated as other DMA to the
-  harts' interrupt files, which `msi_doorbell` gives L2 to map into each domain. On QEMU it's the PCI one, as `virt`'s
-  platform one goes missing from the device tree beside `ramfb`; QEMU 11.1's walk wants U on table entries too, and its
-  translation cache is turned off, for a bug in its permissions (decisions/0199's R6).
+- **The IOMMU:** the RISC-V IOMMU (`src/iommu/riscv`), first-stage Sv48 domains. MSIs are remapped through MRIFs
+  (R7): each device's own MSI page table, an entry for each of its remapped interrupts, whose notice is the interrupt
+  itself, sent to its hart's file, so a device raises only its own interrupts, never another's nor an IPI; the window
+  its messages write to is what L2 maps into each domain. An IOMMU without MRIFs falls back to translating MSIs as other
+  DMA to the harts' interrupt files (`msi_doorbell`). On QEMU it's the PCI one, as `virt`'s platform one goes missing
+  from the device tree beside `ramfb`; QEMU 11.1's walk wants U on table entries too, and its translation cache is
+  turned off, for a bug in its permissions (decisions/0199's R6).
 - **Control-flow integrity:** Zicfilp's landing pads and Zicfiss's shadow stacks, supervisor mode's by the SBI's FWFT
   (landing pads at `init_cpu`, shadow stacks at the hart's first idle or return to user mode, in those functions' own
   bodies) and user mode's by `senvcfg` for each thread. One `ssp` serves every mode, so the trap entry swaps it through
   the `TrapScratch`. Every RISC-V target with shadow stacks branches to each `sspopchk` (`branch-to-sspopchk`), as
-  QEMU 11.1 loses the pc after one that passes. The programs'
-  property note needs an lld that knows RISC-V's: Hemera's own, not lld 19.
+  QEMU 11.1 loses the pc after one that passes. Threads get shadow stacks only where every hart's firmware has them.
+  The programs' property note needs an lld that knows RISC-V's: Hemera's own, not lld 19.
 
 ## Later Stages
 
-- **Later than M19:** the SBI's debug triggers, for hardware breakpoints, steps and watchpoints; the IOMMU's MRIF
-  mode, which would keep a device's MSIs to its own identities.
+- **Later than M19:** the SBI's debug triggers, for hardware breakpoints, steps and watchpoints; an IMSIC in groups,
+  with more than one `reg` range, whose harts past the first range aren't brought up yet.

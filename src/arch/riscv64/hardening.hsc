@@ -41,6 +41,12 @@ FWFT_SHADOW_STACK : u64 : 2
 SENVCFG_LANDING_PADS : u64 : 1 << 2
 /** senvcfg's SSE: user mode has shadow stacks. */
 SENVCFG_SHADOW_STACK : u64 : 1 << 3
+/**
+ * senvcfg's CBCFE and CBZE, bits 6 and 7: user mode may run cbo.clean and cbo.flush (Zicbom) and cbo.zero (Zicboz),
+ * which RVA23U64 has, on memory it can reach, as x86-64's clflush. CBIE stays clear, so cbo.inval traps: it could drop
+ * what's been written to memory that isn't the program's alone.
+ */
+SENVCFG_CACHE_BLOCKS : u64 : (1 << 6) | (1 << 7)
 
 /**
  * Log, at boot, what the harts have against exploits and transient execution (arch_interface.log_hardening).
@@ -86,6 +92,20 @@ find_shadow_stacks :: fn(system : ptr[mut ArchSystem]) {
 }
 
 /**
+ * Check that the calling hart's firmware has FWFT's SHADOW_STACK too, as find_shadow_stacks found for the boot hart,
+ * turning it on for none, and otherwise give no thread a shadow stack: one moving between harts with and without
+ * would push on one and return unchecked on the other. From init_cpu, on every hart before any user thread runs.
+ *
+ * @param system The shared state, whose shadow_stacks is cleared if this hart can't have them; harts only clear it.
+ */
+check_shadow_stacks :: fn(system : ptr[mut ArchSystem]) {
+    if system.shadow_stacks && riscv64.sbi_call(SBI_FWFT, SBI_FWFT_GET, FWFT_SHADOW_STACK).error != 0 {
+        runtime.log_warn("cpu: hart %'s firmware has no shadow stacks, so no thread has one", current_cpu().hart_id)
+        system.shadow_stacks = false
+    }
+}
+
+/**
  * Turn the calling hart's landing pads on in the kernel, where it has Zicfilp and the firmware lets it: FWFT's
  * LANDING_PAD. From init_cpu; safe at once, as every indirect branch the kernel makes lands on one.
  *
@@ -126,8 +146,9 @@ has_user_shadow_stacks :: fn() -> bool {
 
 /**
  * Set the hart's user-mode control-flow integrity for the thread about to return to user mode
- * (arch_interface.load_user_control_flow): senvcfg's LPE and SSE, which return_to_user writes, and user mode's ssp,
- * which the return puts back (riscv64.TrapScratch).
+ * (arch_interface.load_user_control_flow): senvcfg's LPE and SSE, with its cache-block instructions on
+ * (SENVCFG_CACHE_BLOCKS), which return_to_user writes, and user mode's ssp, which the return puts back
+ * (riscv64.TrapScratch).
  *
  * @param landing_pads Whether its indirect branches must land on landing pads; taken only where the harts have
  *     Zicfilp.
@@ -136,7 +157,7 @@ has_user_shadow_stacks :: fn() -> bool {
 load_user_control_flow :: fn(landing_pads : bool, shadow_stack : u64) {
     cpu :: current_cpu()
     system :: current_system()
-    envcfg := cast[u64](0)
+    envcfg := SENVCFG_CACHE_BLOCKS
     if landing_pads && has(&system.features, .RiscvZicfilp) {
         envcfg |= SENVCFG_LANDING_PADS
     }

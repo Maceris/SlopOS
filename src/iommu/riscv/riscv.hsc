@@ -12,9 +12,17 @@ import iommu_interface from "../../iommu_interface"
  * Sv48's upper half isn't reachable from a device's zero-extended ones, and its domain ID is its PSCID. A two-level
  * device directory, each leaf one page of device contexts, made as devices are attached; every other device's DMA
  * faults. Commands go through the command queue, each batch ended with an IOFENCE.C whose completion is the queue's
- * head reaching its tail; faults are records in the fault queue, which L2 reads. It remaps no interrupts: MSIs are
- * translated as other writes (msiptp Off), to the harts' interrupt files, which L2 maps into each domain
- * (arch_interface.msi_doorbell).
+ * head reaching its tail; faults are records in the fault queue, which L2 reads.
+ *
+ * MSIs are remapped where it has MSI_FLAT and MSI_MRIF: each device's context has its own MSI page table (msiptp
+ * Flat), a page made as it's first attached, whose entries are the remapped interrupts L2 gave the device. A remapped
+ * interrupt's message writes its index to a page of MSI_WINDOW, the page's number picking the entry; L2 maps the window
+ * into each domain at its own addresses. Each entry is MRIF mode: the write sets a bit in the device's memory-resident
+ * interrupt file, in the same page, and where that bit is enabled, one of the device's own indices, the IOMMU sends the
+ * entry's notice, which is the interrupt itself: the CPU's interrupt ID, written to its hart's supervisor interrupt
+ * file. A device reaches only its own table, so it raises only its own interrupts, never another device's nor an IPI.
+ * Without both, it remaps none, and MSIs are translated as other writes (msiptp Off), to the harts' interrupt files,
+ * which L2 maps into each domain (arch_interface.msi_doorbell).
  *
  * Its table walks and queue accesses are taken to be coherent, as QEMU's are and the platform's device tree says of
  * the PCI host (dma-coherent), so what's written is ordered before telling it by a fence. L2 serializes calls on one
@@ -25,8 +33,9 @@ import iommu_interface from "../../iommu_interface"
  * QEMUs ignore; and it takes a page's PPN with its PBMT bits, so a page has none, its memory type left to the PMAs,
  * which make the harts' interrupt files device memory whatever a page says.
  *
- * SPEC: The RISC-V IOMMU Architecture Specification, version 1.0: §2 (the device directory and device contexts), §3
- * (queues and commands), §4 (fault records), §5 (registers); The RISC-V Instruction Set Manual, Volume II: Sv48.
+ * SPEC: The RISC-V IOMMU Architecture Specification, version 1.0: §2 (the device directory and device contexts, and
+ * §2.3.3, MSI page tables and MRIFs), §3 (queues and commands), §4 (fault records), §5 (registers); The RISC-V
+ * Advanced Interrupt Architecture, version 1.0 (interrupt files); The RISC-V Instruction Set Manual, Volume II: Sv48.
  */
 
 // ---- Registers: byte offsets from the IOMMU's register base (§5)
@@ -60,6 +69,36 @@ REGISTER_BYTES : u64 : 0x1000
 CAPABILITY_SV48 : u64 : 1 << 10
 /** capabilities' MSI_FLAT: device contexts are the extended format's, 64 bytes, rather than the base format's 32. */
 CAPABILITY_MSI_FLAT : u64 : 1 << 22
+/** capabilities' MSI_MRIF: MSI page table entries may be MRIF mode. */
+CAPABILITY_MSI_MRIF : u64 : 1 << 23
+
+// ---- Remapped MSIs (§2.3.3)
+
+/** The interrupts it remaps where it has MSI_MRIF: as many as a device's MSI page table has entries. */
+REMAPPED_INTERRUPTS : u32 : 128
+/**
+ * Where remapped interrupts' messages write, an I/O address and the physical address it's mapped to in every domain:
+ * a page for each remapped interrupt, whose number below the window picks its MSI page table entry. Nothing is
+ * there; the IOMMU takes the writes as MSIs before they'd reach memory. Below 2^47, past any RAM a board has, and
+ * aligned to the window's size.
+ */
+MSI_WINDOW : u64 : 1 << 46
+/** msi_addr_mask: the page number bits under the window that pick an entry, REMAPPED_INTERRUPTS of them. */
+MSI_ADDRESS_MASK : u64 : 0x7f
+/** msiptp's MODE Flat, bits 63:60: MSIs go through the MSI page table its PPN, bits 43:0, says. */
+MSIPTP_FLAT : u64 : 1 << 60
+/** msiptp's PPN. */
+MSIPTP_PPN : u64 : (1 << 44) - 1
+/** An MSI page table entry's V. */
+MSI_ENTRY_VALID : u64 : 1
+/** An MSI page table entry's M, bits 2:1: 1 for MRIF mode. */
+MSI_ENTRY_MRIF : u64 : 1 << 1
+/** The bytes of an MSI page table entry: two doublewords. */
+MSI_ENTRY_BYTES : u64 : 16
+/** Where a device's MRIF is in its MSI page table's page: past its entries, 512-byte aligned. */
+MRIF_OFFSET : u64 : 2048
+/** IOTINVAL.GVMA, func3 1, no GV: every cached MSI page table entry goes, with what the second stage cached. */
+IOTINVAL_GVMA : u64 : 1 | (1 << 7)
 
 /** ddtp's iommu_mode Off: every device's DMA is refused. */
 MODE_OFF : u64 : 0
@@ -70,8 +109,16 @@ DDTP_BUSY : u64 : 1 << 4
 
 /** cqcsr's and fqcsr's enable, bit 0. */
 QUEUE_ENABLE : u32 : 1 << 0
-/** cqcsr's cqmf, cmd_to and cmd_ill, bits 8 to 10: the command queue stopped, at a memory fault, a timeout, a bad command. */
+/**
+ * cqcsr's cqmf, cmd_to and cmd_ill, bits 8 to 10: the command queue stopped, at a memory fault, a timeout, a bad
+ * command.
+ */
 COMMAND_ERRORS : u32 : 7 << 8
+/**
+ * fqcsr's fqmf and fqof, bits 8 and 9: the fault queue stopped taking records, at a memory fault writing one or with
+ * no room for one, until each is cleared by writing it back.
+ */
+FAULT_ERRORS : u32 : 3 << 8
 /** cqcsr's and fqcsr's on, bit 16: the queue is running. */
 QUEUE_ON : u32 : 1 << 16
 /** cqcsr's and fqcsr's busy, bit 17: a change of enable hasn't taken effect yet. */
@@ -157,6 +204,22 @@ Iommu :: struct {
     faults : u64,
     /** The fault queue's head, as last written to fqh. */
     fault_head : u32,
+    /** Whether it remaps MSIs through MRIFs: it has MSI_FLAT and MSI_MRIF. */
+    remaps : bool,
+    /** Each remapped interrupt L2 gave out, by index: its device's MSI page table has its entry once it's attached. */
+    remapped : RemappedInterrupt[REMAPPED_INTERRUPTS],
+}
+
+/** A remapped interrupt: whose it is, and where its notice goes. */
+RemappedInterrupt :: struct {
+    /** Whether L2 gave it out; the rest means nothing when it isn't. */
+    used : bool,
+    /** The device ID whose MSI page table has it. */
+    stream : u32,
+    /** The physical address of the hart's supervisor interrupt file its notice is written to, a page's start. */
+    file : u64,
+    /** The interrupt ID its notice writes there, below 2048. */
+    id : u32,
 }
 
 /** One domain on an IOMMU (iommu_interface.Domain). */
@@ -178,8 +241,9 @@ Domain :: struct {
  * @param registers The virtual address L2 mapped its registers at, uncached.
  * @param size The bytes mapped there, at least REGISTER_BYTES.
  * @return What it is: its version, 47 address bits, the bytes enable takes (the device directory's root, the command
- *     queue and the fault queue, a page each), 65535 domain IDs as PSCIDs, no interrupts remapped, and faults that L2
- *     asks for.
+ *     queue and the fault queue, a page each), 65535 domain IDs as PSCIDs, and faults that L2 asks for; with MSI_FLAT
+ *     and MSI_MRIF, REMAPPED_INTERRUPTS interrupts remapped and MSI_WINDOW to map, and otherwise none. Wired lines
+ *     aren't remapped: the APLIC writes its MSIs to the interrupt files itself.
  * @error UnsupportedKind kind isn't RiscV.
  * @error NotFound Fewer than REGISTER_BYTES are mapped, or the registers don't read as a version 1 IOMMU's.
  * @error Unsupported It lacks first-stage Sv48.
@@ -209,6 +273,10 @@ identify :: fn(
     extended :: capabilities & CAPABILITY_MSI_FLAT != 0
     iommu.context_bytes = if extended { cast[u64](64) } else { 32 }
     iommu.leaf_bits = if extended { cast[u64](6) } else { 7 }
+    iommu.remaps = extended && capabilities & CAPABILITY_MSI_MRIF != 0
+    for i in 0..<iommu.remapped.count {
+        iommu.remapped[i] = RemappedInterrupt.{}
+    }
     return .Ok(
         iommu_interface.IommuInfo.{
             address_bits = ADDRESS_BITS,
@@ -216,8 +284,11 @@ identify :: fn(
             minor = version & 0xf,
             memory = 3 * PAGE,
             domain_ids = 0xffff,
-            interrupts = 0,
+            interrupts = if iommu.remaps { REMAPPED_INTERRUPTS } else { 0 },
             fault_messages = false,
+            wired_lines_remapped = false,
+            msi_window = if iommu.remaps { MSI_WINDOW } else { 0 },
+            msi_window_pages = if iommu.remaps { REMAPPED_INTERRUPTS } else { 0 },
         }
     )
 }
@@ -225,16 +296,19 @@ identify :: fn(
 /**
  * Turn translation on, every device's DMA faulting until it's attached.
  *
- * The device directory is turned off first, refusing every device's DMA; then the queues are set and turned on, the
- * empty device directory's root set, and every cached context and translation invalidated.
+ * The device directory is turned off first, refusing every device's DMA, and the queues, which firmware or a kernel
+ * before may have left on, with their errors cleared; then the queues are set, their bases read back, and turned on;
+ * every cached context and translation is invalidated, while the directory is still off; and the empty device
+ * directory's root set, and read back.
  *
  * @param iommu The IOMMU, identified.
  * @param memory The physical address of identify's memory bytes, zeroed and contiguous: the device directory's root,
  *     the command queue, then the fault queue, a page each. The IOMMU keeps it for good.
  * @param direct_map_offset The virtual address of physical 0 in the direct map, through which it reaches its tables
  *     and queues, and domains' tables.
- * @error Timeout ddtp stayed busy, a queue didn't turn on, or the first IOFENCE.C didn't complete or met an error,
- *     within SPINS spins; the IOMMU may be left partly set up.
+ * @error Timeout ddtp stayed busy, a queue didn't turn off or on, or the first IOFENCE.C didn't complete or met an
+ *     error, within SPINS spins; Unsupported a queue's base or ddtp didn't keep what was written, as a WARL field may
+ *     not, like a smaller queue than asked for. The IOMMU may be left partly set up.
  */
 enable :: fn(
     iommu : ptr[mut Iommu],
@@ -248,24 +322,37 @@ enable :: fn(
     if !set_directory(iommu, MODE_OFF) {
         return .Error(.Timeout)
     }
+    if !turn_off(iommu, COMMAND_CONTROL, COMMAND_ERRORS) || !turn_off(iommu, FAULT_CONTROL, FAULT_ERRORS) {
+        return .Error(.Timeout)
+    }
     write_u32(iommu, FEATURES_CONTROL, 0)
-    write_u64(iommu, COMMAND_QUEUE_BASE, ppn(iommu.commands) | (COMMAND_LOG - 1))
+    commands :: ppn(iommu.commands) | (COMMAND_LOG - 1)
+    write_u64(iommu, COMMAND_QUEUE_BASE, commands)
     write_u32(iommu, COMMAND_TAIL, 0)
     iommu.command_tail = 0
-    write_u64(iommu, FAULT_QUEUE_BASE, ppn(iommu.faults) | (FAULT_LOG - 1))
+    faults :: ppn(iommu.faults) | (FAULT_LOG - 1)
+    write_u64(iommu, FAULT_QUEUE_BASE, faults)
     write_u32(iommu, FAULT_HEAD, 0)
     iommu.fault_head = 0
+    if read_u64(iommu, COMMAND_QUEUE_BASE) != commands || read_u64(iommu, FAULT_QUEUE_BASE) != faults {
+        return .Error(.Unsupported)
+    }
     riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_OUTPUT)
     if !turn_on(iommu, COMMAND_CONTROL) || !turn_on(iommu, FAULT_CONTROL) {
         return .Error(.Timeout)
     }
-    if !set_directory(iommu, ppn(iommu.directory) | MODE_TWO_LEVEL) {
-        return .Error(.Timeout)
-    }
+    // What the IOMMU cached of any directory before is gone before this one is used
     submit(iommu, IODIR_INVAL_DDT)
     submit(iommu, IOTINVAL_VMA)
     if !sync(iommu) {
         return .Error(.Timeout)
+    }
+    directory :: ppn(iommu.directory) | MODE_TWO_LEVEL
+    if !set_directory(iommu, directory) {
+        return .Error(.Timeout)
+    }
+    if read_u64(iommu, DDTP) & ~DDTP_BUSY != directory {
+        return .Error(.Unsupported)
     }
     return .Ok
 }
@@ -296,15 +383,19 @@ init_domain :: fn(iommu : ptr[Iommu], domain : ptr[mut Domain], id : u32, root :
  * Translate a device's DMA through a domain from now on, instead of what it was before.
  *
  * Its leaf of the device directory is made where there's none; if its context was valid, it's made invalid and
- * invalidated first, with its old PSCID's translations; then it's written, tc last, and invalidated again.
+ * invalidated first, with its old PSCID's translations; then it's written, tc last, and invalidated again. Where it
+ * remaps MSIs, the device's MSI page table is made the first time, and kept after: its context's msiptp points at it,
+ * and it's given the entries of the device's remapped interrupts that L2 gave out before.
  *
  * @param iommu The IOMMU, enabled.
  * @param domain The domain to translate through, made by init_domain; its root and PSCID go into the device's
  *     context, so it must stay alive and keep its root until the device is detached.
  * @param stream The device ID, below 2 to the leaf's bits plus 9.
- * @param frames Zeroed frames, of which one is taken for the device's leaf if it has none.
+ * @param frames Zeroed frames, of which one is taken for the device's leaf if it has none, and one for its MSI page
+ *     table if it has none.
  * @error InvalidAddress The device ID is outside the two-level device directory.
- * @error NeedFrames Its leaf had to be made and frames was empty; nothing was changed.
+ * @error NeedFrames Its leaf or MSI page table had to be made and frames was empty; a leaf made stays, and the device's
+ *     context is as it was.
  */
 attach :: fn(
     iommu : ptr[mut Iommu],
@@ -316,6 +407,17 @@ attach :: fn(
         return .Error(.InvalidAddress)
     }
     context :: device_context(iommu, stream, frames) or_return .Error(.NeedFrames)
+    // Its MSI page table, once made, stays its own; a context invalid keeps its msiptp
+    table := cast[u64](0)
+    if iommu.remaps {
+        kept :: load(iommu, context + 32)
+        if kept & ~MSIPTP_PPN == MSIPTP_FLAT {
+            table = (kept & MSIPTP_PPN) << 12
+        }
+        else {
+            table = take_frame(frames) or_return .Error(.NeedFrames)
+        }
+    }
     if load(iommu, context) & CONTEXT_VALID != 0 {
         store(iommu, context, 0)
         invalidate_device(iommu, stream, cast[u32]((load(iommu, context + 16) >> 12) & 0xfffff))
@@ -326,6 +428,17 @@ attach :: fn(
     store(iommu, context + 24, FSC_SV48 | (domain.root >> 12))
     for word in 4..<iommu.context_bytes / 8 {
         store(iommu, context + word * 8, 0)
+    }
+    if iommu.remaps {
+        for index in 0..<iommu.remapped.count {
+            if iommu.remapped[index].used && iommu.remapped[index].stream == stream {
+                write_entry(iommu, table, cast[u32](index))
+            }
+        }
+        // msiptp, msi_addr_mask and msi_addr_pattern: the window's pages are MSIs, through the table
+        store(iommu, context + 32, MSIPTP_FLAT | (table >> 12))
+        store(iommu, context + 40, MSI_ADDRESS_MASK)
+        store(iommu, context + 48, MSI_WINDOW >> 12)
     }
     riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_READ | riscv64.FENCE_WRITE)
     store(iommu, context, CONTEXT_VALID)
@@ -382,7 +495,8 @@ device_context :: fn(iommu : ptr[mut Iommu], stream : u32, frames : ptr[mut iomm
  * @return The context's physical address.
  */
 context_in :: fn(iommu : ptr[Iommu], entry : u64, stream : u32) -> u64 {
-    return ((entry & PPN_MASK) << 2) + (cast[u64](stream) & ((cast[u64](1) << iommu.leaf_bits) - 1)) * iommu.context_bytes
+    index :: cast[u64](stream) & ((cast[u64](1) << iommu.leaf_bits) - 1)
+    return ((entry & PPN_MASK) << 2) + index * iommu.context_bytes
 }
 
 /**
@@ -474,14 +588,14 @@ unmap :: fn(iommu : ptr[Iommu], domain : ptr[mut Domain], address : u64) {
  * Make the IOMMU see a domain's tables as they are, waiting for it: its PSCID's translations invalidated, after
  * mapping as after unmapping, as an IOMMU may keep what it walked of an invalid entry.
  *
- * @param iommu The IOMMU, enabled; an IOTINVAL.VMA goes on its command queue and is waited for, a failed or timed out
- *     fence ignored.
+ * @param iommu The IOMMU, enabled; an IOTINVAL.VMA goes on its command queue and is waited for. If it fails or times
+ *     out, the kernel stops (an assertion): the domain's old translations may still be in use, and its pages reused.
  * @param domain The domain whose tables changed; only its ID, as the PSCID whose translations go, is read.
  * @param mapped Unused: mapping and unmapping are invalidated alike.
  */
 invalidate :: fn(iommu : ptr[mut Iommu], domain : ptr[Domain], mapped : bool) {
     submit(iommu, IOTINVAL_VMA | PSCID_VALID | cast[u64](domain.id & 0xfffff) << 12)
-    _ = sync(iommu)
+    runtime.assert(sync(iommu), "the RISC-V IOMMU didn't finish an invalidation, stopped or slow")
 }
 
 /**
@@ -548,19 +662,31 @@ free_one :: fn(iommu : ptr[Iommu], table : u64, level : u32, freed : ptr[mut iom
 /**
  * Take the next record from the fault queue.
  *
+ * Where the queue had stopped taking records, full or at a memory fault, that's logged and it's started again: the
+ * faults it dropped are lost, but later ones are kept.
+ *
  * @param iommu The IOMMU, enabled.
  * @return The fault: its device ID, its cause as reason, the address the device used (iotval) by its page, and
- *     whether it was a write, for an untranslated or translated write (TTYP 3 or 7). Null when the queue is empty.
+ *     whether it was a write, for an untranslated or translated write (TTYP 3 or 7). Null when the queue is empty, or
+ *     its tail is out of range, as a PCI IOMMU that stopped decoding reads all ones.
  */
 next_fault :: fn(iommu : ptr[mut Iommu]) -> iommu_interface.DmaFault? {
     size :: cast[u32](1) << cast[u32](FAULT_LOG)
-    if read_u32(iommu, FAULT_TAIL) & (size - 1) == iommu.fault_head {
+    errors :: read_u32(iommu, FAULT_CONTROL) & FAULT_ERRORS
+    if errors != 0 {
+        runtime.log_warn("the RISC-V IOMMU's fault queue dropped records (fqcsr errors %); taking them again", errors)
+        write_u32(iommu, FAULT_CONTROL, read_u32(iommu, FAULT_CONTROL) | errors)
+    }
+    tail :: read_u32(iommu, FAULT_TAIL)
+    if tail >= size || tail == iommu.fault_head {
         return null
     }
     riscv64.fence(riscv64.FENCE_INPUT, riscv64.FENCE_READ)
     record :: iommu.faults + cast[u64](iommu.fault_head) * FAULT_BYTES
     first :: load(iommu, record)
     value :: load(iommu, record + 16)
+    // The record read before the IOMMU is told it may write the slot again
+    riscv64.fence(riscv64.FENCE_READ, riscv64.FENCE_OUTPUT)
     iommu.fault_head = (iommu.fault_head + 1) & (size - 1)
     write_u32(iommu, FAULT_HEAD, iommu.fault_head)
     kind :: (first >> 34) & 0x3f
@@ -574,15 +700,20 @@ next_fault :: fn(iommu : ptr[mut Iommu]) -> iommu_interface.DmaFault? {
 }
 
 /**
- * Remap nothing: it remaps no interrupts (info.interrupts is 0), so L2 never asks.
+ * Make a remapped interrupt deliver an interrupt ID to a hart, raised by one device only (iommu_interface's
+ * remap_interrupt): its entry in the device's MSI page table, once the device is attached, sends direct's message as
+ * its notice; until then it's kept, and attach writes it. A cached entry is invalidated, so the IOMMU uses it once this
+ * returns.
  *
- * @param iommu The IOMMU, unused.
- * @param index The remapped interrupt's index, unused.
- * @param stream The device ID, unused.
- * @param cpu_hardware_id The hart's ID, unused.
- * @param vector The interrupt ID, unused.
- * @param level Unused.
- * @return An empty message.
+ * @param iommu The IOMMU, enabled and remapping MSIs (info.interrupts above 0).
+ * @param index The remapped interrupt, below REMAPPED_INTERRUPTS: its message's page in MSI_WINDOW, and its MRIF bit.
+ * @param stream The device ID whose MSI page table has it, the only device that can raise it.
+ * @param cpu_hardware_id The hart's ID; direct says its interrupt file.
+ * @param vector The interrupt ID; direct says it too.
+ * @param level Unused: what the IOMMU remaps is messages, edge-triggered.
+ * @param direct The message that raises vector on the hart without remapping (arch_interface.route_msi's): its page
+ *     the hart's supervisor interrupt file, its data the identity below 2048. The notice writes it.
+ * @return The message the device writes: index, to its page of MSI_WINDOW.
  */
 remap_interrupt :: fn(
     iommu : ptr[mut Iommu],
@@ -590,18 +721,108 @@ remap_interrupt :: fn(
     stream : u32,
     cpu_hardware_id : u64,
     vector : u32,
-    level : bool
+    level : bool,
+    direct : iommu_interface.MsiMessage
 ) -> iommu_interface.MsiMessage {
-    return iommu_interface.MsiMessage.{}
+    at :: cast[usize](index) % iommu.remapped.count
+    iommu.remapped[at] = RemappedInterrupt.{
+        used = true,
+        stream = stream,
+        file = direct.address & ~(PAGE - 1),
+        id = direct.data & 0x7ff,
+    }
+    match msi_table(iommu, stream) {
+        case Some(table) => {
+            write_entry(iommu, table, cast[u32](at))
+            invalidate_msi(iommu)
+        }
+        case None => {}
+    }
+    return iommu_interface.MsiMessage.{address = MSI_WINDOW + cast[u64](at) * PAGE, data = cast[u32](at)}
 }
 
 /**
- * Do nothing: it remaps no interrupts.
+ * Make a remapped interrupt raise nothing (iommu_interface's unmap_interrupt): its entry and its MRIF bit cleared,
+ * the cached entry invalidated, by the time this returns.
  *
- * @param iommu The IOMMU, unused.
- * @param index The remapped interrupt's index, unused.
+ * @param iommu The IOMMU, enabled.
+ * @param index The remapped interrupt, below REMAPPED_INTERRUPTS; one not given out is left alone.
  */
-unmap_interrupt :: fn(iommu : ptr[mut Iommu], index : u32) {}
+unmap_interrupt :: fn(iommu : ptr[mut Iommu], index : u32) {
+    at :: cast[usize](index) % iommu.remapped.count
+    if !iommu.remapped[at].used {
+        return void
+    }
+    match msi_table(iommu, iommu.remapped[at].stream) {
+        case Some(table) => {
+            store(iommu, table + cast[u64](at) * MSI_ENTRY_BYTES, 0)
+            enable :: table + MRIF_OFFSET + cast[u64](at / 64) * 16 + 8
+            store(iommu, enable, load(iommu, enable) & ~(cast[u64](1) << cast[u64](at % 64)))
+            invalidate_msi(iommu)
+        }
+        case None => {}
+    }
+    iommu.remapped[at] = RemappedInterrupt.{}
+}
+
+/**
+ * Find a device's MSI page table, made at its first attach, without making anything.
+ *
+ * @param iommu The IOMMU, enabled.
+ * @param stream The device ID.
+ * @return The table's physical address, a page; null if it isn't remapping, the device is outside the directory, or
+ *     it was never attached.
+ */
+msi_table :: fn(iommu : ptr[Iommu], stream : u32) -> u64? {
+    if !iommu.remaps || cast[u64](stream) >> (iommu.leaf_bits + 9) != 0 {
+        return null
+    }
+    entry :: load(iommu, iommu.directory + (cast[u64](stream) >> iommu.leaf_bits) * 8)
+    if entry & DIRECTORY_VALID == 0 {
+        return null
+    }
+    kept :: load(iommu, context_in(iommu, entry, stream) + 32)
+    if kept & ~MSIPTP_PPN != MSIPTP_FLAT {
+        return null
+    }
+    return (kept & MSIPTP_PPN) << 12
+}
+
+/**
+ * Write a remapped interrupt's entry in its device's MSI page table, MRIF mode: the device's MRIF, in the table's page,
+ * with the interrupt's bit enabled, and the notice to the interrupt's hart; the notice first, then the entry's first
+ * doubleword with V, so a valid entry is never half written. The caller invalidates.
+ *
+ * @param iommu The IOMMU, remapping; remapped[index] is used.
+ * @param table The device's MSI page table's physical address.
+ * @param index The remapped interrupt, below REMAPPED_INTERRUPTS.
+ */
+write_entry :: fn(iommu : ptr[mut Iommu], table : u64, index : u32) {
+    remapped :: &iommu.remapped[cast[usize](index) % iommu.remapped.count]
+    mrif :: table + MRIF_OFFSET
+    // The MRIF's 64 identities in a pair of doublewords, the pending bits then the enable bits
+    enable :: mrif + cast[u64](index / 64) * 16 + 8
+    store(iommu, enable, load(iommu, enable) | cast[u64](1) << cast[u64](index % 64))
+    entry :: table + cast[u64](index) * MSI_ENTRY_BYTES
+    // NID's low 10 bits in 9:0 and its 11th in bit 60; NPPN, the file's page, in 53:10
+    id :: cast[u64](remapped.id)
+    store(iommu, entry + 8, (id & 0x3ff) | (remapped.file >> 12) << 10 | ((id >> 10) & 1) << 60)
+    riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_READ | riscv64.FENCE_WRITE)
+    // The MRIF's address, 512-byte aligned, in bits 53:7
+    store(iommu, entry, MSI_ENTRY_VALID | MSI_ENTRY_MRIF | (mrif >> 9) << 7)
+}
+
+/**
+ * Invalidate every cached MSI page table entry, and wait for it: IOTINVAL.GVMA, as entries are cached with second-stage
+ * translations. One that fails or times out stops the kernel (an assertion), as the old entry may still be in use.
+ *
+ * @param iommu The IOMMU, its command queue on.
+ */
+invalidate_msi :: fn(iommu : ptr[mut Iommu]) {
+    riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_OUTPUT)
+    submit(iommu, IOTINVAL_GVMA)
+    runtime.assert(sync(iommu), "the RISC-V IOMMU didn't finish an invalidation, stopped or slow")
+}
 
 /**
  * Find which entry of a table an address is in.
@@ -641,7 +862,7 @@ take_frame :: fn(frames : ptr[mut iommu_interface.TableFrames]) -> u64? {
 /**
  * Invalidate a device's cached context and a PSCID's translations, and wait for it.
  *
- * A fence that fails or times out is ignored.
+ * A fence that fails or times out stops the kernel (an assertion), as the old context may still be in use.
  *
  * @param iommu The IOMMU, its command queue on.
  * @param stream The device ID whose cached context goes.
@@ -650,21 +871,23 @@ take_frame :: fn(frames : ptr[mut iommu_interface.TableFrames]) -> u64? {
 invalidate_device :: fn(iommu : ptr[mut Iommu], stream : u32, pscid : u32) {
     submit(iommu, IODIR_INVAL_DDT | DEVICE_VALID | cast[u64](stream & 0xffffff) << 40)
     submit(iommu, IOTINVAL_VMA | PSCID_VALID | cast[u64](pscid & 0xfffff) << 12)
-    _ = sync(iommu)
+    runtime.assert(sync(iommu), "the RISC-V IOMMU didn't finish an invalidation, stopped or slow")
 }
 
 /**
  * Put a command on the command queue, its second word 0, and tell the IOMMU.
  *
  * It waits while the queue is full, for as long as the IOMMU is reading it: a command written over one it hasn't read
- * would be lost, and a lost invalidation leaves stale translations in use. If the queue has stopped at an error, it's
- * never read on, so the kernel stops (an assertion) rather than wait for good or overwrite a command.
+ * would be lost, and a lost invalidation leaves stale translations in use. If the queue has stopped at an error, or
+ * stays full for SPINS spins with none, it's not being read on, so the kernel stops (an assertion) rather than wait
+ * for good, holding the IOMMU's lock, or overwrite a command.
  *
  * @param iommu The IOMMU, its command queue on; its command_tail moves past the command.
  * @param first The command's first word: its opcode, func3 and fields.
  */
 submit :: fn(iommu : ptr[mut Iommu], first : u64) {
     size :: cast[u32](1) << cast[u32](COMMAND_LOG)
+    spins := cast[u64](0)
     loop {
         // Full: the tail one short of the head
         if (iommu.command_tail + 1) & (size - 1) != read_u32(iommu, COMMAND_HEAD) & (size - 1) {
@@ -674,6 +897,8 @@ submit :: fn(iommu : ptr[mut Iommu], first : u64) {
             read_u32(iommu, COMMAND_CONTROL) & COMMAND_ERRORS == 0,
             "the RISC-V IOMMU's command queue stopped at an error"
         )
+        spins += 1
+        runtime.assert(spins < SPINS, "the RISC-V IOMMU's command queue stayed full")
         intrinsics.spin_hint()
     }
     at :: iommu.commands + cast[u64](iommu.command_tail) * COMMAND_BYTES
@@ -717,6 +942,25 @@ turn_on :: fn(iommu : ptr[mut Iommu], control : u64) -> bool {
     for spin in 0..<SPINS {
         state :: read_u32(iommu, control)
         if state & QUEUE_ON != 0 && state & QUEUE_BUSY == 0 {
+            return true
+        }
+        intrinsics.spin_hint()
+    }
+    return false
+}
+
+/**
+ * Turn a queue off, clearing its errors, and wait for it to say it is: its base can be set only while it's off.
+ *
+ * @param iommu The IOMMU, identified; only its registers are used.
+ * @param control The queue's control register: COMMAND_CONTROL or FAULT_CONTROL.
+ * @param errors The control register's error bits, which writing 1 clears: COMMAND_ERRORS or FAULT_ERRORS.
+ * @return True once it's neither on nor busy; false if SPINS spins passed first.
+ */
+turn_off :: fn(iommu : ptr[mut Iommu], control : u64, errors : u32) -> bool {
+    write_u32(iommu, control, errors)
+    for spin in 0..<SPINS {
+        if read_u32(iommu, control) & (QUEUE_ON | QUEUE_BUSY) == 0 {
             return true
         }
         intrinsics.spin_hint()
@@ -787,6 +1031,17 @@ store :: fn(iommu : ptr[Iommu], at : u64, value : u64) {
  */
 read_u32 :: fn(iommu : ptr[Iommu], offset : u64) -> u32 {
     return intrinsics.volatile_load_u32(cast[ptr[u32]](iommu.registers + offset))
+}
+
+/**
+ * Read a 64-bit register.
+ *
+ * @param iommu The IOMMU, whose registers are mapped, as identify records them.
+ * @param offset The register's byte offset from the register base, 8-byte aligned and below REGISTER_BYTES.
+ * @return The register's 64 bits, read with one volatile load; all ones if nothing answers there.
+ */
+read_u64 :: fn(iommu : ptr[Iommu], offset : u64) -> u64 {
+    return intrinsics.volatile_load_u64(cast[ptr[u64]](iommu.registers + offset))
 }
 
 /**

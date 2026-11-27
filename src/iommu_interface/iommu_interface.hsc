@@ -118,6 +118,19 @@ IommuInfo :: struct {
      * Whether it signals its faults by a message (route_faults); otherwise L2 asks for them (next_fault) now and then.
      */
     fault_messages : bool,
+    /**
+     * Whether, once it remaps interrupts, a wired controller's own messages are blocked unless they're remapped too, as
+     * VT-d blocks an I/O APIC's; false where the controller reaches the CPUs another way, or it remaps none.
+     */
+    wired_lines_remapped : bool,
+    /**
+     * Where its remapped interrupts' messages write, an I/O address L2 maps into each domain at the same physical
+     * address, writable, so the IOMMU takes those writes as MSIs; 0 where they need no mapping, or it remaps none. L2
+     * maps it in place of arch_interface.msi_doorbell's pages.
+     */
+    msi_window : u64,
+    /** The pages of msi_window; 0 for none. */
+    msi_window_pages : u32,
 }
 
 /**
@@ -276,6 +289,9 @@ next_fault : fn(iommu : ptr[mut Iommu]) -> DmaFault? : ---
  * @param cpu_hardware_id The hardware ID of the CPU it's delivered to.
  * @param vector The vector it's delivered as, an InterruptId.
  * @param level Whether it's level-triggered, as a wired line remapped may be; a message is edge-triggered.
+ * @param direct The message that raises vector on the CPU without remapping, arch_interface.route_msi's, which an
+ *     IOMMU that sends the interrupt on as a message of its own writes (the RISC-V IOMMU's MRIF notices); empty for
+ *     a wired line's, which such an IOMMU doesn't remap.
  * @return The message the stream's device writes to raise it; a wired line's controller is programmed from it.
  */
 remap_interrupt : fn(
@@ -284,7 +300,8 @@ remap_interrupt : fn(
     stream : u32,
     cpu_hardware_id : u64,
     vector : u32,
-    level : bool
+    level : bool,
+    direct : MsiMessage
 ) -> MsiMessage : ---
 
 /**

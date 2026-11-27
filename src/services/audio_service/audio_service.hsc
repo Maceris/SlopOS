@@ -1126,6 +1126,10 @@ take_driver_answers :: fn(service : ptr[mut Service], into : ptr[mut os.Incoming
                 service.capture_overruns = done.overruns
                 if service.capture == .On && period < service.capture_given.count {
                     service.captured += 1
+                    // What a test waits for before taking the microphone back, so there's something to keep
+                    if service.captured == 1 {
+                        runtime.log_info("recorded its first period")
+                    }
                     take_captured(service, done.period)
                     give_capture(service, done.period)
                 }

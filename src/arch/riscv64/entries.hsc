@@ -81,7 +81,8 @@ trap_entry #calling_convention(.entry) :: fn(frame : ptr[mut riscv64.RegisterFra
  * @param address stval at the trap, the faulting address for a page fault.
  * @param user Whether the access was user mode's, which reaches only leaves with U set, and the kernel's only those
  *     without.
- * @return True for a load, store or instruction page fault whose access the tables now allow; false for anything else.
+ * @return True for a load, store or instruction page fault whose access the tables now allow, a load's on a
+ *     shadow-stack page too; false for anything else.
  */
 stale_fault #no_context :: fn(cpu : ptr[ArchCpu], cause : u64, address : u64, user : bool) -> bool {
     needed := cast[u64](0)
@@ -107,7 +108,10 @@ stale_fault #no_context :: fn(cpu : ptr[ArchCpu], cause : u64, address : u64, us
             return false
         }
         if entry & ENTRY_LEAF != 0 {
-            if (entry & ENTRY_USER != 0) != user || entry & needed == 0 {
+            // A shadow-stack page, W alone, is read by ordinary loads as well (Zicfiss)
+            shadow_stack :: entry & (ENTRY_READ | ENTRY_WRITE | ENTRY_EXECUTE) == ENTRY_WRITE
+            allowed :: entry & needed != 0 || (needed == ENTRY_READ && shadow_stack)
+            if (entry & ENTRY_USER != 0) != user || !allowed {
                 return false
             }
             // A user page take_accessed cleared the mark of: touched now, so marked again
@@ -198,8 +202,9 @@ from_user :: fn(frame : ptr[mut riscv64.RegisterFrame]) #never_returns {
  *     software check, which one.
  * @return A Page fault for a page fault, at value, Execute, Read or Write, present if the active tables map value with
  *     a valid leaf (so the access broke its protection); Alignment for a misaligned access; Protection for an rdtime
- *     scounteren traps, and InvalidInstruction for another illegal instruction; Breakpoint for ebreak; ControlFlow for a landing pad's or a shadow stack's software check;
- *     Protection for the rest, like an access fault the PMP or the bus raised.
+ *     scounteren traps, and InvalidInstruction for another illegal instruction; Breakpoint for ebreak; ControlFlow
+ *     for a landing pad's or a shadow stack's software check; Protection for the rest, like an access fault the PMP
+ *     or the bus raised.
  */
 decode_fault :: fn(cause : u64, value : u64) -> arch_interface.Fault {
     access : arch_interface.Access = .Read

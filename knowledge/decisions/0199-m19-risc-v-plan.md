@@ -320,3 +320,51 @@ In seven stages:
 - **Tests:** the DMA test runs on RISC-V; the kernel's three control-flow tests (a tampered return refused by the
   shadow stack, a branch to no landing pad, a write to its shadow stack, an access fault on RISC-V) and a boot on a CPU
   without either; and `test_control`'s three in user mode, its hardware debugger test skipped on RISC-V.
+
+## As Built: R7, the review (2026-11-27)
+- **Three reviews**, of R1 to R6's RISC-V work: the user/kernel boundary and control-flow integrity, the IOMMU and DMA,
+  and interrupts and paging, with the question R6 left, why an MSI comes to a hart with no route.
+- **Routed from nothing**, answered: moving an IRQ to another CPU freed its old route at once, so what the device had
+  already sent there arrived at a free ID, logged and lost, as input or a connection then waited for good; and a
+  handler read a route without the lock while another CPU rewrote it. A moved IRQ's old route is retired now
+  (`ROUTE_RETIRED`), still delivering to the IRQ until it moves again or is destroyed; a route's state is read and
+  written atomically, the rest published before it; and an ID unroute frees isn't routed again until every CPU has
+  passed a quiescent point (`DeviceRoute.freed_epoch`), the grace destroyed objects already have, so a handler that
+  read it is done with it. A first try had unroute wait for a handler on the route's CPU instead, with interrupts off;
+  under load a CPU locked up shutting down, so it went. No boot since logged a route from nothing.
+- **MRIFs**, so a device behind the RISC-V IOMMU raises only its own interrupts (the owner chose them over IPIs by the
+  SBI): each device's context has an MSI page table of its own, a page made at its first attach, an entry for each of
+  its remapped interrupts, MRIF mode, whose notice is the interrupt itself, the CPU's ID to its hart's interrupt file.
+  The IOMMU interface's `IommuInfo` says where those messages write (`msi_window`, 128 pages at 2^46, mapped into each
+  domain in place of the doorbell) and whether wired lines need remapping too (`wired_lines_remapped`, VT-d's, not
+  RISC-V's, whose APLIC writes to the files itself); `remap_interrupt` takes the message the interrupt has without
+  remapping (`direct`), which the notice writes. QEMU 11.1 has MRIFs; the harts' interrupt files are in no domain
+  now. The DMA test's `edu` reaches only 28 bits, short of the files, so no test writes one; what keeps a device from
+  them is that nothing maps them.
+- **Fixed in SlopOS:**
+  - Freed page tables flushed by ASID, as `sfence.vma` by address need only drop leaves (`unmap`, `evict_page`); a
+    switch flushes where a hart has no ASIDs.
+  - The IOMMU drivers, all three, stop the kernel when an invalidation isn't seen done, rather than reuse what may
+    still be translated; RISC-V's and SMMUv3's waits on a full queue are bounded. RISC-V's: the fault queue's overflow
+    logged and cleared; queues turned off before they're set, their bases and ddtp read back, the directory
+    invalidated while still off; the doorbell only where the files are side by side, and harts past the IMSIC's first
+    range left off.
+  - A device isn't attached through a stream another device has in another domain, as aliased requester IDs give.
+  - The APLIC pends a level-sensitive line again when it's unmasked, as MSI delivery mode doesn't.
+  - Shadow stacks only where every hart's firmware has them; a debugger's pc clears `SPELP`; a load's stale fault on a
+    shadow-stack page retried; user mode's `cbo.clean`, `cbo.flush` and `cbo.zero` allowed; an output fence before
+    user mode's device accesses; `protect` refuses a memory-type change, which nothing asks for.
+  - `slop_os.shadow_stacks_budget` was R6's; this review found its effect (the disk check, above).
+- **Fixed in Hemera:** `vstart` zeroed around the vector saves and restores; morestack, the fiber switches and
+  morestack's calling frame (LLVM patch 0012) checking their returns on the shadow stack; patch 0011's branch as inline
+  assembly; the trap entry clearing `sstatus.SDT`; the UEFI runtime's first console write a plain store, as its
+  atomic was an LSE instruction the AArch64 bootloader ran on ARMv8.0 before refusing it.
+- **Left, the owner agreeing (2026-11-27):** a hardware error from user mode stays fatal, as on the others; `cycle` and
+  `instret` stay unreadable from user mode; an IMSIC in groups isn't driven; unlabeled landing pads; the fiber
+  switches' `ssp` from the carrier block's ordinary memory; and the resume loop's indirect jump, which any landing pad
+  passes.
+- **Tests:** the GUI login typed into the terminal before it had focus, and the microphone test took the microphone
+  back before a period was recorded and shut down before `play` was done: each waits for what it needs now. The full
+  boot suites, all three architectures: 459 of 459, four flaky among the others and passing alone (sound timing on
+  x86-64, a keypress on AArch64, a file search and the microphone on RISC-V, before its fix). Hemera's: 304 of 304 on
+  Windows, and on Linux 85 of 85 for x86-64, 83 of 83 for AArch64 and for RISC-V.

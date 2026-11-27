@@ -29,9 +29,10 @@ implementation doesn't do yet, it lists in `NOT_YET_IMPLEMENTED`, with stubs in 
   and reached through the direct map. A call short of frames says so (`NeedFrames`) having changed nothing.
 - **L2 picks domain IDs and device addresses.** Each domain on an IOMMU has an ID from 1 below `info.domain_ids`, and
   L2 allocates its I/O virtual addresses, below `1 << info.address_bits`.
-- **L2 maps the MSI doorbell.** Where MSIs are writes the IOMMU translates (`arch_interface.msi_doorbell`, AArch64's
-  ITS, RISC-V's IMSIC), L2 maps its pages into each domain at their own addresses, as device memory, and keeps the
-  domain's other addresses clear of them.
+- **L2 maps the MSI doorbell.** Where MSIs are writes the IOMMU translates, L2 maps their pages into each domain at
+  their own addresses, writable, and keeps the domain's other addresses clear of them: the IOMMU's own window where it
+  has one (`info.msi_window`, the RISC-V IOMMU's remapped interrupts), and otherwise the architecture's doorbell
+  (`arch_interface.msi_doorbell`, AArch64's ITS, RISC-V's IMSIC without an IOMMU that remaps).
 - **L2 reads faults it isn't signalled.** An IOMMU whose `info.fault_messages` is false has its faults read at CPU 0's
   ticks, 100 a second.
 - **L2 invalidates.** `map` and `unmap` change tables only; L2 calls `invalidate` once a batch of them is done, and
@@ -103,6 +104,12 @@ IommuInfo :: struct {
     interrupts : u32,
     // Whether it signals its faults by a message (route_faults); otherwise L2 asks for them (next_fault) now and then.
     fault_messages : bool,
+    // Whether, once it remaps, a wired controller's own messages are blocked unless remapped too, as VT-d's are.
+    wired_lines_remapped : bool,
+    // Where its remapped interrupts' messages write, which L2 maps into each domain at the same address; 0 for none.
+    msi_window : u64,
+    // The pages of msi_window; 0 for none.
+    msi_window_pages : u32,
 }
 
 /*
@@ -208,18 +215,24 @@ next_fault : fn(iommu: ptr[mut Iommu]) -> DmaFault? : ---
 /*
  * Remapped interrupt index made to deliver vector, an InterruptId, to the CPU with this hardware ID, from stream only,
  * level-triggered if level says so: the message stream's device writes to raise it, or a wired controller's entry is
- * programmed from. The IOMMU uses it once this returns.
+ * programmed from. direct is the message that raises vector on that CPU without remapping (arch_interface.route_msi's),
+ * which an IOMMU that sends the interrupt on as a message of its own writes; empty for a wired line's. The IOMMU uses
+ * it once this returns.
  */
-remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool) -> MsiMessage : ---
+remap_interrupt : fn(iommu: ptr[mut Iommu], index: u32, stream: u32, cpu_hardware_id: u64, vector: u32, level: bool,
+    direct: MsiMessage) -> MsiMessage : ---
 
 // Remapped interrupt index raising nothing, and nothing the IOMMU cached of it left, when this returns.
 unmap_interrupt : fn(iommu: ptr[mut Iommu], index: u32) : ---
 ```
 
 L2 gives each message-signaled IRQ of a device behind an IOMMU that remaps (`info.interrupts` non-zero) an index of
-its own there, and the message `remap_interrupt` gives is the one `irq_message` gives the driver. A wired line's IRQ,
-once an IOMMU remaps, gets an index too, raised only from its controller's requester ID (`controller_set_source`), and
-the architecture programs the controller's entry from the message (`route_wired_remapped`, decisions/0182).
+its own there, and the message `remap_interrupt` gives is the one `irq_message` gives the driver; moving the IRQ to
+another CPU points the same index there, its message unchanged. A wired line's IRQ, once an IOMMU whose
+`info.wired_lines_remapped` is set remaps, gets an index too, raised only from its controller's requester ID
+(`controller_set_source`), and the architecture programs the controller's entry from the message
+(`route_wired_remapped`, decisions/0182). Where it isn't set, as on RISC-V, whose APLIC writes to the interrupt files
+itself, wired lines are routed as without an IOMMU.
 
 ## VT-d
 
@@ -261,20 +274,21 @@ the architecture programs the controller's entry from the message (`route_wired_
 
 | Interface | The RISC-V IOMMU (`src/iommu/riscv`) |
 |---|---|
-| `identify` | Version 1 with first-stage Sv48. 47-bit I/O addresses, Sv48's lower half, as a device's addresses aren't sign-extended; 65535 domain IDs, as PSCIDs; no interrupts remapped; faults read by L2. The device contexts are 64 bytes with `MSI_FLAT`, else 32 |
-| `enable` | The device directory off, then the command and fault queues (a page each: 256 commands, 128 records), then a two-level directory from an empty root, and every cached context and translation invalidated (`IODIR.INVAL_DDT`, `IOTINVAL.VMA`, `IOFENCE.C`) |
-| `attach` | The device's leaf of the directory made where there's none; its context: `iohgatp` Bare, `ta`'s PSCID the domain's ID, `fsc` Sv48 from the domain's root, `msiptp` Off; `tc`'s V written last, the context and the PSCID's translations invalidated |
+| `identify` | Version 1 with first-stage Sv48. 47-bit I/O addresses, Sv48's lower half, as a device's addresses aren't sign-extended; 65535 domain IDs, as PSCIDs; faults read by L2. The device contexts are 64 bytes with `MSI_FLAT`, else 32. With `MSI_FLAT` and `MSI_MRIF`, 128 interrupts remapped and their window, 128 pages at 2^46 (`msi_window`); without, none |
+| `enable` | The device directory off, and the queues off with their errors cleared, as firmware may have left them on; then the command and fault queues set (a page each: 256 commands, 128 records) and their bases read back; every cached context and translation invalidated (`IODIR.INVAL_DDT`, `IOTINVAL.VMA`, `IOFENCE.C`), the directory still off; then a two-level directory from an empty root, read back |
+| `attach` | The device's leaf of the directory made where there's none; its context: `iohgatp` Bare, `ta`'s PSCID the domain's ID, `fsc` Sv48 from the domain's root, and where it remaps, `msiptp` Flat to the device's own MSI page table, a page made at its first attach and kept after, with `msi_addr_mask` and `msi_addr_pattern` the window's; `tc`'s V written last, the context and the PSCID's translations invalidated. The device's remapped interrupts given out before are written into its table |
+| Interrupt remapping | Each device's MSI page table has an entry for each of its remapped interrupts, by index, the window's page `index` picking it; MRIF mode, the device's memory-resident interrupt file in the table's page, with the index's bit enabled, and the notice the direct message: the CPU's interrupt ID to its hart's supervisor interrupt file. So the notice is the interrupt, and a device reaches only its own table: it raises only its own interrupts, never another device's nor an IPI. The message writes the index to its page. Entries are invalidated by `IOTINVAL.GVMA`, as entries are cached with the second stage's translations |
 | `detach` | The context's V cleared, invalidated as `attach`'s is |
 | `map` | Sv48 entries: tables, and the 4 KiB page readable, writable if asked, with U, A and D set, and no PBMT, device memory being the PMAs' to say. U is set on the tables' entries too: QEMU 11.1's walk checks U on every entry, as a request without a process ID is user mode's, though the privileged spec reserves it there. QEMU's walk also takes a page's PBMT into its address, a second reason for none |
 | `invalidate` | `IOTINVAL.VMA` for the PSCID, after mapping as after unmapping, fenced |
-| Commands | At the queue's tail, waiting while it's full; `IOFENCE.C` is done when the head reaches the tail, or failed if `cqcsr` reports an error. A fence comes before the tail moves |
-| Faults | `next_fault` takes the next fault record: its device ID, its cause, the address (`iotval`), and whether it was a write (TTYP 3 or 7) |
+| Commands | At the queue's tail, waiting while it's full, which stops the kernel if `cqcsr` reports an error or it stays full; `IOFENCE.C` is done when the head reaches the tail, or failed if `cqcsr` reports an error. A fence comes before the tail moves. An invalidation that fails or times out stops the kernel, as the old translations may still be in use; the SMMUv3 and VT-d drivers do the same |
+| Faults | `next_fault` takes the next fault record: its device ID, its cause, the address (`iotval`), and whether it was a write (TTYP 3 or 7). A queue that stopped taking records, full or at a memory fault (`fqof`, `fqmf`), is logged and cleared, and a tail out of range read as empty |
 | Streams | The device ID `iommu-map` gives a requester ID. The IOMMU may be a platform device (`riscv,iommu`) or a PCI function (`riscv,pci-iommu`), whose registers are its BAR 0; QEMU's `virt` leaves its platform one out of the device tree whenever there's a dynamic sysbus device like `ramfb`, so `boot.py` gives it the PCI one, with its translation cache off, as QEMU 11.1's caches a page with the access that first used it |
 
 ## Not Covered
 
 - **AMD-Vi**: a kind the interface names, with no implementation yet.
-- **The RISC-V IOMMU's MSI page tables**: MSIs are translated as other DMA, to the harts' interrupt files, so a device
-  can raise any identity on any hart; only its MRIF mode would keep that per device.
+- **The RISC-V IOMMU without `MSI_MRIF`**: MSIs are translated as other DMA, to the harts' interrupt files, so a device
+  can raise any identity on any hart, an IPI's too; L2 drives MRIFs where they're there, as QEMU's are.
 - **Several IOMMU kinds on one architecture**: the kernel imports one IOMMU package for each architecture so far; one
   with VT-d and AMD-Vi both would choose by the registered kind.

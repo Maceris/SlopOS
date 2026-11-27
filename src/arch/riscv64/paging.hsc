@@ -383,6 +383,13 @@ unmap :: fn(
         store_entry(cast[ptr[mut u64]](parent), 0)
     }
     add_flush(flush, table.tag, address)
+    /*
+     * A table freed: sfence.vma by address need only drop leaf entries, so a hart could go on walking the table's frame
+     * once it's reused. The batch flushes the whole ASID instead, which drops the tables cached for it too
+     */
+    if emptied > 0 {
+        flush.all = true
+    }
     return .Ok(cast[arch_interface.PhysicalAddress](physical))
 }
 
@@ -408,8 +415,9 @@ only_entry :: fn(current : ptr[Table]) -> bool {
 /**
  * Change a mapped page's protection and cache mode, keeping its physical address (arch_interface.protect).
  *
- * A change of memory type takes the entry out and fences it from this hart's translation before the new one goes in,
- * so the page is never seen with two types on this hart; others are fenced through flush, as for any change.
+ * Its memory type (PBMT) can't change here, which stops the kernel (an assertion): other harts could go on using the
+ * old type until flush is shot down, the page seen with two types at once. A caller changing it unmaps the page,
+ * shoots the flush down, and maps it again.
  *
  * @param table The address space, of the kind mapping.user needs, as for map.
  * @param virtual_address The page's address, aligned to size.
@@ -436,10 +444,7 @@ protect :: fn(
     slot :: cast[ptr[mut u64]](path.leaf_slot)
     old :: load_entry(path.leaf_slot)
     new :: leaf_entry(page_address(old, leaf), mapping)
-    if old & ENTRY_PBMT != new & ENTRY_PBMT {
-        store_entry(slot, 0)
-        fence_new_entry(table, address)
-    }
+    runtime.assert(old & ENTRY_PBMT == new & ENTRY_PBMT, "protect doesn't change a page's memory type")
     store_entry(slot, new)
     fence_new_entry(table, address)
     add_flush(flush, table.tag, address)
@@ -543,7 +548,7 @@ lowest_table_slot :: fn(table : ptr[PageTable], current : ptr[mut Table], level 
  * Switch the calling hart to an address space (arch_interface.activate): satp with Sv48, the table's ASID and its root.
  *
  * ASIDs keep each address space's entries apart, so nothing is flushed; the first switch from the bootloader's tables
- * flushes the hart's whole TLB.
+ * flushes the hart's whole TLB, and so does every switch where the hart has no ASIDs, every space's tag 0 then.
  *
  * @param table The address space, which has to stay until the hart switches away from it and its tag is flushed.
  */
@@ -551,7 +556,7 @@ activate :: fn(table : ptr[PageTable]) {
     cpu :: current_cpu()
     asid :: cast[u64](table.tag) & SATP_ASID_MASK
     riscv64.csrw(.SATP, SATP_SV48 | (asid << SATP_ASID_SHIFT) | ((cast[u64](table.root) >> 12) & SATP_PPN_MASK))
-    if cpu.bootloader_tables {
+    if cpu.bootloader_tables || current_system().asid_bits == 0 {
         cpu.bootloader_tables = false
         riscv64.sfence_vma_all()
     }

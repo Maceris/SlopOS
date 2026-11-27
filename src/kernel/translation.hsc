@@ -121,7 +121,7 @@ start_translation :: fn(kernel : ptr[mut Kernel], index : u32) {
         runtime.log_error("IOMMU %: translation didn't go on", index)
         return void
     }
-    if registered.remapping {
+    if registered.remapping && registered.info.wired_lines_remapped {
         intrinsics.atomic_store_u32_release(&kernel.wired_lines_blocked, 1)
     }
     if !registered.info.fault_messages {
@@ -363,7 +363,9 @@ translate_device :: fn(
 }
 
 /**
- * Map the MSI doorbell's pages into a new domain at their own addresses, where MSIs are writes the IOMMU translates.
+ * Map the MSI doorbell's pages into a new domain at their own addresses, where MSIs are writes the IOMMU translates:
+ * the IOMMU's own MSI window where it has one (IommuInfo.msi_window), which its remapped interrupts' messages write
+ * to, and otherwise the architecture's doorbell.
  *
  * They're mapped writable device memory, their tables charged to the domain, and their pages are kept out of the
  * domain's other addresses.
@@ -381,9 +383,18 @@ map_doorbell :: fn(
     registered : ptr[mut RegisteredIommu],
     domain : ptr[mut DmaDomain]
 ) -> iommu_interface.MapError? {
-    doorbell :: arch.msi_doorbell() or_return null
-    first :: cast[u64](doorbell.address)
-    bytes :: cast[u64](doorbell.pages) * frames.FRAME_SIZE
+    first := cast[u64](0)
+    pages := cast[u32](0)
+    if registered.info.msi_window_pages != 0 {
+        first = registered.info.msi_window
+        pages = registered.info.msi_window_pages
+    }
+    else {
+        doorbell :: arch.msi_doorbell() or_return null
+        first = cast[u64](doorbell.address)
+        pages = doorbell.pages
+    }
+    bytes :: cast[u64](pages) * frames.FRAME_SIZE
     if first >= domain.address_limit || bytes > domain.address_limit - first {
         return iommu_interface.MapError.InvalidAddress
     }
@@ -391,7 +402,7 @@ map_doorbell :: fn(
     domain.reserved_bytes = bytes
     tables : iommu_interface.TableFrames
     defer give_back_iommu_tables(kernel, &tables, cast[u64](domain))
-    for page in 0..<cast[u64](doorbell.pages) {
+    for page in 0..<cast[u64](pages) {
         at :: first + page * frames.FRAME_SIZE
         loop {
             match iommu_unit.map(
@@ -637,7 +648,7 @@ remap_msi :: fn(
     if !registered.remapping {
         return message
     }
-    return remap_entry(kernel, registered, irq, path, hardware_id, id, false)
+    return remap_entry(kernel, registered, irq, path, hardware_id, id, false, message)
 }
 
 /**
@@ -666,7 +677,7 @@ remap_wired :: fn(
     if !registered.remapping {
         return null
     }
-    return remap_entry(kernel, registered, irq, path, hardware_id, id, level)
+    return remap_entry(kernel, registered, irq, path, hardware_id, id, level, arch_interface.MsiMessage.{})
 }
 
 /**
@@ -679,6 +690,7 @@ remap_wired :: fn(
  * @param hardware_id The hardware ID of the CPU it goes to.
  * @param id The interrupt ID on that CPU.
  * @param level Whether it's level-triggered.
+ * @param direct The message that raises id on that CPU without remapping, arch.route_msi's; empty for a wired line.
  * @return The message that raises it; null if every remapped interrupt on the IOMMU is taken.
  */
 remap_entry :: fn(
@@ -688,7 +700,8 @@ remap_entry :: fn(
     path : IommuPath,
     hardware_id : u64,
     id : arch_interface.InterruptId,
-    level : bool
+    level : bool,
+    direct : arch_interface.MsiMessage
 ) -> arch_interface.MsiMessage? {
     lock_at(&registered.lock, .Iommu)
     defer unlock_at(&registered.lock, .Iommu)
@@ -705,7 +718,15 @@ remap_entry :: fn(
     if index == registered.interrupt_limit {
         return null
     }
-    remapped :: iommu_unit.remap_interrupt(&registered.unit, index, path.stream, hardware_id, cast[u32](id), level)
+    remapped :: iommu_unit.remap_interrupt(
+        &registered.unit,
+        index,
+        path.stream,
+        hardware_id,
+        cast[u32](id),
+        level,
+        iommu_interface.MsiMessage.{address = direct.address, data = direct.data}
+    )
     irq.remap_iommu = path.iommu
     irq.remap_index = index
     return arch_interface.MsiMessage.{address = remapped.address, data = remapped.data}
@@ -731,8 +752,17 @@ repoint_msi :: fn(
 ) {
     registered :: translating_iommu(kernel, irq.remap_iommu) or_return void
     path :: iommu_path(kernel, device.address)
+    direct :: arch.route_msi(device.msi_source, irq.line, hardware_id, id)
     lock_at(&registered.lock, .Iommu)
-    _ = iommu_unit.remap_interrupt(&registered.unit, irq.remap_index, path.stream, hardware_id, cast[u32](id), false)
+    _ = iommu_unit.remap_interrupt(
+        &registered.unit,
+        irq.remap_index,
+        path.stream,
+        hardware_id,
+        cast[u32](id),
+        false,
+        iommu_interface.MsiMessage.{address = direct.address, data = direct.data}
+    )
     unlock_at(&registered.lock, .Iommu)
 }
 

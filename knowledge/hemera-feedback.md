@@ -244,7 +244,15 @@ entries and after every call (LLVM patch 0010, the call aligned so its landing p
 LLVM patch 0011's `branch-to-sspopchk`, a branch to each epilogue's `sspopchk` for QEMU 11.1, which loses the pc
 after one that passes; `slop_os.shadow_stacks_budget` counting Zicfiss's shadow stacks, as it did CET's and the
 GCS's; and the build cache keyed by the linker it finds on the PATH, as an lld that drops RISC-V's property note had
-linked a program the cache then gave back.
+linked a program the cache then gave back. R7 (2026-11-27), from its review: `vstart` zeroed around the
+whole-register vector saves and restores, which would otherwise leave a thread another's bytes; morestack, the fiber
+switches and the small frame that calls morestack (LLVM patch 0012) pushing and checking their own returns, as
+RISC-V's shadow stack checks only the returns that say so, and without which a resumed fiber left it an entry off;
+patch 0011's branch made inline assembly, as LLVM took the `BEQ` for the block's terminator; the trap entry clearing
+`sstatus.SDT` with `SUM`; and the UEFI runtime noting its first console write with a plain store, as the atomic was
+an LSE instruction the bootloader ran on ARMv8.0 before it could say it refuses the CPU. Left as they are: unlabeled
+landing pads (`lpad 0`, as IBT and BTI are), the fiber switches' `ssp` from the carrier block's ordinary memory (as
+the GCS's is), and the resume loop's indirect jump, which any landing pad passes.
 
 ## 4. Features That Look Like a Strong Fit
 

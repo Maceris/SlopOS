@@ -267,6 +267,9 @@ identify :: fn(
             domain_ids = if features & IDR0_VMID16 != 0 { 0xffff } else { 0xff },
             interrupts = 0,
             fault_messages = false,
+            wired_lines_remapped = false,
+            msi_window = 0,
+            msi_window_pages = 0,
         }
     )
 }
@@ -451,7 +454,7 @@ stream_entry :: fn(iommu : ptr[mut Iommu], stream : u32, frames : ptr[mut iommu_
         // SPAN: SPLIT plus one, 64 entries
         store(iommu, at, table | (SPLIT + 1))
         submit(iommu, CFGI_ALL, 31)
-        _ = sync(iommu)
+        runtime.assert(sync(iommu), "the SMMU didn't finish an invalidation, stopped or slow")
     }
     return (load(iommu, at) & LEVEL_2_MASK) + (cast[u64](stream) & (STREAMS_PER_TABLE - 1)) * 64
 }
@@ -553,8 +556,8 @@ unmap :: fn(iommu : ptr[Iommu], domain : ptr[mut Domain], address : u64) {
  * A dsb makes the tables' writes visible to it. After unmapping, the domain's TLB entries are invalidated by its
  * VMID; nothing is cached of what isn't mapped, so mapping needs nothing more.
  *
- * @param iommu The SMMU, enabled; a TLB invalidation goes on its command queue and is waited for, a failed or timed
- *     out sync ignored.
+ * @param iommu The SMMU, enabled; a TLB invalidation goes on its command queue and is waited for. If it fails or times
+ *     out, the kernel stops (an assertion): the domain's old translations may still be in use, and its pages reused.
  * @param domain The domain whose tables changed; only its ID, as the VMID whose TLB entries go, is read.
  * @param mapped True after mapping, false after unmapping.
  */
@@ -564,7 +567,7 @@ invalidate :: fn(iommu : ptr[mut Iommu], domain : ptr[Domain], mapped : bool) {
         return void
     }
     submit(iommu, TLBI_S12_VMALL | cast[u64](domain.id & 0xffff) << 32, 0)
-    _ = sync(iommu)
+    runtime.assert(sync(iommu), "the SMMU didn't finish an invalidation, stopped or slow")
 }
 
 /**
@@ -669,7 +672,8 @@ next_fault :: fn(iommu : ptr[mut Iommu]) -> iommu_interface.DmaFault? {
  * @param stream The stream, unused.
  * @param cpu_hardware_id The CPU's hardware ID, unused.
  * @param vector The interrupt ID, unused.
- *  * @param level Unused.
+ * @param level Unused.
+ * @param direct Unused.
  * @return An empty message.
  */
 remap_interrupt :: fn(
@@ -678,7 +682,8 @@ remap_interrupt :: fn(
     stream : u32,
     cpu_hardware_id : u64,
     vector : u32,
-    level : bool
+    level : bool,
+    direct : iommu_interface.MsiMessage
 ) -> iommu_interface.MsiMessage {
     return iommu_interface.MsiMessage.{}
 }
@@ -719,7 +724,7 @@ take_frame :: fn(frames : ptr[mut iommu_interface.TableFrames]) -> u64? {
 /**
  * Invalidate a stream's cached configuration and a VMID's TLB entries, and wait for it.
  *
- * A sync that fails or times out is ignored.
+ * A sync that fails or times out stops the kernel (an assertion), as the old configuration may still be in use.
  *
  * @param iommu The SMMU, its command queue on.
  * @param stream The stream ID whose cached stream table entry goes, within the stream table.
@@ -728,7 +733,7 @@ take_frame :: fn(frames : ptr[mut iommu_interface.TableFrames]) -> u64? {
 invalidate_stream :: fn(iommu : ptr[mut Iommu], stream : u32, vmid : u32) {
     submit(iommu, CFGI_STE | cast[u64](stream) << 32, 1)
     submit(iommu, TLBI_S12_VMALL | cast[u64](vmid & 0xffff) << 32, 0)
-    _ = sync(iommu)
+    runtime.assert(sync(iommu), "the SMMU didn't finish an invalidation, stopped or slow")
 }
 
 /**
@@ -744,6 +749,7 @@ invalidate_stream :: fn(iommu : ptr[mut Iommu], stream : u32, vmid : u32) {
  */
 submit :: fn(iommu : ptr[mut Iommu], first : u64, second : u64) {
     size :: cast[u32](1) << cast[u32](QUEUE_LOG)
+    spins := cast[u64](0)
     loop {
         consumer :: read_u32(iommu, COMMAND_CONSUMER)
         // Full: the same index, the other wrap
@@ -751,6 +757,9 @@ submit :: fn(iommu : ptr[mut Iommu], first : u64, second : u64) {
             break
         }
         runtime.assert(consumer & CONSUMER_ERROR == 0, "the SMMU's command queue stopped at an erroneous command")
+        // Full for SPINS spins with no error: not being read on, so the kernel stops rather than wait for good
+        spins += 1
+        runtime.assert(spins < SPINS, "the SMMU's command queue stayed full")
         intrinsics.spin_hint()
     }
     at :: iommu.commands + cast[u64](iommu.command_producer & (size - 1)) * COMMAND_BYTES

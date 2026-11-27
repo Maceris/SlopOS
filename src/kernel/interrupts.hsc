@@ -81,8 +81,18 @@ WiredController :: struct {
 
 /** Where one of a CPU's device interrupt IDs comes from. */
 DeviceRoute :: struct {
-    /** Whether the ID is routed; the rest means nothing when it isn't. */
-    used : bool,
+    /**
+     * ROUTE_FREE, ROUTE_USED or ROUTE_RETIRED; the rest means nothing when it's free. Written under interrupts_lock,
+     * atomically, the other fields before it's made ROUTE_USED, and read by the handler without the lock, atomically,
+     * before the rest (handle_device_interrupt).
+     */
+    state : u32,
+    /**
+     * One past the kernel's epoch when unroute freed it, as retire takes an object's, 0 if it never was: it's routed
+     * again only once every CPU has passed a quiescent point since (oldest_quiescent), so a handler that read it as
+     * routed is done with it first, as one runs between quiescent points. Under interrupts_lock.
+     */
+    freed_epoch : u64,
     /**
      * The index of the controller whose line it's routed from; MSI_CONTROLLER for a message-signaled IRQ, and
      * IOMMU_CONTROLLER for an IOMMU's faults.
@@ -97,6 +107,16 @@ DeviceRoute :: struct {
     /** The Irq object it's for (irqs.hsc), 0 for one the kernel routed for itself. */
     irq : u64,
 }
+
+/** A device interrupt ID routed from nothing, free for route_line or route_message. */
+ROUTE_FREE : u32 : 0
+/** A device interrupt ID routed. */
+ROUTE_USED : u32 : 1
+/**
+ * A device interrupt ID an IRQ was moved off (move_msi_irq): what was on its way there before its message or remapped
+ * entry changed goes on to the IRQ, rather than being lost, until the IRQ moves again or is destroyed, which frees it.
+ */
+ROUTE_RETIRED : u32 : 2
 
 /**
  * Map a controller's registers and set it up with every line masked, so its lines can be routed.
@@ -216,21 +236,24 @@ route_line :: fn(
         unlock_at(&kernel.interrupts_lock, .Interrupts)
         return .Error(.LineInUse)
     }
+    oldest :: oldest_quiescent(kernel)
     for i in 0..<cast[usize](count) {
-        if !cpu.device_routes[i].used {
+        if reusable(&cpu.device_routes[i], oldest) {
             slot = i
             break
         }
     }
     if slot < MAX_DEVICE_INTERRUPTS {
         cpu.device_routes[slot] = DeviceRoute.{
-            used = true,
+            state = ROUTE_FREE,
+            freed_epoch = 0,
             controller = controller_index,
             line = line,
             trigger = trigger,
             count = 0,
             irq = irq,
         }
+        intrinsics.atomic_store_u32(&cpu.device_routes[slot].state, ROUTE_USED)
     }
     unlock_at(&kernel.interrupts_lock, .Interrupts)
     if slot == MAX_DEVICE_INTERRUPTS {
@@ -285,21 +308,24 @@ route_message :: fn(
     )
     slot : usize = MAX_DEVICE_INTERRUPTS
     lock_at(&kernel.interrupts_lock, .Interrupts)
+    oldest :: oldest_quiescent(kernel)
     for i in 0..<cast[usize](count) {
-        if !cpu.device_routes[i].used {
+        if reusable(&cpu.device_routes[i], oldest) {
             slot = i
             break
         }
     }
     if slot < MAX_DEVICE_INTERRUPTS {
         cpu.device_routes[slot] = DeviceRoute.{
-            used = true,
+            state = ROUTE_FREE,
+            freed_epoch = 0,
             controller = controller,
             line = event,
             trigger = .Edge,
             count = 0,
             irq = irq,
         }
+        intrinsics.atomic_store_u32(&cpu.device_routes[slot].state, ROUTE_USED)
     }
     unlock_at(&kernel.interrupts_lock, .Interrupts)
     if slot == MAX_DEVICE_INTERRUPTS {
@@ -353,7 +379,8 @@ line_has_irq :: fn(kernel : ptr[Kernel], controller_index : u32, line : u32) -> 
         if address != 0 {
             routes :: &cast[ptr[PerCpu]](address).device_routes
             for route in routes^ {
-                if route.used && route.irq != 0 && route.controller == controller_index && route.line == line {
+                if route.state == ROUTE_USED && route.irq != 0 && route.controller == controller_index
+                    && route.line == line {
                     return true
                 }
             }
@@ -363,7 +390,9 @@ line_has_irq :: fn(kernel : ptr[Kernel], controller_index : u32, line : u32) -> 
 }
 
 /**
- * Forget a route, an IRQ's being destroyed, so its device interrupt ID is free again. Takes interrupts_lock.
+ * Forget a route, an IRQ's being destroyed or moved twice, so its device interrupt ID is free again once every CPU
+ * has passed a quiescent point (DeviceRoute.freed_epoch). Takes interrupts_lock. A handler that read the route before
+ * may still deliver to its IRQ, which stays in limbo until then too, its binding gone if it's destroyed.
  *
  * The controller isn't touched: the caller masks the line, or stops the message, first.
  *
@@ -382,7 +411,43 @@ unroute :: fn(kernel : ptr[mut Kernel], cpu_index : u32, slot : u32) {
     }
     cpu :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
     lock_at(&kernel.interrupts_lock, .Interrupts)
-    cpu.device_routes[slot] = DeviceRoute.{}
+    cpu.device_routes[slot].freed_epoch = intrinsics.interlocked_increment_u64(&kernel.epoch) + 1
+    intrinsics.atomic_store_u32(&cpu.device_routes[slot].state, ROUTE_FREE)
+    unlock_at(&kernel.interrupts_lock, .Interrupts)
+}
+
+/**
+ * Tell whether a route's slot can be routed again: it's free, and was never routed or freed before every CPU's last
+ * quiescent point.
+ *
+ * @param route The slot, under interrupts_lock, which the caller holds.
+ * @param oldest oldest_quiescent's epoch.
+ * @return True if a new route may go there.
+ */
+reusable :: fn(route : ptr[DeviceRoute], oldest : u64) -> bool {
+    return intrinsics.atomic_load_u32(&route.state) == ROUTE_FREE
+        && (route.freed_epoch == 0 || route.freed_epoch - 1 < oldest)
+}
+
+/**
+ * Retire a route an IRQ is being moved off (ROUTE_RETIRED): what arrives at it still goes to the IRQ, and its ID isn't
+ * routed again until unroute frees it. Takes interrupts_lock.
+ *
+ * @param kernel The kernel, whose per_cpus' routes change under interrupts_lock, so the caller holds no lock of
+ *     rank Interrupts or above.
+ * @param cpu_index The index of the CPU the route is on; one with no started CPU is ignored.
+ * @param slot The route's index in that CPU's device_routes; MAX_DEVICE_INTERRUPTS or more is ignored.
+ */
+retire_route :: fn(kernel : ptr[mut Kernel], cpu_index : u32, slot : u32) {
+    per_cpus :: kernel.per_cpus
+    if cast[usize](cpu_index) >= per_cpus.count
+        || per_cpus[cpu_index] == 0
+        || cast[usize](slot) >= MAX_DEVICE_INTERRUPTS {
+        return void
+    }
+    cpu :: cast[ptr[mut PerCpu]](per_cpus[cpu_index])
+    lock_at(&kernel.interrupts_lock, .Interrupts)
+    intrinsics.atomic_store_u32(&cpu.device_routes[slot].state, ROUTE_RETIRED)
     unlock_at(&kernel.interrupts_lock, .Interrupts)
 }
 
@@ -405,7 +470,10 @@ controller_at :: fn(kernel : ptr[mut Kernel], index : u32) -> ptr[mut WiredContr
  *
  * The route's count goes up; a level-triggered line is masked until it's acknowledged (irq_ack); the interrupt is
  * acknowledged to the local controller either way. Then an IRQ's binding gets a packet, or an IOMMU's faults are
- * read. An ID routed from nothing is logged and acknowledged.
+ * read; an IRQ's retired route still gives it the packet. An ID routed from nothing is logged and acknowledged.
+ *
+ * The route's state is read first, atomically, the rest after it: a route freed meanwhile isn't routed again until
+ * this CPU passes a quiescent point, after this returns (DeviceRoute.freed_epoch).
  *
  * @param id The device interrupt ID that arrived, which should be in arch.device_interrupt_range.
  */
@@ -414,15 +482,17 @@ handle_device_interrupt :: fn(id : arch_interface.InterruptId) {
     kernel :: cpu.kernel
     first, count :: arch.device_interrupt_range()
     slot :: cast[usize](cast[u32](id) - cast[u32](first))
-    if cast[u32](id) < cast[u32](first)
-        || slot >= cast[usize](count)
-        || slot >= MAX_DEVICE_INTERRUPTS
-        || !cpu.device_routes[slot].used {
-        runtime.log_warn("device interrupt % arrived, routed from nothing", cast[u32](id))
+    if cast[u32](id) < cast[u32](first) || slot >= cast[usize](count) || slot >= MAX_DEVICE_INTERRUPTS {
+        runtime.log_warn("device interrupt % arrived, outside the device interrupts", cast[u32](id))
         arch.end_of_interrupt(id)
         return void
     }
     route :: &cpu.device_routes[slot]
+    if intrinsics.atomic_load_u32(&route.state) == ROUTE_FREE {
+        runtime.log_warn("device interrupt % arrived, routed from nothing", cast[u32](id))
+        arch.end_of_interrupt(id)
+        return void
+    }
     if route.trigger == .Level {
         mask_line(kernel, route.controller, route.line)
     }

@@ -36,7 +36,8 @@ import frames from "frames"
  * none. Where the IOMMU translates, the domain's memory is mapped at device addresses of its own, and its devices
  * reach nothing else (translation.hsc); without one, that's all of memory, and a device address is a physical address.
  *
- * Lock order: a device's lock, then the kernel's devices_lock, then interrupts_lock; a device's lock, then iommus_lock.
+ * Lock order: a device's lock, then the kernel's devices_lock, then interrupts_lock; a device's lock, then
+ * devices_lock, then iommus_lock.
  */
 
 /** A device, a kernel object: one PCIe function, its message-signaled IRQs, and the DMA domain it's attached to. */
@@ -264,6 +265,8 @@ PCI_COMMAND_BUS_MASTER : u16 : 1 << 2
  * @param domain The domain, whose devices are all behind one IOMMU, or all behind none.
  * @error WrongIommu The device is behind another IOMMU than the domain's, or none where it's bound to one, or the
  *     other way; nothing changes.
+ * @error InvalidArgument Another device has the same stream on the IOMMU, as aliased requester IDs do, in another
+ *     domain: one context serves both, so attaching it would move the other's DMA too; nothing changes.
  * @error OutOfMemory No domain ID, root table or IOMMU table could be had; the device is detached from its old
  *     domain and attached to none.
  * @error BudgetExceeded The domain's budget couldn't pay for its root table; the device is attached to none.
@@ -275,16 +278,19 @@ attach_device :: fn(
 ) -> Result[void, slop_os.DeviceError] {
     path :: iommu_path(kernel, device.address)
     lock_at(&device.lock, .Device)
+    lock_at(&kernel.devices_lock, .Devices)
     lock_at(&kernel.iommus_lock, .Iommus)
     fits :: !domain.bound || domain.iommu == path.iommu
-    if fits {
+    shared :: fits && stream_elsewhere(kernel, device, domain, path)
+    if fits && !shared {
         domain.bound = true
         domain.iommu = path.iommu
     }
     unlock_at(&kernel.iommus_lock, .Iommus)
-    if !fits {
+    unlock_at(&kernel.devices_lock, .Devices)
+    if !fits || shared {
         unlock_at(&device.lock, .Device)
-        return .Error(.WrongIommu)
+        return .Error(if shared { slop_os.DeviceError.InvalidArgument } else { slop_os.DeviceError.WrongIommu })
     }
     // Away from the domain it was in, if it was
     untranslate_device(kernel, device)
@@ -446,6 +452,7 @@ create_msi_irq :: fn(
     irq.trigger = .Edge
     irq.controller = MSI_CONTROLLER
     irq.slot = cast[u32](MAX_DEVICE_INTERRUPTS)
+    irq.retired_slot = cast[u32](MAX_DEVICE_INTERRUPTS)
     irq.device = cast[u64](device)
     irq.msi_source = device.msi_source
     lock_at(&device.lock, .Device)
@@ -519,9 +526,9 @@ create_msi_irq :: fn(
  * Route a message-signaled IRQ to another CPU (decisions/0099).
  *
  * A route there is made first, then its IOMMU's entry for it is pointed there, or its event moved (the ITS's MOVI),
- * or a new message made for its driver to program; then its old route is forgotten. Where the message changes
- * (x86-64 without interrupt remapping), what the device raises before its driver programs the new one is lost; the
- * caller reads the IRQ's message after. Takes the device's lock, holding it throughout.
+ * or a new message made for its driver to program; then its old route is retired (ROUTE_RETIRED), so what was on its
+ * way there still reaches the IRQ, and the one retired at its move before is forgotten. The caller reads the IRQ's
+ * message after. Takes the device's lock, holding it throughout.
  *
  * @param kernel The kernel, whose CPUs' routes are changed under interrupts_lock, and whose IOMMU's lock is taken
  *     when the IRQ is remapped.
@@ -562,13 +569,52 @@ move_msi_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq], cpu_index : u32
     old_slot :: irq.slot
     irq.cpu = cpu_index
     irq.slot = cast[u32](id) - cast[u32](first)
-    unroute(kernel, old_cpu, old_slot)
+    retire_route(kernel, old_cpu, old_slot)
+    if cast[usize](irq.retired_slot) < MAX_DEVICE_INTERRUPTS {
+        unroute(kernel, irq.retired_cpu, irq.retired_slot)
+    }
+    irq.retired_cpu = old_cpu
+    irq.retired_slot = old_slot
     return .Ok
 }
 
 /**
+ * Tell whether another device has a stream on an IOMMU in another domain than this one.
+ *
+ * @param kernel The kernel, whose devices_lock the caller holds; each listed device's iommu and domain are read.
+ * @param device The device being attached, left out.
+ * @param domain The domain it's joining.
+ * @param path Its IOMMU and stream; one behind no IOMMU shares nothing.
+ * @return True if a listed device other than device is attached to another domain through the same IOMMU and stream.
+ */
+stream_elsewhere :: fn(kernel : ptr[Kernel], device : ptr[Device], domain : ptr[DmaDomain], path : IommuPath) -> bool {
+    if path.iommu == 0 {
+        return false
+    }
+    with {
+        other := kernel.first_device
+    }
+    loop // Each device listed
+    {
+        if other == 0 {
+            return false
+        }
+        listed :: cast[ptr[Device]](other)
+        if other != cast[u64](device)
+            && listed.domain != 0
+            && listed.domain != cast[u64](domain)
+            && listed.iommu.iommu == path.iommu
+            && listed.iommu.stream == path.stream {
+            return true
+        }
+        other = listed.next
+    }
+}
+
+/**
  * Destroy a message-signaled IRQ, for destroy_irq: its event no longer delivered, and free on its device, unless the
- * device is being destroyed, which forgets every event at once; then its IOMMU's entry freed and its route forgotten.
+ * device is being destroyed, which forgets every event at once; then its IOMMU's entry freed and its route forgotten,
+ * and its retired one.
  *
  * @param kernel The kernel, whose CPU's route is forgotten under interrupts_lock, and whose IOMMU's lock is taken
  *     to free the remapping entry; called from destroy_irq, with interrupts off.
@@ -585,6 +631,10 @@ destroy_msi_irq :: fn(kernel : ptr[mut Kernel], irq : ptr[mut Irq]) {
     unremap_msi(kernel, irq)
     if cast[usize](irq.slot) < MAX_DEVICE_INTERRUPTS {
         unroute(kernel, irq.cpu, irq.slot)
+    }
+    if cast[usize](irq.retired_slot) < MAX_DEVICE_INTERRUPTS {
+        unroute(kernel, irq.retired_cpu, irq.retired_slot)
+        irq.retired_slot = cast[u32](MAX_DEVICE_INTERRUPTS)
     }
 }
 

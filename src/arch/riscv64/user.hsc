@@ -2,6 +2,7 @@ package arch_riscv64
 
 import intrinsics from "base:intrinsics"
 import riscv64 from "base:intrinsics/riscv64"
+import runtime from "base:runtime"
 import slop_os from "std:os/slop_os"
 import arch_interface from "../../arch_interface"
 
@@ -148,7 +149,8 @@ get_user_register :: fn(registers : ptr[UserRegisters], index : u32) -> u64 {
  * Set a register as a debugger sets it (arch_interface.set_user_register).
  *
  * @param registers The thread's saved registers.
- * @param index x0 to x31 by number, then 32 for pc; writing x0 changes nothing.
+ * @param index x0 to x31 by number, then 32 for pc; writing x0 changes nothing. Writing pc also clears SPELP, whether
+ *     it was trapped expecting a landing pad: the debugger has taken it somewhere else, which needn't be one.
  * @param value The value; the stack pointer (x2) and pc have to be user addresses.
  * @return False, nothing changed, for an index past pc or a stack pointer or pc outside user addresses; true otherwise.
  */
@@ -161,6 +163,7 @@ set_user_register :: fn(registers : ptr[mut UserRegisters], index : u32, value :
     }
     if index == 32 {
         registers.frame.sepc = value
+        registers.frame.sstatus &= ~SSTATUS_SPELP
     }
     else if index != 0 {
         registers.frame.x[cast[usize](index) % 32] = value
@@ -248,7 +251,8 @@ emulate_counter_read :: fn(registers : ptr[mut UserRegisters], instruction : u32
 /**
  * Return to user mode (arch_interface.return_to_user): sstatus made a user one (user_status), sscratch the hart's
  * TrapScratch, with the kernel stack's top for the next trap, and its kernel shadow stack's, turned on the first time
- * (hardening.hsc), the thread's senvcfg set, then every register loaded, user mode's ssp put back, and sret.
+ * (hardening.hsc), the thread's senvcfg set, the kernel's writes fenced before user mode's device accesses, then every
+ * register loaded, user mode's ssp put back, and sret.
  *
  * @param registers The thread's registers.
  */
@@ -263,12 +267,19 @@ return_to_user :: fn(registers : ptr[UserRegisters]) #never_returns {
      */
     if cpu.kernel_shadow_top != 0 && !cpu.shadow_stacks_on {
         cpu.shadow_stacks_on = riscv64.sbi_call(SBI_FWFT, SBI_FWFT_SET, FWFT_SHADOW_STACK, 1, 0).error == 0
+        // check_shadow_stacks found it on every hart, so threads may have shadow stacks; it has to go on here too
+        runtime.assert(cpu.shadow_stacks_on || !current_system().shadow_stacks, "FWFT didn't turn shadow stacks on")
     }
     if cpu.shadow_stacks_on {
         riscv64.csrw(.SSP, cpu.kernel_shadow_top)
         cpu.scratch.kernel_shadow_stack = cpu.kernel_shadow_top
     }
     riscv64.csrw(.SENVCFG, cpu.user_envcfg)
+    /*
+     * What the kernel wrote is ordered before a device access user mode makes next: a driver programming its device's
+     * MSI after a call that routed it needs the route seen first, which RVWMO orders only with an output fence
+     */
+    riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_OUTPUT)
     riscv64.return_to_user(&frame, &cpu.scratch)
 }
 
