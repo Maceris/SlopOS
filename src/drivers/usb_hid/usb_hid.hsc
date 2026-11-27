@@ -15,6 +15,7 @@
  */
 package usb_hid
 
+import intrinsics from "base:intrinsics"
 import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
@@ -33,6 +34,14 @@ REPORT_OFFSET : u32 : 4096
 DESCRIPTOR_BYTES : u16 : 1024
 /** The most bytes of a report taken. */
 REPORT_BYTES : u32 : 64
+/** How long a request made while starting, or a reset, may take: 5 s. */
+CALL_WAIT : u64 : 5_000_000_000
+/** How many times a control request answered Busy is sent again, and how far apart: 50, 2 ms. */
+BUSY_TRIES :: 50
+BUSY_PAUSE : u64 : 2_000_000
+/** The most bits a report descriptor's field is taken as having, and the most fields an Input item's count gives. */
+MAX_FIELD_BITS : u32 : 32
+MAX_FIELD_COUNT : u32 : 64
 /** The tag of the report transfer, and of the requests made while starting. */
 REPORT_TAG : u64 : 1
 SETUP_TAG : u64 : 2
@@ -122,9 +131,9 @@ Driver :: struct {
  * @param device The connection to the interface, the driver's.
  * @param clients The listener its clients' Connects arrive on, served as a client itself.
  * @return It doesn't return while it serves; 0 once its device is gone; 99 if its state couldn't be had, 2 if the
- *     interface couldn't be described or its buffer had, 3 if it has no interrupt IN endpoint, 4 if a boot device
- *     refused the boot protocol or a pointer's report descriptor couldn't be read or has no X and Y, 5 if no port
- *     could be made, 9 if the listener couldn't be bound.
+ *     interface couldn't be described or its buffer had, 4 if a boot device refused the boot protocol, 5 if no port
+ *     could be made, 9 if the listener couldn't be bound; 0 too for an interface with nothing to serve, no interrupt
+ *     IN endpoint or no X and Y in its reports, so it isn't started again.
  */
 main :: fn(log : slop_os.DebugLog?, device : os.Channel[usb_device.UsbDevice], clients : os.Listener[input.Input]) -> int {
     startup :: slop_os.startup_block()
@@ -156,8 +165,10 @@ main :: fn(log : slop_os.DebugLog?, device : os.Channel[usb_device.UsbDevice], c
             break
         }
     }
+    // An interface with nothing to report on, as some HID interfaces are, isn't one to serve: it ends, not restarted
     if driver.endpoint == 0 {
-        return 3
+        runtime.log_info("no interrupt IN endpoint, so nothing to serve")
+        return 0
     }
     if driver.packet == 0 || driver.packet > REPORT_BYTES {
         driver.packet = REPORT_BYTES
@@ -172,8 +183,10 @@ main :: fn(log : slop_os.DebugLog?, device : os.Channel[usb_device.UsbDevice], c
     }
     else {
         driver.kind = .Pointer
+        // One that isn't a pointer, as a keyboard's consumer controls are, isn't served: it ends, not restarted
         if !read_layout(driver, info.interface) {
-            return 4
+            runtime.log_info("no X and Y in its reports, so nothing to serve")
+            return 0
         }
     }
     // SET_IDLE to 0, reports only on a change; a device that refuses it reports as it likes
@@ -241,7 +254,8 @@ call :: fn(driver : ptr[Driver], request : usb_device.Request) -> usb_device.Res
         return .Unsupported
     }
     into := os.Incoming.{}
-    match usb_device.receive_response(driver.device, port, &into, true) {
+    deadline :: (slop_os.clock_monotonic() or_else 0) + CALL_WAIT
+    match usb_device.receive_response(driver.device, port, &into, true, deadline) {
         case Received => return os.message_of[usb_device.Response](&into)^
         case _ => return .Unsupported
     }
@@ -260,9 +274,33 @@ call :: fn(driver : ptr[Driver], request : usb_device.Request) -> usb_device.Res
  */
 control :: fn(driver : ptr[Driver], request_type : u8, request : u8, value : u16, where : u16, length : u16) -> bool {
     setup :: usb_device.Setup.{request_type = request_type, request = request, value = value, index = where, length = length}
-    return match call(driver, .Control(usb_device.Control.{tag = SETUP_TAG, setup = setup, offset = DESCRIPTOR_OFFSET})) {
-        case Finished(done) => done.status == .Done
-        case _ => false
+    // Again while it's Busy, as another interface's control transfer may hold the device's default endpoint
+    for attempt in 0..<BUSY_TRIES {
+        match call(driver, .Control(usb_device.Control.{tag = SETUP_TAG, setup = setup, offset = DESCRIPTOR_OFFSET})) {
+            case Finished(done) => {
+                if done.status != .Busy {
+                    return done.status == .Done
+                }
+            }
+            case _ => return false
+        }
+        pause(BUSY_PAUSE)
+    }
+    return false
+}
+
+/**
+ * Wait, polling the monotonic clock.
+ *
+ * @param nanoseconds How long; it returns at once if the clock can't be read.
+ */
+pause :: fn(nanoseconds : u64) {
+    deadline :: (slop_os.clock_monotonic() or_else 0) + nanoseconds
+    loop {
+        if (slop_os.clock_monotonic() or_else deadline) >= deadline {
+            return void
+        }
+        intrinsics.spin_hint()
     }
 }
 
@@ -358,10 +396,10 @@ parse_layout :: fn(descriptor : u8[]) -> Layout {
             maximum = signed
         }
         else if tag == 0x74 {
-            size = data
+            size = if data > MAX_FIELD_BITS { MAX_FIELD_BITS } else { data }
         }
         else if tag == 0x94 {
-            count = data
+            count = if data > MAX_FIELD_COUNT { MAX_FIELD_COUNT } else { data }
         }
         else if tag == 0x84 {
             // A report ID: only the first report's fields are taken
@@ -394,7 +432,7 @@ parse_layout :: fn(descriptor : u8[]) -> Layout {
                 }
                 else if page == PAGE_DESKTOP {
                     for i in 0..<cast[usize](count) {
-                        usage :: if i < usage_count { usages[i] } else if usage_minimum + cast[u32](i) <= usage_maximum { usage_minimum + cast[u32](i) } else { cast[u32](0) }
+                        usage :: if i < usage_count { usages[i] } else if cast[u64](usage_minimum) + cast[u64](i) <= cast[u64](usage_maximum) { usage_minimum + cast[u32](i) } else { cast[u32](0) }
                         field :: Field.{
                             offset = bit + cast[u32](i) * size,
                             size = size,
@@ -472,8 +510,8 @@ take_reports :: fn(driver : ptr[mut Driver]) -> bool {
                 if done.status == .Done {
                     report(driver, cast[usize](done.length))
                 }
-                else if done.status == .Stalled {
-                    _ = call_reset(driver)
+                else if done.status == .Stalled && !call_reset(driver) {
+                    return false
                 }
                 if !ask_report(driver) {
                     return false
@@ -485,16 +523,25 @@ take_reports :: fn(driver : ptr[mut Driver]) -> bool {
 }
 
 /**
- * Clear the interrupt endpoint's halt after a stall, not waiting for its answer, which take_reports passes over.
+ * Clear the interrupt endpoint's halt after a stall, and wait for it, so the next report isn't asked for on an
+ * endpoint still halted; again while it's Busy.
  *
- * @param driver The driver.
- * @return False if it couldn't be sent.
+ * @param driver The driver, its report transfer ended.
+ * @return True once it's cleared; false if it couldn't be, as the device refuses or is gone.
  */
 call_reset :: fn(driver : ptr[Driver]) -> bool {
-    out := os.Outgoing.{}
-    made :: os.begin[usb_device.Request](&out)
-    made^ = .ResetEndpoint(usb_device.ResetEndpoint.{tag = SETUP_TAG, endpoint = driver.endpoint})
-    return usb_device.send_request(driver.device, driver.port, &out) is_none
+    for attempt in 0..<BUSY_TRIES {
+        match call(driver, .ResetEndpoint(usb_device.ResetEndpoint.{tag = SETUP_TAG, endpoint = driver.endpoint})) {
+            case Finished(done) => {
+                if done.status != .Busy {
+                    return done.status == .Done
+                }
+            }
+            case _ => return false
+        }
+        pause(BUSY_PAUSE)
+    }
+    return false
 }
 
 /**

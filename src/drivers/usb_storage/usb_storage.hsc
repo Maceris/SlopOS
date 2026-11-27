@@ -40,8 +40,16 @@ COMMAND_SIGNATURE : u32 : 0x43425355
 STATUS_SIGNATURE : u32 : 0x53425355
 /** How long one transfer may take: 10 s, as a disk may spin up. */
 TRANSFER_WAIT : u64 : 10_000_000_000
-/** How many times TEST UNIT READY is tried as the disk becomes ready, a unit attention cleared between. */
-READY_TRIES :: 20
+/** How many times TEST UNIT READY is tried as the disk becomes ready, a unit attention cleared between: 100. */
+READY_TRIES :: 100
+/** Between those tries: 100 ms, so a disk spinning up has 10 s. */
+READY_PAUSE : u64 : 100_000_000
+/** How many times a request answered Busy, as another interface's control transfer holds the device's, is sent again. */
+BUSY_TRIES :: 50
+/** Between those: 2 ms. */
+BUSY_PAUSE : u64 : 2_000_000
+/** SCSI's sense key of an ILLEGAL REQUEST, in REQUEST SENSE's byte 2. */
+SENSE_ILLEGAL_REQUEST : u8 : 5
 
 /** Bulk-only's class requests: the reset (0xff) and GET MAX LUN (0xfe). */
 REQUEST_RESET : u8 : 0xff
@@ -84,6 +92,10 @@ Driver :: struct {
     tag : u32,
     /** Whether the device is gone. */
     gone : bool,
+    /** The tag the next request on the connection is sent with, so an answer to an earlier, late one is told apart. */
+    request_tag : u64,
+    /** Whether the disk refused SYNCHRONIZE CACHE as an illegal request, so a Flush has nothing to do. */
+    no_flush : bool,
     /** The disk's size in block.BLOCK_BYTES blocks, and how many of those one of its own is. */
     block_count : u64,
     per_block : u64,
@@ -184,12 +196,15 @@ main :: fn(log : slop_os.DebugLog?, device : os.Channel[usb_device.UsbDevice], c
 /**
  * Send one request on the interface's connection and wait for its answer, as each exchange does.
  *
+ * Answers to earlier requests that came too late, Finished with another tag, are passed over.
+ *
  * @param driver The driver, nothing else in flight on the connection.
  * @param request The request.
+ * @param tag The request's tag, which its Finished answer comes back with; 0 for Describe and GetBuffer, which have none.
  * @return The answer; Unsupported if it couldn't be sent, didn't come within TRANSFER_WAIT, or the connection's gone,
  *     which marks the device gone.
  */
-call :: fn(driver : ptr[mut Driver], request : usb_device.Request) -> usb_device.Response {
+call :: fn(driver : ptr[mut Driver], request : usb_device.Request, tag : u64 = 0) -> usb_device.Response {
     out := os.Outgoing.{}
     made :: os.begin[usb_device.Request](&out)
     made^ = request
@@ -198,25 +213,86 @@ call :: fn(driver : ptr[mut Driver], request : usb_device.Request) -> usb_device
         return .Unsupported
     }
     deadline :: (slop_os.clock_monotonic() or_else 0) + TRANSFER_WAIT
-    into := os.Incoming.{}
-    match usb_device.receive_response(driver.device, driver.device_port, &into, true, deadline) {
-        case Received => {}
-        case Empty => return .Unsupported
-        case _ => {
-            driver.gone = true
-            return .Unsupported
-        }
-    }
-    answer :: os.message_of[usb_device.Response](&into)^
-    match answer {
-        case Finished(done) => {
-            if done.status == .Gone {
+    loop {
+        into := os.Incoming.{}
+        match usb_device.receive_response(driver.device, driver.device_port, &into, true, deadline) {
+            case Received => {}
+            case Empty => return .Unsupported
+            case _ => {
                 driver.gone = true
+                return .Unsupported
             }
         }
-        case _ => {}
+        answer :: os.message_of[usb_device.Response](&into)^
+        match answer {
+            case Finished(done) => {
+                if done.status == .Gone {
+                    driver.gone = true
+                    return answer
+                }
+                // A late answer to one that timed out
+                if done.tag != tag {
+                    continue
+                }
+            }
+            case _ => {}
+        }
+        return answer
     }
-    return answer
+}
+
+/**
+ * Give the next request's tag.
+ *
+ * @param driver The driver, whose request_tag moves on.
+ * @return A tag no request before it had, from 1.
+ */
+next_tag :: fn(driver : ptr[mut Driver]) -> u64 {
+    driver.request_tag += 1
+    return driver.request_tag
+}
+
+/**
+ * Give a Control, Transfer or ResetEndpoint request with another tag.
+ *
+ * @param request The request.
+ * @param tag The tag.
+ * @return The request with tag; any other request as it is.
+ */
+with_tag :: fn(request : usb_device.Request, tag : u64) -> usb_device.Request {
+    return match request {
+        case Control(asked) => usb_device.Request.Control(usb_device.Control.{tag = tag, setup = asked.setup, offset = asked.offset})
+        case Transfer(asked) => usb_device.Request.Transfer(
+            usb_device.Transfer.{tag = tag, endpoint = asked.endpoint, offset = asked.offset, length = asked.length}
+        )
+        case ResetEndpoint(asked) => usb_device.Request.ResetEndpoint(usb_device.ResetEndpoint.{tag = tag, endpoint = asked.endpoint})
+        case _ => request
+    }
+}
+
+/**
+ * Send a Control, Transfer or ResetEndpoint request, each try with a tag of its own, again while it's answered Busy,
+ * up to BUSY_TRIES times BUSY_PAUSE apart.
+ *
+ * @param driver The driver.
+ * @param request The request; its tag is replaced.
+ * @return Its last answer: Finished, or Unsupported as call gives it, or after BUSY_TRIES Busy answers.
+ */
+send_retried :: fn(driver : ptr[mut Driver], request : usb_device.Request) -> usb_device.Response {
+    for attempt in 0..<BUSY_TRIES {
+        tag :: next_tag(driver)
+        answer :: call(driver, with_tag(request, tag), tag)
+        match answer {
+            case Finished(done) => {
+                if done.status != .Busy {
+                    return answer
+                }
+            }
+            case _ => return answer
+        }
+        pause(BUSY_PAUSE)
+    }
+    return .Unsupported
 }
 
 /**
@@ -237,7 +313,7 @@ control :: fn(driver : ptr[mut Driver], request_type : u8, request : u8, value :
         index = cast[u16](driver.interface),
         length = length,
     }
-    return match call(driver, .Control(usb_device.Control.{tag = 0, setup = setup, offset = DATA_OFFSET})) {
+    return match send_retried(driver, .Control(usb_device.Control.{setup = setup, offset = DATA_OFFSET})) {
         case Finished(done) => done.status == .Done
         case _ => false
     }
@@ -253,8 +329,8 @@ control :: fn(driver : ptr[mut Driver], request_type : u8, request : u8, value :
  * @return How it went, and the bytes moved.
  */
 bulk :: fn(driver : ptr[mut Driver], endpoint : u8, offset : u32, length : u32) -> usb_device.Completion {
-    asked :: usb_device.Transfer.{tag = 0, endpoint = endpoint, offset = offset, length = length}
-    return match call(driver, .Transfer(asked)) {
+    asked :: usb_device.Transfer.{endpoint = endpoint, offset = offset, length = length}
+    return match send_retried(driver, .Transfer(asked)) {
         case Finished(done) => done
         case _ => usb_device.Completion.{status = .DeviceError}
     }
@@ -268,7 +344,7 @@ bulk :: fn(driver : ptr[mut Driver], endpoint : u8, offset : u32, length : u32) 
  * @return True if it's cleared.
  */
 clear_halt :: fn(driver : ptr[mut Driver], endpoint : u8) -> bool {
-    return match call(driver, .ResetEndpoint(usb_device.ResetEndpoint.{tag = 0, endpoint = endpoint})) {
+    return match send_retried(driver, .ResetEndpoint(usb_device.ResetEndpoint.{endpoint = endpoint})) {
         case Finished(done) => done.status == .Done
         case _ => false
     }
@@ -318,14 +394,20 @@ scsi :: fn(driver : ptr[mut Driver], command : u8[], length : u32, into : bool) 
         reset_recovery(driver)
         return .Broken
     }
+    // A data stage that moved fewer bytes than asked, a stall's or a short packet's, fails the command however it ends
+    short := false
     if length > 0 {
         moved :: bulk(driver, if into { driver.bulk_in } else { driver.bulk_out }, DATA_OFFSET, length)
         if moved.status == .Stalled {
             _ = clear_halt(driver, if into { driver.bulk_in } else { driver.bulk_out })
+            short = true
         }
         else if moved.status != .Done {
             reset_recovery(driver)
             return .Broken
+        }
+        else if moved.length != length {
+            short = true
         }
     }
     status := bulk(driver, driver.bulk_in, STATUS_OFFSET, STATUS_BYTES)
@@ -340,8 +422,12 @@ scsi :: fn(driver : ptr[mut Driver], command : u8[], length : u32, into : bool) 
         return .Broken
     }
     result :: intrinsics.volatile_load_u8(cast[ptr[u8]](at + 12))
-    if result == 0 {
+    // dCSWDataResidue: what the device didn't move of what it was asked to
+    if result == 0 && !short && load_u32(at, 8) == 0 {
         return .Passed
+    }
+    if result == 0 {
+        return .Failed
     }
     if result == 1 {
         return .Failed
@@ -369,8 +455,51 @@ become_ready :: fn(driver : ptr[mut Driver]) -> bool {
                 }
             }
         }
+        pause(READY_PAUSE)
     }
     return false
+}
+
+/**
+ * Write back the disk's cache (SYNCHRONIZE CACHE (10)); a disk that refuses it as an illegal request has nothing to
+ * write back, and isn't asked again.
+ *
+ * @param driver The driver, whose no_flush is set by such a refusal.
+ * @return Done once it's written back, or for a disk that has nothing to; DeviceError otherwise.
+ */
+flush :: fn(driver : ptr[mut Driver]) -> block.Status {
+    if driver.no_flush {
+        return .Done
+    }
+    match scsi(driver, u8.[SCSI_SYNCHRONIZE_CACHE, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false) {
+        case .Passed => return .Done
+        case .Failed => {
+            // REQUEST SENSE's fixed format: the sense key in byte 2's low bits
+            if scsi(driver, u8.[SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0], 18, true) == .Passed
+                && intrinsics.volatile_load_u8(cast[ptr[u8]](driver.usb_buffer + cast[u64](DATA_OFFSET) + 2)) & 0xf
+                    == SENSE_ILLEGAL_REQUEST {
+                driver.no_flush = true
+                return .Done
+            }
+            return .DeviceError
+        }
+        case .Broken => return .DeviceError
+    }
+}
+
+/**
+ * Wait, polling the monotonic clock.
+ *
+ * @param nanoseconds How long; it returns at once if the clock can't be read.
+ */
+pause :: fn(nanoseconds : u64) {
+    deadline :: (slop_os.clock_monotonic() or_else 0) + nanoseconds
+    loop {
+        if (slop_os.clock_monotonic() or_else deadline) >= deadline {
+            return void
+        }
+        intrinsics.spin_hint()
+    }
 }
 
 /**
@@ -429,8 +558,7 @@ serve :: fn(driver : ptr[mut Driver], index : usize, into : ptr[mut os.Incoming]
             case Read(transfer) => answer(driver, end, finished(transfer.tag, transfer_blocks(driver, index, transfer, false)))
             case Write(transfer) => answer(driver, end, finished(transfer.tag, transfer_blocks(driver, index, transfer, true)))
             case Flush(tag) => {
-                outcome :: scsi(driver, u8.[SCSI_SYNCHRONIZE_CACHE, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false)
-                answer(driver, end, finished(tag, if outcome == .Passed { block.Status.Done } else { block.Status.DeviceError }))
+                answer(driver, end, finished(tag, flush(driver)))
             }
             case Describe => answer(
                 driver,

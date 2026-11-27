@@ -100,8 +100,8 @@ ArchCpu :: struct #align(64) {
     loaded : DebugRegisters,
 }
 
-/** How many triggers a thread may have at once: one for each of slop_os.DEBUG_SLOTS, and its step's. */
-TRIGGER_ENTRIES :: 5
+/** How many triggers a thread may have at once: one for each of slop_os.DEBUG_SLOTS, and its step's two (a branch's). */
+TRIGGER_ENTRIES :: 6
 
 /**
  * One trigger in the memory the SBI's debug triggers extension shares with a hart: for an install, tdata1 to tdata3

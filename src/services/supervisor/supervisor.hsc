@@ -6625,6 +6625,9 @@ start_hello :: fn(supervisor : ptr[mut Supervisor], again : usize) {
     }
 }
 
+/** How long has_blocks waits for a disk's driver to answer Describe: 5 s. */
+DESCRIBE_WAIT : u64 : 5_000_000_000
+
 /**
  * Ask a disk's driver whether its disk has any blocks, on a connection made for it and closed after.
  *
@@ -6644,7 +6647,8 @@ has_blocks :: fn(supervisor : ptr[mut Supervisor], target : usize) -> bool {
         return true
     }
     into := os.Incoming.{}
-    match block.receive_response(end, port, &into, true) {
+    // A driver that doesn't answer in DESCRIBE_WAIT is taken as having blocks, left to its partition server
+    match block.receive_response(end, port, &into, true, (slop_os.clock_monotonic() or_else 0) + DESCRIBE_WAIT) {
         case Received => {}
         case _ => return true
     }

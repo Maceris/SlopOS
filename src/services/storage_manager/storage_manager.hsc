@@ -558,6 +558,9 @@ start_partition_server :: fn(state : ptr[mut Manager], index : usize) -> bool {
     return true
 }
 
+/** How long has_blocks waits for a disk's driver to answer Describe: 5 s. */
+DESCRIBE_WAIT : u64 : 5_000_000_000
+
 /**
  * Ask a block driver whether its disk has any blocks, on a connection of its, with a port of its own for the answer.
  *
@@ -574,7 +577,8 @@ has_blocks :: fn(end : slop_os.Channel) -> bool {
     made^ = .Describe
     if block.send_request(end, port, &out) is_none {
         into := os.Incoming.{}
-        match block.receive_response(end, port, &into, true) {
+        // A driver that doesn't answer in DESCRIBE_WAIT is taken as having blocks, left to its partition server
+        match block.receive_response(end, port, &into, true, (slop_os.clock_monotonic() or_else 0) + DESCRIBE_WAIT) {
             case Received => {
                 match os.message_of[block.Response](&into)^ {
                     case Described(info) => blocks = info.block_count > 0

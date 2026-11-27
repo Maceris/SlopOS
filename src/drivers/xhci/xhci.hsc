@@ -101,6 +101,8 @@ PORT_ENABLED : u32 : 1 << 1
 PORT_RESET : u32 : 1 << 4
 PORT_POWER : u32 : 1 << 9
 PORT_RESET_CHANGE : u32 : 1 << 21
+/** PORTSC's CSC (17): the port's connection changed since it was last cleared. */
+PORT_CONNECT_CHANGE : u32 : 1 << 17
 PORT_CHANGES : u32 : 0x7f << 17
 /** PORTSC's bits kept as they are by a write: those read-only and those written as read (Linux's neutral state). */
 PORT_KEEP : u32 : 1 | (1 << 3) | (0xf << 10) | (1 << 30) | (0xf << 5) | (1 << 9) | (3 << 14) | (7 << 25)
@@ -128,6 +130,7 @@ TRB_ADDRESS_DEVICE : u32 : 11
 TRB_CONFIGURE_ENDPOINT : u32 : 12
 TRB_EVALUATE_CONTEXT : u32 : 13
 TRB_RESET_ENDPOINT : u32 : 14
+TRB_STOP_ENDPOINT : u32 : 15
 TRB_SET_DEQUEUE : u32 : 16
 TRB_TRANSFER_EVENT : u32 : 32
 TRB_COMMAND_COMPLETION : u32 : 33
@@ -361,7 +364,8 @@ Driver :: struct {
     memory_device : u64,
     commands : Ring,
     events : Ring,
-    /** The command waited for: whether it's answered, and how. */
+    /** The command waited for: its TRB, to the controller, whose completion alone answers it; whether it's answered, and how. */
+    command_trb : u64,
     command_done : bool,
     command_result : CommandResult,
     devices : Device[MAX_DEVICES],
@@ -663,11 +667,14 @@ start_controller :: fn(driver : ptr[Driver], capabilities : u32) -> bool {
  * @param parameter The TRB's parameter.
  * @param status Its status.
  * @param control Its control, without its cycle bit, which the ring's is put in.
+ * @param chained Whether the TRB before it is chained to it (CH), so a link between them carries the chain.
  * @return Where the TRB is, to the controller, as an event names it.
  */
-enqueue :: fn(ring : ptr[mut Ring], parameter : u64, status : u32, control : u32) -> u64 {
+enqueue :: fn(ring : ptr[mut Ring], parameter : u64, status : u32, control : u32, chained : bool = false) -> u64 {
     if ring.index >= RING_TRBS - 1 {
-        write_trb(ring.entries + cast[u64](ring.index) * TRB_BYTES, ring.device, 0, (TRB_LINK << 10) | TRB_TOGGLE | ring.cycle)
+        // Inside a TD (the TRB before had CH), the link has CH too, as §4.11.5.1 has it
+        chain :: if chained { TRB_CHAIN } else { cast[u32](0) }
+        write_trb(ring.entries + cast[u64](ring.index) * TRB_BYTES, ring.device, 0, (TRB_LINK << 10) | TRB_TOGGLE | chain | ring.cycle)
         ring.index = 0
         ring.cycle = ring.cycle ~ 1
     }
@@ -720,7 +727,6 @@ ring_doorbell :: fn(driver : ptr[Driver], slot : u32, target : u32) {
  * @param driver The driver, whose command, transfers and ports change as the events say.
  */
 take_events :: fn(driver : ptr[mut Driver]) {
-    taken := false
     loop {
         at :: driver.events.entries + cast[u64](driver.events.index) * TRB_BYTES
         control :: intrinsics.volatile_load_u32(cast[ptr[u32]](at + 12))
@@ -735,9 +741,8 @@ take_events :: fn(driver : ptr[mut Driver]) {
             driver.events.index = 0
             driver.events.cycle = driver.events.cycle ~ 1
         }
-        taken = true
         kind :: (control >> 10) & 0x3f
-        if kind == TRB_COMMAND_COMPLETION {
+        if kind == TRB_COMMAND_COMPLETION && parameter == driver.command_trb {
             driver.command_done = true
             driver.command_result = CommandResult.{code = status >> 24, slot = control >> 24}
         }
@@ -751,13 +756,12 @@ take_events :: fn(driver : ptr[mut Driver]) {
             }
         }
     }
-    if taken {
-        write_u64(
-            driver.runtime_registers,
-            ERDP,
-            (driver.events.device + cast[u64](driver.events.index) * TRB_BYTES) | ERDP_BUSY
-        )
-    }
+    // Always, EHB with it: events a polling loop took left it set, and while it's set the interrupter raises nothing
+    write_u64(
+        driver.runtime_registers,
+        ERDP,
+        (driver.events.device + cast[u64](driver.events.index) * TRB_BYTES) | ERDP_BUSY
+    )
 }
 
 /**
@@ -766,11 +770,12 @@ take_events :: fn(driver : ptr[mut Driver]) {
  * @param driver The driver, whose command ring takes it.
  * @param parameter The command TRB's parameter.
  * @param control Its control: its type, slot and the rest, without its cycle bit.
- * @return What it completed with; null if it didn't within COMMAND_WAIT.
+ * @return What it completed with; null if it didn't within COMMAND_WAIT, when its late completion, if one comes, is
+ *     passed over, as only the command waited for's is taken.
  */
 command :: fn(driver : ptr[mut Driver], parameter : u64, control : u32) -> CommandResult? {
     driver.command_done = false
-    _ = enqueue(&driver.commands, parameter, 0, control)
+    driver.command_trb = enqueue(&driver.commands, parameter, 0, control)
     ring_doorbell(driver, 0, 0)
     deadline :: (slop_os.clock_monotonic() or_else 0) + COMMAND_WAIT
     loop {
@@ -934,7 +939,14 @@ check_port :: fn(driver : ptr[mut Driver], port : u32) {
         }
         return void
     }
-    if there is_some {
+    // Connected still, but a connection changed: the device there was unplugged and another plugged in
+    if there is_some && status & PORT_CONNECT_CHANGE != 0 {
+        match there {
+            case Some(index) => detach(driver, index)
+            case None => {}
+        }
+    }
+    else if there is_some {
         return void
     }
     usb3 :: port <= MAX_PORTS && (driver.usb3 >> cast[u64](port - 1)) & 1 != 0
@@ -1092,9 +1104,29 @@ enumerate :: fn(
         return null
     }
     bytes :: DEVICE_PAGES * PAGE
-    memory :: slop_os.dma_memory_create(driver.domain, startup.budget, bytes, 0) or_return null
-    at :: map_memory(memory, bytes) or_return null
-    device_address :: slop_os.memory_device_address(memory) or_return null
+    disable :: (TRB_DISABLE_SLOT << 10) | (enabled.slot << 24)
+    memory :: match slop_os.dma_memory_create(driver.domain, startup.budget, bytes, 0) {
+        case Ok(made) => made
+        case Error(error) => {
+            _ = command(driver, 0, disable)
+            return null
+        }
+    }
+    at := cast[u64](0)
+    device_address := cast[u64](0)
+    match map_memory(memory, bytes) {
+        case Some(mapped) => at = mapped
+        case None => {}
+    }
+    match slop_os.memory_device_address(memory) {
+        case Ok(address) => device_address = address
+        case Error(error) => {}
+    }
+    if at == 0 || device_address == 0 {
+        _ = command(driver, 0, disable)
+        _ = slop_os.handle_close(cast[slop_os.Handle](memory))
+        return null
+    }
     driver.devices[index] = Device.{
         used = true,
         slot = enabled.slot,
@@ -1290,6 +1322,10 @@ parse_configuration :: fn(device : ptr[mut Device], data : u64, bytes : u32) {
             if slot >= device.endpoints.count {
                 break
             }
+            if address & 0xf == 0 {
+                at += length
+                continue
+            }
             device.endpoints[slot] = Endpoint.{
                 dci = cast[u32](address & 0xf) * 2 + (if address & 0x80 != 0 { cast[u32](1) } else { cast[u32](0) }),
                 address = address,
@@ -1361,7 +1397,14 @@ check_hub_port :: fn(driver : ptr[mut Driver], hub : usize, port : u32) {
         }
         return void
     }
-    if there is_some {
+    // Connected still, but its connection changed (C_PORT_CONNECTION): another device is there now
+    if there is_some && (status >> 16) & HUB_CONNECTED != 0 {
+        match there {
+            case Some(index) => detach(driver, index)
+            case None => {}
+        }
+    }
+    else if there is_some {
         return void
     }
     _ = own_control(driver, hub, 0x23, REQUEST_SET_FEATURE, HUB_PORT_RESET, cast[u16](port), 0)
@@ -1501,11 +1544,11 @@ release_device :: fn(driver : ptr[mut Driver], index : usize) {
         return void
     }
     device :: &driver.devices[index]
-    intrinsics.volatile_store_u64(cast[ptr[mut u64]](driver.memory_at + DCBAA_PAGE * PAGE + cast[u64](device.slot) * 8), 0)
     if !device.gone {
         _ = command(driver, 0, (TRB_DISABLE_SLOT << 10) | (device.slot << 24))
         device.gone = true
     }
+    intrinsics.volatile_store_u64(cast[ptr[mut u64]](driver.memory_at + DCBAA_PAGE * PAGE + cast[u64](device.slot) * 8), 0)
     for i in 0..<device.interfaces.count {
         each :: &device.interfaces[i]
         if cast[slop_os.Handle](each.peer) != slop_os.NO_HANDLE {
@@ -1663,6 +1706,25 @@ write_endpoint_context :: fn(driver : ptr[Driver], device : ptr[Device], endpoin
 }
 
 /**
+ * Stop an endpoint's transfer in flight and move its dequeue pointer past what was on its ring (Stop Endpoint, then
+ * Set TR Dequeue Pointer, §4.6.9): the transfer is dropped unanswered, its event, if one comes, passed over.
+ *
+ * @param driver The driver.
+ * @param index The device's index.
+ * @param endpoint The endpoint, busy.
+ */
+abort_transfer :: fn(driver : ptr[mut Driver], index : usize, endpoint : ptr[mut Endpoint]) {
+    if index >= driver.devices.count {
+        return void
+    }
+    slot :: driver.devices[index].slot
+    _ = command(driver, 0, (TRB_STOP_ENDPOINT << 10) | (endpoint.dci << 16) | (slot << 24))
+    _ = command(driver, dequeue_of(&endpoint.ring), (TRB_SET_DEQUEUE << 10) | (endpoint.dci << 16) | (slot << 24))
+    endpoint.busy = false
+    endpoint.halted = false
+}
+
+/**
  * Reset an endpoint the controller halted, and move its dequeue pointer past what was on its ring (§4.6.8, §4.6.10).
  *
  * @param driver The driver.
@@ -1707,7 +1769,7 @@ put_data :: fn(endpoint : ptr[mut Endpoint], first_kind : u32, first_flags : u32
         return void
     }
     endpoint.first_trb = enqueue(&endpoint.ring, data, first, (first_kind << 10) | first_flags | TRB_CHAIN | TRB_SHORT)
-    _ = enqueue(&endpoint.ring, boundary, bytes - first, (TRB_NORMAL << 10) | TRB_INTERRUPT | TRB_SHORT)
+    _ = enqueue(&endpoint.ring, boundary, bytes - first, (TRB_NORMAL << 10) | TRB_INTERRUPT | TRB_SHORT, true)
 }
 
 /**
@@ -1800,6 +1862,9 @@ own_control :: fn(
             break
         }
         if (slop_os.clock_monotonic() or_else deadline) >= deadline {
+            // Stopped, so the default endpoint isn't busy for good
+            abort_transfer(driver, index, &device.control)
+            device.control.own = false
             return null
         }
         intrinsics.spin_hint()
@@ -1861,6 +1926,22 @@ set_client :: fn(driver : ptr[mut Driver], index : usize, kind : ClientKind, dev
 drop :: fn(driver : ptr[mut Driver], index : usize) {
     if index >= driver.client_state.count {
         return void
+    }
+    // Its transfers in flight stopped, so its endpoints are free for the next client, as a restarted class driver
+    for device in 0..<driver.devices.count {
+        if !driver.devices[device].used || driver.devices[device].gone {
+            continue
+        }
+        if driver.devices[device].control.busy && !driver.devices[device].control.own
+            && driver.devices[device].control.client == index {
+            abort_transfer(driver, device, &driver.devices[device].control)
+        }
+        for i in 0..<driver.devices[device].endpoints.count {
+            if driver.devices[device].endpoints[i].busy && !driver.devices[device].endpoints[i].own
+                && driver.devices[device].endpoints[i].client == index {
+                abort_transfer(driver, device, &driver.devices[device].endpoints[i])
+            }
+        }
     }
     service_kit.drop_client(&driver.clients, index)
     buffer :: driver.client_state[index].buffer

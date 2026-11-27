@@ -48,8 +48,12 @@ TABLE_BYTES : u64 : 256
 /** For a reset, or the firmware to let it go: 1 s, 2 s. */
 RESET_WAIT : u64 : 1_000_000_000
 HANDOFF_WAIT : u64 : 2_000_000_000
-/** For a port's link to come up: 10 ms, as a device there answers COMRESET within it. */
+/**
+ * For a port to show a device (DET 1 or 3): 10 ms, as a device there answers COMRESET within it; then, for one that
+ * does, for its link to come up (DET 3), which a real PHY may take up to a second for.
+ */
 LINK_WAIT : u64 : 10_000_000
+LINK_UP_WAIT : u64 : 1_000_000_000
 /** For a disk to be ready, which may be spinning up: 5 s. */
 READY_WAIT : u64 : 5_000_000_000
 /** For a port's command engine or FIS receive to stop: 500 ms, as §10.1.2 says. */
@@ -460,8 +464,12 @@ find_disk :: fn(driver : ptr[mut Driver], capabilities : u32) -> u32 {
         if capabilities & CAP_STAGGERED != 0 {
             write_port(driver, PORT_CMD, read_port(driver, PORT_CMD) | CMD_SPIN_UP | CMD_POWER_ON)
         }
+        // A link up at once, or a device seen (DET 1) given longer for its link; nothing there passed over quickly
         if !wait_for(driver.port_registers + PORT_SSTS, 0xf, DET_PRESENT, LINK_WAIT) {
-            continue
+            if read_port(driver, PORT_SSTS) & 0xf == 0
+                || !wait_for(driver.port_registers + PORT_SSTS, 0xf, DET_PRESENT, LINK_UP_WAIT) {
+                continue
+            }
         }
         write_port(driver, PORT_CLB, cast[u32](driver.memory_device + COMMAND_LIST))
         write_port(driver, PORT_CLBU, cast[u32]((driver.memory_device + COMMAND_LIST) >> 32))
@@ -902,29 +910,32 @@ finish :: fn(driver : ptr[mut Driver]) {
 }
 
 /**
- * Fail everything in flight after an error, and start the port again (§6.2.2): its engine stopped, its errors
- * cleared, a COMRESET sent if the disk's still busy, and its engine started; what waits is issued after.
+ * Fail everything in flight after an error, and start the port again (§6.2.2): its engine stopped, then what was in
+ * flight failed, its errors cleared, a COMRESET sent, and its engine started; what waits is issued after.
  *
  * @param driver The driver, whose issued slots are answered DeviceError and freed.
  */
 recover :: fn(driver : ptr[mut Driver]) {
+    // The engine stopped first, so nothing it was doing still writes a buffer that completing a slot lets go
+    write_port(driver, PORT_CMD, read_port(driver, PORT_CMD) & ~CMD_START)
+    _ = wait_for(driver.port_registers + PORT_CMD, CMD_RUNNING, 0, STOP_WAIT)
     for i in 0..<driver.slots.count {
         if driver.slots[i].used && driver.slots[i].issued {
             complete(driver, i, .DeviceError)
         }
     }
-    write_port(driver, PORT_CMD, read_port(driver, PORT_CMD) & ~CMD_START)
-    _ = wait_for(driver.port_registers + PORT_CMD, CMD_RUNNING, 0, STOP_WAIT)
     write_port(driver, PORT_SERR, ~cast[u32](0))
     write_port(driver, PORT_IS, ~cast[u32](0))
-    if read_port(driver, PORT_TFD) & (TFD_BUSY | TFD_REQUEST) != 0 {
-        control :: read_port(driver, PORT_SCTL) & ~cast[u32](0xf)
-        write_port(driver, PORT_SCTL, control | 1)
-        pause(COMRESET_HOLD)
-        write_port(driver, PORT_SCTL, control)
-        _ = wait_for(driver.port_registers + PORT_SSTS, 0xf, DET_PRESENT, LINK_WAIT)
-        write_port(driver, PORT_SERR, ~cast[u32](0))
-    }
+    /*
+     * A COMRESET always: after a queued command's error the disk refuses every queued command until its NCQ error log
+     * is read (READ LOG EXT page 10h), which the reset clears too, as it does a disk still busy
+     */
+    control :: read_port(driver, PORT_SCTL) & ~cast[u32](0xf)
+    write_port(driver, PORT_SCTL, control | 1)
+    pause(COMRESET_HOLD)
+    write_port(driver, PORT_SCTL, control)
+    _ = wait_for(driver.port_registers + PORT_SSTS, 0xf, DET_PRESENT, LINK_UP_WAIT)
+    write_port(driver, PORT_SERR, ~cast[u32](0))
     if !start_port(driver) {
         runtime.log_info("port % didn't start again after an error", driver.port_index)
     }

@@ -552,14 +552,14 @@ COMMAND_INTX_DISABLE : u16 : 1 << 10
  * @param config Where the function's configuration space is mapped, writable.
  * @param address The message's address, as the kernel gave it (slop_os.irq_message).
  * @param data The message's data, of which MSI sends the low 16 bits.
- * @return False, nothing written, if the function has no MSI, or address is past 4 GiB and its MSI takes only 32-bit
- *     addresses.
+ * @return False, nothing written, if the function has no MSI, address is past 4 GiB and its MSI takes only 32-bit
+ *     addresses, or data is past MSI's 16 bits.
  */
 enable_msi :: fn(config : u64, address : u64, data : u32) -> bool {
     capability :: find_capability(config, CAPABILITY_MSI) or_return false
     control :: read_u16(config, capability + 2)
     wide :: control & MSI_64_BIT != 0
-    if !wide && address >> 32 != 0 {
+    if (!wide && address >> 32 != 0) || data > 0xffff {
         return false
     }
     write_u32(config, capability + 4, cast[u32](address))

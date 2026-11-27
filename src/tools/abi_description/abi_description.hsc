@@ -487,21 +487,50 @@ line_with_key :: fn(lines : string[..], key : string) -> string {
 }
 
 /**
- * Tell whether a changed line is a size-prefixed struct growing: its first line's size, where it has a size field
- * in both descriptions (size_prefixed); its old fields' own lines are compared as any others are.
+ * Tell whether a changed line is a struct growing as 0025 allows: a size-prefixed struct's first line, where it has a
+ * size field in both descriptions (size_prefixed), or the call table's (Syscalls), which grows by the calls appended;
+ * its size larger, never smaller. Its old fields' own lines are compared as any others are.
  *
  * @param old The old description.
  * @param new The new one.
  * @param was The changed line, as it was.
  * @param now The line now.
- * @return True if the change is a size-prefixed struct's size growing.
+ * @return True if the change is such a struct's size growing.
  */
 grown :: fn(old #escaping : string, new #escaping : string, was : string, now : string) -> bool {
-    if !strings.contains(was, " : struct size ") {
+    if !strings.contains(was, " : struct size ") || !strings.contains(now, " : struct size ") {
+        return false
+    }
+    if size_of_line(now) <= size_of_line(was) {
         return false
     }
     name :: strings.slice(was, 5, strings.find(was, " : struct") or_else 5)
+    if name == CALL_TABLE {
+        return true
+    }
     return size_prefixed(lines_of(old), name) && size_prefixed(lines_of(new), name)
+}
+
+/** The struct whose members are the system calls, which grows by a field for each call appended. */
+CALL_TABLE :: "Syscalls"
+
+/**
+ * Read a struct's size from its first line, "type <name> : struct size <bytes> align <bytes>".
+ *
+ * @param text The line.
+ * @return The size; 0 if the line has none that reads.
+ */
+size_of_line :: fn(text : string) -> u64 {
+    at :: (strings.find(text, " : struct size ") or_return 0) + 15
+    size := cast[u64](0)
+    for i in at..<text.count {
+        digit :: cast[u8](text[i])
+        if digit < 48 || digit > 57 {
+            break
+        }
+        size = size * 10 + cast[u64](digit - 48)
+    }
+    return size
 }
 
 /**
@@ -523,8 +552,9 @@ size_prefixed :: fn(lines : string[..], name : string) -> bool {
 }
 
 /**
- * Tell whether an added line may be added after v1: a call, a constant, a type, an enum member, or a field of a
- * size-prefixed struct that the old description had.
+ * Tell whether an added line may be added after v1: a call (and the call table's field for it), a constant, a type,
+ * an enum member, a field of a size-prefixed struct that the old description had, or a variant of a new union; not a
+ * variant of a union the old one had.
  *
  * @param before_lines The old description's lines.
  * @param added The added line.
@@ -537,13 +567,19 @@ added_allowed :: fn(before_lines : string[..], added : string) -> bool {
     if strings.contains(added, " member ") {
         return true
     }
+    // The call table's field of a call appended: the call's own line says whether its number was free
     if strings.contains(added, " field ") {
         name :: strings.slice(added, 5, strings.find(added, " field ") or_else 5)
-        if size_prefixed(before_lines, name) {
+        if name == CALL_TABLE || size_prefixed(before_lines, name) {
             return true
         }
         return line_with_key(before_lines, line("type %", name)) == ""
     }
-    // A new type's own line, or a variant of a new union
+    // A variant of a union the old description had, whose old readers don't know its tag
+    if strings.contains(added, " variant ") {
+        name :: strings.slice(added, 5, strings.find(added, " variant ") or_else 5)
+        return line_with_key(before_lines, line("type %", name)) == ""
+    }
+    // A new type's own line
     return true
 }
