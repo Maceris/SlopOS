@@ -713,7 +713,7 @@ default_mss :: fn(stack : ptr[Stack], remote : IpAddress) -> u32 {
  */
 has_source :: fn(stack : ptr[Stack], remote : IpAddress) -> bool {
     return match remote {
-        case V4(_) => !is_zero_ipv4(stack.ipv4)
+        case V4(address) => !is_zero_ipv4(source_v4_for(stack, address))
         case V6(address) => !is_zero_ipv6(source_for(stack, address))
     }
 }
@@ -1335,7 +1335,9 @@ send_tcp :: fn(stack : ptr[mut Stack], remote : IpAddress, segment : mut u8[]) {
             put_u16(
                 segment,
                 16,
-                checksum_finish(pseudo_sum_v4(stack.ipv4, to, PROTOCOL_TCP, segment.count) + checksum_add(0, segment))
+                checksum_finish(
+                    pseudo_sum_v4(source_v4_for(stack, to), to, PROTOCOL_TCP, segment.count) + checksum_add(0, segment)
+                )
             )
             _ = send_ipv4(stack, to, PROTOCOL_TCP, segment)
         }

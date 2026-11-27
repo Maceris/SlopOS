@@ -36,7 +36,8 @@ typedef struct {
 /*
  * Wait until a descriptor below count in readable is ready to read, or in writable to write, or one in errors has
  * failed, or the timeout (NULL for for ever), as POSIX's select; each set's left with those that are. It answers how
- * many bits are left set; -1 with errno EINVAL for a count over FD_SETSIZE or a negative timeout.
+ * many bits are left set, 0 only once the timeout has passed; -1 with errno EINVAL for a count over FD_SETSIZE or a
+ * negative timeout, EBADF for a descriptor that isn't open. One that hung up is ready to read and to write.
  */
 int select(int count, fd_set *readable, fd_set *writable, fd_set *errors, struct timeval *timeout);
 

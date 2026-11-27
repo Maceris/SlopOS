@@ -2148,6 +2148,7 @@ platform_of :: fn(
  * @error BadAddress The registers aren't page-aligned, or are in the kernel's memory.
  * @error TooManyControllers Every controller the kernel takes is registered.
  * @error OutOfMemory The registers couldn't be mapped.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES.
  */
 sys_controller_register :: fn(
     thread : ptr[mut Thread],
@@ -2197,7 +2198,7 @@ sys_controller_register :: fn(
  * @error InvalidHandle The platform or the budget isn't a handle in the caller's table.
  * @error ObjectGone The platform or the budget was destroyed, or the caller's process is being destroyed.
  * @error WrongKind A handle of another kind.
- * @error MissingRight The budget lacks RIGHT_BUDGET_CHARGE.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES, or the budget RIGHT_BUDGET_CHARGE.
  * @error NoController Wired lines' interrupts are blocked (translation.hsc), as a forged message's would be.
  * @error NoSuchController No controller has that number.
  * @error NoSuchLine The controller has no such line.
@@ -2268,7 +2269,7 @@ sys_irq_ack :: fn(thread : ptr[mut Thread], irq : slop_os.Irq) -> Result[void, s
  * @error InvalidHandle The platform or the budget isn't a handle in the caller's table.
  * @error ObjectGone The platform or the budget was destroyed, or the caller's process is being destroyed.
  * @error WrongKind A handle of another kind.
- * @error MissingRight The budget lacks RIGHT_BUDGET_CHARGE.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES, or the budget RIGHT_BUDGET_CHARGE.
  * @error InvalidSize Not a whole number of pages, or a cache mode that isn't one.
  * @error BadAddress Not page-aligned, or memory the kernel owns.
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
@@ -2321,7 +2322,7 @@ sys_memory_create_physical :: fn(
  * @error InvalidHandle The platform or the budget isn't a handle in the caller's table.
  * @error ObjectGone The platform or the budget was destroyed, or the caller's process is being destroyed.
  * @error WrongKind A handle of another kind.
- * @error MissingRight The budget lacks RIGHT_BUDGET_CHARGE.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES, or the budget RIGHT_BUDGET_CHARGE.
  * @error BadAddress The configuration space isn't page-aligned, or is in the kernel's memory.
  * @error DeviceExists Another Device has that address, or that MSI source where the controller uses sources.
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
@@ -2361,6 +2362,7 @@ sys_device_create :: fn(
  *     behind one.
  * @error OutOfMemory No domain ID or translation table could be had.
  * @error BudgetExceeded The domain's budget can't pay for its translation tables.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES.
  */
 sys_device_attach :: fn(
     thread : ptr[mut Thread],
@@ -2497,7 +2499,7 @@ sys_irq_set_cpu :: fn(thread : ptr[mut Thread], irq : slop_os.Irq, cpu : u32) ->
  * @error InvalidHandle The platform or the budget isn't a handle in the caller's table.
  * @error ObjectGone The platform or the budget was destroyed, or the caller's process is being destroyed.
  * @error WrongKind A handle of another kind.
- * @error MissingRight The budget lacks RIGHT_BUDGET_CHARGE.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES, or the budget RIGHT_BUDGET_CHARGE.
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
@@ -2604,6 +2606,7 @@ sys_memory_device_address :: fn(thread : ptr[mut Thread], memory : slop_os.Memor
  * @error InvalidSize The registers is bigger than an IOMMU's registers can be, or count and stream are out of range.
  * @error OutOfMemory The registers couldn't be mapped.
  * @error TooManyIommus Every IOMMU the kernel takes is registered, or every range of requester IDs one covers.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES.
  */
 sys_iommu_register :: fn(
     thread : ptr[mut Thread],
@@ -2647,6 +2650,7 @@ sys_iommu_register :: fn(
  * @error ObjectGone The platform was destroyed.
  * @error WrongKind Not the platform's handle.
  * @error InvalidArgument A value out of its range, or an architecture without I/O ports or that turns off by itself.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_POWER.
  */
 sys_power_set_off :: fn(
     thread : ptr[mut Thread],
@@ -2671,6 +2675,7 @@ sys_power_set_off :: fn(
  * @error ObjectGone The platform was destroyed.
  * @error WrongKind Not the platform's handle.
  * @error InvalidArgument A value out of its range, or an architecture without I/O ports.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_POWER.
  */
 sys_power_set_reset :: fn(
     thread : ptr[mut Thread],
@@ -2694,6 +2699,7 @@ sys_power_set_reset :: fn(
  * @error WrongKind Not the platform's handle.
  * @error InvalidArgument Not one of PowerAction's values.
  * @error NoPowerOff Off, on a machine the kernel can't turn off yet.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_POWER.
  */
 sys_power_end_with :: fn(
     thread : ptr[mut Thread],
@@ -2716,6 +2722,7 @@ sys_power_end_with :: fn(
  * @error ObjectGone The platform was destroyed.
  * @error WrongKind Not the platform's handle.
  * @error NoSuchController No controller is registered with that number.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES.
  */
 sys_controller_set_source :: fn(
     thread : ptr[mut Thread],
@@ -3510,7 +3517,8 @@ sys_cpu_budget_info :: fn(
  * @param thread The calling thread, into whose memory the set is written.
  * @param budget The budget; no right is needed.
  * @param cpus Where the set goes, CPU n bit n % 64 of word n / 64: the kernel's one word, those of its CPUs the
- *     budget has, then zeros in any words past it.
+ *     budget has, then zeros in any words past it, up to CPU_SET_WORDS in all; words past those aren't written, so
+ *     however long a buffer the caller gives, the call does one bounded copy.
  * @return 1, the words the kernel's set has.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The budget was destroyed.
@@ -3531,15 +3539,20 @@ sys_cpu_budget_cpus :: fn(
     )?
     count :: kernel.cpus.count
     known :: if count >= 64 { ~cast[u64](0) } else { (cast[u64](1) << cast[u64](count)) - 1 }
-    zero :: cast[u64](0)
-    for i in 0..<cpus.count {
-        word :: if i == 0 { cpu_budget_cpus_of(kernel, cast[ptr[CpuBudget]](object)) & known } else { zero }
-        if !copy_to_user(kernel, thread.space, cpus.address + i * 8, cast[u64](&word), 8) {
-            return .Error(.BadBuffer)
-        }
+    words : u64[CPU_SET_WORDS]
+    words[0] = cpu_budget_cpus_of(kernel, cast[ptr[CpuBudget]](object)) & known
+    written :: if cpus.count < cast[u64](CPU_SET_WORDS) { cpus.count } else { cast[u64](CPU_SET_WORDS) }
+    if !copy_to_user(kernel, thread.space, cpus.address, cast[u64](&words[0]), written * 8) {
+        return .Error(.BadBuffer)
     }
     return .Ok(1)
 }
+
+/**
+ * The most words of a set of CPUs cpu_budget_cpus writes, the kernel's and the zeros past them: 64, a set of 4096
+ * CPUs, so a buffer sized for a later kernel's set is written whole while no buffer makes the call loop.
+ */
+CPU_SET_WORDS :: 64
 
 /**
  * Put a process, and every thread of its, now and later, on a CPU budget.
@@ -3624,7 +3637,7 @@ sys_thread_use_cpu_budget :: fn(
  * @error InvalidHandle The platform or the budget isn't a handle in the caller's table.
  * @error ObjectGone The platform or the budget was destroyed, or the caller's process is being destroyed.
  * @error WrongKind A handle of another kind.
- * @error MissingRight The budget lacks RIGHT_BUDGET_CHARGE.
+ * @error MissingRight The platform's handle lacks slop_os.RIGHT_PLATFORM_DEVICES, or the budget RIGHT_BUDGET_CHARGE.
  * @error InvalidArgument Ports past the last one, none, or an architecture without ports.
  * @error BudgetExceeded The budget can't pay for it, or the caller's for a page of its table.
  * @error OutOfMemory No slot for it, or no frame for a page of the caller's table.

@@ -259,7 +259,8 @@ receive_udp4 :: fn(stack : ptr[mut Stack], source : Ipv4, destination : Ipv4, da
     if u16_at(whole, 0) == DHCP_SERVER_PORT && u16_at(whole, 2) == DHCP_CLIENT_PORT {
         receive_dhcp(stack, part(whole, UDP_HEADER, length))
     }
-    else if !is_zero_ipv4(stack.ipv4) && same_ipv4(destination, stack.ipv4) {
+    // To the interface's address, or to a loopback one, which only the stack's own packets have (receive_looped_v4)
+    else if (!is_zero_ipv4(stack.ipv4) && same_ipv4(destination, stack.ipv4)) || is_loopback_v4(destination) {
         deliver_datagram(stack, .V4(source), u16_at(whole, 0), u16_at(whole, 2), part(whole, UDP_HEADER, length))
     }
 }
@@ -302,7 +303,8 @@ send_udp4 :: fn(stack : ptr[mut Stack], to : Ipv4, from_port : u16, to_port : u1
     put_u16(bytes, 2, to_port)
     put_u16(bytes, 4, cast[u16](length))
     put_bytes(bytes, UDP_HEADER, payload)
-    checksum := checksum_finish(pseudo_sum_v4(stack.ipv4, to, PROTOCOL_UDP, length) + checksum_add(0, bytes))
+    from :: source_v4_for(stack, to)
+    checksum := checksum_finish(pseudo_sum_v4(from, to, PROTOCOL_UDP, length) + checksum_add(0, bytes))
     if checksum == 0 {
         checksum = 0xffff
     }

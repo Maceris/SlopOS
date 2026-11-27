@@ -167,7 +167,8 @@ attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
 }
 
 /**
- * Suspend every thread of an attached program, one of them the one the debugger looks at.
+ * Suspend every thread of an attached program, one of them the one the debugger looks at, however many it has:
+ * process_threads is asked a page at a time, each past the last ID the page before gave, while it says there are more.
  *
  * @param session The session, whose thread becomes the one wanted, or the first suspended, and which is marked
  *     suspended.
@@ -176,41 +177,59 @@ attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
  */
 suspend_all :: fn(session : ptr[mut Debugging], wanted : u64 = 0) -> u32 {
     process :: session.call.launched.process
-    ids : u64[64]
-    count :: slop_os.process_threads(process, 0, ids) or_else 0
+    ids : u64[THREAD_PAGE]
     suspended : u32 = 0
-    for id, i in ids {
-        if cast[u32](i) >= count {
+    from := cast[u64](0)
+    loop {
+        count :: slop_os.process_threads(process, from, ids) or_else 0
+        for id, i in ids {
+            if cast[u32](i) >= count {
+                break
+            }
+            if slop_os.thread_suspend(process, id) is_ok {
+                if suspended == 0 || id == wanted {
+                    session.thread = id
+                    // Not a stop, but where and the rest read the thread from one
+                    session.stop = slop_os.StopInfo.{thread = id}
+                }
+                suspended += 1
+            }
+        }
+        if count <= cast[u32](ids.count) {
             break
         }
-        if slop_os.thread_suspend(process, id) is_ok {
-            if suspended == 0 || id == wanted {
-                session.thread = id
-                // Not a stop, but where and the rest read the thread from one
-                session.stop = slop_os.StopInfo.{thread = id}
-            }
-            suspended += 1
-        }
+        from = ids[ids.count - 1] + 1
     }
     session.suspended = suspended > 0
     session.at_stop = false
     return suspended
 }
 
+/** How many thread IDs suspend_all and resume_all ask process_threads for at once: 64. */
+THREAD_PAGE :: 64
+
 /**
- * Resume every thread of an attached program that's suspended; those that aren't are left as they are.
+ * Resume every thread of an attached program that's suspended, a page of IDs at a time as suspend_all asks for
+ * them; those that aren't are left as they are.
  *
  * @param session The session, no longer marked suspended.
  */
 resume_all :: fn(session : ptr[mut Debugging]) {
     process :: session.call.launched.process
-    ids : u64[64]
-    count :: slop_os.process_threads(process, 0, ids) or_else 0
-    for id, i in ids {
-        if cast[u32](i) >= count {
+    ids : u64[THREAD_PAGE]
+    from := cast[u64](0)
+    loop {
+        count :: slop_os.process_threads(process, from, ids) or_else 0
+        for id, i in ids {
+            if cast[u32](i) >= count {
+                break
+            }
+            _ = slop_os.thread_resume(process, id)
+        }
+        if count <= cast[u32](ids.count) {
             break
         }
-        _ = slop_os.thread_resume(process, id)
+        from = ids[ids.count - 1] + 1
     }
     session.suspended = false
 }

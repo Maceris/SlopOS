@@ -520,6 +520,50 @@ exchanges_datagrams #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     return .Ok
 }
 
+/**
+ * The loopback interface: datagrams one stack sends to 127.0.0.1, ::1 or its own address come back to it, with no
+ * device, from that address; none of them goes on the link.
+ */
+loops_datagrams_back #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    pair :: make_pair(9, Faults.{})
+    defer runtime.free(pair)
+    stack :: &pair.a
+    server :: net_stack.udp_open(stack, 9100) or_else 0
+    client :: net_stack.udp_open(stack, 0) or_else 0
+    testing.expect(t, server != 0 && client != 0, "the sockets open")
+    loopback_v6 := net_stack.Ipv6.{}
+    loopback_v6.bytes[15] = 1
+    for family in 0..<3 {
+        to :: match family {
+            case 0 => net_stack.IpAddress.V4(net_stack.Ipv4.{bytes = u8.[127, 0, 0, 1]})
+            case 1 => net_stack.IpAddress.V4(FIRST_V4)
+            case _ => net_stack.IpAddress.V6(loopback_v6)
+        }
+        // What the stack sent on starting, its solicitations, taken first, so the link's empty
+        frame : u8[net_stack.MAX_FRAME]
+        loop {
+            _ = net_stack.take_frame(stack, view_of(&frame[0], frame.count)) or_break
+        }
+        testing.expect(t, net_stack.udp_send(stack, client, to, 9100, string_bytes("to myself")), "sent to itself")
+        testing.expect(t, net_stack.take_frame(stack, view_of(&frame[0], frame.count)) is_none, "nothing on the link")
+        testing.expect(t, net_stack.deliver_looped(stack, 0), "taken back")
+        testing.expect_eq(t, net_stack.take_ready(stack) or_else 0, server, "the server's socket is ready")
+        into : u8[net_stack.MAX_DATAGRAM]
+        got :: net_stack.take_datagram(stack, server, view_of(&into[0], into.count)) or_else net_stack.DatagramFrom.{}
+        testing.expect_eq(t, string_of(&into[0], got.length), "to myself", "the datagram arrives whole")
+        testing.expect(t, net_stack.same_address(got.from, to), "from the address it was sent to")
+        testing.expect_eq(t, got.from_port, net_stack.udp_port(stack, client), "from the client's port")
+        testing.expect(t, net_stack.udp_send(stack, server, got.from, got.from_port, string_bytes("back")), "answered")
+        _ = net_stack.deliver_looped(stack, 0)
+        _ = net_stack.take_ready(stack)
+        answer :: net_stack.take_datagram(stack, client, view_of(&into[0], into.count))
+            or_else net_stack.DatagramFrom.{}
+        testing.expect_eq(t, string_of(&into[0], answer.length), "back", "the answer comes back too")
+    }
+    testing.expect(t, !net_stack.has_looped(stack), "nothing left to take back")
+    return .Ok
+}
+
 /** One data segment lost is sent again on the receiver's duplicate acknowledgements, not on the timer. */
 recovers_a_lost_segment_without_the_timer #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
     pair :: make_pair(9, Faults.{})

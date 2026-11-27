@@ -202,6 +202,25 @@ cpu_sets_empty_offline_or_outside_the_parent_are_refused #test :: fn(t : ptr[mut
     words : u64[3] = u64.[7, 7, 7]
     testing.expect_eq(t, slop_os.cpu_budget_cpus(budget, words) or_else 0, 1, "the kernel's set is one word")
     testing.expect(t, words[0] == CPU_1 && words[1] == 0 && words[2] == 0, "and the words past it are zeros")
+    /*
+     * A buffer longer than the kernel writes (64 words, a set of 4096 CPUs): the zeros stop there and the rest is left
+     * as it was, so no buffer, however long, makes the call loop over it
+     */
+    long : u64[100]
+    for i in 0..<long.count {
+        long[i] = 7
+    }
+    testing.expect_eq(t, slop_os.cpu_budget_cpus(budget, long) or_else 0, 1, "a long buffer: the set is one word")
+    zeros := true
+    for i in 1..<64 {
+        zeros = zeros && long[i] == 0
+    }
+    kept := true
+    for i in 64..<long.count {
+        kept = kept && long[i] == 7
+    }
+    testing.expect(t, long[0] == CPU_1 && zeros, "its first 64 words are the set and zeros")
+    testing.expect(t, kept, "and the words past 64 aren't written")
     offline :: slop_os.cpu_budget_set_cpus(budget, u64.[cast[u64](1) << 40])
     testing.expect_error(
         t,

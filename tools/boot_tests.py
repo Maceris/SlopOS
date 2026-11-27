@@ -356,16 +356,18 @@ TESTS = [
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The libc's sockets from C (decisions/0202, 21h): test_network with c_sockets runs c/sockets.c, through BSD sockets
     # over the network service, against the same peers: a TCP echo of 64 KiB through poll and non-blocking receives, a
-    # UDP echo sent to and connected, names by getaddrinfo, calls a socket can't take; then a server on 7 through select
-    # and accept, which echoes back what this machine sends through QEMU's forward, which boot.py checks. It ends once
-    # its lines are all there (--end-when-done); test_settle is only how long the root task gives it at most, which a
-    # RISC-V run, without a power button to end it early, takes all of (RISCV_SETTLE_ROOM): the C's work takes some
-    # 40 s there
+    # UDP echo sent to and connected, names by getaddrinfo, calls a socket can't take; a client and server of its own
+    # over the loopback interface, 127.0.0.1 and ::1 (21i); then a server on 7 through select and accept, which echoes
+    # back what this machine sends through QEMU's forward, which boot.py checks. It ends once its lines are all there
+    # (--end-when-done); test_settle is only how long the root task gives it at most, which a RISC-V run, without a
+    # power button to end it early, takes all of (RISCV_SETTLE_ROOM): the C's work takes some 40 s there
     ("reaches peers and serves one through the libc's sockets, from C", 7, [WITH_PROGRAMS, "--network-peers",
         "--command-line=test_exit test_services test_settle=60 test_network c_sockets tcp_echo={tcp_echo} udp_echo={udp_echo} dns=10.0.2.2:{dns}",
         "--expect-line=[user] test_network: TCP echo of 65536 bytes from 10.0.2.2:{tcp_echo}, whole",
         "--expect-line=[user] test_network: UDP echo from 10.0.2.2:{udp_echo}, both ways",
         "--expect-line=[user] test_network: peer.slopos.test reached by name: yes; missing.slopos.test: Name or service not known",
+        "--expect-line=[user] test_network: loopback over 127.0.0.1: both ways",
+        "--expect-line=[user] test_network: loopback over ::1: both ways",
         "--expect-line=[user] test_network: listening on 7",
         "--expect-line=[user] test_network: echoed 40000 bytes back to 10.0.2.2",
         "--expect-line=[user] test_network: sockets: every check passed",
@@ -580,8 +582,10 @@ TESTS = [
     # USB devices plugged in after start-up (decisions/0202, 21d): a keyboard reaches the input service, new, so its code
     # is typed on it before what it types goes on; unplugged, its driver's let go of and its place in the seat freed; and
     # plugged in again, it's new again in the same place, its driver started in the entry the last one left
+    # (test_connector_room=1: with room for one connector past start-up's, the second takes the place the first freed)
     ("plugs in, types on, unplugs and plugs in again a USB keyboard", 7, [WITH_PROGRAMS, "--timeout=240",
-        "--command-line=test_exit test_services test_settle=60", "--end-when-done", "--input-bus=usb-later",
+        "--command-line=test_exit test_services test_settle=60 test_connector_room=1", "--end-when-done",
+        "--input-bus=usb-later",
         "--hotplug=wait:root task: the supervisor started all", "--hotplug=add:keyboard",
         "--hotplug=wait:echo: read after the code", "--hotplug=del:keyboard", "--hotplug=wait:input: keyboard 0 is gone",
         "--hotplug=add:keyboard", "--hotplug=wait:echo: read replugged", "--hotplug=del:keyboard",
@@ -593,6 +597,9 @@ TESTS = [
         "--expect-line=[user] input: keyboard 0 accepted", "--expect-line=[user] echo: read after the code",
         "--expect-line=[user] supervisor: usb_hid for 1575:1 let go: its device is gone",
         "--expect-line=[user] input: keyboard 0 is gone", "--expect-line=[user] echo: read replugged",
+        "--expect-line-start=[user] supervisor: test_connector_room: ",
+        "--expect-line-start=[user] supervisor: connector ",
+        "--refuse-line=[user] supervisor: no room for another connector",
         "--refuse-console-line=echo: before the code", "--refuse-console-line=echo: again",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # And a USB stick: the storage manager started for it, as there was no disk before, its partitions listed and the
@@ -604,14 +611,16 @@ TESTS = [
         "--hotplug=wait:root task: the supervisor started all", "--hotplug=add:stick",
         f"--hotplug=wait:{tests_passed('disk_check', 14, 10)[len('[user] '):]}", "--hotplug=del:stick",
         "--hotplug=wait:storage_manager: disk 0 is gone", "--hotplug=add:stick",
-        "--hotplug=wait:storage_manager: disk 0 partition 2: EFI system partition",
+        "--hotplug=wait:storage_manager: a disk was plugged in and held, 1 plugged in so far",
         "--expect-line=[user] usb_storage: serving 77824 blocks, 512 bytes each",
         "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
         "--expect-line=[user] supervisor: test_hotplug: the disk plugged in is there; checking it",
         "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
         f"--expect-line={tests_passed('disk_check', 14, 10)}",
         "--expect-line-start=[user] supervisor: usb_storage for ",
-        "--expect-line=[user] storage_manager: disk 0 is gone", "--expect-line=[user] storage_manager: a disk was plugged in",
+        "--expect-line=[user] storage_manager: disk 0 is gone",
+        "--expect-line=[user] storage_manager: a disk was plugged in and held, 1 plugged in so far",
+        "--refuse-line=[user] storage_manager: a disk was plugged in, but isn't held",
         "--expect-disk-block=2049=SlopOS disk check: from the guest",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
@@ -2281,10 +2290,24 @@ KVM_TESTS = [
 
 AARCH64_MORESTACK_TESTS = aarch64_tests(MORESTACK_TESTS, own=False)
 
+def guided(test: tuple) -> tuple:
+    """
+    The fuzzer's test on a kernel with counters: its own lines, and the fuzzer saying it was guided by them, with some
+    reached; refused if it found no counters, as when coverage_take is refused it.
+    """
+    name, number, arguments = test
+    split = arguments.index("--")
+    return (name, number, [*arguments[:split],
+                           "--expect-line-start=[user] test_fuzz_syscalls: guided by the kernel's coverage, ",
+                           "--refuse-line=[user] test_fuzz_syscalls: the kernel has no coverage counters, "
+                           "so every input is drawn afresh",
+                           *arguments[split:]])
+
+
 # The system call fuzzer on a kernel with coverage counters (decisions/0186, He), which guide it; on the others it
 # draws every input afresh (TESTS)
 COVERAGE_TESTS = [
-    program_test("fuzzes the system calls, guided by the kernel's coverage", "test_fuzz_syscalls", 1),
+    guided(program_test("fuzzes the system calls, guided by the kernel's coverage", "test_fuzz_syscalls", 1)),
 ]
 AARCH64_COVERAGE_TESTS = aarch64_tests(COVERAGE_TESTS, own=False)
 

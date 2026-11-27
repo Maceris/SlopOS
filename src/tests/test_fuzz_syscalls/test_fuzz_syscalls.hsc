@@ -452,6 +452,17 @@ survives_calls_drawn_from_the_abi_table #test :: fn(t : ptr[mut testing.T]) -> t
     }
     report_progress(&fuzzer)
     testing.expect_gt(t, fuzzer.totals.calls, 0, "calls were made")
+    // Guided, with counters: some of them reached, so the counters the kernel gave are what the calls ran
+    if fuzzer.counters.count > 0 {
+        testing.expect_gt(t, fuzzer.totals.reached, 0, "the kernel's counters were reached")
+        log_line.write(
+            given.log,
+            "%: guided by the kernel's coverage, % of its % counters reached",
+            NAME,
+            fuzzer.totals.reached,
+            fuzzer.counters.count
+        )
+    }
     return .Ok
 }
 

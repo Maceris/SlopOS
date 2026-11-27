@@ -487,44 +487,80 @@ int select(int count, fd_set *readable, fd_set *writable, fd_set *errors, struct
             places++;
         }
     }
-    int wait = -1;
+    long long wait = -1;
     if (timeout != NULL) {
-        long long milliseconds = (long long)timeout->tv_sec * 1000 + (timeout->tv_usec + 999) / 1000;
-        wait = milliseconds > 0x7fffffff ? 0x7fffffff : (int)milliseconds;
+        wait = (long long)timeout->tv_sec * 1000 + (timeout->tv_usec + 999) / 1000;
     }
-    int ready = poll(asked, (nfds_t)places, wait);
-    if (ready < 0) {
-        return -1;
-    }
-    for (int i = 0; i < places; i++) {
-        if (asked[i].revents & POLLNVAL) {
-            errno = EBADF;
+    struct timespec started;
+    clock_gettime(CLOCK_MONOTONIC, &started);
+    fd_set failed;
+    int bits = 0;
+    /*
+     * poll reports a hangup whatever was asked, so it can wake for a descriptor select has no bit to set for, as one
+     * only in errors that hung up: such a descriptor is left out (its fd made negative, which poll passes over) and the
+     * rest polled again for what's left of the time, so select never answers 0 before its timeout
+     */
+    for (;;) {
+        int left = -1;
+        if (wait >= 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long long spent =
+                (long long)(now.tv_sec - started.tv_sec) * 1000 + (now.tv_nsec - started.tv_nsec) / 1000000;
+            long long remaining = wait - spent < 0 ? 0 : wait - spent;
+            left = remaining > 0x7fffffff ? 0x7fffffff : (int)remaining;
+        }
+        int ready = poll(asked, (nfds_t)places, left);
+        if (ready < 0) {
             return -1;
         }
-    }
-    if (readable != NULL) {
-        FD_ZERO(readable);
-    }
-    if (writable != NULL) {
-        FD_ZERO(writable);
-    }
-    fd_set failed;
-    FD_ZERO(&failed);
-    int bits = 0;
-    for (int i = 0; i < places; i++) {
-        int fd = asked[i].fd;
-        short got = asked[i].revents;
-        if (readable != NULL && (asked[i].events & POLLIN) && (got & (POLLIN | POLLHUP | POLLERR))) {
-            FD_SET(fd, readable);
-            bits++;
+        for (int i = 0; i < places; i++) {
+            if (asked[i].revents & POLLNVAL) {
+                errno = EBADF;
+                return -1;
+            }
         }
-        if (writable != NULL && (asked[i].events & POLLOUT) && (got & (POLLOUT | POLLERR))) {
-            FD_SET(fd, writable);
-            bits++;
+        FD_ZERO(&failed);
+        bits = 0;
+        fd_set reading;
+        fd_set writing;
+        FD_ZERO(&reading);
+        FD_ZERO(&writing);
+        for (int i = 0; i < places; i++) {
+            int fd = asked[i].fd;
+            short got = asked[i].revents;
+            int counted = 0;
+            if (fd < 0) {
+                continue;
+            }
+            if (readable != NULL && (asked[i].events & POLLIN) && (got & (POLLIN | POLLHUP | POLLERR))) {
+                FD_SET(fd, &reading);
+                counted = 1;
+                bits++;
+            }
+            // A descriptor that hung up is writable, as writing it fails at once (EPIPE) rather than blocking
+            if (writable != NULL && (asked[i].events & POLLOUT) && (got & (POLLOUT | POLLHUP | POLLERR))) {
+                FD_SET(fd, &writing);
+                counted = 1;
+                bits++;
+            }
+            if (errors != NULL && FD_ISSET(fd, errors) && (got & POLLERR)) {
+                FD_SET(fd, &failed);
+                counted = 1;
+                bits++;
+            }
+            if (got != 0 && !counted) {
+                asked[i].fd = -1;
+            }
         }
-        if (errors != NULL && FD_ISSET(fd, errors) && (got & POLLERR)) {
-            FD_SET(fd, &failed);
-            bits++;
+        if (bits > 0 || ready == 0) {
+            if (readable != NULL) {
+                *readable = reading;
+            }
+            if (writable != NULL) {
+                *writable = writing;
+            }
+            break;
         }
     }
     if (errors != NULL) {

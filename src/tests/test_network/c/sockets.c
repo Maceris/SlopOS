@@ -1,8 +1,9 @@
 /*
  * The libc's sockets (decisions/0202, 21h), from C, against the development machine's peers (boot.py's
  * --network-peers): a TCP echo of 64 KiB through poll and non-blocking receives, a UDP echo sent to and connected,
- * names resolved by getaddrinfo and reached by name, calls a socket can't take, and last a server on port 7 that
- * echoes back what the development machine sends it. A refused connection isn't among them, as QEMU's user network
+ * names resolved by getaddrinfo and reached by name, calls a socket can't take, a client and a server of its own over
+ * the loopback interface, 127.0.0.1 and ::1 (21i), and last a server on port 7 that echoes back what the development
+ * machine sends it. A refused connection isn't among them, as QEMU's user network
  * never answers a SYN for a closed port (test_network.hsc). Each check says what it found; then how many passed.
  *
  *     sockets <peer address> <TCP echo's port> <UDP echo's port>
@@ -335,6 +336,130 @@ static void serve_echo(void) {
     printf("echoed %zu bytes back to %s\n", echoed, text);
 }
 
+/* The ports the loopback checks listen on and send from. */
+#define LOOPBACK_TCP_PORT 5555
+#define LOOPBACK_UDP_PORT 5556
+
+/* A loopback address of a family, as a sockaddr, with a port: 127.0.0.1 or ::1. */
+static socklen_t loopback_address(int family, uint16_t port, struct sockaddr_storage *into) {
+    memset(into, 0, sizeof *into);
+    if (family == AF_INET) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)into;
+        v4->sin_family = AF_INET;
+        v4->sin_port = htons(port);
+        v4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        return sizeof *v4;
+    }
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)into;
+    v6->sin6_family = AF_INET6;
+    v6->sin6_port = htons(port);
+    v6->sin6_addr.s6_addr[15] = 1;
+    return sizeof *v6;
+}
+
+/*
+ * A client and a server of the program's own over the loopback interface, in one thread: the server listening, the
+ * client connected to it (the listener's backlog of one finishing the handshake before accept), 64 KiB echoed by the
+ * server through poll over both, and a datagram there and back between two UDP sockets.
+ */
+static void check_loopback(int family, const char *name) {
+    char what[96];
+    struct sockaddr_storage address;
+    socklen_t length = loopback_address(family, LOOPBACK_TCP_PORT, &address);
+    int server = socket(family, SOCK_STREAM, 0);
+    snprintf(what, sizeof what, "%s: a listener bound and listening", name);
+    check(server >= 3 && bind(server, (struct sockaddr *)&address, length) == 0 && listen(server, 4) == 0, what);
+    int client = socket(family, SOCK_STREAM, 0);
+    snprintf(what, sizeof what, "%s: a client connected to the listener", name);
+    check(client >= 3 && connect_when_routed(client, (struct sockaddr *)&address, length) == 0, what);
+    struct sockaddr_storage from;
+    socklen_t from_length = sizeof from;
+    int served = accept(server, (struct sockaddr *)&from, &from_length);
+    snprintf(what, sizeof what, "%s: the connection accepted, from the loopback address", name);
+    check(served >= 3 && from.ss_family == family
+              && (family == AF_INET ? ((struct sockaddr_in *)&from)->sin_addr.s_addr == htonl(INADDR_LOOPBACK)
+                                    : ((struct sockaddr_in6 *)&from)->sin6_addr.s6_addr[15] == 1),
+          what);
+    if (client < 0 || served < 0) {
+        close(client);
+        close(served);
+        close(server);
+        return;
+    }
+    fcntl(client, F_SETFL, O_NONBLOCK);
+    fcntl(served, F_SETFL, O_NONBLOCK);
+    unsigned char *back = malloc(ECHO_BYTES);
+    unsigned char *held = malloc(ECHO_BYTES);
+    unsigned char piece[4096];
+    size_t sent = 0, got = 0, taken = 0, given = 0;
+    int stalls = 0;
+    while (got < ECHO_BYTES && stalls < 50 && back != NULL && held != NULL) {
+        struct pollfd ask[2] = {{client, (short)(POLLIN | (sent < ECHO_BYTES ? POLLOUT : 0)), 0},
+                                {served, (short)(POLLIN | (given < taken ? POLLOUT : 0)), 0}};
+        if (poll(ask, 2, 5000) <= 0) {
+            stalls++;
+            continue;
+        }
+        if ((ask[0].revents & POLLOUT) && sent < ECHO_BYTES) {
+            size_t count = ECHO_BYTES - sent < sizeof piece ? ECHO_BYTES - sent : sizeof piece;
+            for (size_t i = 0; i < count; i++) {
+                piece[i] = pattern(sent + i);
+            }
+            ssize_t wrote = write(client, piece, count);
+            sent += wrote > 0 ? (size_t)wrote : 0;
+        }
+        if (ask[1].revents & POLLIN) {
+            ssize_t count = read(served, held + taken, ECHO_BYTES - taken);
+            taken += count > 0 ? (size_t)count : 0;
+        }
+        if ((ask[1].revents & POLLOUT) && given < taken) {
+            ssize_t wrote = write(served, held + given, taken - given);
+            given += wrote > 0 ? (size_t)wrote : 0;
+        }
+        if (ask[0].revents & POLLIN) {
+            ssize_t count = read(client, back + got, ECHO_BYTES - got);
+            got += count > 0 ? (size_t)count : 0;
+        }
+    }
+    int same = got == ECHO_BYTES;
+    for (size_t i = 0; same && i < ECHO_BYTES; i++) {
+        same = back[i] == pattern(i);
+    }
+    snprintf(what, sizeof what, "%s: 64 KiB echoed back by the program's own server", name);
+    check(same, what);
+    free(back);
+    free(held);
+    close(client);
+    close(served);
+    close(server);
+    // A datagram from one socket of the program's to another, and an answer back
+    struct sockaddr_storage to;
+    socklen_t to_length = loopback_address(family, LOOPBACK_UDP_PORT, &to);
+    int receiver = socket(family, SOCK_DGRAM, 0);
+    int sender = socket(family, SOCK_DGRAM, 0);
+    struct timeval wait = {5, 0};
+    setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+    setsockopt(sender, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+    snprintf(what, sizeof what, "%s: a UDP socket bound to receive", name);
+    check(receiver >= 3 && sender >= 3 && bind(receiver, (struct sockaddr *)&to, to_length) == 0, what);
+    char text[32] = {0};
+    struct sockaddr_storage sent_from;
+    socklen_t sent_from_length = sizeof sent_from;
+    int there = sendto(sender, "to myself", 9, 0, (struct sockaddr *)&to, to_length) == 9
+                && recvfrom(receiver, text, sizeof text, 0, (struct sockaddr *)&sent_from, &sent_from_length) == 9
+                && memcmp(text, "to myself", 9) == 0;
+    snprintf(what, sizeof what, "%s: a datagram to the program's own socket", name);
+    check(there, what);
+    memset(text, 0, sizeof text);
+    int answered = there && sendto(receiver, "answered", 8, 0, (struct sockaddr *)&sent_from, sent_from_length) == 8
+                   && recv(sender, text, sizeof text, 0) == 8 && memcmp(text, "answered", 8) == 0;
+    snprintf(what, sizeof what, "%s: its answer back to where it came from", name);
+    check(answered, what);
+    close(receiver);
+    close(sender);
+    printf("loopback over %s: %s\n", name, same && there && answered ? "both ways" : "missing");
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) {
         printf("usage: sockets <peer> <TCP echo's port> <UDP echo's port>\n");
@@ -345,6 +470,8 @@ int main(int argc, char **argv) {
     check_udp(argv[1], argv[3]);
     check_names(argv[2]);
     check_errors();
+    check_loopback(AF_INET, "127.0.0.1");
+    check_loopback(AF_INET6, "::1");
     serve_echo();
     printf("sockets: %d of %d checks passed\n", passed, checks);
     printf("sockets: %s\n", passed == checks ? "every check passed" : "a check failed");

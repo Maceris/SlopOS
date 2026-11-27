@@ -256,6 +256,11 @@ Manager :: struct {
     partition_gone : bool[MAX_PARTITIONS],
     /** The devices channel, which the supervisor sends disks plugged in on; NO_HANDLE without one, or once it fails. */
     devices : slop_os.Channel,
+    /**
+     * How many disks plugged in through devices have been held, each one's line saying so counting it; not the disks
+     * it was started with, as the first one plugged in, when there was no disk before, is.
+     */
+    plugged : u32,
     /** Each disk's connector, kept to dial its driver again for a restarted partition server. */
     connectors : Disk[MAX_DISKS],
     /** Each disk's partition server's process. */
@@ -545,8 +550,14 @@ take_devices :: fn(state : ptr[mut Manager], into : ptr[mut os.Incoming]) {
         }
         match os.message_of[hotplug.Request](into)^ {
             case Added(found) => {
-                runtime.log_info("a disk was plugged in")
-                _ = add_disk(state, found)
+                // Said once it's held, its partitions listed, so a test sees each plugging in that worked
+                if add_disk(state, found) {
+                    state.plugged += 1
+                    runtime.log_info("a disk was plugged in and held, %1 plugged in so far", state.plugged)
+                }
+                else {
+                    runtime.log_info("a disk was plugged in, but isn't held")
+                }
             }
         }
     }

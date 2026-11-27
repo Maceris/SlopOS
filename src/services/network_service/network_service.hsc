@@ -313,14 +313,29 @@ slot_bytes :: fn(service : ptr[Service], slot : u32, length : u32) -> mut u8[] {
 }
 
 /**
- * Move what the stack has for the world on: each event logged, then each frame it queued into a free send slot, sent,
- * while slots are free; and its timer set to its next deadline. Events go first, as what they start, a ping, queues
- * frames too, which would otherwise wait for the next wake.
+ * Move what the stack has for the world on: what it sent itself taken back (deliver_looped), then each event logged,
+ * then each frame it queued into a free send slot, sent, while slots are free; and its timer set to its next deadline.
+ * Events go before frames, as what they start, a ping, queues frames too, which would otherwise wait for the next wake.
  *
  * @param service The service.
  * @param stack The stack.
  */
 pump :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack]) {
+    /*
+     * What the stack sent itself, to a loopback address or its own, taken back as though it had arrived, a few rounds
+     * of it, each one's events reported, as each round's answers make the next's; what's left wakes the timer at once
+     */
+    for round in 0..<LOOPED_ROUNDS {
+        if !net_stack.has_looped(stack) {
+            break
+        }
+        _ = net_stack.deliver_looped(stack, now())
+        loop {
+            happened :: net_stack.take_event(stack) or_break
+            report(service, stack, happened)
+        }
+        net_stack.tcp_resume(stack)
+    }
     loop {
         happened :: net_stack.take_event(stack) or_break
         report(service, stack, happened)
@@ -359,6 +374,9 @@ pump :: fn(service : ptr[mut Service], stack : ptr[mut net_stack.Stack]) {
         _ = slop_os.port_set_timer(service.port, TIMER_KEY, deadline)
     }
 }
+
+/** How many rounds of what the stack sent itself pump takes back at once, before what else it does: 4. */
+LOOPED_ROUNDS :: 4
 
 /**
  * Look again at what waits on the stack's events, after some were dropped: each lookup that's done is answered, and

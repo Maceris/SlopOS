@@ -216,6 +216,36 @@ multicast_mac :: fn(group : Ipv6) -> Mac {
     return mac
 }
 
+/** The IPv6 loopback address, ::1. */
+LOOPBACK_V6 :: Ipv6.{bytes = u8.[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]}
+
+/**
+ * Take back an IPv6 packet the stack sent itself (loop_back): its TCP or UDP passed on, as from a peer, with no check
+ * of its addresses, as it's the stack's own; ICMPv6, which it sends itself only to neighbours and groups, isn't.
+ *
+ * @param stack The stack.
+ * @param packet The packet, from its IP header, with no extension headers.
+ */
+receive_looped_v6 :: fn(stack : ptr[mut Stack], packet : u8[]) {
+    if packet.count < IPV6_HEADER || byte_at(packet, 0) >> 4 != 6 {
+        return void
+    }
+    total :: IPV6_HEADER + cast[usize](u16_at(packet, 4))
+    if total > packet.count {
+        return void
+    }
+    source :: ipv6_at(packet, 8)
+    destination :: ipv6_at(packet, 24)
+    next :: byte_at(packet, 6)
+    payload :: part(packet, IPV6_HEADER, total)
+    if next == PROTOCOL_TCP {
+        receive_tcp(stack, .V6(source), pseudo_sum_v6(source, destination, PROTOCOL_TCP, payload.count), payload)
+    }
+    else if next == PROTOCOL_UDP {
+        receive_udp6(stack, source, destination, payload)
+    }
+}
+
 /**
  * Tell whether an address is the interface's, assigned or, with tentative, still being checked.
  *
@@ -294,9 +324,7 @@ receive_ipv6 :: fn(stack : ptr[mut Stack], from_mac : Mac, packet : u8[]) {
      * A multicast, loopback or own source is dropped, as an answer would go to a group or back to this host (RFC 4443
      * §4.2, RFC 4861 §7.1.1); ::, from duplicate detection's solicitations, is taken
      */
-    loopback := Ipv6.{}
-    loopback.bytes[15] = 1
-    if source.bytes[0] == 0xff || same_ipv6(source, loopback) || is_ours_v6(stack, source, false) {
+    if source.bytes[0] == 0xff || same_ipv6(source, LOOPBACK_V6) || is_ours_v6(stack, source, false) {
         return void
     }
     next := byte_at(packet, 6)
@@ -655,14 +683,18 @@ send_solicitation :: fn(stack : ptr[mut Stack], target : Ipv6, dad : bool) {
 }
 
 /**
- * Choose the source address for a destination: the link-local address for link-local and multicast destinations, else
- * an assigned global one, the one sharing its /64 first.
+ * Choose the source address for a destination: ::1 for ::1, the link-local address for link-local and multicast
+ * destinations, else an assigned global one, the one sharing its /64 first.
  *
  * @param stack The stack.
  * @param to The destination.
  * @return The address; :: if the interface has none assigned.
  */
 source_for :: fn(stack : ptr[Stack], to : Ipv6) -> Ipv6 {
+    // ::1 from itself, so its answer comes back to it (loop_back)
+    if same_ipv6(to, LOOPBACK_V6) {
+        return to
+    }
     link_scoped :: byte_at(view_of(&to.bytes[0], 16), 0) == 0xff
         || prefix_matches(view_of(&to.bytes[0], 16), view_of(&LINK_LOCAL_PREFIX.bytes[0], 16), 10)
     if !link_scoped {
@@ -767,6 +799,11 @@ send_ipv6 :: fn(stack : ptr[mut Stack], from : Ipv6, to : Ipv6, next : u8, paylo
     put_bytes(bytes, 8, view_of(&from.bytes[0], from.bytes.count))
     put_bytes(bytes, 24, view_of(&to.bytes[0], to.bytes.count))
     put_bytes(bytes, IPV6_HEADER, payload)
+    // To ::1 or the interface's own: kept to be taken back, not sent on the link
+    if same_ipv6(to, LOOPBACK_V6) || is_ours_v6(stack, to, false) {
+        loop_back(stack, false, bytes)
+        return true
+    }
     if byte_at(view_of(&to.bytes[0], 16), 0) == 0xff {
         queue_frame(stack, multicast_mac(to), ETHER_IPV6, bytes)
         return true

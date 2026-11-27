@@ -38,6 +38,11 @@ ETHERNET_HEADER :: 14
  * TCP sends nothing while there's no room (outbox_full), and goes on as there is (tcp_resume).
  */
 OUTBOX :: 64
+/**
+ * How many packets the stack sent itself wait to be taken back at most (deliver_looped): 32. Past them, the newest is
+ * dropped, but TCP sends nothing while there's no room (outbox_full).
+ */
+LOOPED :: 32
 /** How many events wait to be taken at most; past them, the newest is dropped. */
 EVENTS :: 128
 /** How many IPv4 neighbours it knows at once. */
@@ -179,6 +184,14 @@ Outgoing :: struct {
     length : usize,
 }
 
+/** A packet the stack sent to itself (loop_back), from its IP header, waiting to be taken back. */
+Looped :: struct {
+    bytes : u8[MAX_FRAME],
+    length : usize,
+    /** True for IPv4, false for IPv6. */
+    v4 : bool,
+}
+
 /** Where a neighbour's resolution is. */
 NeighbourState :: enum {
     /** The entry isn't in use. */
@@ -282,6 +295,13 @@ Stack :: struct {
     outbox       : Outgoing[OUTBOX],
     outbox_first : usize,
     outbox_count #at_most(outbox.count) : usize,
+    /**
+     * The packets it sent itself, to a loopback address or one of its own (loop_back), which deliver_looped takes back
+     * as though they'd arrived, with no device: the loopback interface.
+     */
+    looped       : Looped[LOOPED],
+    looped_first : usize,
+    looped_count #at_most(looped.count) : usize,
     events       : Event[EVENTS],
     events_first : usize,
     events_count : usize,
@@ -439,6 +459,10 @@ tick :: fn(stack : ptr[mut Stack], now : u64) {
  */
 next_deadline :: fn(stack : ptr[Stack]) -> u64 {
     soonest := ~cast[u64](0)
+    // Packets it sent itself are taken back at once
+    if stack.looped_count > 0 {
+        soonest = stack.now
+    }
     if stack.dhcp != .Off && stack.dhcp_deadline < soonest {
         soonest = stack.dhcp_deadline
     }
@@ -511,7 +535,88 @@ take_frame :: fn(stack : ptr[mut Stack], into : mut u8[]) -> usize? {
  * @return True if fewer than 4 frames' room is left: room kept for acknowledgements, ARP and the like.
  */
 outbox_full :: fn(stack : ptr[Stack]) -> bool {
-    return stack.outbox_count + 4 >= OUTBOX
+    return stack.outbox_count + 4 >= OUTBOX || stack.looped_count + 4 >= LOOPED
+}
+
+/**
+ * Keep a packet the stack sends itself, to a loopback address or one of its own, to be taken back by deliver_looped,
+ * not sent on the link.
+ *
+ * @param stack The stack, whose looped take it; it's dropped, and counted with the outbox's, if they're full.
+ * @param v4 True for an IPv4 packet, false for IPv6.
+ * @param packet The packet, from its IP header, MAX_FRAME bytes at most; more is cut off.
+ */
+loop_back :: fn(stack : ptr[mut Stack], v4 : bool, packet : u8[]) {
+    if stack.looped_count >= LOOPED {
+        stack.dropped_frames += 1
+        return void
+    }
+    at :: (stack.looped_first + stack.looped_count) % LOOPED
+    if at >= stack.looped.count {
+        return void
+    }
+    stack.looped_count += 1
+    kept :: &stack.looped[at]
+    length := cast[usize](0)
+    for byte in packet {
+        if length >= kept.bytes.count {
+            break
+        }
+        kept.bytes[length] = byte
+        length += 1
+    }
+    kept.length = length
+    kept.v4 = v4
+}
+
+/**
+ * Tell whether packets the stack sent itself wait to be taken back (deliver_looped).
+ *
+ * @param stack The stack.
+ * @return True if any do.
+ */
+has_looped :: fn(stack : ptr[Stack]) -> bool {
+    return stack.looped_count > 0
+}
+
+/**
+ * Take back the packets the stack sent itself, as though they'd arrived on the link: each one's TCP or UDP passed on
+ * (an IPv4 echo request answered too), what they make sent, those to itself kept for the next call. Only those
+ * waiting when it's called are taken, so a conversation with itself can't keep it from returning.
+ *
+ * @param stack The stack, whose looped are taken.
+ * @param now The time, in nanoseconds.
+ * @return Whether any was taken.
+ */
+deliver_looped :: fn(stack : ptr[mut Stack], now : u64) -> bool {
+    stack.now = now
+    waiting :: stack.looped_count
+    for i in 0..<waiting {
+        if stack.looped_count == 0 {
+            break
+        }
+        at :: stack.looped_first % LOOPED
+        stack.looped_first = (stack.looped_first + 1) % LOOPED
+        stack.looped_count -= 1
+        if at >= stack.looped.count {
+            continue
+        }
+        // Copied out, as what it makes may be kept in the place it leaves
+        packet : u8[MAX_FRAME]
+        kept :: &stack.looped[at]
+        length :: if kept.length < packet.count { kept.length } else { packet.count }
+        for j in 0..<length {
+            packet[j] = kept.bytes[j]
+        }
+        bytes :: view_of(&packet[0], length)
+        if kept.v4 {
+            receive_looped_v4(stack, bytes)
+        }
+        else {
+            receive_looped_v6(stack, bytes)
+        }
+    }
+    return waiting > 0
 }
 
 /**

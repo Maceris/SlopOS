@@ -125,11 +125,13 @@ receive_ipv4 :: fn(stack : ptr[mut Stack], from_mac : Mac, packet : u8[]) {
     destination :: ipv4_at(packet, 16)
     /*
      * A source no host sends from, broadcast, multicast, loopback or the interface's own, is dropped, as an answer to
-     * it would go to every host or back to this one (RFC 1122 §3.2.1.3); 0.0.0.0 only comes with UDP, from DHCP
+     * it would go to every host or back to this one (RFC 1122 §3.2.1.3); 0.0.0.0 only comes with UDP, from DHCP. A
+     * loopback destination is dropped too, as only the stack's own packets go there (loop_back)
      */
     if same_ipv4(source, LIMITED_BROADCAST)
         || source.bytes[0] >= 224
-        || source.bytes[0] == 127
+        || is_loopback_v4(source)
+        || is_loopback_v4(destination)
         || is_subnet_broadcast(stack, source)
         || (!is_zero_ipv4(stack.ipv4) && same_ipv4(source, stack.ipv4))
         || (is_zero_ipv4(source) && protocol != PROTOCOL_UDP) {
@@ -151,6 +153,70 @@ receive_ipv4 :: fn(stack : ptr[mut Stack], from_mac : Mac, packet : u8[]) {
     else if protocol == PROTOCOL_UDP {
         receive_udp4(stack, source, destination, payload)
     }
+}
+
+/**
+ * Take back an IPv4 packet the stack sent itself (loop_back): its TCP, UDP or ICMP passed on, as from a peer, with no
+ * check of its addresses but its header's, as it's the stack's own.
+ *
+ * @param stack The stack.
+ * @param packet The packet, from its IP header.
+ */
+receive_looped_v4 :: fn(stack : ptr[mut Stack], packet : u8[]) {
+    if packet.count < IPV4_HEADER || byte_at(packet, 0) >> 4 != 4 {
+        return void
+    }
+    header_length :: cast[usize](byte_at(packet, 0) & 0xf) * 4
+    total :: cast[usize](u16_at(packet, 2))
+    if header_length < IPV4_HEADER || total < header_length || total > packet.count {
+        return void
+    }
+    protocol :: byte_at(packet, 9)
+    source :: ipv4_at(packet, 12)
+    destination :: ipv4_at(packet, 16)
+    payload :: packet[header_length..<total]
+    if protocol == PROTOCOL_ICMP {
+        receive_icmp(stack, source, payload)
+    }
+    else if protocol == PROTOCOL_TCP {
+        receive_tcp(stack, .V4(source), pseudo_sum_v4(source, destination, PROTOCOL_TCP, payload.count), payload)
+    }
+    else if protocol == PROTOCOL_UDP {
+        receive_udp4(stack, source, destination, payload)
+    }
+}
+
+/**
+ * Tell whether an IPv4 address is a loopback one, in 127.0.0.0/8.
+ *
+ * @param address The address.
+ * @return True if it is.
+ */
+is_loopback_v4 :: fn(address : Ipv4) -> bool {
+    return address.bytes[0] == 127
+}
+
+/**
+ * Tell whether the stack's IPv4 packets to an address come back to it (loop_back): a loopback address, or its own.
+ *
+ * @param stack The stack.
+ * @param to The destination.
+ * @return True if they do.
+ */
+loops_v4 :: fn(stack : ptr[Stack], to : Ipv4) -> bool {
+    return is_loopback_v4(to) || (!is_zero_ipv4(stack.ipv4) && same_ipv4(to, stack.ipv4))
+}
+
+/**
+ * Choose the source address of an IPv4 packet: the destination itself for a loopback one, so its answer comes back to
+ * the same address, else the interface's.
+ *
+ * @param stack The stack.
+ * @param to The destination.
+ * @return The address; 0.0.0.0 without one, to other than a loopback address.
+ */
+source_v4_for :: fn(stack : ptr[Stack], to : Ipv4) -> Ipv4 {
+    return if is_loopback_v4(to) { to } else { stack.ipv4 }
 }
 
 /**
@@ -246,7 +312,8 @@ send_echo_v4 :: fn(stack : ptr[mut Stack], to : Ipv4, sequence : u16) -> bool {
 
 /**
  * Send an IPv4 packet from the interface's address, or 0.0.0.0 without one, to its next hop: the destination if it's
- * on the link or a broadcast, else the router.
+ * on the link or a broadcast, else the router. One to a loopback address, from that address, or to the interface's own
+ * isn't sent on the link but kept to be taken back (loop_back).
  *
  * @param stack The stack.
  * @param to The destination.
@@ -268,10 +335,15 @@ send_ipv4 :: fn(stack : ptr[mut Stack], to : Ipv4, protocol : u8, payload : u8[]
     put_u16(bytes, 6, 0x4000)
     put_u8(bytes, 8, IPV4_TTL)
     put_u8(bytes, 9, protocol)
-    put_bytes(bytes, 12, view_of(&stack.ipv4.bytes[0], stack.ipv4.bytes.count))
+    from :: source_v4_for(stack, to)
+    put_bytes(bytes, 12, view_of(&from.bytes[0], from.bytes.count))
     put_bytes(bytes, 16, view_of(&to.bytes[0], to.bytes.count))
     put_u16(bytes, 10, checksum_finish(checksum_add(0, part(bytes, 0, IPV4_HEADER))))
     put_bytes(bytes, IPV4_HEADER, payload)
+    if loops_v4(stack, to) {
+        loop_back(stack, true, bytes)
+        return true
+    }
     if same_ipv4(to, LIMITED_BROADCAST) || is_subnet_broadcast(stack, to) {
         queue_frame(stack, BROADCAST_MAC, ETHER_IPV4, bytes)
         return true

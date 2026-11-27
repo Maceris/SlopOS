@@ -9,6 +9,7 @@ How to build SlopOS, boot it in QEMU, and run its tests. Everything here runs on
 | Hemera's compiler, `hemera` | the `PATH`, or `HEMERA` for the unit tests | Built from the Hemera repository; it finds Hemera's `std` next to itself, or in `HEMERA_INSTALL` |
 | QEMU, `qemu-system-x86_64` | `QEMU` (the program or its folder), then the `PATH`, then `C:\Program Files\qemu` | Its own UEFI firmware is used, or `OVMF`; every boot is UEFI |
 | xorriso | `XORRISO`, then the `PATH` | Makes the boot ISO around its EFI image |
+| clang and llvm-ar, an LLVM release's | `CLANG` (clang or its folder), else `LLVM` (a release's folder or its `bin`), then `C:\Program Files\LLVM`, the `PATH`, and Visual Studio's | Compiles the programs' C (`tools/c_libraries.py`); the first with the architecture's backend is taken, so a release unpacked elsewhere, as Visual Studio's has no RISC-V, is named by `LLVM` |
 | Python 3 | the `PATH` | Runs the tools in `tools/` |
 
 ## Building

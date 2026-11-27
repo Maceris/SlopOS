@@ -533,6 +533,11 @@ listen #export #calling_convention(.c) :: fn(fd : i32, backlog : i32) -> i32 {
         return failed(E_NOBUFS)
     }
     socket.state = .Listening
+    /*
+     * Its first connection asked for at once, as a backlog of one, so a client's handshake finishes before accept is
+     * called, as a program connecting to its own listener needs; a failure here is accept's to report
+     */
+    _ = check_accept(socket)
     return 0
 }
 
@@ -597,6 +602,8 @@ accept #export #calling_convention(.c) :: fn(fd : i32, address : ptr[mut u8]?, l
         }
         _ = wait_sockets(state, slop_os.NO_DEADLINE)
     }
+    // The port first, so a failure past here has a descriptor to give back and a connection to close, nothing else
+    port :: socket_port_of(state) or_return failed(E_NOBUFS)
     made :: runtime.new(Socket)
     made.family = socket.family
     made.kind = SOCK_STREAM
@@ -610,12 +617,19 @@ accept #export #calling_convention(.c) :: fn(fd : i32, address : ptr[mut u8]?, l
         runtime.free(made)
         return -1
     }
-    port :: socket_port_of(state) or_return failed(E_NOBUFS)
+    // Never served, so there's nothing written to wait on, as close_socket would: closed at once, its place freed
     if !net.serve_on(&made.tcp, port, cast[u64](accepted)) {
-        close_socket(state, accepted)
+        net.close(&made.tcp)
+        runtime.free(made)
+        match descriptor_of(state, accepted) {
+            case Some(descriptor) => descriptor^ = Descriptor.{}
+            case None => {}
+        }
         return failed(E_CONNABORTED)
     }
     give_endpoint(address, length, socket.came_from)
+    // The next one asked for, so the listener's backlog of one stays
+    _ = check_accept(socket)
     return accepted
 }
 

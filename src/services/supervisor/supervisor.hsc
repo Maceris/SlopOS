@@ -150,8 +150,9 @@ import update_service from "../update_service"
  */
 MAX_STARTED :: 24
 /**
- * The most connectors the supervisor serves, over its whole life: a connector's place isn't reused once its other end
- * is gone, and connector_to makes none past this many.
+ * The most connectors the supervisor serves at once. A connector's place is reused once a USB device it was to is
+ * unplugged (detach_usb frees it); another's isn't, as what dials through it may still count on its dials (dials_of),
+ * and connector_to makes none past this many places.
  */
 MAX_CONNECTORS :: 32
 /**
@@ -987,6 +988,8 @@ Connector :: struct {
     target : usize,
     /** How many Dials it has answered with a connection. */
     dials : u32,
+    /** Whether its place is free for connector_to to reuse: its end closed, as the USB device it's to was unplugged. */
+    freed : bool,
 }
 
 /**
@@ -1166,6 +1169,12 @@ Supervisor :: struct {
     connectors : Connector[MAX_CONNECTORS],
     /** How many of connectors are in use, from the first: 0 to MAX_CONNECTORS. */
     connector_count : usize,
+    /**
+     * The most places connector_to makes in connectors, MAX_CONNECTORS but for test_connector_room=N on the kernel's
+     * command line, which makes it those in use once start-up's are all started plus N, so a test can see places
+     * reused; 0 until then, which is MAX_CONNECTORS.
+     */
+    connector_limit : usize,
     /** The port it waits on: what it started ending, connectors' Dials, DMA faults, and its connections' closes. */
     port : slop_os.Port,
     /** The USB interfaces the host controllers' drivers have told of, usb_count of them, gone ones among them. */
@@ -1647,6 +1656,8 @@ main :: fn(
     test_restart_services := false
     test_chaos := cast[u64](0)
     test_chaos_seed := cast[u64](0)
+    test_connector_room := cast[u64](0)
+    has_connector_room := false
     test_store := false
     test_system_config := false
     test_degraded := false
@@ -1699,6 +1710,9 @@ main :: fn(
             test_degraded = service_kit.has_word(text, "test_degraded")
             test_crash = service_kit.has_word(text, "test_crash")
             supervisor.test_hotplug = service_kit.has_word(text, "test_hotplug")
+            test_connector_room = service_kit.number_of(service_kit.word_after(text, "test_connector_room=") or_else "")
+                or_else 0
+            has_connector_room = service_kit.word_after(text, "test_connector_room=") is_some
             test_trace = service_kit.has_word(text, "test_trace")
             if test_trace {
                 // The trace on, if the kernel's trace_boot hasn't already, and drained as each service starts
@@ -1907,6 +1921,15 @@ main :: fn(
         _ = ask_substitute(&supervisor, read_substitutions(&supervisor))
     }
     tell_root(&supervisor, .AllStarted(cast[u32](supervisor.started_count)))
+    if has_connector_room {
+        supervisor.connector_limit = supervisor.connector_count + cast[usize](test_connector_room)
+        log_line.write(
+            supervisor.log,
+            "supervisor: test_connector_room: % connectors in use, room for %",
+            supervisor.connector_count,
+            test_connector_room
+        )
+    }
     // The boot's timeline and a traced exchange, once everything has started (tracing.hsc)
     if test_trace {
         check_trace(&supervisor)
@@ -2095,6 +2118,7 @@ ended :: fn(supervisor : ptr[mut Supervisor], index : usize, code : u64) {
     }
     if code == 0 || not_restarted || entry.ended_on_request || entry.usb_gone {
         entry.done = true
+        forget_usb_controller(supervisor, index)
         return void
     }
     now :: slop_os.clock_monotonic() or_else 0
@@ -2110,6 +2134,7 @@ ended :: fn(supervisor : ptr[mut Supervisor], index : usize, code : u64) {
             RESTARTS + 1
         )
         entry.done = true
+        forget_usb_controller(supervisor, index)
         return void
     }
     entry.restarts += 1
@@ -2181,6 +2206,7 @@ start_again :: fn(supervisor : ptr[mut Supervisor], index : usize, budget : u64)
     }
     log_line.write(supervisor.log, "supervisor: % couldn't be started again, and isn't tried again", entry.name)
     entry.done = true
+    forget_usb_controller(supervisor, index)
     note_missing(supervisor, entry.name, "didn't start", 0)
     tell_root(supervisor, .Failed(report_of(entry.name, 0)))
 }
@@ -5851,6 +5877,7 @@ detach_usb :: fn(supervisor : ptr[mut Supervisor], usb : usize) {
                 _ = slop_os.port_unbind(supervisor.port, CONNECTOR_KEY + cast[u64](i))
                 _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.connectors[i].end))
                 supervisor.connectors[i].end = NONE
+                supervisor.connectors[i].freed = true
             }
         }
         if entry.running {
@@ -5863,9 +5890,33 @@ detach_usb :: fn(supervisor : ptr[mut Supervisor], usb : usize) {
 }
 
 /**
+ * Let go of what a USB host controller's driver that ended for good had found, as nothing finds it again: each of its
+ * interfaces detached (detach_usb), and its connection's binding dropped. What isn't a host controller's driver, or
+ * isn't watched, is left alone.
+ *
+ * @param supervisor The supervisor, whose interfaces of the controller's are marked gone.
+ * @param index The driver's index in started.
+ */
+forget_usb_controller :: fn(supervisor : ptr[mut Supervisor], index : usize) {
+    if index >= supervisor.started.count || supervisor.started[index].speaks != .UsbBus {
+        return void
+    }
+    if supervisor.started[index].usb_watched {
+        _ = slop_os.port_unbind(supervisor.port, USB_KEY + cast[u64](index))
+        supervisor.started[index].usb_watched = false
+    }
+    for usb in 0..<supervisor.usb_count {
+        if usb < supervisor.usb.count && supervisor.usb[usb].controller == index && !supervisor.usb[usb].gone {
+            detach_usb(supervisor, usb)
+        }
+    }
+}
+
+/**
  * Give a USB class driver started once start-up's devices are all there to the service that takes what it serves: an
  * input device's to the input service, a disk's to the storage manager, each as a connector on its devices channel;
- * a disk's starts the storage manager, if it isn't running, as there was no disk before.
+ * a disk's starts the storage manager, if there was no disk before, or starts it again if it had ended for good. A
+ * disk plugged in while the storage manager is being started again is taken with the disks it's started with.
  *
  * @param supervisor The supervisor, which serves a new connector to the driver.
  * @param slot The class driver's index in started.
@@ -5885,6 +5936,26 @@ announce_usb :: fn(supervisor : ptr[mut Supervisor], slot : usize) {
     else if speaks == .Block && supervisor.storage_slot == NOWHERE {
         // The first disk: the storage manager started for it, given it as it's given the disks found at start
         supervisor.storage_slot = start_storage(supervisor, NOWHERE)
+        hotplug_disk_check(supervisor)
+        return void
+    }
+    else if speaks == .Block && supervisor.storage_slot < supervisor.started.count
+        && supervisor.started[supervisor.storage_slot].done {
+        /*
+         * The storage manager ended for good, as it ended too often or couldn't be started again: a disk plugged in is
+         * cause to try once more, its restarts counted afresh, given every disk there is now, this one among them
+         */
+        storage :: &supervisor.started[supervisor.storage_slot]
+        log_line.write(supervisor.log, "supervisor: a disk was plugged in, so % is started again", storage.name)
+        storage.done = false
+        storage.restarts = 0
+        storage.retries = 0
+        budget : u64 = 0
+        match service_named(supervisor, storage.name) {
+            case Some(service) => budget = service.budget
+            case None => {}
+        }
+        start_again(supervisor, supervisor.storage_slot, budget)
         hotplug_disk_check(supervisor)
         return void
     }
@@ -7408,31 +7479,65 @@ start_disk_check :: fn(supervisor : ptr[mut Supervisor], storage_slot : usize) {
  *
  * Its end is bound to the supervisor's port, and anything already on it served.
  *
- * @param supervisor The supervisor, whose connectors and connector_count grow by one, the new one bound to its port
- *     under CONNECTOR_KEY plus its index and served from then on.
+ * @param supervisor The supervisor, whose connectors take the new one in a place an unplug freed, or else in a new
+ *     place, connector_count growing by one; it's bound to its port under CONNECTOR_KEY plus its index and served from
+ *     then on.
  * @param target What it dials: an index in started, or MANAGER_TARGET.
- * @return The client's end, which moves to the caller; null if target is NOWHERE, MAX_CONNECTORS have been made, or it
- *     couldn't be made.
+ * @return The client's end, which moves to the caller; null if target is NOWHERE, no place is free and connector_limit
+ *     (MAX_CONNECTORS) places have been made, or it couldn't be made.
  */
 connector_to :: fn(supervisor : ptr[mut Supervisor], target : usize) -> os.Channel[connector.Connector]? {
-    index :: supervisor.connector_count
-    if target == NOWHERE || index >= supervisor.connectors.count {
+    if target == NOWHERE {
+        return null
+    }
+    index := supervisor.connector_count
+    reused := false
+    for i in 0..<supervisor.connector_count {
+        if i < supervisor.connectors.count && supervisor.connectors[i].freed && supervisor.connectors[i].end == NONE {
+            index = i
+            reused = true
+            break
+        }
+    }
+    limit :: if supervisor.connector_limit == 0 || supervisor.connector_limit > supervisor.connectors.count {
+        supervisor.connectors.count
+    }
+    else {
+        supervisor.connector_limit
+    }
+    if !reused && index >= limit {
+        log_line.write(supervisor.log, "supervisor: no room for another connector")
+        return null
+    }
+    place :: index
+    if place >= supervisor.connectors.count {
         return null
     }
     pair :: os.channel_for[connector.Connector](supervisor.block.budget, 0) or_return null
+    // The place's last binding, if closing its end hadn't dropped it
+    if reused {
+        _ = slop_os.port_unbind(supervisor.port, CONNECTOR_KEY + cast[u64](place))
+    }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         supervisor.port,
-        CONNECTOR_KEY + cast[u64](index),
+        CONNECTOR_KEY + cast[u64](place),
         cast[slop_os.Handle](pair.b),
         signals,
         .Persistent
     ) is_error {
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
+        _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return null
     }
-    supervisor.connectors[index] = Connector.{end = pair.b, target = target}
-    supervisor.connector_count = index + 1
-    serve_connector(supervisor, index)
+    supervisor.connectors[place] = Connector.{end = pair.b, target = target}
+    if reused {
+        log_line.write(supervisor.log, "supervisor: connector % reused", place)
+    }
+    else {
+        supervisor.connector_count = place + 1
+    }
+    serve_connector(supervisor, place)
     return os.Channel[connector.Connector].{end = pair.a}
 }
 

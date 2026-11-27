@@ -9,10 +9,11 @@ stdarg.h, limits.h, float.h, stdbool.h), and no others.
     python -I tools/c_libraries.py <programs folder> <architecture>
 
 The architecture is x86_64, aarch64 or riscv64. clang is CLANG if set; else the first that has the architecture's
-backend of: an LLVM release's (LLVM, its folder or its bin, if set; then LLVM_RELEASES, the newest first), the PATH's,
-and Visual Studio's. llvm-ar is LLVM_AR if set, else beside that clang. Only where no clang has the backend, as Visual
-Studio's has no RISC-V, is the first found made to give LLVM bitcode, which llc compiles: LLC if set, else the one
-built in Hemera's LLVM beside the hemera on the PATH.
+backend of: an LLVM release's (LLVM, its folder or its bin, if set; then LLVM_RELEASES, an installer's), the PATH's,
+and Visual Studio's. An LLVM release unpacked anywhere else is found through LLVM, or CLANG (docs/guides/building.md).
+llvm-ar is LLVM_AR if set, else beside that clang. Only where no clang has the backend, as Visual Studio's has no
+RISC-V, is the first found made to give LLVM bitcode, which llc compiles: LLC if set, else the one built in Hemera's
+LLVM beside the hemera on the PATH.
 Nothing's built, and it succeeds, where no program has C. A c/key.txt and keyed folders an earlier version left are
 removed. It ends with 1 if a source doesn't compile or the tools aren't found.
 
@@ -35,9 +36,9 @@ PROGRAM_FOLDERS = [ROOT / "src" / "services", ROOT / "src" / "apps", ROOT / "src
 C_PACKAGES = [ROOT / "src" / "libc"]
 # The libc's headers, which every C source is compiled with (decisions/0201, 20l)
 LIBC_HEADERS = ROOT / "src" / "libc" / "include"
-# Where LLVM releases are unpacked, each a glob of their bin folders: an installer's, and a release's archive unpacked
-# beside the other tools (decisions/0202, 21g); the newest version first
-LLVM_RELEASES = ["C:/Program Files/LLVM/bin", "D:/Programs/System Tools/llvm-*-download/clang+llvm-*/bin"]
+# Where LLVM is installed, each a glob of bin folders, the newest version first: an installer's on Windows, and the
+# usual places on Linux; a release unpacked elsewhere is LLVM's to name (decisions/0202, 21g and 21i)
+LLVM_RELEASES = ["C:/Program Files/LLVM/bin", "/usr/lib/llvm-*/bin"]
 # Visual Studio's LLVM, where a Windows machine with it has clang
 VISUAL_STUDIO_LLVM = Path("C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin")
 # Each architecture's target and flags: the programs' baseline, and the control-flow integrity they're built with
@@ -91,8 +92,9 @@ def clang_candidates() -> list[Path]:
     if given:
         folders += [Path(given) / "bin", Path(given)]
     for pattern in LLVM_RELEASES:
-        anchor = Path(pattern[:3])
-        found = [Path(match) for match in anchor.glob(pattern[3:])] if "*" in pattern else [Path(pattern)]
+        whole = Path(pattern)
+        anchor = Path(whole.anchor)
+        found = [Path(match) for match in anchor.glob(str(whole.relative_to(anchor)))] if "*" in pattern else [whole]
         folders += sorted(found, key=version_key, reverse=True)
     name = "clang.exe" if os.name == "nt" else "clang"
     candidates = [folder / name for folder in folders if (folder / name).is_file()]
