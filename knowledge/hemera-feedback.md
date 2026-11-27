@@ -300,7 +300,10 @@ crash_reports writes them out and asserts them against the package's. 21c: `RIGH
 `RIGHT_PORT_BIND`, `RIGHT_BUDGET_WATCH` from `RIGHT_BUDGET_CHARGE`, the Platform's `RIGHT_PLATFORM_DEVICES`,
 `RIGHT_PLATFORM_POWER` and `RIGHT_PLATFORM_DUPLICATE`; `coverage_take` taking the debug log, with `CoverageError`'s
 handle tags; the process manager's `Load` carrying its calls as a `Relative[u64]`, which the launcher fills with every
-call for a debugger; a launched program's budget with `RIGHT_BUDGET_WATCH`.
+call for a debugger; a launched program's budget with `RIGHT_BUDGET_WATCH`. 21e: std's `schema.try_parse`, giving back OutOfMemory where
+`parse` calls the assertion handler (a failed list's add noted in `Schema.short_of_memory`, what was read freed); files'
+`NotVolumeRoot`, mapped to `AccessDenied`; dir's `Indexes` on any directory, so `index_of`, `where_number` and
+`where_text` take any directory of the volume; `where_text`'s long constants compared whole.
 
 ## 4. Features That Look Like a Strong Fit
 

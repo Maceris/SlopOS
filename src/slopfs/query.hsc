@@ -10,12 +10,16 @@ import runtime from "base:runtime"
  * those in the first index it names, or the one that bounds it. A comparison at its top, or one arm of an and at its
  * top, bounds the keys walked to its own range of that index; anything else walks the whole of the first index named.
  * Each file walked is then tested against the whole predicate, from its records of the indexes (IndexedRecord), so
- * nothing of it is read, and a text's comparisons see its first INDEX_TEXT_BYTES bytes alone. A walk looks at a
- * bounded number of files a call, and goes on from a cursor: a key and the last file of its bucket answered.
+ * nothing of it is read but where a text's first INDEX_TEXT_BYTES bytes, which its record keeps, are a constant's
+ * first bytes too: then the two are compared by their whole values, the file's read from its value (decisions/0202's
+ * 21e). A walk looks at a bounded number of files a call, and goes on from a cursor: a key and the last file of its
+ * bucket answered.
  */
 
 /** The most terms a predicate has. */
 MAX_TERMS :: 32
+/** The most bytes of a plan's text constants longer than INDEX_TEXT_BYTES, together, which the plan keeps whole. */
+PLAN_TEXT_BYTES :: 4096
 /** The limit a server gives query_next for a client's request, files of the index looked at; then it answers file 0. */
 QUERY_LOOKS : u64 : 4096
 
@@ -64,6 +68,13 @@ Term :: struct {
     text : u8[INDEX_TEXT_BYTES],
     /** How many of text's bytes are the constant's, 0 to INDEX_TEXT_BYTES. */
     text_bytes : usize,
+    /**
+     * A constant longer than INDEX_TEXT_BYTES, whole: its place among its plan's texts; 0 with whole_bytes 0 for one
+     * that text holds whole.
+     */
+    whole_offset : usize,
+    /** How many bytes of its plan's texts, from whole_offset, the whole constant is; 0 for one text holds whole. */
+    whole_bytes : usize,
     /** A comparison's field's kind and its constant's key, which plan_query works out. */
     field : FieldKind,
     /** A comparison's constant as a key of its index, which plan_query works out. */
@@ -87,6 +98,10 @@ Plan :: struct {
     low : u64,
     /** The greatest key of it walked. */
     high : u64,
+    /** Text constants longer than INDEX_TEXT_BYTES, whole, each at its term's whole_offset. */
+    texts : u8[PLAN_TEXT_BYTES],
+    /** How many of texts' bytes are used. */
+    texts_used : usize,
 }
 
 /** Where a query's walk is: in the walked index's buckets, its spilled records, or done. */
@@ -128,8 +143,8 @@ QueryFound :: struct {
  * @param plan The predicate's terms and count, as the caller filled them; its schema, walk and keys are set, and each
  *     comparison's field and key.
  * @error NotIndexable The terms don't hold together in postfix (one left at the end), name indexes of more than one
- *     schema, give a text for a field that isn't text or a number for one that is, or a bool past 1; or there are
- *     none, or more than MAX_TERMS.
+ *     schema, give a text for a field that isn't text or a number for one that is, or a bool past 1, or a whole
+ *     constant that isn't within texts_used; or there are none, or more than MAX_TERMS.
  * @error NotFound A comparison names an index the volume hasn't.
  * @error OutOfMemory No memory for a node.
  * @error Corrupt A declaration or a node couldn't be read or didn't check out.
@@ -162,7 +177,8 @@ plan_query :: fn(volume : ptr[mut Volume], plan : ptr[mut Plan]) -> Result[void,
             field :: field_kind_of(cast[u32](record.kind)) or_return .Error(.NotIndexable)
             term.field = field
             if field == .Text {
-                if term.text_bytes > term.text.count {
+                if term.text_bytes > term.text.count || term.whole_offset + term.whole_bytes > plan.texts_used
+                    || plan.texts_used > plan.texts.count {
                     return .Error(.NotIndexable)
                 }
                 term.key = text_key(part(term.text, 0, term.text_bytes))
@@ -323,11 +339,28 @@ holds :: fn(volume : ptr[mut Volume], plan : ptr[Plan], file : u64) -> Result[bo
         value := false
         if term.kind == .Compare {
             if indexed_key(volume, file, term.index, keyed)? {
-                order :: if term.field == .Text {
+                order := if term.field == .Text {
                     compare_texts(part(keyed.text, 0, keyed.text_bytes), part(term.text, 0, term.text_bytes))
                 }
                 else {
                     compare_numbers(keyed.key, term.key)
+                }
+                // Both as long as a record keeps, and alike in it: their whole values decide
+                if term.field == .Text && order == 0 && keyed.text_bytes == INDEX_TEXT_BYTES
+                    && term.text_bytes == INDEX_TEXT_BYTES {
+                    // The constant whole: in the plan's texts if it's longer than the term keeps
+                    whole :: term.whole_bytes > 0 && term.whole_offset + term.whole_bytes <= plan.texts.count
+                    order = if whole {
+                        whole_text_order(
+                            volume,
+                            file,
+                            term.index,
+                            part(plan.texts, term.whole_offset, term.whole_offset + term.whole_bytes)
+                        )?
+                    }
+                    else {
+                        whole_text_order(volume, file, term.index, part(term.text, 0, term.text_bytes))?
+                    }
                 }
                 value = compared(order, term.comparison)
             }

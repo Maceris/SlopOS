@@ -92,9 +92,9 @@ Live :: struct {
  * @param plan Where it's planned, zeroed as slopfs.make gives it; filled whatever happens, and good only if null is
  *     given back.
  * @return Null once it's planned; WrongType if the terms don't hold together, there are none or past MAX_TERMS, a
- *     kind or comparison isn't one, a text isn't within the texts, an = or ≠'s text is longer than an index keeps
- *     (slopfs.INDEX_TEXT_BYTES, so it could equal another text alike in what's kept), or it names indexes of more
- *     than one type; NotFound for an index that isn't there; or why the volume couldn't be read.
+ *     kind or comparison isn't one, a text isn't within the texts, the texts longer than an index keeps
+ *     (slopfs.INDEX_TEXT_BYTES) are past slopfs.PLAN_TEXT_BYTES together, or it names indexes of more than one type;
+ *     NotFound for an index that isn't there; or why the volume couldn't be read.
  */
 plan_of :: fn(
     volume : ptr[mut slopfs.Volume],
@@ -121,13 +121,19 @@ plan_of :: fn(
                 return files.FileError.WrongType
             }
             text :: slopfs.part(texts, cast[usize](start), cast[usize](end))
-            exact :: made.comparison == .Equal || made.comparison == .NotEqual
-            if exact && text.count > made.text.count {
-                return files.FileError.WrongType
-            }
             kept :: if text.count < made.text.count { text.count } else { made.text.count }
             slopfs.copy_bytes(made.text, 0, slopfs.part(text, 0, kept))
             made.text_bytes = kept
+            // Longer than a record keeps: kept whole in the plan, which compares it whole (slopfs.holds)
+            if text.count > made.text.count {
+                if text.count > plan.texts.count - plan.texts_used {
+                    return files.FileError.WrongType
+                }
+                made.whole_offset = plan.texts_used
+                made.whole_bytes = text.count
+                slopfs.copy_bytes(plan.texts, plan.texts_used, text)
+                plan.texts_used += text.count
+            }
         }
         plan.terms[i] = made
     }
@@ -746,6 +752,24 @@ indexes_changed :: fn(server : ptr[mut Server], schema : u8[32], dropped : u64) 
         else if state.plan.schema == schema {
             state.resync = true
             answer_live(server, i)
+        }
+    }
+}
+
+/**
+ * Begin every live query again, its next answer Resync, as after a commit that failed and went back to the one before,
+ * whose changes it may have seen.
+ *
+ * @param server The server, whose live queries are marked.
+ */
+restart_lives :: fn(server : ptr[mut Server]) {
+    for live in server.lives {
+        match live.state {
+            case Some(state) => {
+                state.resync = true
+                state.pending_count = 0
+            }
+            case None => {}
         }
     }
 }

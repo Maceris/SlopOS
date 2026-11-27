@@ -255,8 +255,7 @@ index_changes :: fn(volume : ptr[mut Volume]) -> Result[void, Error] {
  * @error NotIndexable The bytes aren't a schema, its type isn't a struct, it has no member of the name, or the
  *     member's of a type an index can't hold; or the name's empty or past INDEX_FIELD_BYTES.
  * @error TooLarge The volume has MAX_INDEXES already.
- * @error OutOfMemory No memory for a buffer or a node, or for working out the schema's hash; the schema's own reading
- *     fails context.assertion_handler.
+ * @error OutOfMemory No memory for a buffer or a node, for reading the schema, or for working out its hash.
  * @error DeviceError A file of the schema couldn't be read.
  * @error NoSpace No free extent for a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
@@ -324,10 +323,15 @@ declare_index :: fn(volume : ptr[mut Volume], schema_bytes : u8[], field : strin
  * @return The declaration: the schema's hash, and the field's offset, size, kind and name.
  * @error NotIndexable The bytes aren't a schema, its type isn't a struct, it has no member of the name, or the
  *     member's of a type an index can't hold, or doesn't fit in the struct.
- * @error OutOfMemory The schema's hash couldn't be worked out, which hash_rooted gives as all zeros.
+ * @error OutOfMemory No memory to read the schema (schema.try_parse), or its hash couldn't be worked out, which
+ *     hash_rooted gives as all zeros.
  */
 field_of :: fn(schema_bytes : u8[], field : string) -> Result[IndexRecord, Error] {
-    parsed := schema.parse(schema_bytes) or_return .Error(.NotIndexable)
+    parsed := schema.Schema.{}
+    match schema.try_parse(schema_bytes) {
+        case Ok(read) => parsed = read
+        case Error(error) => return .Error(if error == .OutOfMemory { Error.OutOfMemory } else { Error.NotIndexable })
+    }
     defer schema.free(&parsed)
     root :: schema.type_in(&parsed, schema.unaliased_place(&parsed, 0)) or_return .Error(.NotIndexable)
     if root.kind != .Struct || root.is_union {
@@ -756,6 +760,65 @@ key_in :: fn(
         return .Ok(true)
     }
     return .Ok(false)
+}
+
+/**
+ * Compare a file's text field with a text by their whole values, the first INDEX_TEXT_BYTES bytes of each being alike,
+ * as a query does where its record of the index keeps no more (query.hsc's holds).
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param file The file's ID, a file in the index.
+ * @param number The index, of a text field.
+ * @param text The text, whole; its first INDEX_TEXT_BYTES bytes are taken to be the file's.
+ * @return -1 if the file's text is before text, 1 if after, 0 if they're the same; 0 too if the file's value no
+ *     longer holds the field, as the record of the index has it.
+ * @error NotFound The index or the file isn't there.
+ * @error OutOfMemory No memory for a buffer or a node.
+ * @error DeviceError The file's chunks couldn't be read.
+ * @error Corrupt A chunk's record or seal, or a node, didn't check out.
+ */
+whole_text_order :: fn(volume : ptr[mut Volume], file : u64, number : u64, text : u8[]) -> Result[int, Error] {
+    index :: index_record(volume, number)? or_return .Error(.NotFound)
+    record :: get_object(volume, file)?
+    size :: cast[u64](record.size)
+    offset :: cast[u64](cast[u32](index.offset))
+    fixed :: cast[u64](cast[u32](index.fixed))
+    if size < fixed || offset + 8 > fixed {
+        return .Ok(0)
+    }
+    relative : u8[8]
+    if !(read_exactly(volume, file, offset, mut_part(relative, 0, 8))?) {
+        return .Ok(0)
+    }
+    start :: little_endian(part(relative, 0, 4))
+    count :: little_endian(part(relative, 4, 8))
+    if start < fixed || start + count > size {
+        return .Ok(0)
+    }
+    length :: cast[u64](text.count)
+    chunk : u8[256]
+    at := cast[u64](INDEX_TEXT_BYTES)
+    loop {
+        file_left :: if count > at { count - at } else { cast[u64](0) }
+        text_left :: if length > at { length - at } else { cast[u64](0) }
+        if file_left == 0 || text_left == 0 {
+            return .Ok(if file_left == text_left { 0 } else if file_left == 0 { -1 } else { 1 })
+        }
+        take :: if file_left < cast[u64](chunk.count) { cast[usize](file_left) } else { chunk.count }
+        if !(read_exactly(volume, file, start + at, mut_part(chunk, 0, take))?) {
+            return .Ok(0)
+        }
+        for i in 0..<take {
+            place :: cast[usize](at) + i
+            if place >= text.count {
+                return .Ok(1)
+            }
+            if chunk[i] != text[place] {
+                return .Ok(if chunk[i] < text[place] { -1 } else { 1 })
+            }
+        }
+        at += cast[u64](take)
+    }
 }
 
 /**

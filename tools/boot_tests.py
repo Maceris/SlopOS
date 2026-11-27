@@ -1485,7 +1485,9 @@ TESTS = [
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then
-    # crashes, so a program that crashed under load, as search once did on RISC-V, is shown with where
+    # crashes, so a program that crashed under load, as search once did on RISC-V, is shown with where. And query
+    # (decisions/0202's 21e): two indexes of made.value's type, TreeMade, declared, then asked with and and not as
+    # bare words, with or and parentheses as one text, one that matches nothing, and one whose ( has no )
     ("searches files, views text, bytes and typed files, and pages a long value", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
@@ -1497,6 +1499,12 @@ TESTS = [
         "view reading/todo.txt\\r\\>"
         "view reading/bytes.bin\\r\\>"
         "view reading/made.value\\r\\>"
+        "query --index TreeMade files\\r\\>"
+        "query --index TreeMade directories\\r\\>"
+        "query TreeMade files == 3 and not directories == 2 | map path\\r\\>"
+        "query TreeMade \"files > 3 or (directories == 1 and not files == 1)\" | map path\\r\\>"
+        "query TreeMade \"files == 3 and directories == 2\"\\r\\>"
+        "query TreeMade \"(files == 3\"\\r\\>"
         "view reading/long.txt | page\\r\\u{lines 1-22 of 60} \\u{lines 23-44 of 60}G\\u{lines 39-60 of 60}k\\u{lines 38-59 of 60}xq\\>"
         "view reading/todo.txt | page\\r\\>"
         "view reading/CAFE\\u0301.txt\\r\\>"
@@ -1512,6 +1520,9 @@ TESTS = [
         "--expect-console-line=error: search --pattern: BadPattern: The pattern isn't a regular expression; check its parentheses, "
         "brackets and repetitions.",
         "--expect-console-line=first", "--expect-console-line=last",
+        "--expect-console-contains=of TreeMade.files", "--expect-console-contains=of TreeMade.directories",
+        "--expect-console-line=reading/made.value", "--expect-console-line=no file matches",
+        "--expect-console-contains=this ( has no )",
         "--expect-console-line=00000010  10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f  |................|",
         "--expect-console-line=files: 3", "--expect-console-line=directories: 1",
         "--expect-console-line=lines 1-22 of 60: Space and b page, Up and Down scroll, q quits",

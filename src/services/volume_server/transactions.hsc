@@ -439,8 +439,9 @@ commit_transaction :: fn(server : ptr[mut Server], index : usize) -> dir.Respons
             case None => {}
         }
     }
+    // One whose indexes couldn't be updated went back to before it (commit), so nothing of it is kept
     if !commit(server) {
-        return .Failed(.DeviceError)
+        return .Failed(server.commit_failure)
     }
     return .Done
 }
@@ -630,7 +631,7 @@ installed :: fn(server : ptr[mut Server], index : usize) -> files.FileError? {
         }
         case Error(error) => return file_error(error)
     }
-    return if commit(server) { cast[files.FileError?](null) } else { files.FileError.DeviceError }
+    return if commit(server) { cast[files.FileError?](null) } else { server.commit_failure }
 }
 
 // Change cursors

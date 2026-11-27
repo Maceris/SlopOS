@@ -40,7 +40,7 @@ SCRIPTS :: Script.[
 ]
 
 /** What it made. */
-Made :: struct {
+TreeMade :: struct {
     /** How many files. */
     files : u64,
     /** How many directories. */
@@ -67,7 +67,7 @@ TreeError :: union {
  * @param here The shell's directory, given without asking, which they're made beneath.
  * @param reading Whether reading is made too: long.txt, of 60 lines, "line 1" to "line 60"; todo.txt, of three, the
  *     second "TODO: water the plants"; bytes.bin, the 32 bytes 0 to 31; made.value, a typed file of this program's
- *     Made, of 3 files and 1 directory; Café.txt, its é one code point, for "did you mean" to find from a name typed
+ *     TreeMade, of 3 files and 1 directory; Café.txt, its é one code point, for "did you mean" to find from a name typed
  *     in capitals with a combining accent; and tone.wav, half a second of 440 Hz at a quarter of full scale, 16 kHz
  *     mono 16-bit integers, for the viewer to play.
  * @param scripts Whether four scripts are made too (decisions/0179, 11e6): report.shell, which takes here, a pattern
@@ -77,7 +77,7 @@ TreeError :: union {
  * @return How many files and directories it made.
  * @error Unwritable Something couldn't be written there.
  */
-main :: fn(here : os.Channel[dir.Dir], reading : bool, scripts : bool) -> Result[Made, TreeError] {
+main :: fn(here : os.Channel[dir.Dir], reading : bool, scripts : bool) -> Result[TreeMade, TreeError] {
     problem :: Problem.{parameter = os.ParameterName.{name = "here"}}
     directory, opened :: os.directory_on(here.end)
     if opened is_some {
@@ -97,7 +97,7 @@ main :: fn(here : os.Channel[dir.Dir], reading : bool, scripts : bool) -> Result
             return .Error(.Unwritable(problem))
         }
     }
-    made := Made.{files = cast[u64](files.count), directories = 2}
+    made := TreeMade.{files = cast[u64](files.count), directories = 2}
     if reading {
         if !make_reading(directory) {
             return .Error(.Unwritable(problem))
@@ -180,13 +180,13 @@ make_reading :: fn(directory : os.Directory) -> bool {
     if !make_tone(directory) {
         return false
     }
-    value :: Made.{files = 3, directories = 1}
+    value :: TreeMade.{files = 3, directories = 1}
     written : u8[..]
     defer runtime.array_free(&written)
     if (schema.try_write_value(value, &written) is_some) || written.count == 0 {
         return false
     }
-    file, error :: os.open_with_schema(directory, "reading/made.value", .WRITE, os.schema_hash_of[Made]())
+    file, error :: os.open_with_schema(directory, "reading/made.value", .WRITE, os.schema_hash_of[TreeMade]())
     if error is_some {
         return false
     }

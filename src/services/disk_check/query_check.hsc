@@ -4,15 +4,17 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import files from "std:os/slop_os/files"
 import query from "std:os/slop_os/query"
 import testing from "std:testing"
 import test_kit from "../../test_kit"
 
 /*
- * Indexes and queries (decisions/0201's 20i and 20j), on the system volume, through std's typed API: indexes of a
- * typed file's fields declared on its root, and refused beneath it, typed files written beneath a directory and
- * committed, queried by a comparison and by an and of two, and a live query that answers what matches, then a file
- * added and one removed as each commits. What it made is taken away again, its indexes dropped and its notes and
+ * Indexes and queries (decisions/0201's 20i and 20j, 0202's 21e), on the system volume, through std's typed API:
+ * indexes of a typed file's fields declared on its root, and refused beneath it as NotVolumeRoot, but found and asked
+ * beneath it; typed files written beneath a directory and committed, queried by a comparison, by an and of two, and by
+ * an or and a not, and by a text past what an index keeps, whole; and a live query that answers what matches, then a
+ * file added and one removed as each commits. What it made is taken away again, its indexes dropped and its notes and
  * their directory removed, so later commits don't index them and the next run begins as this one did.
  */
 
@@ -20,8 +22,11 @@ import test_kit from "../../test_kit"
 QUERIED :: "Queried notes"
 /** How long an event of the live query is waited for, in nanoseconds: 10 s, as an emulated machine is slow. */
 EVENT_WAIT : u64 : 10_000_000_000
+/** Two titles alike in their first 300 bytes, past the 255 an index keeps of a text, which differ after. */
+LONG_ONE :: "a long title, the same for its first 300 bytes: ................................................................................................................................................................................................................................................................ then one"
+LONG_TWO :: "a long title, the same for its first 300 bytes: ................................................................................................................................................................................................................................................................ then two"
 /** The names of every note the check may write in QUERIED, each removed by clean_up. */
-NOTE_NAMES :: string.["one", "two", "three", "four"]
+NOTE_NAMES :: string.["one", "two", "three", "four", "long one", "long two"]
 
 /** The typed files the check writes and asks after: a level, whether it's done, and a title. */
 QueryNote :: struct {
@@ -59,6 +64,7 @@ indexes_answer_queries_and_live_queries_follow_commits #test :: fn(t : ptr[mut t
     defer os.close_directory(notes)
     beneath :: os.declare_index[QueryNote](notes, "level")
     testing.expect(t, beneath is_error, "an index isn't declared from beneath the volume's root")
+    testing.expect_eq(t, refusal_beneath(notes), files.FileError.NotVolumeRoot, "the refusal says it isn't the root")
 
     declaring_level :: os.declare_index[QueryNote](root, "level")
     level :: testing.require_ok(t, declaring_level, "an index of a typed file's integer field is declared")?
@@ -72,6 +78,36 @@ indexes_answer_queries_and_live_queries_follow_commits #test :: fn(t : ptr[mut t
         testing.require_none(t, write_note(notes, each.name, each.level), "a typed note is written")?
     }
     testing.require(t, synced(system.end, port), "the notes commit, and their index entries with them")?
+
+    // Found and asked beneath the root, not on it: an or of a not, level 1 or not under 3
+    found_beneath :: os.index_of[QueryNote](notes, "level")
+    testing.expect_eq(t, (found_beneath or_else os.IndexFound.{}).number, level, "an index is found beneath the root")
+    either := os.Predicate.{}
+    defer os.free_predicate(&either)
+    testing.require_none(t, os.where_number[QueryNote](notes, &either, "level", .Equal, 1), "a comparison is made beneath the root")?
+    testing.require_none(t, os.where_number[QueryNote](notes, &either, "level", .Less, 3), "a second comparison is made")?
+    os.negate(&either)
+    os.either(&either)
+    asking_either :: os.query_in(notes, &either)
+    found_either := testing.require_ok(t, asking_either, "a query of an or of a not is answered")?
+    defer os.free_matches(&found_either)
+    testing.expect_eq(t, found_either.count, 2, "one note's level is 1, one's isn't under 3")
+    testing.expect(t, has_name(&found_either, "one") && has_name(&found_either, "three"), "they're one and three")
+    // A title past what an index keeps, compared whole
+    testing.require_none(t, write_titled(notes, "long one", 5, LONG_ONE), "a note with a long title is written")?
+    testing.require_none(t, write_titled(notes, "long two", 5, LONG_TWO), "another, alike in all an index keeps")?
+    testing.require(t, synced(system.end, port), "the long notes commit")?
+    long := os.Predicate.{}
+    defer os.free_predicate(&long)
+    testing.require_none(t, os.where_text[QueryNote](notes, &long, "title", .Equal, LONG_TWO), "a long text is compared")?
+    asking_long :: os.query_in(notes, &long)
+    found_long := testing.require_ok(t, asking_long, "a query of a long text is answered")?
+    defer os.free_matches(&found_long)
+    testing.expect_eq(t, found_long.count, 1, "only the note whose whole title is the text matches")
+    testing.expect(t, has_name(&found_long, "long two"), "it's the second")
+    testing.require_none(t, os.delete_file_in(notes, "long one"), "the first long note is removed")?
+    testing.require_none(t, os.delete_file_in(notes, "long two"), "the second is")?
+    testing.require(t, synced(system.end, port), "their removal commits")?
 
     // Queried: by a comparison, then by an and of two indexes
     at_least_two := os.Predicate.{}
@@ -171,6 +207,23 @@ clean_up :: fn(root : os.Directory) {
     _ = os.remove_directory_in(root, QUERIED)
 }
 
+/**
+ * Ask a directory beneath the volume's root to drop an index, which only the root may.
+ *
+ * @param directory The directory, which stays the caller's.
+ * @return What it was refused with; WrongType if it wasn't refused, or didn't answer.
+ */
+refusal_beneath :: fn(directory : os.Directory) -> files.FileError {
+    state :: os.directory_of(directory)
+    out := os.Outgoing.{}
+    os.begin[dir.Request](&out)^ = .DropIndex(1)
+    into := os.Incoming.{}
+    match ask_dir(state.end, state.port, &out, &into) {
+        case Failed(failure) => return failure
+        case _ => return .WrongType
+    }
+}
+
 /** A note to write: its name and level. */
 NoteOf :: struct {
     /** Its name, in the notes' directory, and its title. */
@@ -188,10 +241,23 @@ NoteOf :: struct {
  * @return Null once it's written; why not, as os.write_typed_in says.
  */
 write_note :: fn(directory : os.Directory, name : string, level : i32) -> OsError? {
+    return write_titled(directory, name, level, name)
+}
+
+/**
+ * Write a typed note with a title of its own.
+ *
+ * @param directory The directory it's written in, which stays the caller's.
+ * @param name Its name there.
+ * @param level Its level.
+ * @param title Its title, which may be longer than a name can be.
+ * @return Null once it's written; why not, as os.write_typed_in says.
+ */
+write_titled :: fn(directory : os.Directory, name : string, level : i32, title : string) -> OsError? {
     out := os.Outgoing.{}
     note :: os.begin[QueryNote](&out)
     note.level = level
-    note.title = os.append(&out, string_bytes(name))
+    note.title = os.append(&out, string_bytes(title))
     return os.write_typed_in[QueryNote](directory, name, os.value_bytes(&out))
 }
 

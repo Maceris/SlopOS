@@ -195,6 +195,10 @@ Server :: struct {
     described : container.Described,
     /** When what's changed is committed without a Sync, in nanoseconds of the monotonic clock; 0 when nothing has. */
     commit_at : u64,
+    /** The volume's record as it was last committed, or as it was attached: what a commit that fails goes back to. */
+    last_committed : slopfs.VolumeRecord,
+    /** Why the last commit that failed did: NoMemory or NoSpace when its indexes couldn't be updated, else DeviceError. */
+    commit_failure : files.FileError,
     /** The connections, by slot. */
     connections : Connection[MAX_CONNECTIONS],
     /** How many slots of connections have ever been used: one past the highest. */
@@ -306,6 +310,8 @@ main :: fn(
     }
     server.volume = slopfs.attach_volume(&server.nodes, device, described.id, described.record, keys) or_return 7
     server.volume.tree.lineage = described.lineage
+    server.last_committed = slopfs.record_of(server.volume)
+    server.commit_failure = .DeviceError
     // A volume made with nothing in it (decisions/0141) given its root directory, its first commit
     if !described.read_only && slopfs.is_unfilled(&described.record) {
         // Its root directory made when the volume was
@@ -549,15 +555,44 @@ release :: fn(context : rawptr, address : u64, blocks : u64, owner : u64, birth 
  * Make what's changed durable: the volume's dirty nodes written, every write done, then its record committed by the
  * container service, which makes it durable with a checkpoint.
  *
- * What it changed is indexed again as it's written (slopfs.write_volume), and once it's committed, each live query is
- * given what changed (queries.hsc).
+ * What it changed is indexed again first (slopfs.index_changes), and once it's committed, each live query is given what
+ * changed (queries.hsc). A commit is all of what changed since the last one, or none of it (decisions/0202's 21e): one
+ * whose indexes can't be updated, for want of memory or space for their nodes or a changed file that can't be read,
+ * goes back to the last commit, every change since then forgotten as a crash would, rather than committing a file
+ * without its entries; the volume is served as it was then, and its live queries begin again.
  *
- * @param server The server, whose commit_at is cleared and whose next transaction is the one the container gives.
- * @return Whether it was committed; a failure marks the volume failed, logged, and every later commit fails too.
+ * @param server The server, whose commit_at is cleared, whose last_committed is the record committed, and whose next
+ *     transaction is the one the container gives.
+ * @return Whether it was committed. One whose indexes couldn't be updated is logged and gone back from, commit_failure
+ *     saying why (NoMemory, NoSpace, DeviceError); any other failure, or an index's record that doesn't check out,
+ *     marks the volume failed, logged, and every later commit fails too (commit_failure DeviceError).
  */
 commit :: fn(server : ptr[mut Server]) -> bool {
     server.commit_at = 0
+    server.commit_failure = .DeviceError
     keep_committed(server)
+    if !server.volume.failed {
+        match slopfs.index_changes(server.volume) {
+            case Ok => {}
+            case Error(error) => {
+                if error == .Corrupt {
+                    log_line.write(server.log, "volume_server: volume %'s indexes don't check out: %", server.volume.id, error)
+                    server.volume.failed = true
+                    return false
+                }
+                log_line.write(
+                    server.log,
+                    "volume_server: volume %'s indexes can't be updated (%), so what changed since its last commit is forgotten",
+                    server.volume.id,
+                    error
+                )
+                undo(server, server.last_committed)
+                server.commit_failure = file_error(error)
+                restart_lives(server)
+                return false
+            }
+        }
+    }
     record := slopfs.VolumeRecord.{}
     match slopfs.write_volume(server.volume) {
         case Ok(written) => record = written
@@ -570,6 +605,7 @@ commit :: fn(server : ptr[mut Server]) -> bool {
     match ask(server, .Commit(record)) {
         case Committed(next) => {
             server.nodes.transaction = next
+            server.last_committed = record
             feed_lives(server)
             return true
         }

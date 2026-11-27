@@ -1,6 +1,7 @@
 package slopfs_test
 
 import runtime from "base:runtime"
+import memory from "std:memory"
 import schema from "std:schema"
 import testing from "std:testing"
 import slopfs from ".."
@@ -12,7 +13,8 @@ import slopfs from ".."
  * snapshot as its tree had it; and queries over them, bounded by an index's range or walking it, through and, or and
  * not, beneath a directory, a bounded number of files a step, going on from a cursor that a removal doesn't move.
  * What an index keeps is looked at record by record too (index_records), so a removal or a drop is seen to leave
- * nothing behind.
+ * nothing behind. Texts longer than an index's records keep are compared by their whole values, and indexes that
+ * can't be made at a commit leave it to be forgotten whole (decisions/0202's 21e).
  */
 
 /** Where a typed file's text is, from its value's start, as a message's Relative is; it names its elements' type. */
@@ -40,7 +42,7 @@ Task :: struct {
 }
 
 /** How many bytes a Task's value takes, its fixed part and its name, at most. */
-VALUE_BYTES :: 128
+VALUE_BYTES :: 1024
 
 /** A Task's value as a typed file holds it. */
 Value :: struct {
@@ -845,5 +847,190 @@ an_index_forgets_with_its_transaction_and_a_snapshot_keeps_its_own #test :: fn(
     defer slopfs.free_volume(then)
     testing.expect_eq(t, count_of(then, root, one), 1, "the snapshot finds the value the file had when it was taken")
     testing.expect_eq(t, count_of(then, root, two), 0, "and not the one it was given after")
+    return .Ok
+}
+
+/**
+ * Make a text of a run of one byte then a word, as long as asked.
+ *
+ * @param count How long it is, at least the word's length.
+ * @param tail The word it ends with; its bytes go last.
+ * @return The text, on the heap, the caller's to give back with runtime.free_array of its bytes; empty without the
+ *     memory.
+ */
+long_text :: fn(count : usize, tail : string) -> string {
+    made, error :: runtime.new_array(u8, count)
+    if error != null || made.count == 0 {
+        return ""
+    }
+    for i in 0..<made.count {
+        made[i] = cast[u8]('x')
+    }
+    for byte, i in string_bytes(tail) {
+        at :: count - tail.count + i
+        if at < made.count {
+            made[at] = byte
+        }
+    }
+    return string_of(&made[0], made.count)
+}
+
+/**
+ * Count the files a text comparison finds, its constant kept whole in the plan as a server keeps one longer than an
+ * index's records do.
+ *
+ * @param volume The volume.
+ * @param index The text index's number.
+ * @param comparison How the field is compared.
+ * @param text The constant, whole.
+ * @return How many files beneath the root it finds; or why it couldn't be planned or run.
+ */
+count_long :: fn(
+    volume : ptr[mut slopfs.Volume],
+    index : u64,
+    comparison : slopfs.Comparison,
+    text : string
+) -> Result[u64, slopfs.Error] {
+    plan :: slopfs.make(slopfs.Plan)?
+    defer runtime.free(plan)
+    plan.terms[0] = compare_text(index, comparison, text)
+    if text.count > slopfs.INDEX_TEXT_BYTES {
+        slopfs.copy_bytes(plan.texts, 0, string_bytes(text))
+        plan.texts_used = text.count
+        plan.terms[0].whole_offset = 0
+        plan.terms[0].whole_bytes = text.count
+    }
+    plan.count = 1
+    slopfs.plan_query(volume, plan)?
+    count := cast[u64](0)
+    cursor := slopfs.QueryCursor.{}
+    loop {
+        found :: slopfs.query_next(volume, plan, slopfs.ROOT_OBJECT, cursor, slopfs.QUERY_LOOKS)? or_break
+        if found.file != 0 {
+            count += 1
+        }
+        cursor = found.next
+    }
+    return .Ok(count)
+}
+
+a_long_text_is_compared_by_its_whole_value_past_what_an_index_keeps #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
+    kept :: kept_volume(t)?
+    defer free_kept(kept)
+    volume :: kept.made.volume
+    root :: slopfs.ROOT_OBJECT
+    task := task_schema()
+    defer free_schema(&task)
+    declaring :: slopfs.declare_index(volume, task.bytes, "name")
+    name :: testing.require_ok(t, declaring, "an index of a text field is declared")?
+    /*
+     * Three texts alike in their first 600 bytes, so in all an index's record keeps: x's then apple, x's then berry,
+     * and more x's then apple, which orders after both; and one shorter than a record keeps, x's then apple
+     */
+    apple :: long_text(650, "apple")
+    berry :: long_text(650, "berry")
+    longer :: long_text(690, "apple")
+    short :: long_text(200, "apple")
+    names :: string.[apple, berry, longer, short]
+    defer {
+        for text in names {
+            if text.count > 0 {
+                runtime.free_array(view_of(cast[ptr[mut u8]](&text[0]), text.count))
+            }
+        }
+    }
+    testing.require(t, apple.count > 0 && berry.count > 0 && longer.count > 0 && short.count > 0, "the texts are made")?
+    for text, i in names {
+        file_name : u8[16]
+        length :: name_of_number(file_name, cast[int](i))
+        writing :: write_task(volume, root, string_of(&file_name[0], length), task.hash, task_value(1, 0, false, text))
+        require_done(t, writing, "a typed file with a long name is made")?
+    }
+    testing.require(t, commit_apart(kept.made), "the files commit")?
+    testing.expect_eq(t, count_long(volume, name, .Equal, apple) or_else 99, 1, "= finds only the text that's the same whole")
+    testing.expect_eq(t, count_long(volume, name, .NotEqual, apple) or_else 99, 3, "≠ finds the other three")
+    testing.expect_eq(t, count_long(volume, name, .Equal, longer) or_else 99, 1, "a longer text with the same start isn't the same")
+    testing.expect_eq(t, count_long(volume, name, .Less, berry) or_else 99, 2, "< orders by what's past the kept bytes")
+    testing.expect_eq(t, count_long(volume, name, .Greater, apple) or_else 99, 2, "> finds berry and the longer apple")
+    testing.expect_eq(t, count_long(volume, name, .GreaterOrEqual, longer) or_else 99, 1, ">= of the longest finds it alone")
+    testing.expect_eq(t, count_long(volume, name, .Equal, short) or_else 99, 1, "a text shorter than what's kept is exact as before")
+    // A constant past what's kept, but the plan not told it whole: compared by its first bytes, as all four start so
+    cut :: count_of(volume, root, slopfs.Term.[compare_text(name, .Less, apple)])
+    testing.expect_eq(t, cut, 1, "without the whole constant, only the short text is before its first bytes")
+    return .Ok
+}
+
+an_index_that_cant_be_made_at_commit_leaves_the_changes_to_be_forgotten_whole #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
+    device :: formatted(t, BLOCKS, 0x61)?
+    defer free_device(device)
+    mounting :: slopfs.mount(device)
+    container :: testing.require_ok(t, mounting, "a formatted disk mounts")?
+    defer slopfs.unmount(container)
+    creating :: create_test_volume(container, "unindexed", false)
+    volume :: testing.require_ok(t, creating, "a new container has room for a volume")?
+    root :: slopfs.ROOT_OBJECT
+    task := task_schema()
+    defer free_schema(&task)
+    declaring :: slopfs.declare_index(volume, task.bytes, "size")
+    size :: testing.require_ok(t, declaring, "an index is declared")?
+    making :: write_task(volume, root, "a", task.hash, task_value(1, 0, false, "a"))
+    require_done(t, making, "a typed file is made")?
+    require_commit(t, container, "the index and the file commit")?
+    committed :: slopfs.record_of(volume)
+
+    /*
+     * Written again, with a file made beside it, then indexed with each of its allocations failing in turn, as one
+     * without the memory: the indexing fails and the volume isn't failed; gone back to the last commit, as a volume
+     * server does, the writes and their half-made entries are all forgotten, until one with every allocation it needs
+     */
+    failures := 0
+    for fail_at in cast[u64](1)..<200 {
+        rewriting :: write_task(volume, root, "a", task.hash, task_value(2, 0, false, "a"))
+        require_done(t, rewriting, "the file is written again")?
+        making_b :: write_task(volume, root, "b", task.hash, task_value(3, 0, false, "b"))
+        require_done(t, making_b, "another typed file is made")?
+        failing :: testing.require_some(t, memory.make_failing(fail_at), "a failing allocator is made")?
+        indexing : Result[void, slopfs.Error] = .Ok
+        push_context failing_context (allocator = memory.failing_allocator(failing)) {
+            indexing = slopfs.index_changes(volume)
+        }
+        failed :: failing.failed
+        memory.free_failing(failing)
+        if !failed {
+            testing.require(t, indexing is_ok, "indexing with every allocation it asks for succeeds")?
+            undone : slopfs.Change[..]
+            defer runtime.array_free(&undone)
+            slopfs.abandon_volume(container, volume.id, &undone)
+            slopfs.forget(volume, committed)
+            break
+        }
+        testing.require(t, indexing is_error, "indexing fails when an allocation it needs fails")?
+        testing.expect(t, !volume.failed, "a failed index update doesn't fail the volume")
+        failures += 1
+        undone : slopfs.Change[..]
+        defer runtime.array_free(&undone)
+        slopfs.abandon_volume(container, volume.id, &undone)
+        slopfs.forget(volume, committed)
+        testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 1)]), 1, "the file's committed value is found")
+        testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 2)]), 0, "its forgotten write isn't")
+        testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 3)]), 0, "nor the file made with it")
+        gone :: match slopfs.lookup(volume, root, "b") {
+            case Ok(found) => found is_none
+            case Error(error) => false
+        }
+        testing.expect(t, gone, "the file made since the commit is gone")
+    }
+    testing.expect(t, failures > 0, "indexing asks for memory, so a failed allocation fails it")
+    require_commit(t, container, "the volume commits after going back")?
+    testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 1)]), 1, "the committed value is still found")
+    // And the next change is indexed as it commits
+    again :: write_task(volume, root, "a", task.hash, task_value(4, 0, false, "a"))
+    require_done(t, again, "the file is written once more")?
+    require_commit(t, container, "the write commits, indexed")?
+    testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 4)]), 1, "its new value is found")
     return .Ok
 }
