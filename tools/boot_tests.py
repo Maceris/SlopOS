@@ -1493,8 +1493,9 @@ TESTS = [
         "--expect-console-line=error: test_libc_files ended with 255"])),
     # C ports from the shell (decisions/0202, 21g): test_c_ports' files beneath the shell's directory; Lua's checks,
     # given arguments, an error nothing catches (its message and 1), and -e; then minigzip compressing a file, its .gz
-    # the same bytes on every architecture, and giving it back, the bytes it was; then Lua holding 6 MiB, more than a
-    # program that asks for no memory is given, as it asks for 16 MiB (21f), given its script as a bare word
+    # the same bytes on every architecture, and giving it back, the bytes it was; then Lua holding 20 MB, more than the
+    # shell's own 16 MiB budget, as it asks for 32 MiB (21f) out of the session's programs budget (21i), given its script
+    # as a bare word; and test_memory_ask, which asks for 96 MiB, more than that budget's 48, refused
     ("runs Lua and minigzip from the shell, C ports on the libc", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=240")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
@@ -1507,7 +1508,8 @@ TESTS = [
         "lua [\"compare.lua\", \"gz\"]\\r\\>"
         "minigzip [\"-d\", \"gzip_input.txt.gz\"]\\r\\>"
         "lua [\"compare.lua\", \"back\"]\\r\\>"
-        "lua big.lua\\r",
+        "lua big.lua\\r\\>"
+        "test_memory_ask\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=lua checks: 39 of 39 passed",
@@ -1515,7 +1517,9 @@ TESTS = [
         "--expect-console-line=42",
         "--expect-console-line=gz: 1865 bytes, hash dd37d4ba",
         "--expect-console-line=gunzipped: true, 4373 bytes",
-        "--expect-console-line=big: 9600000 bytes, 2400 pieces"])),
+        "--expect-console-line=big: 20000000 bytes, 5000 pieces",
+        "--expect-console-line=  test_memory_ask",
+        "--expect-console-contains=error: test_memory_ask asks for 96 MiB to run on, more than the shell has to give now ("])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then

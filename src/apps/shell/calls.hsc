@@ -26,29 +26,33 @@ import shell_language as language from "../../shell_language"
  */
 
 /**
- * The memory a program the shell runs is given to run on, in bytes, split off the shell's budget, when it declares
- * none: 4 MiB.
+ * The memory a program the shell runs is given to run on, in bytes, when it declares none: 4 MiB.
  */
 PROGRAM_BUDGET : u64 : 4 * 1024 * 1024
 /**
- * What the shell keeps of its budget for itself, in bytes, past what a program it runs may take (decisions/0202, 21i):
- * 8 MiB. A program is given what its bundle asks for (its PROGRAM_MEMORY) when the shell's budget has that much
- * uncharged beyond this reserve (program_room), with no fixed cap; one that asks for more isn't run.
+ * What the shell keeps of its own budget for itself, in bytes, when it splits a program's budget off its own (it has
+ * no programs budget): 8 MiB. A program is given what its bundle asks for (its PROGRAM_MEMORY) when the budget it's
+ * split off has that much uncharged (program_room), with no fixed cap; one that asks for more isn't run.
  */
 SHELL_RESERVE : u64 : 8 * 1024 * 1024
 
 /**
- * Find how much memory the shell can give a program now: its budget's limit less what's charged to it, its programs'
- * running already among that, and less SHELL_RESERVE.
+ * Find how much memory the shell can give a program now (decisions/0202, 21i): its session's programs budget's limit
+ * less what's charged to it, its programs' running already among that; or, without one, its own budget's so, less
+ * SHELL_RESERVE.
  *
- * @return The bytes; 0 when there's no more than the reserve left, or the budget can't be described.
+ * @param shell The shell, whose programs_budget says which budget.
+ * @return The bytes; 0 when there's nothing left (or no more than the reserve, of the shell's own), or the budget can't
+ *     be described.
  */
-program_room :: fn() -> u64 {
-    info :: slop_os.memory_budget_info(slop_os.startup_block().budget) or_return 0
-    if info.used >= info.limit || info.limit - info.used <= SHELL_RESERVE {
+program_room :: fn(shell : ptr[Shell]) -> u64 {
+    reserve :: if shell.programs_budget is_some { cast[u64](0) } else { SHELL_RESERVE }
+    budget :: shell.programs_budget or_else slop_os.startup_block().budget
+    info :: slop_os.memory_budget_info(budget) or_return 0
+    if info.used >= info.limit || info.limit - info.used <= reserve {
         return 0
     }
-    return info.limit - info.used - SHELL_RESERVE
+    return info.limit - info.used - reserve
 }
 
 /** One of a program's parameters, as its manifest has it, and what it's given. */
@@ -137,7 +141,7 @@ prepare_call :: fn(
     if entry.kind != .Function {
         return .Error(EvalError.{message = message("%'s manifest isn't an entry's", tree.text), at = tree.at})
     }
-    room :: program_room()
+    room :: program_room(shell)
     if call.budget > room {
         return .Error(
             EvalError.{
@@ -411,6 +415,8 @@ start_call :: fn(shell : ptr[mut Shell], call : ptr[mut Call], key : u64) -> Eva
     // On a CPU budget of its own, a child of its session's (decisions/0187)
     own_cpu :: program_cpu_budget(shell)
     options.cpu_budget = bindable_copy(own_cpu)
+    // Its memory out of the session's programs budget, where the shell has one (decisions/0202, 21i)
+    options.memory_budget = shell.programs_budget
     budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
     match os.launch_named(
         manager,

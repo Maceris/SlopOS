@@ -23,10 +23,11 @@ LUA_C :: #library("lua_c")
 c_main #foreign(LUA_C) #link_name("main") : fn(argc : i32, argv : ptr[mut cstring?]) -> i32 : ---
 
 /**
- * The memory Lua asks to run on (decisions/0202, 21f): 16 MiB, for scripts whose tables and strings outgrow the 4 MiB a
- * program that asks for none is given.
+ * The memory Lua asks to run on (decisions/0202, 21f and 21i): 32 MiB, for scripts whose tables and strings outgrow
+ * the 4 MiB a program that asks for none is given, and more than the shell's own budget, as it comes out of the
+ * session's programs budget.
  */
-PROGRAM_MEMORY : u64 : 16 * 1024 * 1024
+PROGRAM_MEMORY : u64 : 32 * 1024 * 1024
 
 /**
  * Run Lua, as its own lua does.

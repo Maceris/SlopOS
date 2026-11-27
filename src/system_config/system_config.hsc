@@ -401,6 +401,7 @@ SERVICES :: Service.[
         module = "session_manager.elf",
         starter = .Supervisor,
         by_manager = true,
+        // Its own, each session's shell's (16 MiB) and programs budget (48 MiB, the first session's), and the rest
         budget = 128 * MIB,
         entry = type_of(session_manager.main),
         cpu = SESSIONS_CPU,
