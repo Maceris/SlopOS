@@ -73,6 +73,7 @@ import i6300esb from "../../drivers/i6300esb"
 import power_button from "../../drivers/power_button"
 import ahci from "../../drivers/ahci"
 import nvme from "../../drivers/nvme"
+import xhci from "../../drivers/xhci"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_gpu from "../../drivers/virtio_gpu"
@@ -84,6 +85,7 @@ import service_kit from "../../libraries/service_kit"
 import log_line from "../../log_line"
 import accounts from "../../protocols/accounts"
 import block from "../../protocols/block"
+import usb_bus from "../../protocols/usb_bus"
 import bundle_store from "../../protocols/bundle_store"
 import clock_setting from "../../protocols/clock_setting"
 import config as config_protocol from "../../protocols/config"
@@ -271,6 +273,8 @@ Speaks :: enum {
     Audio,
     /** The audio service: the sound protocol. */
     Sound,
+    /** A USB host controller's driver: the USB bus protocol, which only the supervisor speaks to it. */
+    UsbBus,
 }
 
 /**
@@ -808,6 +812,8 @@ Modules :: struct {
     nvme : slop_os.Memory?,
     /** The AHCI driver's module. */
     ahci : slop_os.Memory?,
+    /** The xHCI driver's module. */
+    xhci : slop_os.Memory?,
     /** The virtio console driver's module. */
     virtio_console : slop_os.Memory?,
     /** The virtio input driver's module. */
@@ -1133,6 +1139,9 @@ Supervisor :: struct {
     connector_count : usize,
     /** The port it waits on: what it started ending, connectors' Dials, DMA faults, and its connections' closes. */
     port : slop_os.Port,
+    /** The USB interfaces the host controllers' drivers have told of, usb_count of them. */
+    usb : UsbInterface[MAX_USB_INTERFACES],
+    usb_count : usize,
     /** The first serial line's driver, by index in started; NOWHERE without one. */
     first_serial : usize,
     /** The first disk's driver, by index in started; NOWHERE without one. */
@@ -1335,6 +1344,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param virtio_blk_module The virtio block driver's program.
  * @param nvme_module The NVMe driver's program.
  * @param ahci_module The AHCI driver's program.
+ * @param xhci_module The xHCI driver's program.
  * @param virtio_console_module The virtio console driver's program.
  * @param virtio_input_module The virtio input driver's program.
  * @param virtio_rng_module The virtio entropy driver's program.
@@ -1392,6 +1402,7 @@ main :: fn(
     virtio_blk_module : slop_os.Memory?,
     nvme_module : slop_os.Memory?,
     ahci_module : slop_os.Memory?,
+    xhci_module : slop_os.Memory?,
     virtio_console_module : slop_os.Memory?,
     virtio_input_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
@@ -1516,6 +1527,7 @@ main :: fn(
         virtio_blk = virtio_blk_module,
         nvme = nvme_module,
         ahci = ahci_module,
+        xhci = xhci_module,
         virtio_console = virtio_console_module,
         virtio_input = virtio_input_module,
         virtio_rng = virtio_rng_module,
@@ -1667,6 +1679,7 @@ main :: fn(
         }
     }
     start_drivers(&supervisor, true)
+    start_usb(&supervisor)
     storage_slot :: start_storage(&supervisor, NOWHERE)
     supervisor.storage_slot = storage_slot
     if storage_slot != NOWHERE {
@@ -2920,6 +2933,13 @@ start_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, device : pla
         pair :: listener_for[block.Block](supervisor, &device) or_return void
         listener = pair.b
         launched = launch_serving[block.Block](supervisor, service, device, pair.a, type_of(virtio_blk.main))
+    }
+    else if service.name == "xhci" {
+        name = "xhci"
+        speaks = .UsbBus
+        pair :: listener_for[usb_bus.UsbBus](supervisor, &device) or_return void
+        listener = pair.b
+        launched = launch_serving[usb_bus.UsbBus](supervisor, service, device, pair.a, type_of(xhci.main))
     }
     else if service.name == "ahci" {
         name = "ahci"
@@ -5179,6 +5199,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "ahci" {
         modules.ahci
     }
+    else if name == "xhci" {
+        modules.xhci
+    }
     else if name == "virtio_input" {
         modules.virtio_input
     }
@@ -5562,6 +5585,88 @@ start_drivers :: fn(supervisor : ptr[mut Supervisor], boot_set : bool) {
             start_driver(supervisor, index, device, NOWHERE)
         }
     }
+}
+
+/** The most USB interfaces the supervisor keeps, from every host controller: 16. */
+MAX_USB_INTERFACES :: 16
+/** How long start_usb waits for each host controller's driver to say it's Settled: 10 s. */
+USB_SETTLE_WAIT : u64 : 10_000_000_000
+
+/** A USB interface a host controller's driver told of. */
+UsbInterface :: struct {
+    /** What it said of it: its key, IDs, class, subclass and protocol, and the connection to it, the supervisor's. */
+    found : usb_bus.Interface,
+    /** The host controller's driver's entry in started. */
+    controller : usize,
+}
+
+/**
+ * Hear from each USB host controller's driver what it found on its ports, until it says it's Settled or
+ * USB_SETTLE_WAIT has passed: each interface kept, with its connection, for its class driver.
+ *
+ * @param supervisor The supervisor, whose usb takes each interface; one past MAX_USB_INTERFACES is closed. Its port
+ *     isn't handled while it waits.
+ */
+start_usb :: fn(supervisor : ptr[mut Supervisor]) {
+    for i in 0..<supervisor.started_count {
+        if i >= supervisor.started.count || supervisor.started[i].speaks != .UsbBus || !supervisor.started[i].running {
+            continue
+        }
+        end :: supervisor.started[i].listener
+        port :: os.port_for(supervisor.block.budget, end) or_continue
+        deadline :: (slop_os.clock_monotonic() or_else 0) + USB_SETTLE_WAIT
+        settled := false
+        loop {
+            out := os.Outgoing.{}
+            made :: os.begin[usb_bus.Request](&out)
+            made^ = .Next
+            if usb_bus.send_request(end, port, &out) is_some {
+                break
+            }
+            into := os.Incoming.{}
+            match usb_bus.receive_response(end, port, &into, true, deadline) {
+                case Received => {}
+                case _ => break
+            }
+            match os.message_of[usb_bus.Response](&into)^ {
+                case Attached(found) => keep_usb(supervisor, i, found)
+                case Settled => {
+                    settled = true
+                    break
+                }
+                case _ => {}
+            }
+        }
+        _ = slop_os.handle_close(cast[slop_os.Handle](port))
+        if !settled {
+            log_line.write(supervisor.log, "supervisor: %'s USB devices didn't settle", supervisor.started[i].name)
+        }
+    }
+}
+
+/**
+ * Keep a USB interface a host controller's driver told of, and say it has no class driver yet.
+ *
+ * @param supervisor The supervisor, whose usb takes it.
+ * @param controller The host controller's driver's entry in started.
+ * @param found What it said; its connection is the supervisor's, closed if there's no room.
+ */
+keep_usb :: fn(supervisor : ptr[mut Supervisor], controller : usize, found : usb_bus.Interface) {
+    if supervisor.usb_count >= supervisor.usb.count {
+        _ = slop_os.handle_close(cast[slop_os.Handle](found.device.end))
+        return void
+    }
+    supervisor.usb[supervisor.usb_count] = UsbInterface.{found = found, controller = controller}
+    supervisor.usb_count += 1
+    log_line.write(
+        supervisor.log,
+        "supervisor: USB interface %1:%2 (class %3, subclass %4, protocol %5) has no driver",
+        found.vendor,
+        found.product,
+        found.class,
+        found.subclass,
+        found.protocol
+    )
 }
 
 /**
@@ -6365,6 +6470,35 @@ start_hello :: fn(supervisor : ptr[mut Supervisor], again : usize) {
 }
 
 /**
+ * Ask a disk's driver whether its disk has any blocks, on a connection made for it and closed after.
+ *
+ * @param supervisor The supervisor.
+ * @param target The driver's entry in started, one that speaks the block protocol.
+ * @return False if it answered Describe with no blocks, or couldn't be dialed; true otherwise.
+ */
+has_blocks :: fn(supervisor : ptr[mut Supervisor], target : usize) -> bool {
+    end :: dial(supervisor, target) or_return false
+    defer slop_os.handle_close(cast[slop_os.Handle](end))
+    port :: os.port_for(supervisor.block.budget, end) or_return true
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    made :: os.begin[block.Request](&out)
+    made^ = .Describe
+    if block.send_request(end, port, &out) is_some {
+        return true
+    }
+    into := os.Incoming.{}
+    match block.receive_response(end, port, &into, true) {
+        case Received => {}
+        case _ => return true
+    }
+    return match os.message_of[block.Response](&into)^ {
+        case Described(info) => info.block_count > 0
+        case _ => true
+    }
+}
+
+/**
  * Start the storage manager, when there's a disk, with a connector to each of the first four disks' drivers, a
  * connector to the process manager, copies of the partition, FAT, container and volume servers' modules, the kernel's
  * command line, and a listener for its clients, whose other end the supervisor keeps.
@@ -6377,6 +6511,16 @@ start_hello :: fn(supervisor : ptr[mut Supervisor], again : usize) {
  */
 start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
     if supervisor.first_disk == NOWHERE {
+        return NOWHERE
+    }
+    // Only disks with blocks, as a controller with nothing on it serves none of (decisions/0201, 20c); with none, no storage
+    any_blocks := false
+    for i in 0..<supervisor.started_count {
+        if i < supervisor.started.count && supervisor.started[i].speaks == .Block && has_blocks(supervisor, i) {
+            any_blocks = true
+        }
+    }
+    if !any_blocks {
         return NOWHERE
     }
     service :: service_named(supervisor, "storage_manager") or_return NOWHERE
@@ -6400,7 +6544,7 @@ start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
     disks : MaybeConnector[4]
     found : usize = 0
     for entry, i in supervisor.started {
-        if i < supervisor.started_count && entry.speaks == .Block && found < disks.count {
+        if i < supervisor.started_count && entry.speaks == .Block && found < disks.count && has_blocks(supervisor, i) {
             disks[found] = connector_to(supervisor, i)
             found += 1
         }
@@ -7146,6 +7290,7 @@ dial :: fn(supervisor : ptr[mut Supervisor], target : usize) -> slop_os.Channel?
         case .Accounts => (accounts.connect(entry.listener, port, budget) or_return null).end
         case .Audio => (audio.connect(entry.listener, port, budget) or_return null).end
         case .Sound => (sound.connect(entry.listener, port, budget) or_return null).end
+        case .UsbBus => null
         case .Nothing => null
     }
 }

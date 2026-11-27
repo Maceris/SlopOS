@@ -20,6 +20,7 @@ import i6300esb from "../drivers/i6300esb"
 import power_button from "../drivers/power_button"
 import ahci from "../drivers/ahci"
 import nvme from "../drivers/nvme"
+import xhci from "../drivers/xhci"
 import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
 import virtio_gpu from "../drivers/virtio_gpu"
@@ -672,6 +673,22 @@ SERVICES :: Service.[
         budget = 4 * MIB,
         entry = type_of(virtio_blk.main),
         devices = platform_protocol.DeviceMatch.{vendor = 0x1af4, device = 0x1042, class = platform_protocol.ANY_CLASS},
+        trusted_with_dma = true,
+    },
+    // A USB host controller, xHCI, by its class (serial bus, USB, xHCI); its rings and buffers are DMA memory
+    Service.{
+        name = "xhci",
+        boot_set = true,
+        module = "xhci.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 4 * MIB,
+        entry = type_of(xhci.main),
+        devices = platform_protocol.DeviceMatch.{
+            vendor = platform_protocol.ANY_ID,
+            device = platform_protocol.ANY_ID,
+            class = 0x0c0330,
+        },
         trusted_with_dma = true,
     },
     // An AHCI controller, by its class (mass storage, SATA, AHCI 1.0); its buffers are its clients' DMA memory

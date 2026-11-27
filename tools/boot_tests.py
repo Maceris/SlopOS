@@ -135,6 +135,10 @@ AARCH64_IOMMU_LINE = "[info] IOMMU 0: SMMUv3, 128 KiB of registers at 0x00000000
 # How it translates (src/kernel/translation.hsc): VT-d remapping interrupts too, and signalling its faults; SMMUv3 not
 # The real-time clock the platform service finds: the MC146818 on x86-64, and the device tree's PL031 on AArch64
 X86_CLOCK_LINE = "[user] platform: the real-time clock (Mc146818) claimed"
+# What the supervisor starts on a boot with nothing but its own devices: on x86-64, q35's AHCI controller's driver too,
+# though with no disk on it there's no storage manager, beside AArch64's and RISC-V's 8 (decisions/0201, 20c)
+X86_SERVICES_LINE = "[user] root task: the supervisor started all 9 of its services"
+OTHER_SERVICES_LINE = "[user] root task: the supervisor started all 8 of its services"
 # What the shell says of a program that ran intrinsics.trap: ud2 on x86-64, brk on AArch64
 CRASH_LINE = "error: test_shell_calls crashed: invalid instruction; crashes shows where"
 AARCH64_CRASH_LINE = "error: test_shell_calls crashed: breakpoint; crashes shows where"
@@ -249,14 +253,14 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 105 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 108 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
         "--expect-line=[user] process manager: started supervisor", "--expect-line=[user] process manager: started hello",
         "--expect-line=[user] hello: heap working, random numbers working",
         "--expect-line=[user] hello: the entropy service gave 32 random bytes", "--expect-line=[user] root task: the supervisor started hello",
-        "--expect-line=[user] platform: serving", "--expect-line=[user] root task: the supervisor started all 8 of its services",
+        "--expect-line=[user] platform: serving", f"--expect-line={X86_SERVICES_LINE}",
         HEALTHY_LINE,
         "--expect-line=[info] root task ended with code 0"]),
     # The IOMMU the platform service found in the firmware tables, which the kernel identified
@@ -515,6 +519,22 @@ TESTS = [
         f"--expect-line={tests_passed('disk_check', 13, 9)}",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # A USB host controller (decisions/0201's 20d): a keyboard on a root port, a hub on another with a mouse behind it,
+    # and a tablet; each device addressed, its descriptors read and its interfaces told to the supervisor. QEMU's USB 2
+    # ports, which these are on, are the controller's 5 to 8, after its USB 3 ones; its IDs are logged in decimal
+    ("finds USB devices on root ports and behind a hub", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services",
+        "--expect-line=[user] xhci: 1575:1 on port 5: interface 0, class 3, subclass 1, protocol 1",
+        "--expect-line=[user] xhci: a hub of 8 ports on port 6",
+        "--expect-line=[user] xhci: 1575:1 on port 6, behind a hub: interface 0, class 3, subclass 1, protocol 2",
+        "--expect-line=[user] xhci: 1575:1 on port 7: interface 0, class 3, subclass 0, protocol 0",
+        "--expect-line=[user] xhci: serving 8 ports, 3 devices found",
+        "--expect-line=[user] supervisor: USB interface 1575:1 (class 3, subclass 1, protocol 1) has no driver",
+        "--expect-line=[user] supervisor: USB interface 1575:1 (class 3, subclass 1, protocol 2) has no driver",
+        "--expect-line=[user] supervisor: USB interface 1575:1 (class 3, subclass 0, protocol 0) has no driver",
+        "--expect-line=[info] root task ended with code 0", "--",
+        "-device", "qemu-xhci,id=usb", "-device", "usb-kbd,bus=usb.0,port=1", "-device", "usb-hub,bus=usb.0,port=2",
+        "-device", "usb-mouse,bus=usb.0,port=2.1", "-device", "usb-tablet,bus=usb.0,port=3"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
     # loading only the boot set; the storage stack finding its partitions and its SlopOS
     # container, every other program read from the system volume, and the disk check passing on it as on the test disk
@@ -1788,7 +1808,7 @@ TESTS = [
         "--expect-line=[user] storage_manager: restarted the partition server for disk 0"])),
     ("keeps the kernel's share of memory out of the root budget", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services kernel_reserve=24",
         "--expect-line=[info] memory: 24 MiB kept out of the root budget for the kernel's own",
-        "--expect-line=[user] root task: the supervisor started all 8 of its services"]),
+        f"--expect-line={X86_SERVICES_LINE}"]),
     ("doesn't start the root task with no_root_task", 0, [WITH_PROGRAMS, "--command-line=test_exit no_root_task",
         "--expect-line=[info] boot memory reclaimed"]),
     ("reports a kernel fault", 1, ["--command-line=test_exit test_fault"]),
@@ -1934,6 +1954,7 @@ def aarch64_tests(tests: list, own: bool = True) -> list:
     lines = {f"--expect-line={X86_IOMMU_LINE}": f"--expect-line={AARCH64_IOMMU_LINE}",
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={AARCH64_TRANSLATING_LINE}",
              f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={AARCH64_CLOCK_LINE}",
+             f"--expect-line={X86_SERVICES_LINE}": f"--expect-line={OTHER_SERVICES_LINE}",
              f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
              f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={AARCH64_HARDENING_LINE}",
              f"--expect-line=[user] test_control: {X86_CONTROL_TESTS}": f"--expect-line=[user] test_control: {AARCH64_CONTROL_TESTS}",
@@ -2019,6 +2040,7 @@ RISCV_NAMES = {
 def riscv_tests(tests: list) -> list:
     """The tests for RISC-V, named so, on the AIA, with RISC-V's own lines, but those RISCV_LEFT_OUT."""
     lines = {f"--expect-line={X86_CLOCK_LINE}": f"--expect-line={RISCV_CLOCK_LINE}",
+             f"--expect-line={X86_SERVICES_LINE}": f"--expect-line={OTHER_SERVICES_LINE}",
              f"--expect-line={X86_WINDOWS_LINE}": f"--expect-line={AARCH64_WINDOWS_LINE}",
              f"--expect-line={X86_HARDENING_LINE}": f"--expect-line={RISCV_HARDENING_LINE}",
              f"--expect-line={X86_IOMMU_LINE}": f"--expect-line-start={RISCV_IOMMU_LINE_START}",

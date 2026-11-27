@@ -309,9 +309,11 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t : ptr[
     // The partition, among every disk's
     found := cast[u32](0xffffffff)
     partition := storage.Partition.{}
+    any := false
     for index in 0..<MOST_PARTITIONS {
         match ask(manager.end, manager.port, .Describe(index)) {
             case Described(described) => {
+                any = true
                 info := described.info
                 if partitions.name_of(&info) == CHECKED {
                     found = index
@@ -321,6 +323,11 @@ the_checked_partition_reads_writes_and_refuses_past_its_end #test :: fn(t : ptr[
             }
             case _ => break
         }
+    }
+    // A storage manager with no disks, as one whose only controller has none on it is
+    if !any {
+        _ = testing.skip(t, "no disks")
+        return .Error(.Skipped)
     }
     testing.require_ne(
         t,
