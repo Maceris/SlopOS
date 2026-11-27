@@ -80,7 +80,7 @@ add_client_index #export :: fn(clients : ptr[mut Clients], port : slop_os.Port, 
     // The binding the one before had, if it's still there
     _ = slop_os.port_unbind(port, cast[u64](index))
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(port, cast[slop_os.Handle](end), signals, cast[u64](index), .Persistent) is_error {
+    if slop_os.port_bind(port, cast[u64](index), cast[slop_os.Handle](end), signals, .Persistent) is_error {
         return null
     }
     clients.ends[index] = end

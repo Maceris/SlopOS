@@ -808,9 +808,9 @@ main :: fn(
     // Pressure on its budget, which its sessions' programs' budgets are split off, wakes it to stop idle installations
     slop_os.port_bind(
         sessions.port,
+        PRESSURE_KEY,
         cast[slop_os.Handle](block.budget),
         slop_os.SIGNAL_PRESSURE,
-        PRESSURE_KEY,
         .Persistent
     )
         or_return 1
@@ -2022,9 +2022,9 @@ programs_connection :: fn(sessions : ptr[mut Manager], number : u32) -> os.Chann
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         sessions.port,
+        PROGRAMS_KEY + cast[u64](number),
         cast[slop_os.Handle](pair.a),
         signals,
-        PROGRAMS_KEY + cast[u64](number),
         .Persistent
     ) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
@@ -2506,7 +2506,7 @@ pending_powerbox :: fn(sessions : ptr[mut Manager], number : u32) -> programs.Re
     pair :: os.channel_for[powerbox.Powerbox](slop_os.startup_block().budget, 0)
         or_return programs.Response.Refused(.Failed)
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(sessions.port, cast[slop_os.Handle](pair.a), signals, PENDING_KEY + cast[u64](at), .Persistent)
+    if slop_os.port_bind(sessions.port, PENDING_KEY + cast[u64](at), cast[slop_os.Handle](pair.a), signals, .Persistent)
         is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))

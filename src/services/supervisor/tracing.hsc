@@ -88,7 +88,7 @@ has_run :: fn(supervisor : ptr[Supervisor], thread : u64) -> bool {
  */
 first_run_of :: fn(supervisor : ptr[Supervisor], process : slop_os.Process) -> u64 {
     ids : u64[16]
-    count :: slop_os.process_threads(process, ids) or_else 0
+    count :: slop_os.process_threads(process, 0, ids) or_else 0
     earliest : u64 = 0
     for id, i in ids {
         if cast[u32](i) >= count {
@@ -193,7 +193,7 @@ trace_ping :: fn(supervisor : ptr[mut Supervisor]) {
         match lifecycle.read(entry.lifecycle) {
             case Some(reply) => answered = reply.answer == .Pong && reply.sequence == TRACE_PING
             case None => {
-                _ = slop_os.port_bind(waiter, cast[slop_os.Handle](entry.lifecycle), slop_os.SIGNAL_READABLE, 1, .Once)
+                _ = slop_os.port_bind(waiter, 1, cast[slop_os.Handle](entry.lifecycle), slop_os.SIGNAL_READABLE, .Once)
                 packets : slop_os.Packet[1]
                 _ = slop_os.port_wait(waiter, packets, deadline)
             }
@@ -219,7 +219,7 @@ trace_ping :: fn(supervisor : ptr[mut Supervisor]) {
     }
     sort_by_time(events[0..<events.count])
     clocks : u64[16]
-    clock_count :: slop_os.process_threads(entry.process, clocks) or_else 0
+    clock_count :: slop_os.process_threads(entry.process, 0, clocks) or_else 0
     // In order: a clock thread woken, then a clock thread run
     stage := 0
     for event in events {

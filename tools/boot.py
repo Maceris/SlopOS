@@ -2303,8 +2303,9 @@ BOOT_ESP_SECTORS = 131072
 # with room to grow (31 MiB of 32 was full on 2026-11-11, and a staged generation didn't fit)
 BOOT_SYSTEM_SECTORS = 131072
 # With --debug-files, the system volume and the disk grow by this much for the programs' debug files (decisions/0185):
-# 96 MiB, as 64 MiB grew too small for AArch64's once the GUI programs came (2026-11-19)
-DEBUG_FILES_SECTORS = 196608
+# 160 MiB, as 64 MiB grew too small for AArch64's once the GUI programs came (2026-11-19), and 96 MiB once the libc and
+# its C programs did (155 MB of them on 2026-11-27)
+DEBUG_FILES_SECTORS = 327680
 # On RISC-V: 256 MiB, as its debug files are about twice the others' (198 MiB on 2026-11-26)
 RISCV_DEBUG_FILES_SECTORS = 524288
 

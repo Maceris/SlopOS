@@ -375,18 +375,29 @@ thread_in :: fn(kernel : ptr[mut Kernel], process : u64, id : u64) -> ptr[mut Th
 }
 
 /**
- * Count the live threads in a process's subtree, and list their IDs. Takes threads_lock.
+ * Count the live threads in a process's subtree with IDs of from and past, and list the least of them, in increasing
+ * order, so a caller lists more than fit by asking again from past the last ID it was given (process_threads). Takes
+ * threads_lock; each thread found is put in its place among the least so far, so it takes up to 64 steps a thread.
  *
  * @param kernel The kernel, whose list of threads is walked under threads_lock.
  * @param process The Process, as its address.
- * @param ids Where the IDs are written, the newest thread first.
+ * @param from The least ID counted and listed; 0 for all of them.
+ * @param ids Where the IDs are written, the least first.
  * @param capacity How many IDs to write, at most; more than 64 is taken as 64.
- * @return How many live threads the subtree has, which may be more than capacity.
+ * @return How many live threads the subtree has with IDs of from and past, which may be more than capacity.
  */
-threads_of :: fn(kernel : ptr[mut Kernel], process : u64, ids : ptr[mut u64[64]], capacity : u32) -> u32 {
+threads_of :: fn(
+    kernel : ptr[mut Kernel],
+    process : u64,
+    from : u64,
+    ids : ptr[mut u64[64]],
+    capacity : u32
+) -> u32 {
     lock_at(&kernel.threads_lock, .Threads)
     defer unlock_at(&kernel.threads_lock, .Threads)
+    kept :: cast[usize](if capacity < 64 { capacity } else { 64 })
     count := cast[u32](0)
+    listed := cast[usize](0)
     with {
         address := kernel.first_thread
     }
@@ -395,11 +406,31 @@ threads_of :: fn(kernel : ptr[mut Kernel], process : u64, ids : ptr[mut u64[64]]
             break
         }
         thread :: cast[ptr[Thread]](address)
-        if !is_dying(address) && controls(address, process) {
-            if count < capacity && cast[usize](count) < 64 {
-                ids^[cast[usize](count) % 64] = thread.id
-            }
+        if !is_dying(address) && controls(address, process) && thread.id >= from {
             count += 1
+            // Where it goes among the least listed so far, those after it moving up, the last dropped if it's full
+            at := listed
+            loop {
+                if at == 0 || ids^[(at - 1) % 64] < thread.id {
+                    break
+                }
+                at -= 1
+            }
+            if at < kept {
+                last :: if listed < kept { listed } else { kept - 1 }
+                move := last
+                loop {
+                    if move <= at {
+                        break
+                    }
+                    ids^[move % 64] = ids^[(move - 1) % 64]
+                    move -= 1
+                }
+                ids^[at % 64] = thread.id
+                if listed < kept {
+                    listed += 1
+                }
+            }
         }
         address = thread.all_next
     }

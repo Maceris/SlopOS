@@ -222,9 +222,9 @@ main :: fn(
     // Pressure on its budget, which its pages bring it to, wakes it to give some back
     slop_os.port_bind(
         service.port,
+        PRESSURE_KEY,
         cast[slop_os.Handle](service.block.budget),
         slop_os.SIGNAL_PRESSURE,
-        PRESSURE_KEY,
         .Persistent
     )
         or_return 1
@@ -981,8 +981,8 @@ evict :: fn(service : ptr[mut Store], count : u64) {
             continue
         }
         memory :: service.objects[page.slot].memory
-        touched :: slop_os.memory_page_accessed(memory, page.offset) or_else 0
-        if touched != 0 && steps <= service.resident.count {
+        touched :: slop_os.memory_page_accessed(memory, page.offset) or_else false
+        if touched && steps <= service.resident.count {
             service.hand = at + 1
             continue
         }

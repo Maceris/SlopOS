@@ -15,7 +15,7 @@ positions are the calls' numbers (`../../knowledge/design/system-abi.md` §4, `0
 generated from it at compile time, with `#insert`:
 - **a stub per call**, `slop_os.port_wait(port, packets, deadline) -> Result[u32, PortError]` and so on,
   which programs call. Stubs are `#no_context`, so they work before a program's context exists;
-- **`SYSCALL_<NAME>`**, each call's number, and `syscall_bit(number)` for an intercept's calls;
+- **`SYSCALL_<NAME>`**, each call's number, and `add_call(calls, number)` for an intercept's set of calls;
 - **the kernel's dispatch**, which decodes a call's registers into its handler's typed arguments.
 
 Arguments are typed: a handle of the kind the call takes (`Port`, `Channel`, `MemoryBudget`, `Memory`,
@@ -69,7 +69,7 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 |---|---|---|---|
 | 0 | `handle_close` | handle | nothing; the object is destroyed if it was the owning handle |
 | 1 | `handle_duplicate` | handle, rights | a non-owning handle with those rights; needs `RIGHT_DUPLICATE`, and every right asked for; `handle_restrict`, appended to the calls (`0195`, 18c), drops rights from a handle in place instead, owning or not, so one can be moved on without what its new holder isn't to have |
-| 2 | `handle_info` | handle | the object's kind, and the handle's rights |
+| 2 | `handle_info` | handle | the handle's rights, and the object's kind (`HandleInfo`, in that order) |
 | 3 | `thread_exit` | | never returns: the calling thread is destroyed |
 | 4 | `thread_create` | budget, address space, entry, stack pointer, argument | an owning handle to a new thread, started; needs `RIGHT_SPACE_THREADS`. The thread starts at entry with the argument in the first argument register and every other register zero (`0026`) |
 | 5 | `process_create` | budget | an owning handle to a new process, owned by the caller's, whose budget the budget is |
@@ -85,12 +85,12 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 15 | `channel_map` | end, address space, address | nothing: the channel's memory, `channel_memory_size` bytes, mapped read/write at address, page-aligned. Needs `RIGHT_CHANNEL_MAP` and `RIGHT_SPACE_MAP`; one mapping per end |
 | 16 | `channel_unmap` | end | nothing: the end's mapping, unmapped |
 | 17 | `channel_notify` | end, signals | nothing: `SIGNAL_READABLE` or `SIGNAL_WRITABLE`, raised on the other end |
-| 18 | `channel_write` | end, payload (a slice), batch | nothing: one message into the end's ring, with handle batch (`NO_BATCH` for none), raising Readable if the reader waits |
+| 18 | `channel_write` | end, bytes (a slice), batch | nothing: one message into the end's ring, with handle batch (`NO_BATCH` for none), raising Readable if the reader waits |
 | 19 | `channel_read` | end, buffer (a slice), size (a pointer, or null) | the next message's size, and its flags and batch (batch in the high 16 bits): its payload copied to buffer, its size written at size too, also when the buffer is too small (`BufferTooSmall`), raising Writable if the writer waits |
 | 20 | `channel_send_handles` | end, handles (a slice), batch | nothing: the handles (up to 64) moved out of the caller's table into batch (0 to 15) on the other end. Each needs `RIGHT_TRANSFER` |
 | 21 | `channel_take_handles` | end, batch, handles (a slice), count (a pointer, or null) | how many: the batch's handles, in the caller's table, written into handles, and how many there are at count too, also when handles is too small; `NO_HANDLE` for any whose object is gone |
 | 22 | `channel_notify_and_wait` | end, signals, port, packets (a slice), deadline | as `channel_notify`, then `port_wait`; a thread the notify wakes is made ready on the caller's CPU |
-| 23 | `port_bind` | port, object, signals, key, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread, a Device, a memory budget (with `RIGHT_BUDGET_CHARGE`) or a memory object (its owning handle), raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread, a Device, a memory budget or a memory object can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
+| 23 | `port_bind` | port, key, object, signals, mode | nothing: a `Signal` packet for key when the object, a channel end, a process (with `RIGHT_PROCESS_INSPECT`), a thread, a Device, a memory budget (with `RIGHT_BUDGET_CHARGE`) or a memory object (its owning handle), raises any of signals, or for an IRQ an `Irq` packet for its interrupts, signals unused; needs `RIGHT_PORT_BIND`. A process, a thread, a Device, a memory budget or a memory object can be watched by 2 bindings, an end by 4. Mode `Once` (1) disarms it once its packet is queued, and binding the same key to the same object arms it again; `Persistent` (2) doesn't |
 | 24 | `memory_budget_create` | budget, limit | an owning handle to a child budget of limit bytes, charged to the budget |
 | 25 | `memory_budget_info` | budget | its limit, and how much of it is charged, in bytes |
 | 26 | `memory_create` | budget, size | an owning handle to a new memory object of size bytes, a whole number of pages up to `MAX_MEMORY_SIZE` (1 GiB), charged for all of it |
@@ -101,14 +101,14 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 31 | `irq_ack` | irq | nothing: a level-triggered line, unmasked again; needs `RIGHT_IRQ_ACK` |
 | 32 | `memory_create_physical` | platform, budget, address, size, cache | an owning handle to device memory: size bytes at the physical address, which mustn't be RAM the kernel owns, mapped with the `CacheMode` |
 | 33 | `memory_create_window` | memory, budget, offset, size | an owning handle to a window onto size bytes of the memory from offset, which can be mapped only as the memory's handle could |
-| 34 | `process_threads` | process, IDs (a slice) | how many threads the process's subtree has; up to its count (and 64) of their IDs written into IDs. Needs `RIGHT_PROCESS_INSPECT` |
+| 34 | `process_threads` | process, from, IDs (a slice) | how many threads of the process's subtree have IDs of from and past; up to its count (and 64) of those IDs written into IDs, the least first, so a longer list is had by asking again from the last plus 1. Needs `RIGHT_PROCESS_INSPECT` |
 | 35 | `process_read_memory` | process, address space, address, buffer (a slice) | nothing: the space's bytes, which must be in the process's subtree, copied into buffer. Needs `RIGHT_PROCESS_READ_MEMORY` |
-| 36 | `process_write_memory` | process, address space, address, buffer (a slice) | nothing: buffer's bytes copied into the space. Needs `RIGHT_PROCESS_WRITE_STATE` |
+| 36 | `process_write_memory` | process, address space, address, bytes (a slice) | nothing: the bytes copied into the space. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 37 | `thread_suspend` | process, thread ID | nothing: the thread stops where it is until `thread_resume`; a wait it's in goes on. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 38 | `thread_resume` | process, thread ID | nothing: a suspended thread goes on. Needs `RIGHT_PROCESS_WRITE_STATE` |
 | 39 | `thread_read_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's `THREAD_REGISTERS` registers (one suspended while it waits too, as it began the wait), as u64s, written at registers. Needs `RIGHT_PROCESS_INSPECT` |
 | 40 | `thread_write_registers` | process, thread ID, registers (a slice of at least `THREAD_REGISTERS`) | nothing: a stopped or suspended thread's registers, set from registers. Needs `RIGHT_PROCESS_WRITE_STATE` |
-| 41 | `intercept_attach` | process, port, key, calls, points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls whose bit is set in calls, or every call with `STOP_ALL_CALLS`, at faults (`STOP_FAULT`), and at a new thread's start (`STOP_THREAD_START`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
+| 41 | `intercept_attach` | process, port, key, calls (a slice of words), points | an owning handle to an intercept of the process's subtree, paid for by the caller's process's budget: its threads stop at the entry or exit (`STOP_SYSCALL_ENTRY`, `STOP_SYSCALL_EXIT`) of the calls in calls, call n bit n % 64 of word n / 64, of any length (words past the kernel's calls ignored), or every call with `STOP_ALL_CALLS`, at faults (`STOP_FAULT`), and at a new thread's start (`STOP_THREAD_START`); with `STOP_FAULT_LIMITED` too, a fault stop not let go within a second ends its process. Needs `RIGHT_PROCESS_INTERCEPT` and `RIGHT_PORT_BIND` |
 | 42 | `intercept_next` | intercept, stop (a pointer) | nothing: the next stop not yet reported, a `StopInfo`, written at stop |
 | 43 | `intercept_resume` | intercept, thread ID, action | nothing: a thread the intercept stopped goes on: `Continue`, `Skip` (at an entry only) or `Kill`; but for `Continue` from a fault, and `Kill`, it needs `RIGHT_INTERCEPT_STEER` |
 | 44 | `process_kill` | process | nothing: the process is destroyed, with its subtree. Needs `RIGHT_PROCESS_KILL` |
@@ -142,14 +142,14 @@ hold on a subtree (`0056`), `DebugLog`, lines in the kernel's log (`0060`), and 
 | 72 | `irq_set_cpu` | IRQ, CPU | nothing: a message-signaled IRQ routed to the CPU with that index, one of the caller's CPU budget's CPUs (`0099`) |
 | 73 | `memory_budget_set_threshold` | budget, threshold | nothing: the budget's pressure threshold in bytes, 0 for none, `SIGNAL_PRESSURE` raised at once if it's reached; `RIGHT_BUDGET_CHARGE` (`0111`) |
 | 74 | `memory_evict` | memory, offset | nothing: the supplied page at offset of paged memory given back, unmapped everywhere, freed and uncharged; `RIGHT_MEMORY_WRITE` (`0111`) |
-| 75 | `memory_page_accessed` | memory, offset | 1 if any mapping touched the page at offset of paged memory since this last asked, 0 if not, the marks cleared; always 0 where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
+| 75 | `memory_page_accessed` | memory, offset | true if any mapping touched the page at offset of paged memory since this last asked, false if not, the marks cleared; always false where the hardware doesn't keep them; `RIGHT_MEMORY_WRITE` (`0111`) |
 | 76 | `thread_use_cpu_budget` | budget | the calling thread runs on the budget from now on, as a server does for a connection whose client lent it the budget, or on its process's again with `NO_HANDLE`; `RIGHT_CPU_BUDGET_BIND` (`0130`) |
 | 77 | `memory_holders` | memory | how many hold the memory besides its owner: handles to it that aren't the owning one, in any process or on their way in a channel, its mappings, and its windows; only the owning handle asks, else `MissingRight` (`0178`) |
 | 78 | `power_set_off` | platform, PM1a control, PM1b control, PM1a sleep type, PM1b sleep type | nothing: how x86-64 turns off, ACPI's PM1 control ports (PM1b 0 for none) and `\_S5`'s sleep types, 0 to 7, replacing what was set; `InvalidArgument` on an architecture that turns off by itself, through PSCI (`0182`) |
 | 79 | `power_set_reset` | platform, port, value | nothing: the FADT's reset register, an I/O port, and the byte that resets, replacing what was set; without it x86-64 resets through 0xcf9 (`0182`) |
 | 80 | `power_end_with` | platform, action | nothing: what the kernel does once the root task ends, a `PowerAction`: `Halt`, `Off` or `Restart`, done after every other CPU has stopped and the objects left are logged; under `test_exit`, only with `test_power` too (`0182`) |
 | 81 | `controller_set_source` | platform, controller, source | nothing: the requester ID, with its segment, a controller's interrupts come from, as the IOMMU that remaps them sees it; once an IOMMU remaps, a controller's lines are routed through it with one, and `irq_create` refuses them without (`NoController`) (`0182`) |
-| 82 | `thread_set_debug` | process, thread ID, debug (a pointer) | nothing: a parked thread's debugging state, a `ThreadDebug`: whether it single-steps, and up to `DEBUG_SLOTS` hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes), each a fault stop when hit (`FAULT_SINGLE_STEP`, `FAULT_BREAKPOINT`, `FAULT_WATCHPOINT`). Needs `RIGHT_PROCESS_WRITE_STATE`; `BadRegisters` for a slot the CPU can't set (`0183`) |
+| 82 | `thread_set_debug` | process, thread ID, debug (a pointer) | nothing: a parked thread's debugging state, a `ThreadDebug`, size-prefixed (its size and slot count first, read as far as size says, so it can grow): whether it single-steps, and up to `DEBUG_SLOTS` hardware breakpoints (`Execute`) and watchpoints (`Write`, `ReadWrite`, of 1, 2, 4 or 8 bytes), each a fault stop when hit (`FAULT_SINGLE_STEP`, `FAULT_BREAKPOINT`, `FAULT_WATCHPOINT`). Needs `RIGHT_PROCESS_WRITE_STATE`; `BadRegisters` for a slot the CPU can't set, more than `DEBUG_SLOTS` slots, or reserved bytes that aren't zero; `BadBuffer` for a size too small for its slots (`0183`) |
 | 83 | `intercept_set` | intercept, calls, points | nothing: where the intercept stops threads from now, as `intercept_attach`'s calls and points; threads stopped already stay so (`0183`); needs `RIGHT_INTERCEPT_STEER` |
 | 84 | `process_set_traps` | process, traps | nothing: what the process's threads trap on from their next return from the kernel: `TRAP_COUNTER` for user mode's counter reads, which the kernel runs and then reports as a fault stop, `FAULT_COUNTER`, the value in the instruction's register. Needs `RIGHT_PROCESS_WRITE_STATE` (`0183`) |
 | 85 | `trace_set` | log, on | nothing: the kernel's trace on or off: each CPU's ring of its last `TRACE_EVENTS` scheduler events, a switch or a wake (`TraceEvent`); needs the debug log with `RIGHT_DEBUG_LOG_TRACE`, which the root task gives the supervisor alone (`0183`) |
@@ -382,15 +382,16 @@ The memory, `channel_memory_size(ring)` bytes:
 | 4 | `WrongKind` | The handle isn't to the kind of object the call takes |
 | 5 | `TableFull` | The process has 65535 handles |
 | 6 | `OutOfMemory` | |
-| 7 | `NoSuchCall` | No call has that number |
+| 7 | `NoSuchCall` | No call has that number; every call's error enum has it, as a kernel without a call answers it with this |
 | 25 | `BudgetExceeded` | The budget can't pay for it, or (`channel_take_handles`) the taker's can't take what the batch owns; a CPU budget's share past what its parent has left, or its priority above its parent's |
 | 46 | `InvalidArgument` | A CPU budget's period of 0, time of 0, or priority above 255 |
 
-Calls on a port fail with `slop_os.PortError`, whose tags mean the same where they're shared:
+Every tag means one thing across the error enums: one value has one name, one name one value, which the ABI's
+description checks (`src/abi_describe`, `abi_describe:E0002`). Calls on a port fail with `slop_os.PortError`:
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6, 25 | as above | |
+| 1 to 7, 25 | as above | |
 | 8 | `KeyInUse` | The key is bound already, or bound to another kind of binding |
 | 9 | `NoSuchKey` | No binding has that key, or not one of that kind |
 | 10 | `BadBuffer` | Packets would go where the thread can't write; nothing was taken |
@@ -401,7 +402,7 @@ Calls on a channel fail with `slop_os.ChannelError`, the same where tags are sha
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6, 10, 25 | as above | |
+| 1 to 7, 10, 25 | as above | |
 | 12 | `PeerClosed` | The other end is closed (for `channel_read`: and nothing is left to read) |
 | 13 | `Full` | No room in the ring for the message |
 | 14 | `Empty` | No message in the ring |
@@ -420,22 +421,22 @@ Calls on a memory budget or a memory object fail with `slop_os.MemoryError`:
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6, 25 | as above | |
+| 1 to 7, 25 | as above | |
 | 18 | `BadAddress` | Not a page-aligned user address range, or it overlaps a mapping or a channel's rings |
 | 24 | `InvalidSize` | Not a whole number of pages, none, more than `MAX_MEMORY_SIZE`, or past the memory's end |
 | 26 | `NotMapped` | No mapping starts at that address |
 | 27 | `BadProtection` | Writable and executable at once, or no access at all |
-| 28 | `NoPager` | `memory_create_paged`: the port has no wake binding with that key, or is gone |
-| 29 | `NothingWanted` | `memory_page_wanted`: no page is waited for that hasn't been reported |
-| 30 | `NotPaged` | `memory_page_wanted`, `memory_supply`, `memory_evict`, `memory_page_accessed`: not paged memory |
-| 31 | `NotSupplied` | `memory_evict`: the page hasn't been supplied |
-| 32 | `MappedWidely` | `memory_evict`: more address spaces map the page than one call takes it from (`MAX_EVICT_SPACES`, 16) |
+| 49 | `NoPager` | `memory_create_paged`: the port has no wake binding with that key, or is gone |
+| 50 | `NothingWanted` | `memory_page_wanted`: no page is waited for that hasn't been reported |
+| 51 | `NotPaged` | `memory_page_wanted`, `memory_supply`, `memory_evict`, `memory_page_accessed`: not paged memory |
+| 52 | `NotSupplied` | `memory_evict`: the page hasn't been supplied |
+| 53 | `MappedWidely` | `memory_evict`: more address spaces map the page than one call takes it from (`MAX_EVICT_SPACES`, 16) |
 
 Registering a controller, making an IRQ or device memory fail with `slop_os.DeviceError`:
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6, 25 | as above | |
+| 1 to 7, 25 | as above | |
 | 18 | `BadAddress` | Not page-aligned, or RAM the kernel owns |
 | 24 | `InvalidSize` | Not a whole number of pages, or an unknown cache mode |
 | 28 | `NoController` | No controller of that kind at those registers, or none of that kind on this architecture |
@@ -449,7 +450,7 @@ Process control fails with `slop_os.ControlError`:
 
 | Tag | Error | Why |
 |---|---|---|
-| 1 to 6, 10, 25 | as above | |
+| 1 to 7, 10, 25 | as above | |
 | 14 | `Empty` | `intercept_next`: no stop left to report |
 | 15 | `TooBig` | `process_give_handles`: more than 64 handles |
 | 18 | `BadAddress` | The address space isn't in the process's subtree, or the range isn't mapped there |

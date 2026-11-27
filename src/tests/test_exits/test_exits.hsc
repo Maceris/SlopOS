@@ -1,11 +1,13 @@
 /**
- * test_exits (decisions/0068, 0098): how a program ends when it can't start, seen by whoever started it. Two copies
- * of the program, each watched until it ends:
+ * test_exits (decisions/0068, 0098): how a program ends when it can't start, seen by whoever started it. Copies of
+ * the program, each watched until it ends:
  * - one launched through the process manager as if its entry took nothing, given no grants, ends with
  *   EXIT_MISSING_GRANT (126), as its real entry requires its debug log;
- * - one built with the process builder directly, its startup block saying an ABI version that isn't the kernel's,
- *   ends with EXIT_WRONG_ABI (125) before its entry runs.
- * What both had comes back to its budget. And a launch refused, its watch's key still the first copy's, gives back
+ * - two built with the process builder directly: one whose startup block says an ABI version earlier than the
+ *   program's ends with EXIT_WRONG_ABI (125) before its entry runs; one whose says a later one starts, and ends as the
+ *   first does, its entry finding no grants.
+ * Three copies in all, then.
+ * What each had comes back to its budget. And a launch refused, its watch's key still the first copy's, gives back
  * what it made for the copy, so its starter's budget is charged no more than before.
  */
 package test_exits
@@ -123,14 +125,54 @@ a_copy_missing_a_grant_ends_with_126_and_a_refused_launch_gives_back #test :: fn
 }
 
 /**
- * Check that a copy built here with the process builder, its startup block saying an ABI version that isn't the
- * kernel's, ends with EXIT_WRONG_ABI before its entry runs, and that what it had comes back to its budget.
+ * Check that a copy built here with the process builder, its startup block saying an ABI version earlier than the
+ * program's, as an older kernel's would, ends with EXIT_WRONG_ABI before its entry runs, and that what it had comes
+ * back to its budget.
  *
  * @param t The test's state.
- * @return Ok once it's run; Error if main wasn't given its module, or the port, the copy's budget, process or address
- *     space, its watch, or the module's mapping couldn't be made, or the copy couldn't be built.
+ * @return Ok once it's run; Error if the copy couldn't be built and watched (built_with).
  */
-a_copy_told_another_abi_version_ends_with_125 #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+a_copy_told_an_earlier_abi_version_ends_with_125 #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    code :: built_with(t, slop_os.ABI_VERSION - 1)?
+    testing.expect_eq(
+        t,
+        code,
+        cast[u64](slop_os.EXIT_WRONG_ABI),
+        "a copy told an ABI version earlier than its own ends with EXIT_WRONG_ABI before its entry runs"
+    )
+    return .Ok
+}
+
+/**
+ * Check that a copy built here with the process builder, its startup block saying a later ABI version than the
+ * program's, as a newer kernel's would, is started: it gets past the version's check to its entry, which, given no
+ * grants, ends it with EXIT_MISSING_GRANT, and what it had comes back to its budget.
+ *
+ * @param t The test's state.
+ * @return Ok once it's run; Error if the copy couldn't be built and watched (built_with).
+ */
+a_copy_told_a_later_abi_version_starts #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome {
+    code :: built_with(t, slop_os.ABI_VERSION + 1)?
+    testing.expect_eq(
+        t,
+        code,
+        cast[u64](slop_os.EXIT_MISSING_GRANT),
+        "a copy told a later ABI version than its own starts, and ends as its entry finds no grants"
+    )
+    return .Ok
+}
+
+/**
+ * Build a copy of the program with the process builder, given no grants, its startup block saying an ABI version, wait
+ * for it to end, and check that what it had comes back to its budget.
+ *
+ * @param t The test's state.
+ * @param abi_version The version its startup block says.
+ * @return How it ended, its exit code, or 0xffff if waiting for it failed; Error if main wasn't given its module, or
+ *     the port, the copy's budget, process or address space, its watch, or the module's mapping couldn't be made, or
+ *     the copy couldn't be built.
+ */
+built_with :: fn(t : ptr[mut testing.T], abi_version : u32) -> Result[u64, testing.Stopped] {
     given :: test_kit.given(t, Given)?
     block :: slop_os.startup_block()
     executable :: testing.require_some(t, given.program, "the root task grants the program's own module")?
@@ -138,7 +180,7 @@ a_copy_told_another_abi_version_ends_with_125 #test :: fn(t : ptr[mut testing.T]
     budget :: testing.require_ok(t, slop_os.memory_budget_create(block.budget, COPY_BUDGET), "a budget for the copy")?
     process :: testing.require_ok(t, slop_os.process_create(budget), "a process for the copy")?
     space :: testing.require_ok(t, slop_os.address_space_create(budget), "an address space for the copy")?
-    watched :: slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, BUILT_KEY, .Once)
+    watched :: slop_os.port_bind(port, BUILT_KEY, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, .Once)
     testing.require_ok(t, watched, "the copy's end is watched")?
     size :: testing.require_ok(t, slop_os.memory_size(executable), "the module's size can be read")?
     address :: testing.require_some(t, runtime.reserve_addresses(cast[usize](size)), "addresses to map the module at")?
@@ -150,14 +192,9 @@ a_copy_told_another_abi_version_ends_with_125 #test :: fn(t : ptr[mut testing.T]
     random_stream.fill(&stream, seed)
     target :: process_builder.Target.{process = process, space = space, budget = budget}
     no_grants : process_builder.Grant[1]
-    built :: process_builder.build(target, file, view_of(&no_grants[0], 0), seed, &stream, slop_os.ABI_VERSION + 1)
-    testing.require_ok(t, built, "the process builder builds the copy, its startup block saying another ABI version")?
-    testing.expect_eq(
-        t,
-        ended_with(port),
-        cast[u64](slop_os.EXIT_WRONG_ABI),
-        "a copy told an ABI version that isn't the kernel's ends with EXIT_WRONG_ABI before its entry runs"
-    )
+    built :: process_builder.build(target, file, view_of(&no_grants[0], 0), seed, &stream, abi_version)
+    testing.require_ok(t, built, "the process builder builds the copy, its startup block saying the version given")?
+    code :: ended_with(port)
     _ = slop_os.memory_unmap(block.space, address)
     // The build gave the copy's thread's ID in its own process, not a handle of this one's, so there's nothing to close
     _ = slop_os.handle_close(cast[slop_os.Handle](process))
@@ -168,7 +205,7 @@ a_copy_told_another_abi_version_ends_with_125 #test :: fn(t : ptr[mut testing.T]
     )
     _ = slop_os.handle_close(cast[slop_os.Handle](budget))
     _ = slop_os.handle_close(cast[slop_os.Handle](port))
-    return .Ok
+    return .Ok(code)
 }
 
 /**

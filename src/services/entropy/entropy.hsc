@@ -196,9 +196,9 @@ add_source :: fn(service : ptr[mut Entropy], end : slop_os.Channel) {
     }
     match slop_os.port_bind(
         service.port,
+        SOURCE_KEY + cast[u64](index),
         cast[slop_os.Handle](end),
         signals,
-        SOURCE_KEY + cast[u64](index),
         .Persistent
     ) {
         case Ok => {}

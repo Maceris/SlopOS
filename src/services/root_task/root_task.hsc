@@ -665,9 +665,9 @@ main :: fn(
         // Without the watch it wouldn't know the process ended, and would wait for it for good
         if slop_os.port_bind(
             port,
+            cast[u64](i),
             cast[slop_os.Handle](started.process),
             slop_os.SIGNAL_TERMINATED,
-            cast[u64](i),
             .Once
         ) is_error {
             log_line.write(root.log, "root task: can't watch %", started.name)
@@ -678,9 +678,9 @@ main :: fn(
         | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         port,
+        SUPERVISOR_KEY,
         cast[slop_os.Handle](root.supervision),
         supervisor_signals,
-        SUPERVISOR_KEY,
         .Persistent
     ) is_error {
         log_line.write(root.log, "root task: can't watch the supervisor's channel")
@@ -1451,9 +1451,9 @@ connector_to :: fn(root : ptr[mut Root], service : RootService) -> os.Channel[co
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         root.connector_port,
+        CONNECTOR_KEY + cast[u64](index),
         cast[slop_os.Handle](pair.b),
         signals,
-        CONNECTOR_KEY + cast[u64](index),
         .Persistent
     ) is_error {
         return null
@@ -1658,9 +1658,9 @@ restart :: fn(root : ptr[mut Root], key : usize) {
     }
     if slop_os.port_bind(
         root.port,
+        cast[u64](key),
         cast[slop_os.Handle](root.started[key].process),
         slop_os.SIGNAL_TERMINATED,
-        cast[u64](key),
         .Once
     ) is_error {
         log_line.write(root.log, "root task: can't watch % again", name)

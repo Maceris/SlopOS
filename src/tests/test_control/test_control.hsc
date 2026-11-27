@@ -555,12 +555,27 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
     ids : u64[4]
     testing.expect_eq(
         t,
-        slop_os.process_threads(target, ids) or_else 0,
+        slop_os.process_threads(target, 0, ids) or_else 0,
         2,
         "T's subtree has its two threads, T1 and T2"
     )
+    testing.expect(t, ids[0] < ids[1], "process_threads lists IDs the least first")
+    // A list longer than its buffer, a thread at a time from past the last ID
+    first : u64[1]
+    testing.expect_eq(t, slop_os.process_threads(target, 0, first) or_else 0, 2, "one ID asked for: still two threads")
+    testing.expect_eq(t, first[0], ids[0], "the one written is the least")
+    testing.expect_eq(
+        t,
+        slop_os.process_threads(target, first[0] + 1, first) or_else 0,
+        1,
+        "from past the first, one thread is left"
+    )
+    testing.expect_eq(t, first[0], ids[1], "and it's the other")
     points :: slop_os.STOP_SYSCALL_ENTRY | slop_os.STOP_SYSCALL_EXIT | slop_os.STOP_FAULT
-    calls :: slop_os.syscall_bit(slop_os.SYSCALL_CLOCK_MONOTONIC)
+    calls : u64[2]
+    added :: slop_os.add_call(calls, slop_os.SYSCALL_CLOCK_MONOTONIC)
+    testing.expect(t, added, "ClockMonotonic is in a set of two words")
+    testing.expect(t, !slop_os.add_call(calls, 128), "a call past a set's words isn't added to it")
     intercept :: testing.require_ok(
         t,
         slop_os.intercept_attach(target, port, CONTROL_KEY, calls, points),
@@ -573,7 +588,7 @@ a_debugger_controls_a_process_in_its_subtree #test :: fn(t : ptr[mut testing.T])
         slop_os.ControlError.AlreadyIntercepted,
         "a process is intercepted by one debugger at a time"
     )
-    watched :: slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, WATCH_KEY, .Persistent)
+    watched :: slop_os.port_bind(port, WATCH_KEY, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, .Persistent)
     testing.expect_ok(t, watched, "D watches for T's end")
     // T1 goes, by a write to T's memory
     went :: slop_os.process_write_memory(target, target_space, found.page + SLOT_GO * 8, os.bytes_of(&one))
@@ -778,9 +793,9 @@ a_process_ending_itself_gives_its_code #test :: fn(t : ptr[mut testing.T]) -> te
     exit_port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for E's end")?
     watched :: slop_os.port_bind(
         exit_port,
+        EXIT_WATCH_KEY,
         cast[slop_os.Handle](exiting),
         slop_os.SIGNAL_TERMINATED,
-        EXIT_WATCH_KEY,
         .Once
     )
     testing.expect_ok(t, watched, "D watches for E's end")
@@ -845,7 +860,7 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
     // A launch's intercept reports, and can't steer: where F stops isn't its to change, nor F's threads (0195, 18b)
     testing.expect_error(
         t,
-        slop_os.intercept_set(faults.intercept, 0, slop_os.STOP_SYSCALL_ENTRY),
+        slop_os.intercept_set(faults.intercept, u64.[], slop_os.STOP_SYSCALL_ENTRY),
         slop_os.ControlError.MissingRight,
         "a launch's intercept can't change where F stops"
     )
@@ -882,7 +897,7 @@ a_launch_reports_faults_and_ends_a_program_left_stopped #test :: fn(t : ptr[mut 
     ids : u64[4]
     testing.expect_eq(
         t,
-        slop_os.process_threads(above, ids) or_else 99,
+        slop_os.process_threads(above, 0, ids) or_else 99,
         0,
         "a process F's moved under lists none of F's threads"
     )
@@ -1152,12 +1167,12 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
     port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for E's stops and end")?
     intercept :: testing.require_ok(
         t,
-        slop_os.intercept_attach(target, port, CONTROL_KEY, 0, slop_os.STOP_FAULT),
+        slop_os.intercept_attach(target, port, CONTROL_KEY, u64.[], slop_os.STOP_FAULT),
         "D intercepts E's faults"
     )?
-    _ = slop_os.port_bind(port, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, EXIT_WATCH_KEY, .Once)
+    _ = slop_os.port_bind(port, EXIT_WATCH_KEY, cast[slop_os.Handle](target), slop_os.SIGNAL_TERMINATED, .Once)
     ids : u64[2]
-    testing.require(t, (slop_os.process_threads(target, ids) or_else 0) == 1, "E has its one thread")?
+    testing.require(t, (slop_os.process_threads(target, 0, ids) or_else 0) == 1, "E has its one thread")?
     thread :: ids[0]
     registers : u64[slop_os.THREAD_REGISTERS]
     // Suspended once it leaves its CPU, which it's spinning on
@@ -1201,6 +1216,31 @@ a_debugger_breaks_steps_and_watches #test :: fn(t : ptr[mut testing.T]) -> testi
     // Nothing set, told to end
     debug = slop_os.ThreadDebug.{}
     testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "D clears E's debugging state")
+    // A ThreadDebug is read as far as its size says, which has to hold its slots
+    debug = slop_os.ThreadDebug.{size = 16, slot_count = 0}
+    testing.expect_ok(t, slop_os.thread_set_debug(target, thread, &debug), "a ThreadDebug of its header alone is read")
+    debug = slop_os.ThreadDebug.{size = 16}
+    testing.expect_error(
+        t,
+        slop_os.thread_set_debug(target, thread, &debug),
+        slop_os.ControlError.BadBuffer,
+        "a ThreadDebug too small for its slots is refused"
+    )
+    debug = slop_os.ThreadDebug.{slot_count = slop_os.DEBUG_SLOTS + 1}
+    testing.expect_error(
+        t,
+        slop_os.thread_set_debug(target, thread, &debug),
+        slop_os.ControlError.BadRegisters,
+        "more slots than the kernel has are refused"
+    )
+    debug = slop_os.ThreadDebug.{}
+    debug.slots[0].reserved[0] = 1
+    testing.expect_error(
+        t,
+        slop_os.thread_set_debug(target, thread, &debug),
+        slop_os.ControlError.BadRegisters,
+        "a slot whose reserved bytes aren't zero is refused"
+    )
     one : u64 = 1
     testing.expect_ok(t, slop_os.process_write_memory(target, space, watched, os.bytes_of(&one)), "D tells E to end")
     testing.expect_ok(t, slop_os.intercept_resume(intercept, thread, .Continue), "D lets E go")
@@ -1297,7 +1337,7 @@ a_recorder_traps_counter_reads #test :: fn(t : ptr[mut testing.T]) -> testing.Ou
     port :: testing.require_ok(t, slop_os.port_create(block.budget), "a port for C's stops")?
     intercept :: testing.require_ok(
         t,
-        slop_os.intercept_attach(target, port, CONTROL_KEY, 0, slop_os.STOP_FAULT),
+        slop_os.intercept_attach(target, port, CONTROL_KEY, u64.[], slop_os.STOP_FAULT),
         "D intercepts C's faults"
     )?
     testing.expect_ok(t, slop_os.process_set_traps(target, slop_os.TRAP_COUNTER), "D traps C's counter reads")

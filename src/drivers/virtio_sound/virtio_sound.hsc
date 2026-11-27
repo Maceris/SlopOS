@@ -223,7 +223,7 @@ main :: fn(
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+    slop_os.port_bind(driver.port, IRQ_KEY, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), .Persistent)
         or_return 6
 
     bytes :: DEVICE_PAGES * PAGE

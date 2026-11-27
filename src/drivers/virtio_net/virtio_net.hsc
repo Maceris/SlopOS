@@ -201,7 +201,7 @@ main :: fn(
             return 6
         }
         key :: if cast[usize](entry) < keys.count { keys[entry] } else { RECEIVE_KEY }
-        slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), key, .Persistent)
+        slop_os.port_bind(driver.port, key, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), .Persistent)
             or_return 6
     }
     send_vector :: if vectors >= 3 { cast[u16](1) } else { cast[u16](0) }

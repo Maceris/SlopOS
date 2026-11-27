@@ -210,9 +210,9 @@ TEST_DEBUG_CRASH_LINE = 92
 # The line of test_debug.hsc the debugger breaks at, where its values are all made and kept in memory
 TEST_DEBUG_BREAK_LINE = 68
 # BOOT_DISK_BASE with the programs' debug files in the store (decisions/0185), on a disk boot.py makes bigger for them
-WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 468992 blocks")
-                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 468992 blocks")
-                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 327680 blocks") for argument in BOOT_DISK_BASE]
+WITH_DEBUG_FILES = [argument.replace("serving 272384 blocks", "serving 600064 blocks")
+                    .replace("partitions on a disk of 272384 blocks", "partitions on a disk of 600064 blocks")
+                    .replace("SlopOS system, 131072 blocks", "SlopOS system, 458752 blocks") for argument in BOOT_DISK_BASE]
 
 # What the disk check says, and writes, which the tests of booting a disk itself check
 DISK_CHECK_LINES = [
@@ -1914,7 +1914,7 @@ TESTS = [
     # 17a (decisions/0196): a thread on a 2 ms high-priority budget wakes for its deadlines, idle and with every CPU busy
     program_test("wakes a high-priority thread for its deadlines, with the CPUs idle and with every one busy", "test_latency", 2),
     program_test("reads I/O ports through a range of them", "test_io_ports", 1),
-    program_test("ends a program missing a grant, or told another ABI version, as its starter sees", "test_exits", 2),
+    program_test("ends a program missing a grant, or told an earlier ABI version, as its starter sees", "test_exits", 3),
     program_test("gives an entry's parameters that aren't handles as values", "test_values", 1),
     program_test("streams typed records and bytes between programs, with backpressure", "test_streams", 1),
     program_test("supplies paged memory's pages from a pager in user mode", "test_pager", 3),
@@ -2098,9 +2098,9 @@ def riscv_tests(tests: list) -> list:
              f"--expect-line={X86_TRANSLATING_LINE}": f"--expect-line={RISCV_TRANSLATING_LINE}",
              f"--expect-line=[user] test_control: {X86_CONTROL_TESTS}": f"--expect-line=[user] test_control: {RISCV_CONTROL_TESTS}"}
     # The system volume's room for debug files, larger on RISC-V (boot.py's RISCV_DEBUG_FILES_SECTORS)
-    debug_disk = {"serving 468992 blocks": "serving 796672 blocks",
-                  "partitions on a disk of 468992 blocks": "partitions on a disk of 796672 blocks",
-                  "SlopOS system, 327680 blocks": "SlopOS system, 655360 blocks"}
+    debug_disk = {"serving 600064 blocks": "serving 796672 blocks",
+                  "partitions on a disk of 600064 blocks": "partitions on a disk of 796672 blocks",
+                  "SlopOS system, 458752 blocks": "SlopOS system, 655360 blocks"}
     adapted = []
     for name, expected, arguments in tests:
         if name in RISCV_LEFT_OUT:

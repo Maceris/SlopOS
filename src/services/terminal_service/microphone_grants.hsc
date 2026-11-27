@@ -73,7 +73,7 @@ microphone_end :: fn(service : ptr[mut Service]) -> slop_os.Channel? {
         case _ => return null
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(service.port, cast[slop_os.Handle](given.end), signals, MICROPHONE_KEY, .Persistent) is_error {
+    if slop_os.port_bind(service.port, MICROPHONE_KEY, cast[slop_os.Handle](given.end), signals, .Persistent) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](given.end))
         return null
     }

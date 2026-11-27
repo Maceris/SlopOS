@@ -2336,9 +2336,9 @@ open_system :: fn(supervisor : ptr[mut Supervisor], storage_slot : usize) {
                 or_else cast[slop_os.Port](slop_os.NO_HANDLE)
             if slop_os.port_bind(
                 supervisor.port,
+                SYSTEM_KEY + supervisor.system_generation % SYSTEM_GENERATIONS,
                 cast[slop_os.Handle](root.end),
                 slop_os.SIGNAL_PEER_CLOSED,
-                SYSTEM_KEY + supervisor.system_generation % SYSTEM_GENERATIONS,
                 .Once
             ) is_error {
                 log_line.write(supervisor.log, "supervisor: can't watch the system volume's root for its end")
@@ -3065,9 +3065,9 @@ start_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, device : pla
     if watch != slop_os.NO_HANDLE
         && (slop_os.port_bind(
             supervisor.port,
+            FAULT_KEY + cast[u64](slot),
             watch,
             slop_os.SIGNAL_DMA_FAULT,
-            FAULT_KEY + cast[u64](slot),
             .Persistent
         ) is_error) {
         log_line.write(supervisor.log, "supervisor: %'s DMA faults go unwatched", name)
@@ -3296,9 +3296,9 @@ dial_root_service :: fn(supervisor : ptr[mut Supervisor], which : usize) -> bool
     }
     _ = slop_os.port_bind(
         supervisor.port,
+        ROOT_SERVICE_KEY + cast[u64](which),
         cast[slop_os.Handle](channel),
         slop_os.SIGNAL_PEER_CLOSED,
-        ROOT_SERVICE_KEY + cast[u64](which),
         .Once
     )
     if again {
@@ -6779,7 +6779,7 @@ files_of_type :: fn(supervisor : ptr[mut Supervisor], storage_slot : usize, kind
     end :: dial(supervisor, storage_slot) or_return null
     defer slop_os.handle_close(cast[slop_os.Handle](end))
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](end), signals, STORAGE_KEY, .Persistent) is_error {
+    if slop_os.port_bind(supervisor.port, STORAGE_KEY, cast[slop_os.Handle](end), signals, .Persistent) is_error {
         return null
     }
     defer slop_os.port_unbind(supervisor.port, STORAGE_KEY)
@@ -6818,7 +6818,7 @@ ask_storage_once :: fn(
     end :: dial(supervisor, storage_slot) or_return .Unsupported
     defer slop_os.handle_close(cast[slop_os.Handle](end))
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](end), signals, STORAGE_KEY, .Persistent) is_error {
+    if slop_os.port_bind(supervisor.port, STORAGE_KEY, cast[slop_os.Handle](end), signals, .Persistent) is_error {
         return .Unsupported
     }
     defer slop_os.port_unbind(supervisor.port, STORAGE_KEY)
@@ -7089,9 +7089,9 @@ connector_to :: fn(supervisor : ptr[mut Supervisor], target : usize) -> os.Chann
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         supervisor.port,
+        CONNECTOR_KEY + cast[u64](index),
         cast[slop_os.Handle](pair.b),
         signals,
-        CONNECTOR_KEY + cast[u64](index),
         .Persistent
     ) is_error {
         return null
@@ -7126,7 +7126,7 @@ power_connection :: fn(
     set_power_end(supervisor, slot, null)
     pair :: os.channel_for[power_protocol.Power](supervisor.block.budget, 0) or_return null
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, key, .Persistent) is_error {
+    if slop_os.port_bind(supervisor.port, key, cast[slop_os.Handle](pair.b), signals, .Persistent) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
         return null

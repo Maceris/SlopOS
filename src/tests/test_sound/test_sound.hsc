@@ -439,8 +439,8 @@ main :: fn(
     second := open(dialing.end, sound.Format.{sample = 1, rate = 44100, channels = 1}, 1500.0, seconds) or_return 3
     port :: slop_os.port_create(startup.budget) or_return 2
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    slop_os.port_bind(port, cast[slop_os.Handle](first.end), signals, 1, .Persistent) or_return 2
-    slop_os.port_bind(port, cast[slop_os.Handle](second.end), signals, 2, .Persistent) or_return 2
+    slop_os.port_bind(port, 1, cast[slop_os.Handle](first.end), signals, .Persistent) or_return 2
+    slop_os.port_bind(port, 2, cast[slop_os.Handle](second.end), signals, .Persistent) or_return 2
     for period in 0..<sound.PERIODS {
         if !give_next(&first, port, period) || !give_next(&second, port, period) {
             return 4

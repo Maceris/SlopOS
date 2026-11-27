@@ -36,7 +36,8 @@ user/kernel boundary, which is a house-rule check (`0007`).
   system.
 - **From v1:**
   - Syscall numbers are append-only and never reused.
-  - A removed call keeps its number and returns `NotSupported`.
+  - A removed call keeps its number and returns `NoSuchCall` (7), which every call's error enum has, as a kernel
+    answers for a number it hasn't.
   - A changed signature gets a new number.
   - Layouts are frozen, and grow only through size-prefixed structs or new versions.
 - A compiler-checked comparison of the ABI package against the previous release

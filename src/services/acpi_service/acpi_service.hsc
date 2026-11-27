@@ -207,9 +207,9 @@ main :: fn(platform_service : os.Channel[platform.Platform], power : os.Channel[
     if cast[slop_os.Handle](service.sci) != slop_os.NO_HANDLE {
         if slop_os.port_bind(
             events,
+            SCI_KEY,
             cast[slop_os.Handle](service.sci),
             cast[slop_os.Signals](0),
-            SCI_KEY,
             .Persistent
         ) is_error {
             runtime.log_error("the SCI can't be waited for")

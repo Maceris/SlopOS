@@ -481,9 +481,9 @@ open :: fn(service : ptr[mut Service], name : u8[]) -> events.Source? {
         || !pair_made
         || (slop_os.port_bind(
             service.port,
+            DOORBELL_KEY + cast[u64](slot),
             cast[slop_os.Handle](pair.a),
             signals,
-            DOORBELL_KEY + cast[u64](slot),
             .Persistent
         ) is_error) {
         if kept != slop_os.NO_HANDLE {

@@ -283,7 +283,17 @@ Relative's items are plain data, no enums (friction: the server checks each one 
 20m's review of them: `drop_index`, the indexes declared, dropped and listed on a volume's root alone, a `Match` of
 file 0 for a page that found none in what the server looked at (`query_in` going on past it), `Resync` and `NotFound`
 for an index declared or dropped under a live query, and `where_number` refusing a negative value for an unsigned or
-bool field.
+bool field. 20n's fixes before v1, in the ABI package and base's runtime: ABI 15; the runtime refusing only a kernel
+older than the program, and a startup block too small for `cpu_features` (`SlopOsStartup` now has them); the grant
+"arguments"' layouts moved out of the runtime's `#if OS == .SlopOS` so the package mirrors them with asserts
+(`ArgumentsHeader`, `ArgumentHeader`, `ARGUMENTS_MAGIC`); `NoSuchCall` (7) in every error enum and `MemoryError`'s
+28 to 32 moved to 49 to 53; `intercept_attach` and `intercept_set` taking a set of calls, `u64[]` (`add_call` in place
+of `syscall_bit`; `syscall_count` for the kernel's size of one); `process_threads` from an ID; `port_bind`'s key second;
+`memory_page_accessed` giving a bool; `ThreadDebug` size-prefixed with a slot count; `reserved` fields for every gap
+(`HandleInfo` now rights then kind, `DebugSlot`, `MsiMessage`, `Sample`); typed counts (`DEBUG_SLOTS` and the
+like, `u32`); `Lending` backed by `u32`; and `has_feature` and `add_feature` bounds-checked. Friction: a field's
+default can't be `size_of` its own struct (a circular dependency), so `ThreadDebug.size`'s is written out; and a build
+check's `BuildOptions` names an output-less target by its output's file, its `output_type` read as `Executable`.
 
 ## 4. Features That Look Like a Strong Fit
 

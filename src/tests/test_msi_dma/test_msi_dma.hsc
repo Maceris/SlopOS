@@ -277,7 +277,7 @@ edu_takes_its_msi_and_copies_a_page_through_dma #test :: fn(t : ptr[mut testing.
     testing.expect_ne(t, message.address, 0, "an MSI's message says where the device writes to raise it")
     testing.expect(t, program_msi(config, message), "edu has an MSI capability, which the message is programmed into")
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port for the MSI's packets")?
-    bound :: slop_os.port_bind(port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+    bound :: slop_os.port_bind(port, IRQ_KEY, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), .Persistent)
     testing.expect_ok(t, bound, "the MSI binds to the port")
     write_edu(edu, EDU_INTERRUPT_RAISE, 1)
     testing.expect(t, wait_for_interrupt(port), "edu raising its MSI queues an Irq packet within a second")

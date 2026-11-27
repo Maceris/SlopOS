@@ -240,9 +240,9 @@ session_started :: fn(service : ptr[mut Service], remote : ptr[mut Remote], numb
         remote.pipe_end = terminals_a
         _ = slop_os.port_bind(
             service.port,
+            remote.key + TERMINAL_KEY,
             cast[slop_os.Handle](remote.pipe_end),
             signals,
-            remote.key + TERMINAL_KEY,
             .Persistent
         )
     }
@@ -251,16 +251,16 @@ session_started :: fn(service : ptr[mut Service], remote : ptr[mut Remote], numb
         remote.prompts_end = prompts_a
         _ = slop_os.port_bind(
             service.port,
+            remote.key + TERMINAL_KEY,
             cast[slop_os.Handle](remote.terminal_end),
             signals,
-            remote.key + TERMINAL_KEY,
             .Persistent
         )
         _ = slop_os.port_bind(
             service.port,
+            remote.key + PROMPTS_KEY,
             cast[slop_os.Handle](remote.prompts_end),
             signals,
-            remote.key + PROMPTS_KEY,
             .Persistent
         )
     }
@@ -273,9 +273,9 @@ session_started :: fn(service : ptr[mut Service], remote : ptr[mut Remote], numb
             _ = session.send_request(remote.wait_end, service.port, &asking)
             _ = slop_os.port_bind(
                 service.port,
+                remote.key + WAIT_KEY,
                 cast[slop_os.Handle](remote.wait_end),
                 signals,
-                remote.key + WAIT_KEY,
                 .Persistent
             )
         }

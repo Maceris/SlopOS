@@ -900,11 +900,11 @@ wait_result :: fn[E](outcome : WaitOutcome) -> Result[u32, E] {
  * @param thread The calling thread, the CPU's current one, which doesn't block here: its process's handle table is
  *     where the handles are looked up.
  * @param port The port, which needs RIGHT_PORT_BIND.
+ * @param key The binding's key, which its packets carry: one not bound on the port, or one bound to this same object.
  * @param object What to watch: a channel end, a process (which needs RIGHT_PROCESS_INSPECT), a thread, an IRQ, a
  *     Device, a memory budget (which needs RIGHT_BUDGET_CHARGE), or a memory object, through its owning handle, for
  *     SIGNAL_UNHELD (decisions/0178); the others need no right.
  * @param signals The slop_os.SIGNAL_ bits to see; ignored for an IRQ.
- * @param key The binding's key, which its packets carry: one not bound on the port, or one bound to this same object.
  * @param mode Once, disarmed once its packet is queued; any other value is Persistent.
  * @error InvalidHandle The port or the object isn't a handle in the caller's table.
  * @error ObjectGone The port or the object was destroyed, or is being.
@@ -919,9 +919,9 @@ wait_result :: fn[E](outcome : WaitOutcome) -> Result[u32, E] {
 sys_port_bind :: fn(
     thread : ptr[mut Thread],
     port : slop_os.Port,
+    key : u64,
     object : slop_os.Handle,
     signals : slop_os.Signals,
-    key : u64,
     mode : slop_os.BindMode
 ) -> Result[void, slop_os.PortError] {
     kernel :: per_cpu().kernel
@@ -1201,22 +1201,22 @@ sys_channel_notify :: fn(
  * @param thread The calling thread, which doesn't block here: the end is looked up in its process's table, and the
  *     payload is copied from its address space.
  * @param end The caller's end; no right is needed.
- * @param payload The message's bytes in the caller's memory, copied; a count past 2^32 - 1 is taken as that.
+ * @param bytes The message's payload in the caller's memory, copied; a count past 2^32 - 1 is taken as that.
  * @param batch The handle batch channel_send_handles filled for this message, or slop_os.NO_BATCH for none.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The end was destroyed.
  * @error WrongKind Not a channel end's handle.
- * @error TooBig The payload is bigger than channel_max_payload of the ring's size.
+ * @error TooBig The bytes are more than channel_max_payload of the ring's size.
  * @error NoSuchBatch A batch number of slop_os.HANDLE_BATCHES or more that isn't NO_BATCH.
  * @error PeerClosed The other end is closed.
  * @error Corrupt The ring's indices are impossible: the other end broke them.
  * @error Full The ring has no room for the message now; wait for Writable.
- * @error BadBuffer The payload isn't mapped readable user memory.
+ * @error BadBuffer The bytes aren't mapped readable user memory.
  */
 sys_channel_write :: fn(
     thread : ptr[mut Thread],
     end : slop_os.Channel,
-    payload : slop_os.UserBuffer,
+    bytes : slop_os.UserBuffer,
     batch : u32
 ) -> Result[void, slop_os.ChannelError] {
     found :: end_of(thread, end, cast[slop_os.Rights](0))?
@@ -1226,8 +1226,8 @@ sys_channel_write :: fn(
             per_cpu().kernel,
             thread,
             found,
-            payload.address,
-            cast[u32](min_u64(payload.count, 0xffffffff)),
+            bytes.address,
+            cast[u32](min_u64(bytes.count, 0xffffffff)),
             batch
         )
     )
@@ -1884,7 +1884,7 @@ sys_memory_evict :: fn(
  *     where the handles are looked up.
  * @param memory The paged memory, which needs RIGHT_MEMORY_WRITE.
  * @param offset The page's offset in bytes.
- * @return 1 if it was touched, 0 if it wasn't; always 0 where the hardware doesn't keep the marks.
+ * @return True if it was touched, false if it wasn't; always false where the hardware doesn't keep the marks.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The memory was destroyed.
  * @error WrongKind Not a memory object's handle.
@@ -1896,7 +1896,7 @@ sys_memory_page_accessed :: fn(
     thread : ptr[mut Thread],
     memory : slop_os.Memory,
     offset : u64
-) -> Result[u64, slop_os.MemoryError] {
+) -> Result[bool, slop_os.MemoryError] {
     found :: object_of[slop_os.MemoryError](
         process_of(thread),
         cast[slop_os.Handle](memory),
@@ -2761,12 +2761,13 @@ control_done :: fn(error : slop_os.ControlError?) -> Result[void, slop_os.Contro
 }
 
 /**
- * List the threads of a process's subtree.
+ * List the threads of a process's subtree, by ID, the least first, from an ID on (threads_of).
  *
  * @param thread The calling thread, into whose memory the IDs are written.
  * @param process The process, which needs RIGHT_PROCESS_INSPECT.
- * @param ids Where the threads' IDs go in the caller's memory, at most 64 of them however big it is.
- * @return How many threads the subtree has, which can be more than were written.
+ * @param from The least ID listed; 0 for all of them.
+ * @param ids Where the IDs go in the caller's memory, in increasing order, at most 64 of them however big it is.
+ * @return How many threads the subtree has of from and past, which can be more than were written.
  * @error InvalidHandle Not a handle in the caller's table.
  * @error ObjectGone The process was destroyed.
  * @error WrongKind Not a process's handle.
@@ -2776,13 +2777,14 @@ control_done :: fn(error : slop_os.ControlError?) -> Result[void, slop_os.Contro
 sys_process_threads :: fn(
     thread : ptr[mut Thread],
     process : slop_os.Process,
+    from : u64,
     ids : slop_os.UserBuffer
 ) -> Result[u32, slop_os.ControlError] {
     kernel :: per_cpu().kernel
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INSPECT)?
     found : u64[64]
     capacity :: cast[u32](min_u64(ids.count, 64))
-    count :: threads_of(kernel, cast[u64](target), &found, capacity)
+    count :: threads_of(kernel, cast[u64](target), from, &found, capacity)
     written :: min_u64(cast[u64](count), cast[u64](capacity))
     if !copy_to_user(kernel, thread.space, ids.address, cast[u64](&found[0]), written * 8) {
         return .Error(.BadBuffer)
@@ -2855,7 +2857,7 @@ sys_process_read_memory :: fn(
  * @param process The process, which needs RIGHT_PROCESS_WRITE_STATE.
  * @param space An address space in its subtree, through a handle the caller has; no right is needed.
  * @param address Where in space to write to, a user virtual address.
- * @param buffer The bytes to write, in the caller's memory.
+ * @param bytes The bytes to write, in the caller's memory.
  * @error InvalidHandle The process or the space isn't a handle in the caller's table.
  * @error ObjectGone The process or the space was destroyed.
  * @error WrongKind A handle of another kind.
@@ -2867,11 +2869,11 @@ sys_process_write_memory :: fn(
     process : slop_os.Process,
     space : slop_os.AddressSpace,
     address : u64,
-    buffer : slop_os.UserBuffer
+    bytes : slop_os.UserBuffer
 ) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
     other :: subtree_space(thread, target, space)?
-    if !copy_between(per_cpu().kernel, thread.space, buffer.address, other, address, buffer.count) {
+    if !copy_between(per_cpu().kernel, thread.space, bytes.address, other, address, bytes.count) {
         return .Error(.BadAddress)
     }
     return .Ok
@@ -3034,7 +3036,8 @@ sys_thread_write_registers :: fn(
  * @param process The process, which needs RIGHT_PROCESS_INTERCEPT.
  * @param port The port stops are reported to, which needs RIGHT_PORT_BIND.
  * @param key The Stop packets' key, bound on port.
- * @param calls Which system calls stop at entry or exit: a bit per call number below 64.
+ * @param calls Which system calls stop at entry or exit: the caller's words, call n bit n % 64 of word n / 64, read as
+ *     far as the kernel's calls go (read_calls).
  * @param points slop_os.STOP_ bits: where threads stop.
  * @return An owning handle to the intercept; closing it lets the subtree run on unintercepted.
  * @error InvalidHandle The process or the port isn't a handle in the caller's table.
@@ -3045,18 +3048,20 @@ sys_thread_write_registers :: fn(
  * @error BudgetExceeded The caller's budget can't pay for the intercept, its binding, or a page of its table.
  * @error OutOfMemory No slot for the intercept or its binding, or no frame for a page of the caller's table.
  * @error TableFull The caller's table has no room.
+ * @error BadBuffer The calls aren't readable user memory.
  */
 sys_intercept_attach :: fn(
     thread : ptr[mut Thread],
     process : slop_os.Process,
     port : slop_os.Port,
     key : u64,
-    calls : u64,
+    calls : slop_os.UserBuffer,
     points : u32
 ) -> Result[slop_os.Intercept, slop_os.ControlError] {
     kernel :: per_cpu().kernel
     caller :: process_of(thread)
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_INTERCEPT)?
+    stopping :: read_calls(thread, calls) or_return .Error(.BadBuffer)
     reporting :: object_of[slop_os.ControlError](
         caller,
         cast[slop_os.Handle](port),
@@ -3070,7 +3075,7 @@ sys_intercept_attach :: fn(
         target,
         cast[ptr[mut Port]](reporting),
         key,
-        calls,
+        &stopping,
         points
     )?
     handle :: owning_handle[slop_os.ControlError](kernel, caller, cast[u64](made), false)?
@@ -3666,6 +3671,50 @@ sys_io_port_write :: fn(
 }
 
 /**
+ * Read a ThreadDebug from a caller's memory, as far as its size says: its 16-byte header, then its slot_count slots;
+ * slots past those are Off. A size past the kernel's own ThreadDebug's is read only as far as that, as a program never
+ * runs on a kernel older than it (base's runtime, EXIT_WRONG_ABI).
+ *
+ * @param thread The calling thread, from whose memory it's read.
+ * @param debug Where it is in the caller's memory, untrusted.
+ * @return The state, every slot the kernel has, those not given Off.
+ * @error BadBuffer It isn't readable user memory, or its size is less than its header or its slot_count slots.
+ * @error BadRegisters A slot_count past slop_os.DEBUG_SLOTS, or reserved bytes, the header's or a slot's, not zero.
+ */
+read_debug :: fn(thread : ptr[mut Thread], debug : u64) -> Result[slop_os.ThreadDebug, slop_os.ControlError] {
+    HEADER :: cast[u64](offset_of(slop_os.ThreadDebug, slots))
+    SLOT :: cast[u64](size_of(slop_os.DebugSlot))
+    given := slop_os.ThreadDebug.{}
+    kernel :: per_cpu().kernel
+    if !copy_from_user(kernel, thread.space, debug, cast[u64](&given), HEADER) {
+        return .Error(.BadBuffer)
+    }
+    if given.slot_count > slop_os.DEBUG_SLOTS {
+        return .Error(.BadRegisters)
+    }
+    count :: cast[u64](given.slot_count)
+    if cast[u64](given.size) < HEADER + count * SLOT {
+        return .Error(.BadBuffer)
+    }
+    if count != 0 && !copy_from_user(kernel, thread.space, debug + HEADER, cast[u64](&given.slots[0]), count * SLOT) {
+        return .Error(.BadBuffer)
+    }
+    for byte in given.reserved {
+        if byte != 0 {
+            return .Error(.BadRegisters)
+        }
+    }
+    for slot in given.slots {
+        for byte in slot.reserved {
+            if byte != 0 {
+                return .Error(.BadRegisters)
+            }
+        }
+    }
+    return .Ok(given)
+}
+
+/**
  * Set a parked thread's debugging state: single-stepping, and its hardware breakpoints and watchpoints
  * (arch.set_debug, decisions/0183).
  *
@@ -3674,15 +3723,15 @@ sys_io_port_write :: fn(
  * @param thread The calling thread, from whose memory the state is read.
  * @param process The process, which needs RIGHT_PROCESS_WRITE_STATE.
  * @param id The thread's ID, as process_threads gives it.
- * @param debug Where the slop_os.ThreadDebug is in the caller's memory.
+ * @param debug Where the slop_os.ThreadDebug is in the caller's memory, read as its size says (read_debug).
  * @error InvalidHandle The process isn't a handle in the caller's table.
  * @error ObjectGone The process was destroyed.
  * @error WrongKind Not a process's handle.
  * @error MissingRight The handle lacks RIGHT_PROCESS_WRITE_STATE.
  * @error NoSuchThread No live thread with that ID in the subtree.
- * @error BadBuffer debug isn't readable user memory.
+ * @error BadBuffer debug isn't readable user memory, or its size is too small (read_debug).
  * @error NotStopped The thread isn't parked: stopped or suspended, and off its CPU.
- * @error BadRegisters A slot the CPU can't set (arch.set_debug).
+ * @error BadRegisters A slot the CPU can't set (arch.set_debug), too many slots, or reserved bytes that aren't zero.
  */
 sys_thread_set_debug :: fn(
     thread : ptr[mut Thread],
@@ -3691,16 +3740,7 @@ sys_thread_set_debug :: fn(
     debug : u64
 ) -> Result[void, slop_os.ControlError] {
     found :: subtree_thread(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE, id)?
-    given := slop_os.ThreadDebug.{}
-    if !copy_from_user(
-        per_cpu().kernel,
-        thread.space,
-        debug,
-        cast[u64](&given),
-        cast[u64](size_of(slop_os.ThreadDebug))
-    ) {
-        return .Error(.BadBuffer)
-    }
+    given :: read_debug(thread, debug)?
     lock_at(&found.control, .ThreadControl)
     defer unlock_at(&found.control, .ThreadControl)
     if !found.parked {
@@ -3784,10 +3824,10 @@ sys_thread_set_pointer :: fn(thread : ptr[mut Thread], value : u64) -> Result[vo
  *
  * @param thread The calling thread.
  * @param process The process, with RIGHT_PROCESS_WRITE_STATE.
- * @param debug A slop_os.ThreadDebug in the caller's memory: its slots, which replace the process's; step must be
- *     false.
- * @error BadBuffer debug isn't memory the caller can read.
- * @error BadRegisters step is set, or a slot the architecture can't set.
+ * @param debug A slop_os.ThreadDebug in the caller's memory, read as its size says (read_debug): its slots, which
+ *     replace the process's; step must be false.
+ * @error BadBuffer debug isn't memory the caller can read, or its size is too small.
+ * @error BadRegisters step is set, a slot the architecture can't set, too many slots, or reserved bytes not zero.
  */
 // sys_thread_set_page, system call 92, is in thread_pages.hsc; sys_process_set_control_flow, 93, in shadow_stacks.hsc
 
@@ -3797,16 +3837,7 @@ sys_process_set_debug :: fn(
     debug : u64
 ) -> Result[void, slop_os.ControlError] {
     target :: target_of(thread, process, slop_os.RIGHT_PROCESS_WRITE_STATE)?
-    given := slop_os.ThreadDebug.{}
-    if !copy_from_user(
-        per_cpu().kernel,
-        thread.space,
-        debug,
-        cast[u64](&given),
-        cast[u64](size_of(slop_os.ThreadDebug))
-    ) {
-        return .Error(.BadBuffer)
-    }
+    given :: read_debug(thread, debug)?
     // Made apart from any thread's registers, which a process's slots don't step
     made := arch.DebugRegisters.{}
     scratch := arch.UserRegisters.{}
@@ -3831,24 +3862,26 @@ sys_process_set_debug :: fn(
  *
  * @param thread The calling thread, whose handle table the intercept is looked up in.
  * @param intercept The intercept, which needs RIGHT_INTERCEPT_STEER.
- * @param calls The system calls it stops at from now, a bit per call number below 64.
+ * @param calls The system calls it stops at from now, the caller's words as sys_intercept_attach reads them.
  * @param points slop_os.STOP_ bits: where it stops threads from now.
  * @error InvalidHandle The intercept isn't a handle in the caller's table.
  * @error ObjectGone The intercept was destroyed.
  * @error WrongKind Not an intercept's handle.
  * @error MissingRight The handle lacks RIGHT_INTERCEPT_STEER.
+ * @error BadBuffer The calls aren't readable user memory; nothing is changed.
  */
 sys_intercept_set :: fn(
     thread : ptr[mut Thread],
     intercept : slop_os.Intercept,
-    calls : u64,
+    calls : slop_os.UserBuffer,
     points : u32
 ) -> Result[void, slop_os.ControlError] {
     found :: intercept_of_handle(thread, intercept)?
     if !steers(thread, intercept) {
         return .Error(.MissingRight)
     }
-    set_intercept(found, calls, points)
+    stopping :: read_calls(thread, calls) or_return .Error(.BadBuffer)
+    set_intercept(found, &stopping, points)
     return .Ok
 }
 

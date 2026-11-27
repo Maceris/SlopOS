@@ -413,16 +413,18 @@ load :: fn(manager : ptr[mut Manager], request : ptr[protocol.Load]) -> protocol
         return .NotLoaded(.NoCpuBudget)
     }
     if cast[slop_os.Handle](request.watch_port) != slop_os.NO_HANDLE
-        && (slop_os.port_bind(request.watch_port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED,
-            request.watch_key, .Once) is_error) {
+        && (slop_os.port_bind(request.watch_port, request.watch_key, cast[slop_os.Handle](process),
+            slop_os.SIGNAL_TERMINATED, .Once) is_error) {
         return .NotLoaded(.NoWatch)
     }
     if cast[slop_os.Handle](request.intercept_port) != slop_os.NO_HANDLE {
+        // The protocol's calls are a set's first word, the first 64 calls; STOP_ALL_CALLS reaches the rest
+        calls :: u64.[request.intercept_calls]
         made.intercept = slop_os.intercept_attach(
             process,
             request.intercept_port,
             request.intercept_key,
-            request.intercept_calls,
+            calls,
             request.intercept_points
         ) or_return .NotLoaded(.NoWatch)
         made.space = cast[slop_os.AddressSpace](slop_os.handle_duplicate(cast[slop_os.Handle](space), slop_os.RIGHT_TRANSFER)
@@ -677,7 +679,7 @@ steer :: fn(manager : ptr[mut Manager], asked : protocol.Steer) -> protocol.Resp
             record.intercept = cast[slop_os.Intercept](slop_os.NO_HANDLE)
         }
         // The new one's owning handle is the steerer's: closed, the program runs on unintercepted
-        match slop_os.intercept_attach(record.process, asked.port, asked.key, 0, slop_os.STOP_FAULT) {
+        match slop_os.intercept_attach(record.process, asked.port, asked.key, u64.[], slop_os.STOP_FAULT) {
             case Ok(made) => attached = made
             case Error(error) => {
                 log_line.write(manager.log, "process manager: steering: no intercept: %", error)

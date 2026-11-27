@@ -242,7 +242,13 @@ main :: fn(
                 case Some(found) => {
                     service.driver = found.end
                     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-                    _ = slop_os.port_bind(service.port, cast[slop_os.Handle](found.end), signals, DRIVER_KEY, .Persistent)
+                    _ = slop_os.port_bind(
+                        service.port,
+                        DRIVER_KEY,
+                        cast[slop_os.Handle](found.end),
+                        signals,
+                        .Persistent
+                    )
                 }
                 case None => runtime.log_info("no sound device's driver answered")
             }

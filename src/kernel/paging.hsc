@@ -608,7 +608,7 @@ covering :: fn(memory : ptr[Memory], page : u64) -> u64 {
  * @param kernel Unused; the hardware's marks are all that's read.
  * @param memory The paged memory, not a window onto it.
  * @param offset The page's offset in memory, in bytes, page aligned, below its size.
- * @return 1 if it was touched, 0 if not.
+ * @return True if it was touched, false if not.
  * @error NotPaged The memory isn't paged memory, or is a window.
  * @error InvalidSize The offset isn't page aligned, or is past the memory's end.
  */
@@ -616,7 +616,7 @@ page_accessed :: fn(
     kernel : ptr[mut Kernel],
     memory : ptr[mut Memory],
     offset : u64
-) -> Result[u64, slop_os.MemoryError] {
+) -> Result[bool, slop_os.MemoryError] {
     if memory.pager_binding == 0 || memory.parent != 0 {
         return .Error(.NotPaged)
     }
@@ -643,7 +643,7 @@ page_accessed :: fn(
         window_address = window.window_next
     }
     unlock_at(&memory.lock, .MemoryParent)
-    return .Ok(if touched { cast[u64](1) } else { cast[u64](0) })
+    return .Ok(touched)
 }
 
 /**

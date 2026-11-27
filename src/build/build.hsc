@@ -15,7 +15,8 @@
  *   (decisions/0174), which the store builder puts in its bundle (decisions/0094); and beside the root task,
  *   system.records, the system configuration as data (decisions/0110).
  * - tests_output: the folder test programs go in, build/tests by default.
- * - tools_output: the folder tools go in, build/tools by default.
+ * - tools_output: the folder tools go in, build/tools by default, with each architecture's ABI description,
+ *   abi_description.<arch>.txt (add_abi_descriptions).
  * - stack_check: what the kernel's prologue checks do without room, trap (the default) or morestack,
  *   which a boot test of stack segments builds.
  * - arch: the kernel's and the programs' architecture, x86_64 (the default), aarch64 (roadmap A) or riscv64 (M19,
@@ -97,6 +98,7 @@ build :: fn() {
     compiler.add_check(checks.check_program)
     compiler.add_check(write_manifest)
     compiler.add_check(write_system_records)
+    compiler.add_check(write_abi_description)
 }
 
 /**
@@ -546,6 +548,97 @@ add_tools :: fn(folder : string) {
         tool.output_path = text_buffer.as_string(&output)
         target :: compiler.add_target(tool)
     }
+    add_abi_descriptions()
+}
+
+/**
+ * The architectures SlopOS runs on, each by the name its ABI description's file has and the build's arch setting
+ * takes, and its Hemera architecture.
+ */
+AbiArchitecture :: struct {
+    /** The name: x86_64, aarch64 or riscv64. */
+    name : string,
+    /** The architecture the description is worked out for. */
+    architecture : compiler.Architecture,
+}
+
+/** Every architecture an ABI description is written for (add_abi_descriptions). */
+ABI_ARCHITECTURES :: AbiArchitecture.[
+    AbiArchitecture.{name = "x86_64", architecture = .x86_64},
+    AbiArchitecture.{name = "aarch64", architecture = .arm64},
+    AbiArchitecture.{name = "riscv64", architecture = .riscv64},
+]
+
+/** The start of the name of each target that works out an architecture's ABI description, abi_description.<arch>. */
+ABI_TARGET_PREFIX :: "abi_description."
+
+/**
+ * Add a target for each of ABI_ARCHITECTURES that compiles src/abi_describe as a SlopOS package of that architecture,
+ * with no output of its own, for write_abi_description to write its description beside the tools:
+ * abi_description.<arch>.txt in the tools_output folder (decisions/0201's 20a and 20n), as the ABI package differs by
+ * architecture and the hosted tool sees only this machine's.
+ */
+add_abi_descriptions :: fn() {
+    for each in ABI_ARCHITECTURES {
+        name_storage : u8[64]
+        name := text_buffer.make(name_storage)
+        text_buffer.append(&name, ABI_TARGET_PREFIX)
+        text_buffer.append(&name, each.name)
+        output_storage : u8[512]
+        output := text_buffer.make(output_storage)
+        text_buffer.append(&output, compiler.target_setting("tools_output", default = DEFAULT_TOOLS))
+        text_buffer.append(&output, "/")
+        text_buffer.append(&output, text_buffer.as_string(&name))
+        text_buffer.append(&output, ".txt")
+        described := compiler.command_line_options()
+        described.name = text_buffer.as_string(&name)
+        described.root = "../abi_describe"
+        described.output_path = text_buffer.as_string(&output)
+        described.target_options.os = .SlopOS
+        described.target_options.architecture = each.architecture
+        described.target_options.output_type = .Nothing
+        target :: compiler.add_target(described)
+    }
+}
+
+/**
+ * Write an architecture's ABI description, abi_describe's DESCRIPTION as compiled for it, at its target's output path
+ * (add_abi_descriptions). A compiler check, run for every target.
+ *
+ * @param target The target being built; only one whose root package is abi_describe (an abi_description.<arch>) is
+ *     written for, at its output path.
+ * @param program The target's program, which has the abi_describe package.
+ * @return True when it's written, or the target isn't one; false, with an error reported, if abi_describe isn't in the
+ *     program, has no DESCRIPTION, or the file couldn't be written.
+ */
+write_abi_description :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
+    if program.root.name != "abi_describe" {
+        return true
+    }
+    for &package in program.packages {
+        if package.name != "abi_describe" {
+            continue
+        }
+        found :: match compiler.find_constant(package, "DESCRIPTION") {
+            case Some(constant) => constant
+            case None => {
+                compiler.report_error(package.location, "abi_describe has no DESCRIPTION to write")
+                return false
+            }
+        }
+        if found.value.data == null {
+            compiler.report_error(package.location, "abi_describe's DESCRIPTION wasn't worked out")
+            return false
+        }
+        text :: cast[ptr[string]](found.value.data)^
+        if !compiler.checking() && os.write_entire_file(target.output_path, text) != null {
+            compiler.report_error(package.location, "can't write %", target.output_path)
+            return false
+        }
+        return true
+    }
+    compiler.report_error(program.root.location, "% hasn't the abi_describe package", target.name)
+    return false
 }
 
 /**

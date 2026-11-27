@@ -165,9 +165,9 @@ take_nic :: fn(service : ptr[mut Service], dialing : os.Channel[connector.Connec
     // Its answers are waited for on the port
     if slop_os.port_bind(
         service.port,
+        CONNECTOR_KEY,
         cast[slop_os.Handle](dialing.end),
         signals,
-        CONNECTOR_KEY,
         .Persistent
     ) is_error {
         runtime.log_info("the network interface's connector couldn't be watched")
@@ -181,7 +181,7 @@ take_nic :: fn(service : ptr[mut Service], dialing : os.Channel[connector.Connec
         }
     }
     end :: connection.end
-    if slop_os.port_bind(service.port, cast[slop_os.Handle](end), signals, NIC_KEY, .Persistent) is_error {
+    if slop_os.port_bind(service.port, NIC_KEY, cast[slop_os.Handle](end), signals, .Persistent) is_error {
         runtime.log_info("the network interface's connection couldn't be watched")
         return void
     }
@@ -1105,9 +1105,9 @@ make_stream_channel :: fn(service : ptr[mut Service], index : usize) -> os.Chann
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         service.port,
+        STREAM_KEY + cast[u64](index),
         cast[slop_os.Handle](pair.b),
         signals,
-        STREAM_KEY + cast[u64](index),
         .Persistent
     ) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
@@ -1529,9 +1529,9 @@ open_listener :: fn(service : ptr[mut Service], port : u16, root : u64) -> netwo
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         service.port,
+        LISTENER_KEY + cast[u64](index),
         cast[slop_os.Handle](pair.b),
         signals,
-        LISTENER_KEY + cast[u64](index),
         .Persistent
     ) is_error {
         net_stack.tcp_unlisten(stack, listener)
@@ -1795,9 +1795,9 @@ open_socket :: fn(
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         service.port,
+        SOCKET_KEY + cast[u64](index),
         cast[slop_os.Handle](pair.b),
         signals,
-        SOCKET_KEY + cast[u64](index),
         .Persistent
     ) is_error {
         net_stack.udp_close(stack, socket)

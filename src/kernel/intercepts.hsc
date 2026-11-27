@@ -37,6 +37,36 @@ import arch_interface from "../arch_interface"
  * Lock order: an intercept's lock, then a thread's control lock, then a port's.
  */
 
+/** How many words a set of calls takes: a bit for each system call the ABI package's table has. */
+CALL_WORDS :: (cast[usize](slop_os.syscall_count()) + 63) / 64
+
+/**
+ * A set of system calls an intercept stops at, as intercept_attach and intercept_set give it: call n is bit n % 64 of
+ * words[n / 64]; a call past the table is never in it.
+ */
+CallSet :: struct {
+    /** The set's bits, each word written and read atomically once it's an intercept's. */
+    words : u64[CALL_WORDS],
+}
+
+/**
+ * Read a set of calls from a caller's memory: as many of its words as the kernel's set has, those past them ignored, as
+ * they name calls that don't exist, and those it hasn't taken as zeros.
+ *
+ * @param thread The calling thread, from whose memory it's read.
+ * @param calls The caller's words, untrusted.
+ * @return The set; null if the words the kernel reads aren't memory the caller can read.
+ */
+read_calls :: fn(thread : ptr[mut Thread], calls : slop_os.UserBuffer) -> CallSet? {
+    made := CallSet.{}
+    words :: if calls.count < cast[u64](CALL_WORDS) { calls.count } else { cast[u64](CALL_WORDS) }
+    if words != 0
+        && !copy_from_user(per_cpu().kernel, thread.space, calls.address, cast[u64](&made.words[0]), words * 8) {
+        return null
+    }
+    return made
+}
+
 /** An intercept, a kernel object: a debugger's hold on a process's subtree, and the threads it has stopped. */
 Intercept :: struct #align(16) {
     /** The object's header; first, as for every kernel object. */
@@ -47,8 +77,8 @@ Intercept :: struct #align(16) {
     process : u64,
     /** The process's generation when it was made, so a destroyed process isn't taken for it. */
     process_generation : u32,
-    /** The system calls it stops at, a bit per call number below 64; written atomically by set_intercept. */
-    calls : u64,
+    /** The system calls it stops at; each word written atomically by set_intercept. */
+    calls : CallSet,
     /**
      * Where it stops threads: slop_os.STOP_* bits, for a call's entry and exit, and faults; written atomically by
      * set_intercept.
@@ -82,7 +112,7 @@ Intercept :: struct #align(16) {
  * @param process The process whose subtree it intercepts.
  * @param port The port its Stop packet goes to.
  * @param key The key its packet carries, which no binding on the port may have yet.
- * @param calls The system calls to stop at, a bit per call number below 64.
+ * @param calls The system calls to stop at, copied.
  * @param points Where to stop threads, slop_os.STOP_* bits.
  * @return The intercept, owned by owner, the process's; the caller makes a handle to it.
  * @error OutOfMemory No memory could be had for the object or its binding.
@@ -98,7 +128,7 @@ create_intercept :: fn(
     process : ptr[mut Process],
     port : ptr[mut Port],
     key : u64,
-    calls : u64,
+    calls : ptr[CallSet],
     points : u32
 ) -> Result[ptr[mut Intercept], slop_os.ControlError] {
     object := cast[u64](0)
@@ -118,7 +148,7 @@ create_intercept :: fn(
     intercept :: cast[ptr[mut Intercept]](object)
     intercept.process = cast[u64](process)
     intercept.process_generation = process.header.generation
-    intercept.calls = calls
+    intercept.calls = calls^
     intercept.points = points
     // Its binding first, so a stop always has somewhere to go
     lock_at(&port.lock, .Port)
@@ -397,13 +427,18 @@ fire_fault_stop :: fn(kernel : ptr[mut Kernel], fired : ptr[TimerEntry]) {
  *
  * @param intercept The intercept, whose calls and points are read without its lock (set_intercept).
  * @param number The system call's number, from the stopping thread's registers; any value.
- * @return True with STOP_ALL_CALLS among its points; otherwise if number is below 64 and its bit is in its calls.
+ * @return True with STOP_ALL_CALLS among its points; otherwise if number is in its calls, which a number past the
+ *     table never is.
  */
 wants_call :: fn(intercept : ptr[Intercept], number : u64) -> bool {
     if intercept.points & slop_os.STOP_ALL_CALLS != 0 {
         return true
     }
-    return number < 64 && intercept.calls & (cast[u64](1) << number) != 0
+    word :: cast[usize](number / 64)
+    if word >= intercept.calls.words.count {
+        return false
+    }
+    return intrinsics.atomic_load_u64(&intercept.calls.words[word]) & (cast[u64](1) << (number % 64)) != 0
 }
 
 /**
@@ -622,10 +657,12 @@ unlink_stopped :: fn(intercept : ptr[mut Intercept], thread : ptr[mut Thread]) {
  * thread reaches a point, so a thread there as they change may stop by either.
  *
  * @param intercept The intercept.
- * @param calls The system calls it stops at, a bit per call number below 64.
+ * @param calls The system calls it stops at, copied a word at a time.
  * @param points slop_os.STOP_ bits.
  */
-set_intercept :: fn(intercept : ptr[mut Intercept], calls : u64, points : u32) {
-    intrinsics.atomic_store_u64_release(&intercept.calls, calls)
+set_intercept :: fn(intercept : ptr[mut Intercept], calls : ptr[CallSet], points : u32) {
+    for word, i in calls.words {
+        intrinsics.atomic_store_u64_release(&intercept.calls.words[i], word)
+    }
     intrinsics.atomic_store_u32_release(&intercept.points, points)
 }

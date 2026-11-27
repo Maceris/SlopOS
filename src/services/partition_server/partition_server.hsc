@@ -207,9 +207,9 @@ main :: fn(
      */
     if slop_os.port_bind(
         server.port,
+        DISK_KEY,
         cast[slop_os.Handle](server.disk),
         slop_os.SIGNAL_PEER_CLOSED,
-        DISK_KEY,
         .Once
     ) is_error {
         return 1
@@ -427,16 +427,16 @@ open :: fn(server : ptr[mut Server], first : u64, count : u64, client : slop_os.
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if (slop_os.port_bind(
         server.port,
+        CLIENT_KEY + cast[u64](slot),
         cast[slop_os.Handle](ours),
         signals,
-        CLIENT_KEY + cast[u64](slot),
         .Persistent
     ) is_error)
         || (slop_os.port_bind(
             server.port,
+            DRIVER_KEY + cast[u64](slot),
             cast[slop_os.Handle](driver.end),
             signals,
-            DRIVER_KEY + cast[u64](slot),
             .Persistent
         ) is_error) {
         _ = slop_os.port_unbind(server.port, CLIENT_KEY + cast[u64](slot))

@@ -86,9 +86,9 @@ main :: fn(platform_service : os.Channel[platform.Platform], power : os.Channel[
     _ = service_kit.watch_stop(events)
     if slop_os.port_bind(
         events,
+        IRQ_KEY,
         cast[slop_os.Handle](button.irq),
         cast[slop_os.Signals](0),
-        IRQ_KEY,
         .Persistent
     ) is_error {
         return 3

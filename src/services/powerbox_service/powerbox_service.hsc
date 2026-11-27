@@ -221,7 +221,7 @@ main :: fn(
             box.programs_port = os.port_for(block.budget, connection.end) or_return 2
             // Its answers wake the loop, taken as they come (take_sessions_answer)
             signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-            slop_os.port_bind(box.port, cast[slop_os.Handle](connection.end), signals, SESSIONS_KEY, .Persistent)
+            slop_os.port_bind(box.port, SESSIONS_KEY, cast[slop_os.Handle](connection.end), signals, .Persistent)
                 or_return 2
         }
         case None => {}
@@ -238,7 +238,7 @@ main :: fn(
     box.prompt_port = os.port_for(block.budget, prompts.end) or_return 2
     // Its answers wake the loop too
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    slop_os.port_bind(box.port, cast[slop_os.Handle](prompts.end), signals, PROMPT_KEY, .Persistent) or_return 2
+    slop_os.port_bind(box.port, PROMPT_KEY, cast[slop_os.Handle](prompts.end), signals, .Persistent) or_return 2
     if !service_kit.add_client(&box.clients, box.port, manager.end) {
         return 3
     }

@@ -146,7 +146,7 @@ main :: fn(log : slop_os.DebugLog?, device : os.Channel[usb_device.UsbDevice], c
     driver.port = slop_os.port_create(startup.budget) or_return 5
     _ = service_kit.watch_stop(driver.port)
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](device.end), signals, DEVICE_KEY, .Persistent) or_return 5
+    slop_os.port_bind(driver.port, DEVICE_KEY, cast[slop_os.Handle](device.end), signals, .Persistent) or_return 5
 
     info :: match call(driver, .Describe) {
         case Described(described) => described

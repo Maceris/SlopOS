@@ -655,7 +655,7 @@ dial_serial :: fn(service : ptr[mut Service]) {
     port :: os.port_for(slop_os.startup_block().budget, service.serial_connector) or_return void
     line :: connector.dial[serial.Serial](service.serial_connector, port) or_return void
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(service.port, cast[slop_os.Handle](line.end), signals, SERIAL_KEY, .Persistent) {
+    match slop_os.port_bind(service.port, SERIAL_KEY, cast[slop_os.Handle](line.end), signals, .Persistent) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](line.end))
@@ -694,7 +694,7 @@ dial_seat :: fn(service : ptr[mut Service]) {
     port :: os.port_for(slop_os.startup_block().budget, service.seat_connector) or_return void
     keys :: connector.dial[seat.Seat](service.seat_connector, port) or_return void
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    match slop_os.port_bind(service.port, cast[slop_os.Handle](keys.end), signals, SEAT_KEY, .Persistent) {
+    match slop_os.port_bind(service.port, SEAT_KEY, cast[slop_os.Handle](keys.end), signals, .Persistent) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](keys.end))
@@ -2629,9 +2629,9 @@ dial_accounts :: fn(service : ptr[mut Service]) {
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         service.port,
+        ACCOUNTS_KEY,
         cast[slop_os.Handle](connection.end),
         signals,
-        ACCOUNTS_KEY,
         .Persistent
     ) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](connection.end))
@@ -3001,9 +3001,9 @@ start_session :: fn(service : ptr[mut Service], home : os.Channel[dir.Dir]?) -> 
         if started
             && (slop_os.port_bind(
                 service.port,
+                PROMPT_KEY + cast[u64](service.viewing),
                 cast[slop_os.Handle](prompts),
                 signals,
-                PROMPT_KEY + cast[u64](service.viewing),
                 .Persistent
             ) is_ok) {
             view(service).prompt_end = prompts

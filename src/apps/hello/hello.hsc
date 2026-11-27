@@ -101,7 +101,7 @@ main :: fn(
     match manager {
         case Some(connection) => {
             port :: slop_os.port_create(slop_os.startup_block().budget) or_return 3
-            slop_os.port_bind(port, cast[slop_os.Handle](connection.end), slop_os.SIGNAL_PEER_CLOSED, 0, .Once)
+            slop_os.port_bind(port, 0, cast[slop_os.Handle](connection.end), slop_os.SIGNAL_PEER_CLOSED, .Once)
                 or_return 4
             // Or until it's asked to stop, as the system shuts down (decisions/0182)
             _ = service_kit.watch_stop(port)

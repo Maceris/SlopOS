@@ -114,9 +114,9 @@ dial_accounts :: fn(service : ptr[mut Service]) -> bool {
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         service.port,
+        ACCOUNTS_KEY,
         cast[slop_os.Handle](connection.end),
         signals,
-        ACCOUNTS_KEY,
         .Persistent
     ) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](service.accounts_answers))

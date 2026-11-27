@@ -307,23 +307,21 @@ pages_are_charged_and_given_back_under_pressure #test :: fn(t : ptr[mut testing.
         "the paying budget is charged a page for each page supplied"
     )
     // Page 0 was touched, and isn't once that's been asked
-    testing.expect_eq(
+    testing.expect(
         t,
-        slop_os.memory_page_accessed(shared.paged, 0) or_else 99,
-        1,
+        slop_os.memory_page_accessed(shared.paged, 0) or_else false,
         "a page read since it was supplied is reported touched"
     )
-    testing.expect_eq(
+    testing.expect(
         t,
-        slop_os.memory_page_accessed(shared.paged, 0) or_else 99,
-        0,
+        !(slop_os.memory_page_accessed(shared.paged, 0) or_else true),
         "asking clears a page's touch, so it isn't reported again until touched again"
     )
     // A threshold a page above what the budget has: touching page 1 reaches it, raising pressure on another port
     watch :: testing.require_ok(t, slop_os.port_create(block.budget), "a port to watch for pressure")?
     testing.require_ok(
         t,
-        slop_os.port_bind(watch, cast[slop_os.Handle](paged.paying), slop_os.SIGNAL_PRESSURE, PRESSURE_KEY, .Once),
+        slop_os.port_bind(watch, PRESSURE_KEY, cast[slop_os.Handle](paged.paying), slop_os.SIGNAL_PRESSURE, .Once),
         "the paying budget's pressure is watched"
     )?
     now :: testing.require_ok(t, slop_os.memory_budget_info(paged.paying), "the paying budget can be read")?

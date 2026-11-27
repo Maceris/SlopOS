@@ -131,13 +131,13 @@ ipc_round_trip_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcom
     echoing.port = testing.require_ok(t, slop_os.port_create(budget), "a port for the echoing thread")?
     testing.require_ok(
         t,
-        slop_os.port_bind(echoing.port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, ECHO_KEY, .Persistent),
+        slop_os.port_bind(echoing.port, ECHO_KEY, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, .Persistent),
         "the echoing thread's end wakes its port"
     )?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port for the answers")?
     testing.require_ok(
         t,
-        slop_os.port_bind(port, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, ANSWER_KEY, .Persistent),
+        slop_os.port_bind(port, ANSWER_KEY, cast[slop_os.Handle](pair.a), slop_os.SIGNAL_READABLE, .Persistent),
         "the measuring end wakes its port"
     )?
     thread :: testing.require_ok(
@@ -258,9 +258,9 @@ thread_create_is_measured #test :: fn(t : ptr[mut testing.T]) -> testing.Outcome
         // A key of its own, a fired Once binding keeping its key; gone already, it ended before it could be watched
         watched :: slop_os.port_bind(
             port,
+            ENDED_KEY + i,
             cast[slop_os.Handle](thread),
             slop_os.SIGNAL_TERMINATED,
-            ENDED_KEY + i,
             .Once
         )
         if watched is_ok {

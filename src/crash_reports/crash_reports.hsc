@@ -303,10 +303,26 @@ CRASH_ATTEMPTS :: 100
  *     has none, NotStopped if it wasn't suspended within CRASH_ATTEMPTS milliseconds, or what the calls gave.
  */
 make_crash :: fn(process : slop_os.Process, ping : slop_os.Channel?) -> Result[void, slop_os.ControlError] {
-    ids : u64[1]
-    if (slop_os.process_threads(process, ids)?) == 0 {
+    // Its newest thread, the last listed: the runtime's lifecycle thread where it has one, which the ping wakes
+    newest := cast[u64](0)
+    from := cast[u64](0)
+    loop {
+        ids : u64[64]
+        count :: slop_os.process_threads(process, from, ids)?
+        written :: if count < 64 { count } else { 64 }
+        if written == 0 {
+            break
+        }
+        newest = ids[cast[usize](written - 1) % 64]
+        if count <= 64 {
+            break
+        }
+        from = newest + 1
+    }
+    if newest == 0 {
         return .Error(.NoSuchThread)
     }
+    ids :: u64.[newest]
     slop_os.thread_suspend(process, ids[0])?
     defer slop_os.thread_resume(process, ids[0])
     match ping {

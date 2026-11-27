@@ -288,9 +288,9 @@ handles_and_messages_pass_between_processes #test :: fn(t : ptr[mut testing.T]) 
     any_x :: cast[slop_os.Handle](x)
     readable_or_closed :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE)
         | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    bound :: slop_os.port_bind(port, any_x, readable_or_closed, KEY_X, .Persistent)
+    bound :: slop_os.port_bind(port, KEY_X, any_x, readable_or_closed, .Persistent)
     testing.expect_ok(t, bound, "x binds to a port for Readable and PeerClosed")
-    bound_once :: slop_os.port_bind(port, any_x, slop_os.SIGNAL_WRITABLE, KEY_ONCE, .Once)
+    bound_once :: slop_os.port_bind(port, KEY_ONCE, any_x, slop_os.SIGNAL_WRITABLE, .Once)
     testing.expect_ok(t, bound_once, "x binds to a port for Writable, once")
     // Through the rings: x is side 0, so A writes ring 0 and reads ring 1
     once := cast[u64](0)
@@ -338,7 +338,7 @@ handles_and_messages_pass_between_processes #test :: fn(t : ptr[mut testing.T]) 
     }
     testing.expect_eq(t, once, 0, "a Once binding, once it has fired, queues nothing more until it's bound again")
     // Armed again, it sees the next one; then B closes y
-    rebound :: slop_os.port_bind(port, any_x, slop_os.SIGNAL_WRITABLE, KEY_ONCE, .Once)
+    rebound :: slop_os.port_bind(port, KEY_ONCE, any_x, slop_os.SIGNAL_WRITABLE, .Once)
     testing.expect_ok(t, rebound, "a fired Once binding binds again")
     if ring_send(ring_at, 0, SECOND_FROM_A) {
         _ = slop_os.channel_notify(x, slop_os.SIGNAL_READABLE)
@@ -457,7 +457,7 @@ an_end_bound_before_it_is_read_is_woken #test :: fn(t : ptr[mut testing.T]) -> t
     budget :: slop_os.startup_block().budget
     pair :: testing.require_ok(t, slop_os.channel_create(budget, 0, 0), "a channel")?
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port")?
-    bound :: slop_os.port_bind(port, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, KEY_ONCE, .Persistent)
+    bound :: slop_os.port_bind(port, KEY_ONCE, cast[slop_os.Handle](pair.b), slop_os.SIGNAL_READABLE, .Persistent)
     testing.require_ok(t, bound, "an empty end binds for Readable")?
     value := CHANNEL_VALUE
     written :: slop_os.channel_write(pair.a, os.bytes_of(&value), slop_os.NO_BATCH)
@@ -563,7 +563,7 @@ run_b :: fn(c0 : slop_os.Channel) -> int {
     port :: slop_os.port_create(block.budget) or_return 102
     results : u64[B_RESULTS]
     results[B_BOUND_C0] = test_kit.tag_of(
-        slop_os.port_bind(port, cast[slop_os.Handle](c0), slop_os.SIGNAL_READABLE, KEY_C0, .Persistent)
+        slop_os.port_bind(port, KEY_C0, cast[slop_os.Handle](c0), slop_os.SIGNAL_READABLE, .Persistent)
     )
     // Through the kernel: Empty says it waits, so A's write rings the doorbell
     data : u64[8]
@@ -592,7 +592,7 @@ run_b :: fn(c0 : slop_os.Channel) -> int {
     y :: cast[slop_os.Channel](into[0])
     results[B_MAPPED_Y] = test_kit.tag_of(slop_os.channel_map(y, space, ring_at))
     results[B_BOUND_Y] = test_kit.tag_of(
-        slop_os.port_bind(port, cast[slop_os.Handle](y), slop_os.SIGNAL_READABLE, KEY_Y, .Persistent)
+        slop_os.port_bind(port, KEY_Y, cast[slop_os.Handle](y), slop_os.SIGNAL_READABLE, .Persistent)
     )
     // y is side 1: B writes ring 1 and reads ring 0
     once := cast[u64](0)

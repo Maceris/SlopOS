@@ -311,7 +311,7 @@ memory_counts_who_holds_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcom
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     testing.require_ok(
         t,
-        slop_os.port_bind(port, cast[slop_os.Handle](memory), slop_os.SIGNAL_UNHELD, UNHELD_KEY, .Persistent),
+        slop_os.port_bind(port, UNHELD_KEY, cast[slop_os.Handle](memory), slop_os.SIGNAL_UNHELD, .Persistent),
         "its owner watches it"
     )?
     testing.expect_eq(t, slop_os.memory_holders(memory) or_else 99, 0, "no one holds new memory but its owner")
@@ -332,7 +332,7 @@ memory_counts_who_holds_it #test :: fn(t : ptr[mut testing.T]) -> testing.Outcom
     )
     testing.expect_error(
         t,
-        slop_os.port_bind(port, cast[slop_os.Handle](copy), slop_os.SIGNAL_UNHELD, UNHELD_KEY + 1, .Persistent),
+        slop_os.port_bind(port, UNHELD_KEY + 1, cast[slop_os.Handle](copy), slop_os.SIGNAL_UNHELD, .Persistent),
         slop_os.PortError.MissingRight,
         "only the owning handle watches"
     )
@@ -424,7 +424,7 @@ memory_held_by_a_process_is_let_go_with_it #test :: fn(t : ptr[mut testing.T]) -
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     testing.require_ok(
         t,
-        slop_os.port_bind(port, cast[slop_os.Handle](memory), slop_os.SIGNAL_UNHELD, UNHELD_KEY, .Persistent),
+        slop_os.port_bind(port, UNHELD_KEY, cast[slop_os.Handle](memory), slop_os.SIGNAL_UNHELD, .Persistent),
         "its owner watches it"
     )?
     rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ) | cast[u32](slop_os.RIGHT_TRANSFER))
@@ -550,9 +550,9 @@ a_write_where_only_reading_is_mapped_ends_the_process #test :: fn(t : ptr[mut te
     defer slop_os.handle_close(cast[slop_os.Handle](exit_port))
     watched :: slop_os.port_bind(
         exit_port,
+        WRITER_WATCH_KEY,
         cast[slop_os.Handle](launched.process),
         slop_os.SIGNAL_TERMINATED,
-        WRITER_WATCH_KEY,
         .Once
     )
     testing.require_ok(t, watched, "A watches for B's end")?

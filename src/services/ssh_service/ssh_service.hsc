@@ -136,9 +136,9 @@ main :: fn(
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         service.port,
+        SESSIONS_KEY,
         cast[slop_os.Handle](service.sessions_end),
         signals,
-        SESSIONS_KEY,
         .Persistent
     ) is_error {
         return 2

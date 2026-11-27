@@ -26,12 +26,16 @@ freestanding **ABI package** (`0025`). If it's not in this table, it isn't stabl
 | Surface | What is frozen at v1 | Defined in | Designed in |
 |---|---|---|---|
 | **ABI version** | The version number and how it's checked | ABI package | §5 |
-| **Syscall table** | Numbers, argument and result types, the register convention | ABI package (typed declarations; stubs and dispatch generated) | §4 |
-| **Handles and rights** | The 32-bit handle encoding as user space sees it (opaque), rights bit values, handle kinds | ABI package | `0008`, `0010`, `0015` |
-| **Error types** | Each syscall's error union: variant tags and data | ABI package | §4 |
+| **Syscall table** | Numbers, argument names and types, result types, the register convention | ABI package (typed declarations; stubs and dispatch generated) | §4 |
+| **Handles and rights** | The 32-bit handle encoding as user space sees it (opaque), `NO_HANDLE`, rights bit values (`RIGHT_*`, `RIGHTS_ALL`), handle kinds | ABI package | `0008`, `0010`, `0015` |
+| **Error types** | Each syscall's error enum: data-less, its tags, one value one name across every enum, `NoSuchCall` (7) in each | ABI package | §4 |
+| **Call structs** | What calls take and give by pointer or in registers: `HandleInfo`, `ThreadDebug` and `DebugSlot` (size-prefixed), `StopInfo`, `Sample`, `TraceEvent`, `MsiMessage`, `ProcessCpu`, `CpuBudgetInfo`'s words; the `FAULT_`, `STOP_`, `TRAP_` and `PROTECTION_` values; `THREAD_REGISTERS` and the register order on each architecture | ABI package | §4 |
+| **Per-thread page** | `ThreadPage`'s layout, which the kernel reads at its scheduling points | ABI package | `0041`, `0185` |
 | **Channel rings** | `RingIndices`, `MessageHeader`, alignment, the wake (event-suppression) protocol, handle-batch numbering | ABI package | `ipc.md` §2 |
-| **Port packets** | `Packet`, `PacketData` variants and their tags, `Signals` bits | ABI package | `ipc.md` §3 |
-| **Startup block** | Layout, relative-pointer encoding, the ABI-version field, where grants and typed arguments sit | ABI package | §6 |
+| **Port packets** | `Packet`, `PacketKind` and its tags, `Signals` bits, `EXIT_KILLED` | ABI package | `ipc.md` §3 |
+| **Protocol messages** | How a message carries variable-size data and handles: `Relative[T]` (offset and count from the message's start), `NO_HANDLE_INDEX`; `Protocol` and `Lending` | ABI package | `0040`, `0071` |
+| **Startup block** | `StartupBlock`'s layout, size-prefixed, the ABI-version field, the grants (an offset from the block, then `Grant`s), the grant "arguments"' format (`ArgumentsHeader`, `ArgumentHeader`, `ARGUMENTS_MAGIC`), and the exit codes of a program that can't start (`EXIT_WRONG_ABI`, `EXIT_MISSING_GRANT`) | ABI package | §6 |
+| **Firmware grant** | The root task's "firmware" grant: `FirmwareTables`, `FirmwareTable`, `PhysicalRange`, `FramebufferLayout`, `FIRMWARE_MAGIC` | ABI package | `0070`, `0073` |
 | **`CpuFeatures`** | Feature enum values | ABI package | `0019` |
 | **Process start** | Initial registers: entry, stack pointer, startup-block argument; everything else zeroed (`0026`) | ABI package (documented with the startup block) | §6 |
 | **Calling convention version** | The pinned Hemera convention version, for separately compiled libraries | Hemera's `calling_convention.md`, pinned by version (not frozen, `0027`) | §7 |
@@ -44,8 +48,12 @@ the `std` they were built with, and the kernel promises only the table above.
 numbers are append-only, layouts grow only through size-prefixed structs or new versions,
 and the release tooling compares the ABI package against the previous release
 (`0025`). The comparison is `src/tools/abi_description` (M20's 20a, `0201`): the package's description, worked out
-when the tool's compiled, kept in `docs/specs/abi_description.txt`, which `tools/unit_tests.py` checks it against;
-exactly until v1, and from v1 by 0025's rules.
+when `src/abi_describe` is compiled, for each architecture, as parts of the package differ by architecture
+(`THREAD_REGISTERS`), kept in `docs/specs/abi_description.<arch>.txt` for x86_64, aarch64 and riscv64, which
+`tools/unit_tests.py` checks the built ones against; exactly until v1, and from v1 by 0025's rules. Only the structs
+the tool names as growable (`StartupBlock`, `ThreadDebug`) may grow, and none used inside another layout. Working the
+description out also fails on a struct whose fields leave unnamed bytes (every gap is a `reserved` field, zeros) and
+on an error tag that means two things.
 
 ### Where it sits
 ```
@@ -96,15 +104,16 @@ defined in the ABI package.
 generates the kernel's dispatch table, the user-space stubs, the interception filter bits
 (`kernel.md` §4) and the documentation:
 ```
-port_wait :: fn(port: Port, out: mut Packet[], deadline: MonotonicTime?) -> Result[u32, PortError]
+port_wait :: fn(port : Port, packets : mut Packet[], deadline : u64) -> Result[u32, PortError]
 ```
 On x86-64:
 - The syscall number goes in `rax`, and up to six register-sized arguments in the remaining
   argument registers. A slice takes two registers. Larger arguments go in a size-prefixed
   struct passed by pointer.
-- Results: `rax` holds `0` for success or the error variant's tag, and `rdx` (plus `r8` if
-  needed) carries the value or the error's data. A `#run` check rejects syscalls whose
-  success value or error variants don't fit.
+- Results: `rax` holds `0` for success or the error's tag, and `rdx` (plus `r8` if
+  needed) carries the value, or a struct's first two fields. Errors are data-less enums, each call's own, whose tags
+  mean the same in every one of them; a number the kernel hasn't answers `NoSuchCall` (7), which every enum has. The
+  generated stubs reject at compile time a call whose arguments, success value or error don't fit.
 - The kernel preserves every register except the result registers, including the context
   register, so a syscall stub is an ordinary Hemera function.
 - On AArch64 (`decisions/0066`): `svc #0`, the number in `x8`, up to six arguments in `x0` to `x5`,
@@ -122,8 +131,10 @@ turns out to matter. It would then join the table in §1.
 
 - The ABI package defines `ABI_VERSION`.
 - The startup block carries the version the kernel implements, and `std`'s startup code
-  compares it with the version the program was built against. Before v1, any difference
-  is a refusal to start. From v1, a newer kernel accepts older programs.
+  compares it with the version the program was built against: a kernel older than the program is a refusal to start
+  (`EXIT_WRONG_ABI`), as is a block too small to hold what the program reads, through `cpu_features`; a newer kernel
+  starts it, so a newer kernel accepts older programs. Before v1 that's a promise nothing keeps yet, as layouts still
+  change and everything is rebuilt together.
 - A content-addressed program's hash covers the ABI version it was built for.
 
 ## 6. Process Start and the Startup Block
@@ -133,13 +144,14 @@ function:
 - The stub sets up the initial thread's **carrier block** and **carrier register**, then
   builds the `Context` and calls the program's exported entry function with it. The carrier
   block's layout is private to the program's `std`, so it isn't part of the startup block.
-- **One argument** points at the **startup block**: a structure made of relative pointers
-  (`relptr`), written by the process manager into a memory object mapped into the new
-  process. It holds:
-  - the ABI version;
+- **One argument** points at the **startup block**, `StartupBlock`, size-prefixed, written by the process
+  manager into a memory object mapped into the new process. It holds:
+  - the ABI version, and its own size;
   - `CpuFeatures` (`0019`);
-  - the startup grants (`0009`), with their handle kinds and labels;
-  - the typed arguments of the exported entry point (`0018`).
+  - the startup grants (`0009`), with their handle kinds and labels: `grant_count` `Grant`s at `grants`, an offset in
+    bytes from the block's start;
+  - through the grant "arguments", the typed arguments of the exported entry point that aren't handles (`0018`,
+    `ArgumentsHeader`).
 - `std`'s startup code turns the startup block into the program's typed parameters: each the grant
   labeled with the parameter's name, of its type's kind (`0068`).
 

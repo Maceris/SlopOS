@@ -398,7 +398,7 @@ add :: fn(
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     _ = slop_os.port_unbind(server.port, cast[u64](slot))
-    match slop_os.port_bind(server.port, cast[slop_os.Handle](end), signals, cast[u64](slot), .Persistent) {
+    match slop_os.port_bind(server.port, cast[u64](slot), cast[slop_os.Handle](end), signals, .Persistent) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))

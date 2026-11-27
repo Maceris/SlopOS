@@ -487,7 +487,7 @@ connect_seat :: fn(compositor : ptr[mut Compositor], dialer : os.Channel[connect
     defer slop_os.handle_close(cast[slop_os.Handle](port))
     channel :: connector.dial[seat.Seat](dialer.end, port) or_return void
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(compositor.port, cast[slop_os.Handle](channel.end), signals, SEAT_KEY, .Persistent) is_error {
+    if slop_os.port_bind(compositor.port, SEAT_KEY, cast[slop_os.Handle](channel.end), signals, .Persistent) is_error {
         _ = slop_os.handle_close(cast[slop_os.Handle](channel.end))
         return void
     }

@@ -625,9 +625,9 @@ add_finder :: fn(
         signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
         if slop_os.port_bind(
             sessions.port,
+            FINDER_KEY + cast[u64](i),
             cast[slop_os.Handle](end),
             signals,
-            FINDER_KEY + cast[u64](i),
             .Persistent
         ) is_error {
             break

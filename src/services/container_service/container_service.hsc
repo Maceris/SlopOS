@@ -648,7 +648,7 @@ add :: fn(
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     _ = slop_os.port_unbind(server.port, cast[u64](slot))
     _ = slop_os.port_unbind(server.port, DRIVER_KEY + cast[u64](slot))
-    match slop_os.port_bind(server.port, cast[slop_os.Handle](end), signals, cast[u64](slot), .Persistent) {
+    match slop_os.port_bind(server.port, cast[u64](slot), cast[slop_os.Handle](end), signals, .Persistent) {
         case Ok => {}
         case Error(error) => {
             _ = slop_os.handle_close(cast[slop_os.Handle](end))
@@ -658,9 +658,9 @@ add :: fn(
     if cast[slop_os.Handle](driver) != slop_os.NO_HANDLE
         && (slop_os.port_bind(
             server.port,
+            DRIVER_KEY + cast[u64](slot),
             cast[slop_os.Handle](driver),
             signals,
-            DRIVER_KEY + cast[u64](slot),
             .Persistent
         ) is_error) {
         // Its driver unwatched, its replies would never be read

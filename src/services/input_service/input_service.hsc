@@ -237,9 +237,9 @@ dial :: fn(service : ptr[mut Service], index : usize) {
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     match slop_os.port_bind(
         service.port,
+        KEYBOARD_KEY + cast[u64](index),
         cast[slop_os.Handle](keys.end),
         signals,
-        KEYBOARD_KEY + cast[u64](index),
         .Persistent
     ) {
         case Ok => {}

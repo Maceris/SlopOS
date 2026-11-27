@@ -436,9 +436,9 @@ start_job :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[Va
         signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
         _ = slop_os.port_bind(
             watch_port(shell),
+            running.first_key + OUTPUT_KEY,
             cast[slop_os.Handle](running.from),
             signals,
-            running.first_key + OUTPUT_KEY,
             .Persistent
         )
     }

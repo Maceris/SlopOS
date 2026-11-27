@@ -123,7 +123,7 @@ stop_entry :: fn(supervisor : ptr[mut Supervisor], index : usize, deadline : u64
 ended_by :: fn(supervisor : ptr[mut Supervisor], process : slop_os.Process, deadline : u64) -> bool {
     port :: slop_os.port_create(supervisor.block.budget) or_return false
     defer slop_os.handle_close(cast[slop_os.Handle](port))
-    if slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, 0, .Once) is_error {
+    if slop_os.port_bind(port, 0, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, .Once) is_error {
         // Its handle's gone, as once it's ended and been let go of
         return true
     }

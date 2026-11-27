@@ -330,7 +330,7 @@ go_on :: fn(session : ptr[mut Debugging], step : bool) -> bool {
     }
     process :: session.call.launched.process
     if !session.going {
-        _ = slop_os.intercept_set(session.faults.intercept, 0, slop_os.STOP_FAULT)
+        _ = slop_os.intercept_set(session.faults.intercept, u64.[], slop_os.STOP_FAULT)
         session.going = true
     }
     // An attached program's threads suspended, the one looked at not stopped at the intercept: stepped or resumed
@@ -596,7 +596,7 @@ say_registers :: fn(session : ptr[mut Debugging]) {
  */
 say_threads :: fn(session : ptr[mut Debugging]) {
     ids : u64[16]
-    count :: slop_os.process_threads(session.call.launched.process, ids) or_else 0
+    count :: slop_os.process_threads(session.call.launched.process, 0, ids) or_else 0
     for id, i in ids {
         if cast[u32](i) >= count {
             break

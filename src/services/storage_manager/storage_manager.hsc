@@ -454,9 +454,9 @@ dial_manager :: fn(state : ptr[mut Manager]) -> bool {
     state.manager_port = os.port_for(slop_os.startup_block().budget, state.manager.end) or_return false
     _ = slop_os.port_bind(
         state.port,
+        MANAGER_KEY,
         cast[slop_os.Handle](state.manager.end),
         slop_os.SIGNAL_PEER_CLOSED,
-        MANAGER_KEY,
         .Once
     )
     if again {
@@ -1370,9 +1370,9 @@ volume_of :: fn(
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     if slop_os.port_bind(
         state.port,
+        LINKS_KEY + cast[u64](slot),
         cast[slop_os.Handle](stored_links.b),
         signals,
-        LINKS_KEY + cast[u64](slot),
         .Persistent
     ) is_error {
         return .Failed

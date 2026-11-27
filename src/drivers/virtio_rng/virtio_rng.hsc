@@ -94,7 +94,7 @@ main :: fn(
     if !virtio.set_vector(&driver.transport, 0, message.address, message.data) {
         return 6
     }
-    slop_os.port_bind(driver.port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+    slop_os.port_bind(driver.port, IRQ_KEY, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), .Persistent)
         or_return 6
 
     // Its queue and the buffer the device fills, in DMA memory
@@ -115,9 +115,9 @@ main :: fn(
     pair :: os.channel_for[rng.Rng](block.budget, 0) or_return 9
     slop_os.port_bind(
         driver.port,
+        REQUESTS_KEY,
         cast[slop_os.Handle](pair.b),
         cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED)),
-        REQUESTS_KEY,
         .Persistent
     )
         or_return 9

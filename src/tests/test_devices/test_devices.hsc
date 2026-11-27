@@ -159,7 +159,7 @@ a_driver_takes_its_device_interrupts_through_an_irq #test :: fn(t : ptr[mut test
     without :: slop_os.irq_create(not_platform, budget, controller.number, info.line, info.flags)
     testing.expect_error(t, without, slop_os.DeviceError.WrongKind, "only the platform capability makes IRQs")
     port :: testing.require_ok(t, slop_os.port_create(budget), "a port for the IRQ's packets")?
-    bound :: slop_os.port_bind(port, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), IRQ_KEY, .Persistent)
+    bound :: slop_os.port_bind(port, IRQ_KEY, cast[slop_os.Handle](irq), cast[slop_os.Signals](0), .Persistent)
     testing.expect_ok(t, bound, "an IRQ binds to a port, to queue a packet for each interrupt")
     // The device's interrupts, which run while the IRQ exists
     taken := cast[u64](0)

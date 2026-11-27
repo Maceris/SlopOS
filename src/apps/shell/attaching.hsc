@@ -105,7 +105,7 @@ attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
     }
     defer end_call(call)
     // Its end, on the port too
-    _ = slop_os.port_bind(port, cast[slop_os.Handle](attached.process), slop_os.SIGNAL_TERMINATED, DEBUG_END_KEY, .Once)
+    _ = slop_os.port_bind(port, DEBUG_END_KEY, cast[slop_os.Handle](attached.process), slop_os.SIGNAL_TERMINATED, .Once)
     faults :: call.launched.faults or_return error_at(tree.at, "it was attached without its intercept")
     session := Debugging.{shell = shell, call = call, port = port, faults = faults, going = true, attached = true}
     file := DebugFile.{}
@@ -164,7 +164,7 @@ attach_debugged :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Res
 suspend_all :: fn(session : ptr[mut Debugging]) -> u32 {
     process :: session.call.launched.process
     ids : u64[64]
-    count :: slop_os.process_threads(process, ids) or_else 0
+    count :: slop_os.process_threads(process, 0, ids) or_else 0
     suspended : u32 = 0
     for id, i in ids {
         if cast[u32](i) >= count {
@@ -192,7 +192,7 @@ suspend_all :: fn(session : ptr[mut Debugging]) -> u32 {
 resume_all :: fn(session : ptr[mut Debugging]) {
     process :: session.call.launched.process
     ids : u64[64]
-    count :: slop_os.process_threads(process, ids) or_else 0
+    count :: slop_os.process_threads(process, 0, ids) or_else 0
     for id, i in ids {
         if cast[u32](i) >= count {
             break

@@ -48,7 +48,7 @@ trace_connection :: fn(supervisor : ptr[mut Supervisor]) -> os.Channel[trace.Tra
         }
     }
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
-    if slop_os.port_bind(supervisor.port, cast[slop_os.Handle](pair.b), signals, TRACE_KEY, .Persistent) is_error {
+    if slop_os.port_bind(supervisor.port, TRACE_KEY, cast[slop_os.Handle](pair.b), signals, .Persistent) is_error {
         log_line.write(supervisor.log, "supervisor: no trace connection: its end couldn't be bound")
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.a))
         _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
@@ -239,7 +239,7 @@ finish_trace :: fn(supervisor : ptr[mut Supervisor]) {
                 continue
             }
             ids : u64[64]
-            threads :: slop_os.process_threads(entry.process, ids) or_else 0
+            threads :: slop_os.process_threads(entry.process, 0, ids) or_else 0
             for id, i in ids {
                 if cast[u32](i) < threads && id == count.thread {
                     owner = index

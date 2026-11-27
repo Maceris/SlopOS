@@ -367,9 +367,9 @@ start_call :: fn(shell : ptr[mut Shell], call : ptr[mut Call], key : u64) -> Eva
             // Its lifecycle channel wakes the shell when it says its progress; without the binding, it's read anyway
             _ = slop_os.port_bind(
                 watch_port(shell),
+                key + LIFECYCLE_KEY,
                 cast[slop_os.Handle](ends.a),
                 slop_os.SIGNAL_READABLE,
-                key + LIFECYCLE_KEY,
                 .Persistent
             )
             return null

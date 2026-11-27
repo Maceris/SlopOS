@@ -499,7 +499,7 @@ SYMBOLS_END_WAIT : u64 : 2_000_000_000
 wait_for_end :: fn(process : slop_os.Process, longest : u64) {
     port :: slop_os.port_create(slop_os.startup_block().budget) or_return void
     defer slop_os.handle_close(cast[slop_os.Handle](port))
-    if slop_os.port_bind(port, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, 1, .Once) is_error {
+    if slop_os.port_bind(port, 1, cast[slop_os.Handle](process), slop_os.SIGNAL_TERMINATED, .Once) is_error {
         return void
     }
     packets : slop_os.Packet[1]

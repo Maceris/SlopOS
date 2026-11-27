@@ -16,12 +16,12 @@ syscall 14 channel_create : fn(budget : MemoryBudget, ring_bytes : u32, tag : u6
 syscall 15 channel_map : fn(end : Channel, space : AddressSpace, address : u64) -> Result[void, ChannelError]
 syscall 16 channel_unmap : fn(end : Channel) -> Result[void, ChannelError]
 syscall 17 channel_notify : fn(end : Channel, signals : Signals) -> Result[void, ChannelError]
-syscall 18 channel_write : fn(end : Channel, payload : u8[], batch : u32) -> Result[void, ChannelError]
+syscall 18 channel_write : fn(end : Channel, bytes : u8[], batch : u32) -> Result[void, ChannelError]
 syscall 19 channel_read : fn(end : Channel, buffer : u8[], size : ptr[mut u32]) -> Result[MessageInfo, ChannelError]
 syscall 20 channel_send_handles : fn(end : Channel, handles : Handle[], batch : u32) -> Result[void, ChannelError]
 syscall 21 channel_take_handles : fn(end : Channel, batch : u32, handles : Handle[], count : ptr[mut u32]) -> Result[u32, ChannelError]
 syscall 22 channel_notify_and_wait : fn(end : Channel, signals : Signals, port : Port, packets : Packet[], deadline : u64) -> Result[u32, ChannelError]
-syscall 23 port_bind : fn(port : Port, object : Handle, signals : Signals, key : u64, mode : BindMode) -> Result[void, PortError]
+syscall 23 port_bind : fn(port : Port, key : u64, object : Handle, signals : Signals, mode : BindMode) -> Result[void, PortError]
 syscall 24 memory_budget_create : fn(budget : MemoryBudget, limit : u64) -> Result[MemoryBudget, HandleError]
 syscall 25 memory_budget_info : fn(budget : MemoryBudget) -> Result[BudgetInfo, HandleError]
 syscall 26 memory_create : fn(budget : MemoryBudget, size : u64) -> Result[Memory, MemoryError]
@@ -32,14 +32,14 @@ syscall 30 irq_create : fn(platform : Platform, budget : MemoryBudget, controlle
 syscall 31 irq_ack : fn(irq : Irq) -> Result[void, HandleError]
 syscall 32 memory_create_physical : fn(platform : Platform, budget : MemoryBudget, address : u64, size : u64, cache : CacheMode) -> Result[Memory, DeviceError]
 syscall 33 memory_create_window : fn(memory : Memory, budget : MemoryBudget, offset : u64, size : u64) -> Result[Memory, MemoryError]
-syscall 34 process_threads : fn(process : Process, ids : u64[]) -> Result[u32, ControlError]
+syscall 34 process_threads : fn(process : Process, from : u64, ids : u64[]) -> Result[u32, ControlError]
 syscall 35 process_read_memory : fn(process : Process, space : AddressSpace, address : u64, buffer : u8[]) -> Result[void, ControlError]
-syscall 36 process_write_memory : fn(process : Process, space : AddressSpace, address : u64, buffer : u8[]) -> Result[void, ControlError]
+syscall 36 process_write_memory : fn(process : Process, space : AddressSpace, address : u64, bytes : u8[]) -> Result[void, ControlError]
 syscall 37 thread_suspend : fn(process : Process, thread : u64) -> Result[void, ControlError]
 syscall 38 thread_resume : fn(process : Process, thread : u64) -> Result[void, ControlError]
 syscall 39 thread_read_registers : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
 syscall 40 thread_write_registers : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
-syscall 41 intercept_attach : fn(process : Process, port : Port, key : u64, calls : u64, points : u32) -> Result[Intercept, ControlError]
+syscall 41 intercept_attach : fn(process : Process, port : Port, key : u64, calls : u64[], points : u32) -> Result[Intercept, ControlError]
 syscall 42 intercept_next : fn(intercept : Intercept, stop : ptr[mut StopInfo]) -> Result[void, ControlError]
 syscall 43 intercept_resume : fn(intercept : Intercept, thread : u64, action : InterceptAction) -> Result[void, ControlError]
 syscall 44 process_kill : fn(process : Process) -> Result[void, ControlError]
@@ -73,7 +73,7 @@ syscall 71 cpu_budget_set_cpus : fn(budget : CpuBudget, cpus : u64) -> Result[vo
 syscall 72 irq_set_cpu : fn(irq : Irq, cpu : u32) -> Result[void, DeviceError]
 syscall 73 memory_budget_set_threshold : fn(budget : MemoryBudget, threshold : u64) -> Result[void, HandleError]
 syscall 74 memory_evict : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
-syscall 75 memory_page_accessed : fn(memory : Memory, offset : u64) -> Result[u64, MemoryError]
+syscall 75 memory_page_accessed : fn(memory : Memory, offset : u64) -> Result[bool, MemoryError]
 syscall 76 thread_use_cpu_budget : fn(budget : CpuBudget) -> Result[void, HandleError]
 syscall 77 memory_holders : fn(memory : Memory) -> Result[u64, MemoryError]
 syscall 78 power_set_off : fn(platform : Platform, control_a : u32, control_b : u32, sleep_a : u32, sleep_b : u32) -> Result[void, DeviceError]
@@ -81,7 +81,7 @@ syscall 79 power_set_reset : fn(platform : Platform, port : u32, value : u32) ->
 syscall 80 power_end_with : fn(platform : Platform, action : PowerAction) -> Result[void, DeviceError]
 syscall 81 controller_set_source : fn(platform : Platform, controller : u32, source : u32) -> Result[void, DeviceError]
 syscall 82 thread_set_debug : fn(process : Process, thread : u64, debug : ptr[ThreadDebug]) -> Result[void, ControlError]
-syscall 83 intercept_set : fn(intercept : Intercept, calls : u64, points : u32) -> Result[void, ControlError]
+syscall 83 intercept_set : fn(intercept : Intercept, calls : u64[], points : u32) -> Result[void, ControlError]
 syscall 84 process_set_traps : fn(process : Process, traps : u32) -> Result[void, ControlError]
 syscall 85 trace_set : fn(log : DebugLog, on : bool) -> Result[void, DeviceError]
 syscall 86 trace_read : fn(log : DebugLog, events : TraceEvent[]) -> Result[u32, DeviceError]
@@ -98,7 +98,8 @@ syscall 96 handle_same : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
 syscall 97 handle_restrict : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]
 syscall 98 channel_peer_owned_by : fn(end : Channel, process : Process) -> Result[bool, ControlError]
 syscall 99 thread_set_pointer : fn(value : u64) -> Result[void, MemoryError]
-const ABI_VERSION : u32 = 14
+const ABI_VERSION : u32 = 15
+const ARGUMENTS_MAGIC : u32 = 1196573000
 const CHANNEL_DEFAULT_RING : u32 = 1024
 const CHANNEL_MAX_RING : u32 = 131072
 const CHANNEL_MIN_RING : u32 = 1024
@@ -106,9 +107,9 @@ const CHANNEL_RINGS_OFFSET : u32 = 256
 const CONTROL_FLOW_LANDING_PADS : u32 = 1
 const CONTROL_FLOW_SHADOW_STACK : u32 = 2
 const CONTROL_FLOW_SIGNED_RETURNS : u32 = 4
-const CPU_BUDGET_INFO_WORDS : i64 = 8
+const CPU_BUDGET_INFO_WORDS : u32 = 8
 const DEBUG_LOG_LINE : u64 = 200
-const DEBUG_SLOTS : i64 = 4
+const DEBUG_SLOTS : u32 = 4
 const DMA_DOMAIN_TRUSTED : u32 = 1
 const EXIT_KILLED : u64 = 4294967296
 const EXIT_MISSING_GRANT : u32 = 126
@@ -129,23 +130,61 @@ const FAULT_SINGLE_STEP : u32 = 5
 const FAULT_WATCHPOINT : u32 = 10
 const FAULT_WRITE : u32 = 1
 const FIRMWARE_MAGIC : u64 = 6000285925988652870
-const GRANT_LABEL_SIZE : i64 = 32
+const GRANT_LABEL_SIZE : u32 = 32
 const HANDLE_BATCHES : u32 = 16
 const IRQ_ACTIVE_LOW : u32 = 2
 const IRQ_LEVEL : u32 = 1
 const MAX_DEVICE_MSIS : u32 = 32
-const MAX_EVICT_SPACES : i64 = 16
+const MAX_EVICT_SPACES : u32 = 16
 const MAX_HANDLES_PER_BATCH : u32 = 64
 const MAX_MEMORY_SIZE : u64 = 1073741824
 const MAX_PACKETS_PER_WAIT : u32 = 64
 const MESSAGE_HAS_HANDLES : u16 = 1
 const NO_BATCH : u32 = 65535
 const NO_DEADLINE : u64 = 18446744073709551615
+const NO_HANDLE : Handle = 0
 const NO_HANDLE_INDEX : u32 = 4294967295
 const PACKAGE_TIER : Tier = Freestanding
-const SAMPLES : i64 = 1024
-const SAMPLE_FRAMES : i64 = 8
+const PROTECTION_EXECUTE : Protection = 4
+const PROTECTION_GUARDED : Protection = 8
+const PROTECTION_READ : Protection = 1
+const PROTECTION_WRITE : Protection = 2
+const RIGHTS_ALL : Rights = 4294967295
+const RIGHT_BUDGET_CHARGE : Rights = 256
+const RIGHT_CHANNEL_MAP : Rights = 256
+const RIGHT_CPU_BUDGET_BIND : Rights = 1024
+const RIGHT_CPU_BUDGET_SET : Rights = 512
+const RIGHT_CPU_BUDGET_SPLIT : Rights = 256
+const RIGHT_DEBUG_LOG_TRACE : Rights = 512
+const RIGHT_DEBUG_LOG_WRITE : Rights = 256
+const RIGHT_DUPLICATE : Rights = 1
+const RIGHT_INTERCEPT_STEER : Rights = 256
+const RIGHT_IO_PORTS_ACCESS : Rights = 256
+const RIGHT_IRQ_ACK : Rights = 256
+const RIGHT_MEMORY_EXECUTE : Rights = 1024
+const RIGHT_MEMORY_READ : Rights = 256
+const RIGHT_MEMORY_WRITE : Rights = 512
+const RIGHT_PORT_BIND : Rights = 512
+const RIGHT_PORT_WAIT : Rights = 256
+const RIGHT_PROCESS_INSPECT : Rights = 256
+const RIGHT_PROCESS_INTERCEPT : Rights = 2048
+const RIGHT_PROCESS_KILL : Rights = 4096
+const RIGHT_PROCESS_READ_MEMORY : Rights = 512
+const RIGHT_PROCESS_THREADS : Rights = 8192
+const RIGHT_PROCESS_WRITE_STATE : Rights = 1024
+const RIGHT_SPACE_MAP : Rights = 512
+const RIGHT_SPACE_THREADS : Rights = 256
+const RIGHT_TRANSFER : Rights = 2
+const SAMPLES : u32 = 1024
+const SAMPLE_FRAMES : u32 = 8
 const SHADOW_STACK_BYTES : u64 = 65536
+const SIGNAL_DMA_FAULT : Signals = 16
+const SIGNAL_PEER_CLOSED : Signals = 4
+const SIGNAL_PRESSURE : Signals = 32
+const SIGNAL_READABLE : Signals = 1
+const SIGNAL_TERMINATED : Signals = 8
+const SIGNAL_UNHELD : Signals = 64
+const SIGNAL_WRITABLE : Signals = 2
 const STOP_ALL_CALLS : u32 = 16
 const STOP_FAULT : u32 = 4
 const STOP_FAULT_LIMITED : u32 = 8
@@ -153,7 +192,7 @@ const STOP_SYSCALL_ENTRY : u32 = 1
 const STOP_SYSCALL_EXIT : u32 = 2
 const STOP_THREAD_START : u32 = 32
 const SYSCALL_ADDRESS_SPACE_CREATE : u32 = 6
-const SYSCALL_ARGUMENT_WORDS : i64 = 6
+const SYSCALL_ARGUMENT_WORDS : u32 = 6
 const SYSCALL_CHANNEL_CREATE : u32 = 14
 const SYSCALL_CHANNEL_MAP : u32 = 15
 const SYSCALL_CHANNEL_NOTIFY : u32 = 17
@@ -253,11 +292,19 @@ const SYSCALL_THREAD_USE_CPU_BUDGET : u32 = 76
 const SYSCALL_THREAD_WRITE_REGISTERS : u32 = 40
 const SYSCALL_TRACE_READ : u32 = 86
 const SYSCALL_TRACE_SET : u32 = 85
-const THREAD_REGISTERS : u32 = 18
-const TRACE_EVENTS : i64 = 1024
+const THREAD_REGISTERS : u32 = 34
+const TRACE_EVENTS : u32 = 1024
 const TRAP_COUNTER : u32 = 1
 type AddressSpace = distinct Handle
 type Handle = distinct u32
+type ArgumentHeader : struct size 40 align 4
+type ArgumentHeader field 0000 name_bytes offset 0 : u32
+type ArgumentHeader field 0001 value_bytes offset 4 : u32
+type ArgumentHeader field 0002 hash offset 8 : u8[32]
+type ArgumentsHeader : struct size 16 align 8
+type ArgumentsHeader field 0000 magic offset 0 : u32
+type ArgumentsHeader field 0001 count offset 4 : u32
+type ArgumentsHeader field 0002 total offset 8 : u64
 type BindMode : enum u32
 type BindMode member Once = 0x1
 type BindMode member Persistent = 0x2
@@ -276,6 +323,7 @@ type ChannelError member MissingRight = 0x3
 type ChannelError member WrongKind = 0x4
 type ChannelError member TableFull = 0x5
 type ChannelError member OutOfMemory = 0x6
+type ChannelError member NoSuchCall = 0x7
 type ChannelError member BadBuffer = 0xa
 type ChannelError member PeerClosed = 0xc
 type ChannelError member Full = 0xd
@@ -301,6 +349,7 @@ type ControlError member MissingRight = 0x3
 type ControlError member WrongKind = 0x4
 type ControlError member TableFull = 0x5
 type ControlError member OutOfMemory = 0x6
+type ControlError member NoSuchCall = 0x7
 type ControlError member BadBuffer = 0xa
 type ControlError member Empty = 0xe
 type ControlError member TooBig = 0xf
@@ -320,6 +369,7 @@ type ControllerKind member GicDistributor = 0x2
 type ControllerKind member Plic = 0x3
 type ControllerKind member Aplic = 0x4
 type CoverageError : enum u32
+type CoverageError member NoSuchCall = 0x7
 type CoverageError member BadBuffer = 0xa
 type CoverageError member NotCounted = 0x30
 type CpuBudget = distinct Handle
@@ -450,6 +500,7 @@ type DebugSlot : struct size 16 align 8
 type DebugSlot field 0000 address offset 0 : u64
 type DebugSlot field 0001 kind offset 8 : DebugSlotKind
 type DebugSlot field 0002 size offset 9 : u8
+type DebugSlot field 0003 reserved offset 10 : u8[6]
 type DebugSlotKind : enum u8
 type DebugSlotKind member Off = 0x0
 type DebugSlotKind member Execute = 0x1
@@ -463,6 +514,7 @@ type DeviceError member MissingRight = 0x3
 type DeviceError member WrongKind = 0x4
 type DeviceError member TableFull = 0x5
 type DeviceError member OutOfMemory = 0x6
+type DeviceError member NoSuchCall = 0x7
 type DeviceError member BadAddress = 0x12
 type DeviceError member InvalidSize = 0x18
 type DeviceError member BudgetExceeded = 0x19
@@ -539,8 +591,9 @@ type HandleError member BadBuffer = 0xa
 type HandleError member BudgetExceeded = 0x19
 type HandleError member InvalidArgument = 0x2e
 type HandleInfo : struct size 8 align 4
-type HandleInfo field 0000 kind offset 0 : ObjectKind
-type HandleInfo field 0001 rights offset 4 : Rights
+type HandleInfo field 0000 rights offset 0 : Rights
+type HandleInfo field 0001 kind offset 4 : ObjectKind
+type HandleInfo field 0002 reserved offset 5 : u8[3]
 type Rights = distinct u32
 type Intercept = distinct Handle
 type InterceptAction : enum u32
@@ -554,7 +607,7 @@ type IommuKind member AmdVi = 0x2
 type IommuKind member Smmuv3 = 0x3
 type IommuKind member RiscV = 0x4
 type Irq = distinct Handle
-type Lending : enum u64
+type Lending : enum u32
 type Lending member PerConnection = 0x0
 type Lending member Server = 0x1
 type Memory = distinct Handle
@@ -566,16 +619,17 @@ type MemoryError member MissingRight = 0x3
 type MemoryError member WrongKind = 0x4
 type MemoryError member TableFull = 0x5
 type MemoryError member OutOfMemory = 0x6
+type MemoryError member NoSuchCall = 0x7
 type MemoryError member BadAddress = 0x12
 type MemoryError member InvalidSize = 0x18
 type MemoryError member BudgetExceeded = 0x19
 type MemoryError member NotMapped = 0x1a
 type MemoryError member BadProtection = 0x1b
-type MemoryError member NoPager = 0x1c
-type MemoryError member NothingWanted = 0x1d
-type MemoryError member NotPaged = 0x1e
-type MemoryError member NotSupplied = 0x1f
-type MemoryError member MappedWidely = 0x20
+type MemoryError member NoPager = 0x31
+type MemoryError member NothingWanted = 0x32
+type MemoryError member NotPaged = 0x33
+type MemoryError member NotSupplied = 0x34
+type MemoryError member MappedWidely = 0x35
 type MemoryKind : enum u8
 type MemoryKind member Anonymous = 0x1
 type MemoryKind member Paged = 0x2
@@ -594,6 +648,7 @@ type MessageInfo field 0001 flags_and_batch offset 4 : u32
 type MsiMessage : struct size 16 align 8
 type MsiMessage field 0000 address offset 0 : u64
 type MsiMessage field 0001 data offset 8 : u32
+type MsiMessage field 0002 reserved offset 12 : u32
 type Packet : struct size 32 align 8
 type Packet field 0000 key offset 0 : u64
 type Packet field 0001 kind offset 8 : PacketKind
@@ -616,6 +671,7 @@ type PortError member ObjectGone = 0x2
 type PortError member MissingRight = 0x3
 type PortError member WrongKind = 0x4
 type PortError member OutOfMemory = 0x6
+type PortError member NoSuchCall = 0x7
 type PortError member KeyInUse = 0x8
 type PortError member NoSuchKey = 0x9
 type PortError member BadBuffer = 0xa
@@ -631,10 +687,10 @@ type ProcessCpu : struct size 16 align 8
 type ProcessCpu field 0000 run_ns offset 0 : u64
 type ProcessCpu field 0001 lent_ns offset 8 : u64
 type Protection = distinct u32
-type Protocol : struct size 32 align 8
+type Protocol : struct size 24 align 8
 type Protocol field 0000 name offset 0 : string
 type Protocol field 0001 major_version offset 16 : u32
-type Protocol field 0002 lending offset 24 : Lending
+type Protocol field 0002 lending offset 20 : Lending
 type RingIndices : struct size 128 align 64
 type RingIndices field 0000 tail offset 0 : u32
 type RingIndices field 0001 producer_waiting offset 4 : u32
@@ -646,7 +702,8 @@ type Sample : struct size 88 align 8
 type Sample field 0000 thread offset 0 : u64
 type Sample field 0001 fiber offset 8 : u64
 type Sample field 0002 count offset 16 : u32
-type Sample field 0003 frames offset 24 : u64[8]
+type Sample field 0003 reserved offset 20 : u32
+type Sample field 0004 frames offset 24 : u64[8]
 type Signals = distinct u32
 type StartupBlock : struct size 128 align 8
 type StartupBlock field 0000 abi_version offset 0 : u32
@@ -695,12 +752,12 @@ type Syscalls field 0014 channel_create offset 112 : fn(budget : MemoryBudget, r
 type Syscalls field 0015 channel_map offset 120 : fn(end : Channel, space : AddressSpace, address : u64) -> Result[void, ChannelError]
 type Syscalls field 0016 channel_unmap offset 128 : fn(end : Channel) -> Result[void, ChannelError]
 type Syscalls field 0017 channel_notify offset 136 : fn(end : Channel, signals : Signals) -> Result[void, ChannelError]
-type Syscalls field 0018 channel_write offset 144 : fn(end : Channel, payload : u8[], batch : u32) -> Result[void, ChannelError]
+type Syscalls field 0018 channel_write offset 144 : fn(end : Channel, bytes : u8[], batch : u32) -> Result[void, ChannelError]
 type Syscalls field 0019 channel_read offset 152 : fn(end : Channel, buffer : u8[], size : ptr[mut u32]) -> Result[MessageInfo, ChannelError]
 type Syscalls field 0020 channel_send_handles offset 160 : fn(end : Channel, handles : Handle[], batch : u32) -> Result[void, ChannelError]
 type Syscalls field 0021 channel_take_handles offset 168 : fn(end : Channel, batch : u32, handles : Handle[], count : ptr[mut u32]) -> Result[u32, ChannelError]
 type Syscalls field 0022 channel_notify_and_wait offset 176 : fn(end : Channel, signals : Signals, port : Port, packets : Packet[], deadline : u64) -> Result[u32, ChannelError]
-type Syscalls field 0023 port_bind offset 184 : fn(port : Port, object : Handle, signals : Signals, key : u64, mode : BindMode) -> Result[void, PortError]
+type Syscalls field 0023 port_bind offset 184 : fn(port : Port, key : u64, object : Handle, signals : Signals, mode : BindMode) -> Result[void, PortError]
 type Syscalls field 0024 memory_budget_create offset 192 : fn(budget : MemoryBudget, limit : u64) -> Result[MemoryBudget, HandleError]
 type Syscalls field 0025 memory_budget_info offset 200 : fn(budget : MemoryBudget) -> Result[BudgetInfo, HandleError]
 type Syscalls field 0026 memory_create offset 208 : fn(budget : MemoryBudget, size : u64) -> Result[Memory, MemoryError]
@@ -711,14 +768,14 @@ type Syscalls field 0030 irq_create offset 240 : fn(platform : Platform, budget 
 type Syscalls field 0031 irq_ack offset 248 : fn(irq : Irq) -> Result[void, HandleError]
 type Syscalls field 0032 memory_create_physical offset 256 : fn(platform : Platform, budget : MemoryBudget, address : u64, size : u64, cache : CacheMode) -> Result[Memory, DeviceError]
 type Syscalls field 0033 memory_create_window offset 264 : fn(memory : Memory, budget : MemoryBudget, offset : u64, size : u64) -> Result[Memory, MemoryError]
-type Syscalls field 0034 process_threads offset 272 : fn(process : Process, ids : u64[]) -> Result[u32, ControlError]
+type Syscalls field 0034 process_threads offset 272 : fn(process : Process, from : u64, ids : u64[]) -> Result[u32, ControlError]
 type Syscalls field 0035 process_read_memory offset 280 : fn(process : Process, space : AddressSpace, address : u64, buffer : u8[]) -> Result[void, ControlError]
-type Syscalls field 0036 process_write_memory offset 288 : fn(process : Process, space : AddressSpace, address : u64, buffer : u8[]) -> Result[void, ControlError]
+type Syscalls field 0036 process_write_memory offset 288 : fn(process : Process, space : AddressSpace, address : u64, bytes : u8[]) -> Result[void, ControlError]
 type Syscalls field 0037 thread_suspend offset 296 : fn(process : Process, thread : u64) -> Result[void, ControlError]
 type Syscalls field 0038 thread_resume offset 304 : fn(process : Process, thread : u64) -> Result[void, ControlError]
 type Syscalls field 0039 thread_read_registers offset 312 : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
 type Syscalls field 0040 thread_write_registers offset 320 : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
-type Syscalls field 0041 intercept_attach offset 328 : fn(process : Process, port : Port, key : u64, calls : u64, points : u32) -> Result[Intercept, ControlError]
+type Syscalls field 0041 intercept_attach offset 328 : fn(process : Process, port : Port, key : u64, calls : u64[], points : u32) -> Result[Intercept, ControlError]
 type Syscalls field 0042 intercept_next offset 336 : fn(intercept : Intercept, stop : ptr[mut StopInfo]) -> Result[void, ControlError]
 type Syscalls field 0043 intercept_resume offset 344 : fn(intercept : Intercept, thread : u64, action : InterceptAction) -> Result[void, ControlError]
 type Syscalls field 0044 process_kill offset 352 : fn(process : Process) -> Result[void, ControlError]
@@ -752,7 +809,7 @@ type Syscalls field 0071 cpu_budget_set_cpus offset 568 : fn(budget : CpuBudget,
 type Syscalls field 0072 irq_set_cpu offset 576 : fn(irq : Irq, cpu : u32) -> Result[void, DeviceError]
 type Syscalls field 0073 memory_budget_set_threshold offset 584 : fn(budget : MemoryBudget, threshold : u64) -> Result[void, HandleError]
 type Syscalls field 0074 memory_evict offset 592 : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
-type Syscalls field 0075 memory_page_accessed offset 600 : fn(memory : Memory, offset : u64) -> Result[u64, MemoryError]
+type Syscalls field 0075 memory_page_accessed offset 600 : fn(memory : Memory, offset : u64) -> Result[bool, MemoryError]
 type Syscalls field 0076 thread_use_cpu_budget offset 608 : fn(budget : CpuBudget) -> Result[void, HandleError]
 type Syscalls field 0077 memory_holders offset 616 : fn(memory : Memory) -> Result[u64, MemoryError]
 type Syscalls field 0078 power_set_off offset 624 : fn(platform : Platform, control_a : u32, control_b : u32, sleep_a : u32, sleep_b : u32) -> Result[void, DeviceError]
@@ -760,7 +817,7 @@ type Syscalls field 0079 power_set_reset offset 632 : fn(platform : Platform, po
 type Syscalls field 0080 power_end_with offset 640 : fn(platform : Platform, action : PowerAction) -> Result[void, DeviceError]
 type Syscalls field 0081 controller_set_source offset 648 : fn(platform : Platform, controller : u32, source : u32) -> Result[void, DeviceError]
 type Syscalls field 0082 thread_set_debug offset 656 : fn(process : Process, thread : u64, debug : ptr[ThreadDebug]) -> Result[void, ControlError]
-type Syscalls field 0083 intercept_set offset 664 : fn(intercept : Intercept, calls : u64, points : u32) -> Result[void, ControlError]
+type Syscalls field 0083 intercept_set offset 664 : fn(intercept : Intercept, calls : u64[], points : u32) -> Result[void, ControlError]
 type Syscalls field 0084 process_set_traps offset 672 : fn(process : Process, traps : u32) -> Result[void, ControlError]
 type Syscalls field 0085 trace_set offset 680 : fn(log : DebugLog, on : bool) -> Result[void, DeviceError]
 type Syscalls field 0086 trace_read offset 688 : fn(log : DebugLog, events : TraceEvent[]) -> Result[u32, DeviceError]
@@ -883,9 +940,15 @@ type Result[IoPortRange, DeviceError] variant 0001 Error: DeviceError@4
 type Result[u64, MemoryError] : union size 16 tag u8
 type Result[u64, MemoryError] variant 0000 Ok: u64@8
 type Result[u64, MemoryError] variant 0001 Error: MemoryError@4
-type ThreadDebug : struct size 72 align 8
-type ThreadDebug field 0000 step offset 0 : bool
-type ThreadDebug field 0001 slots offset 8 : DebugSlot[4]
+type Result[bool, MemoryError] : union size 8 tag u8
+type Result[bool, MemoryError] variant 0000 Ok: bool@1
+type Result[bool, MemoryError] variant 0001 Error: MemoryError@4
+type ThreadDebug : struct size 80 align 8
+type ThreadDebug field 0000 size offset 0 : u32
+type ThreadDebug field 0001 slot_count offset 4 : u32
+type ThreadDebug field 0002 step offset 8 : bool
+type ThreadDebug field 0003 reserved offset 9 : u8[7]
+type ThreadDebug field 0004 slots offset 16 : DebugSlot[4]
 type TraceEvent : struct size 32 align 8
 type TraceEvent field 0000 time offset 0 : u64
 type TraceEvent field 0001 kind offset 8 : TraceKind
