@@ -43,7 +43,9 @@ the `std` they were built with, and the kernel promises only the table above.
 **Before v1** every row can change, and programs are rebuilt with the system. **From v1**,
 numbers are append-only, layouts grow only through size-prefixed structs or new versions,
 and the release tooling compares the ABI package against the previous release
-(`0025`).
+(`0025`). The comparison is `src/tools/abi_description` (M20's 20a, `0201`): the package's description, worked out
+when the tool's compiled, kept in `docs/specs/abi_description.txt`, which `tools/unit_tests.py` checks it against;
+exactly until v1, and from v1 by 0025's rules.
 
 ### Where it sits
 ```
