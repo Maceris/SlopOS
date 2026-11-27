@@ -252,7 +252,9 @@ patch 0011's branch made inline assembly, as LLVM took the `BEQ` for the block's
 `sstatus.SDT` with `SUM`; and the UEFI runtime noting its first console write with a plain store, as the atomic was
 an LSE instruction the bootloader ran on ARMv8.0 before it could say it refuses the CPU. Left as they are: unlabeled
 landing pads (`lpad 0`, as IBT and BTI are), the fiber switches' `ssp` from the carrier block's ordinary memory (as
-the GCS's is), and the resume loop's indirect jump, which any landing pad passes.
+the GCS's is), and the resume loop's indirect jump, which any landing pad passes. Before ABI v1 (2026-11-27): the
+linker found beside the compiler before the PATH, Hemera's build putting its own lld there with the DLLs it and the
+compiler load, so its `bin` folder is the whole toolchain (`decisions/0200`).
 
 ## 4. Features That Look Like a Strong Fit
 

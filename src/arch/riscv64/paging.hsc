@@ -232,7 +232,8 @@ init_page_table :: fn(
  *
  * Tables the walk lacks are taken from the end of tables. The new entry is then fenced into this hart's translation
  * (sfence.vma for its address), as a hart may keep an invalid entry it walked; other harts see it once Svvptc's bounded
- * time has passed.
+ * time has passed. An executable page of ordinary memory has every hart's instruction fetches made to see what was
+ * written to it first (sync_code), as RISC-V's needn't otherwise.
  *
  * @param table The address space: a user mapping needs a user address space, a kernel one the kernel's own.
  * @param virtual_address Where to map it, aligned to size: in USER_LOW to USER_HIGH for a user mapping, at
@@ -285,6 +286,9 @@ map :: fn(
         return .Error(.NeedTableFrames)
     }
 
+    if mapping.protection == .ReadExecute && mapping.cache == .WriteBack {
+        sync_code()
+    }
     current = table_at(table, cast[u64](table.root))
     for level in leaf..=TOP_LEVEL #reverse {
         slot :: slot_at(current, address, level)
@@ -392,6 +396,23 @@ unmap :: fn(
     }
     return .Ok(cast[arch_interface.PhysicalAddress](physical))
 }
+
+/**
+ * Make every hart's instruction fetches see what was written to memory before, so code written to a page, as a pager
+ * fills one, runs as written once it's mapped executable: fence.i on this hart, and on the others the SBI's remote
+ * fence.i, which every hart's firmware has (RFENCE). Writes another hart made are seen once they're visible to this
+ * one, as the page's filling is before it's mapped.
+ */
+sync_code :: fn() {
+    riscv64.fence(riscv64.FENCE_READ | riscv64.FENCE_WRITE, riscv64.FENCE_READ | riscv64.FENCE_WRITE)
+    riscv64.fence_i()
+    // Every hart: a hart mask of 0 from a base of -1
+    _ = riscv64.sbi_call(SBI_RFENCE, SBI_REMOTE_FENCE_I, 0, ~cast[u64](0))
+}
+
+/** The SBI's RFENCE extension ("RFNC") and its remote_fence_i. */
+SBI_RFENCE : u64 : 0x52464e43
+SBI_REMOTE_FENCE_I : u64 : 0
 
 /**
  * Tell whether a table has exactly one valid entry, so taking it out empties the table.

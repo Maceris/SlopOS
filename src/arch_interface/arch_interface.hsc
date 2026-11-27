@@ -307,7 +307,9 @@ init_page_table : fn(
 /**
  * Map one page.
  *
- * A call that fails changes nothing. No TLB flush is needed, since nothing was mapped there before.
+ * A call that fails changes nothing. No TLB flush is needed, since nothing was mapped there before. A page mapped
+ * executable, of write-back memory, runs what was written to it before this call on every CPU: an architecture whose
+ * instruction fetches don't see data writes by themselves makes them (RISC-V's fence.i, AArch64's cache maintenance).
  *
  * @param table The address space: user pages only in a user one, kernel pages only in the kernel's own.
  * @param virtual_address Where the page goes, aligned to size.

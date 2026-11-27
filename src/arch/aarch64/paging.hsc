@@ -287,6 +287,44 @@ init_page_table :: fn(
     table.direct_map_offset = kernel.direct_map_offset
 }
 
+
+/**
+ * Make every CPU's instruction fetches see what was written to a page of memory before, so code written to it, as a
+ * pager fills one, runs as written once it's mapped executable: unless CTR_EL0 says the caches don't need it, the
+ * data cache cleaned to the point of unification by line through the direct map (IDC clear), and every CPU's
+ * instruction cache invalidated (DIC clear), with the barriers between.
+ *
+ * @param table The address space, for the direct map's offset.
+ * @param physical The page's physical address.
+ * @param bytes Its size.
+ */
+sync_code :: fn(table : ptr[PageTable], physical : u64, bytes : u64) {
+    cache_type :: aarch64.read_system_register_encoded(3, 3, 0, 0, 1)
+    if cache_type & CTR_IDC == 0 {
+        // DminLine, the smallest data cache line, as a log2 of words
+        line :: cast[u64](4) << ((cache_type >> 16) & 0xf)
+        at := table.direct_map_offset + physical
+        end :: at + bytes
+        loop {
+            if at >= end {
+                break
+            }
+            aarch64.dc_cvau(cast[rawptr](at))
+            at += line
+        }
+        aarch64.dsb(.ISH)
+    }
+    if cache_type & CTR_DIC == 0 {
+        aarch64.ic_ialluis()
+        aarch64.dsb(.ISH)
+    }
+    aarch64.isb()
+}
+
+/** CTR_EL0's IDC: the data cache needn't be cleaned for instruction fetches to see a write. */
+CTR_IDC : u64 : 1 << 28
+/** CTR_EL0's DIC: the instruction cache needn't be invalidated for them to. */
+CTR_DIC : u64 : 1 << 29
 /**
  * Map a page or block (arch_interface.map), checking first, so a call that fails changes nothing.
  *
@@ -345,6 +383,9 @@ map :: fn(
 
     // The address of the entry pointing at current, counting its valid entries; 0 for the root
     counted : u64 = 0
+    if mapping.protection == .ReadExecute && mapping.cache == .WriteBack {
+        sync_code(table, physical, page_bytes(size))
+    }
     current = table_at(table, cast[u64](table.root))
     for level in leaf..=TOP_LEVEL #reverse {
         slot :: slot_at(current, address, level)

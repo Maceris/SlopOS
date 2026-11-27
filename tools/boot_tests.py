@@ -1334,7 +1334,8 @@ TESTS = [
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
-    # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too
+    # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then
+    # crashes, so a program that crashed under load, as search once did on RISC-V, is shown with where
     ("searches files, views text, bytes and typed files, and pages a long value", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=180").replace("--timeout=120", "--timeout=330")
                        for argument in BOOT_DISK_BASE], [
@@ -1348,10 +1349,13 @@ TESTS = [
         "view reading/made.value\\r\\>"
         "view reading/long.txt | page\\r\\u{lines 1-22 of 60} \\u{lines 23-44 of 60}G\\u{lines 39-60 of 60}k\\u{lines 38-59 of 60}xq\\>"
         "view reading/todo.txt | page\\r\\>"
-        "view reading/CAFE\\u0301.txt\\r",
+        "view reading/CAFE\\u0301.txt\\r\\>"
+        "crashes\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=files: 9", "--expect-console-line=reading/todo.txt  2     TODO: water the plants",
+        # None of them crashed; where one did, what crashes shows says where
+        "--expect-console-line=no crashes",
         # CAFÉ, written with E and a combining acute, is Café once both are normalized and case folded
         "--expect-console-line=error: reading/CAFE\u0301.txt: there's nothing there; did you mean reading/Café.txt?",
         "--expect-console-line=reading/long.txt  0     ",

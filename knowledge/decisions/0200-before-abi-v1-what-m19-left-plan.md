@@ -1,6 +1,6 @@
 # 0200: Before ABI v1, What M19 Left, Planned
 
-Status: accepted
+Status: accepted; built
 Date: 2026-11-27
 Related: `0199` (M19, RISC-V), `0197` (Before M19, the pattern), `0025` and `0027` (the ABI), `../hemera-feedback.md`,
 `../roadmap.md`
@@ -46,3 +46,33 @@ to the host. Done when two full runs in a row, all three architectures, have non
 - Hemera's `bin` folder is the whole toolchain: the compiler, its `base` and `std`, and its linkers.
 - The boot suites become a signal again: a test failing among the others means something.
 - ABI v1 is planned next, its own decision.
+
+## As Built: C1 and C2 (2026-11-27)
+- **C1, the linker beside the compiler.** Hemera looks for `ld.lld` and `lld-link` in its own folder first, then on
+  the PATH (`back_end/linker.h`), the back end and the build cache alike. Its build copies its own LLVM's `lld` there
+  under both names, and on Windows the DLLs the compiler and `lld` load, and those they load in turn, resolved as it
+  builds (`copy_runtime_dlls.cmake`: vcpkg's `z.dll`, `libxml2.dll` and its `iconv-2.dll`): the compiler itself had
+  needed vcpkg's folders on the PATH for `z.dll`. A Hemera test links a Windows and a Linux program with nothing on the
+  PATH; RISC-V's programs keep their property note with Visual Studio's lld 19 first on it; the boot suites ran with
+  only Hemera's `bin/Release` on the PATH, after the system's.
+- **C2, the flaky tests.**
+  - AArch64's release command line: the bootloader's line was cut short, as `SerialKeys` read the serial port off a
+    socket QEMU reset when the machine ended with keys sent it never read, and a reset on Windows drops what was
+    received and not yet read. QEMU now writes the serial file itself (the chardev's `logfile`), and the socket is
+    only for the keys and for watching.
+  - x86-64's mix: its second stream starts as its client runs, which a busy host puts off, so the half second in the
+    middle of the whole sound caught it before it started. The check takes the half second, of 40 through the sound,
+    where every tone is nearest its level.
+  - RISC-V's file search: not a race but `search` crashing, an execute fault on its first run, once, under load. Not
+    reproduced since; the test now runs `crashes` at its end and wants none, so another says where.
+  - The microphone's two races were fixed in R7.
+  - Done: two full runs in a row, all three architectures, 459 of 459 each, none flaky.
+- **Found on the way:**
+  - A CPU locking up (`[fatal] lockup`), twice in M19's last runs, once in a shutdown and once in a generation's
+    rollback, neither seen since; RISC-V has no NMI to make the stuck CPU say where it is, so `boot.py` asks QEMU for
+    every CPU's registers the moment the kernel says one locked up, and prints them with the run.
+  - Instruction fetches made to see code before it's mapped executable, which real hardware needs and QEMU doesn't:
+    RISC-V's `map` runs `fence.i` here and the SBI's remote `fence.i` on the other harts, and AArch64's cleans the data
+    cache to the point of unification and invalidates every CPU's instruction cache, unless `CTR_EL0`'s IDC and DIC
+    say it needn't. x86-64's caches are coherent.
+- **Tests:** Hemera's 305 of 305 on Windows and 85 of 85 on Linux; the boot suites as above.

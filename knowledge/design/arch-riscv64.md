@@ -97,7 +97,8 @@ What L0 and L1 (see `layers.md`) need to deal with on 64-bit RISC-V, as `arch-x8
   bodies) and user mode's by `senvcfg` for each thread. One `ssp` serves every mode, so the trap entry swaps it through
   the `TrapScratch`. Every RISC-V target with shadow stacks branches to each `sspopchk` (`branch-to-sspopchk`), as
   QEMU 11.1 loses the pc after one that passes. Threads get shadow stacks only where every hart's firmware has them.
-  The programs' property note needs an lld that knows RISC-V's: Hemera's own, not lld 19.
+  The programs' property note needs an lld that knows RISC-V's, not lld 19: Hemera's own, which is beside it
+  (decisions/0200).
 
 ## Later Stages
 

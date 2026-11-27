@@ -191,24 +191,44 @@ def make_image(kernel: Path, programs: list[Path], bootloader: Path, image_build
 
 
 # Where each CPU was when a boot timed out, from QEMU (run_watched), printed with the failure: one entry a timeout
-CPU_STATES: list[str] = []
+CPU_STATES: list[tuple[str, str]] = []
+
+# What the kernel writes when a CPU stops making progress (lockups.hsc): the CPU that's stuck can't say where it is
+# itself where there's no NMI to ask it (RISC-V), so QEMU is asked
+LOCKUP_LINE = b"[fatal] lockup:"
 
 
-def run_watched(command: list[str], timeout: float) -> int | None:
+def run_watched(command: list[str], timeout: float, serial: Path | None = None) -> int | None:
     """
     Runs QEMU until it ends or timeout passes, with a machine protocol socket of its own on the loopback. On a timeout
     every CPU's registers are asked for through it (info registers -a), kept in CPU_STATES, before QEMU is killed, so a
-    hang says where each CPU was. Gives QEMU's exit code, or None for a timeout.
+    hang says where each CPU was; and so they are, once, the moment serial, where given, says a CPU locked up, before
+    the kernel halts or resets. Gives QEMU's exit code, or None for a timeout.
     """
     port = free_port()
     process = subprocess.Popen(command + ["-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"])
-    try:
-        return process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        CPU_STATES.append(cpu_states(port))
-        process.kill()
-        process.wait()
-        return None
+    deadline = time.monotonic() + timeout
+    # What's been read of serial, less a line's worth, so a line written across two reads is found
+    read = 0
+    looked = False
+    while True:
+        try:
+            return process.wait(timeout=min(0.5, max(0.0, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+        if time.monotonic() >= deadline:
+            CPU_STATES.append(("when it timed out", cpu_states(port)))
+            process.kill()
+            process.wait()
+            return None
+        if serial is not None and not looked and serial.exists():
+            with serial.open("rb") as written:
+                written.seek(read)
+                new = written.read()
+            if LOCKUP_LINE in new:
+                looked = True
+                CPU_STATES.append(("when the kernel said a CPU locked up", cpu_states(port)))
+            read = max(read, read + len(new) - len(LOCKUP_LINE))
 
 
 def cpu_states(port: int) -> str:
@@ -254,7 +274,7 @@ def run(image: Path | None, qemu: Path, serial: Path, timeout: float, cpu: str, 
     if keys is not None:
         keys.thread.start()
     try:
-        returncode = run_watched(command + extra, timeout)
+        returncode = run_watched(command + extra, timeout, serial)
     finally:
         if keys is not None:
             keys.thread.join(timeout=5)
@@ -349,7 +369,7 @@ def run_aarch64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     if keys is not None:
         keys.thread.start()
     try:
-        returncode = run_watched(command + extra, timeout)
+        returncode = run_watched(command + extra, timeout, serial)
     finally:
         if keys is not None:
             keys.thread.join(timeout=5)
@@ -411,7 +431,7 @@ def run_riscv64(image: Path | None, qemu: Path, serial: Path, timeout: float, cp
     if keys is not None:
         keys.thread.start()
     try:
-        returncode = run_watched(command + extra, timeout)
+        returncode = run_watched(command + extra, timeout, serial)
     finally:
         if keys is not None:
             keys.thread.join(timeout=5)
@@ -430,7 +450,9 @@ class SerialKeys:
     """
     The serial port on a TCP socket QEMU serves on the loopback, in place of a file, for a key held down as the
     machine starts (--recovery-key): the firmware's console takes what arrives on the serial port as typed, so this
-    sends the key over and over until the bootloader says what it boots, and keeps the output in the serial file.
+    sends the key over and over until the bootloader says what it boots. QEMU itself keeps the output in the serial
+    file (the chardev's logfile), as what this reads is only for watching: a machine that ends with keys sent it never
+    read has its socket reset, and on Windows a reset drops what was received and not yet read.
     """
 
     def __init__(self, serial: Path, key: str, then: str = ""):
@@ -442,7 +464,10 @@ class SerialKeys:
         self.thread = threading.Thread(target=self.talk, daemon=True)
 
     def qemu_arguments(self) -> list[str]:
-        return ["-chardev", f"socket,id=serial,host=127.0.0.1,port={self.port},server=on,wait=on", "-serial", "chardev:serial"]
+        # A comma in the path is doubled, as QEMU's options take it
+        logfile = str(self.serial).replace(",", ",,")
+        return ["-chardev", f"socket,id=serial,host=127.0.0.1,port={self.port},server=on,wait=on,logfile={logfile},logappend=off",
+                "-serial", "chardev:serial"]
 
     def talk(self) -> None:
         connection = None
@@ -457,7 +482,7 @@ class SerialKeys:
         connection.settimeout(0.1)
         shown = b""
         typed = False
-        with connection, self.serial.open("wb") as out:
+        with connection:
             while True:
                 answered = b"bootloader: booting generation" in shown or b"bootloader: editing the command line" in shown \
                     or b"isn't built for development" in shown
@@ -475,8 +500,6 @@ class SerialKeys:
                     return
                 if not data:
                     return
-                out.write(data)
-                out.flush()
                 shown += data
 
 
@@ -2770,8 +2793,8 @@ def main() -> int:
                 print(f"[console] {line}")
     description = {TIMED_OUT: "timed out", NO_EXIT_CODE: "ended without an exit code"}.get(code, f"exited with {code}")
     print(f"boot.py: the kernel {description}", file=sys.stderr)
-    for states in CPU_STATES:
-        print("boot.py: where each CPU was when it timed out:", file=sys.stderr)
+    for when, states in CPU_STATES:
+        print(f"boot.py: where each CPU was {when}:", file=sys.stderr)
         sys.stderr.write(states.replace("\r\n", "\n"))
     print("boot.py: took " + ", ".join(f"{seconds:.1f} s {phase}" for phase, seconds in phases), file=sys.stderr)
     if arguments.expect is not None:
@@ -2882,11 +2905,13 @@ def run_done(arguments: argparse.Namespace, serial: Path, console: "ConsoleLink 
 
 
 # How much of a tone --audio-tone wants played, in seconds; how far its level may be from half of full scale; how strong
-# its harmonics may be, as a fraction of it; and how long a stretch of silence counts as a gap, in seconds
+# its harmonics may be, as a fraction of it; how long a stretch of silence counts as a gap, in seconds; and how many
+# half-second windows through the sound are looked at for the one its tones are measured in
 AUDIO_SECONDS = 0.9
 AUDIO_LEVEL_TOLERANCE = 0.05
 AUDIO_HARMONICS = 0.04
 AUDIO_GAP = 0.002
+AUDIO_WINDOWS = 40
 
 
 def tone_strength(samples: list, frequency: float, rate: float) -> float:
@@ -2903,9 +2928,9 @@ def tone_strength(samples: list, frequency: float, rate: float) -> float:
 
 def tones_played(played: Path, tones: list) -> str | None:
     """
-    Check what QEMU's wav backend wrote: at least AUDIO_SECONDS of sound, its middle each tone, HZ or HZ:LEVEL, at its
-    level of full scale (half by default), within AUDIO_LEVEL_TOLERANCE, its second and third harmonics under
-    AUDIO_HARMONICS of it. Says how much it played, and its gaps, stretches of silence of AUDIO_GAP or more inside the
+    Check what QEMU's wav backend wrote: at least AUDIO_SECONDS of sound, and in some half second of it each tone, HZ
+    or HZ:LEVEL, at its level of full scale (half by default), within AUDIO_LEVEL_TOLERANCE, its second and third
+    harmonics under AUDIO_HARMONICS of it. Says how much it played, and its gaps, stretches of silence of AUDIO_GAP or more inside the
     sound, which only fail it if there's too little sound. None if it's right.
     """
     if not played.exists():
@@ -2937,9 +2962,19 @@ def tones_played(played: Path, tones: list) -> str | None:
         quiet = quiet + 1 if abs(sample) < 0.01 else 0
         if quiet == int(AUDIO_GAP * rate):
             gaps += 1
-    middle = (first + last) // 2
-    window = left[middle - rate // 4:middle + rate // 4]
     wanted = [(float(tone.split(":")[0]), float(tone.split(":")[1]) if ":" in tone else 0.5) for tone in tones]
+
+    def deviation(start: int) -> float:
+        window = left[start:start + rate // 2]
+        return max(abs(tone_strength(window, frequency, rate) - expected) for frequency, expected in wanted)
+
+    # The half second, of up to AUDIO_WINDOWS spread through the sound, where every tone is nearest its level: a mix's
+    # streams start and end as their clients run, which a busy host puts off, so the middle of the whole sound may
+    # catch one before it started; a mix is right if they're all at their levels together somewhere
+    span = max(0, last - first - rate // 2)
+    starts = sorted({first + span * i // (AUDIO_WINDOWS - 1) for i in range(AUDIO_WINDOWS)})
+    best = min(starts, key=deviation)
+    window = left[best:best + rate // 2]
     found = []
     for frequency, expected in wanted:
         level = tone_strength(window, frequency, rate)
