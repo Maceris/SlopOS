@@ -319,8 +319,8 @@ add_kernel :: fn() {
  * its startup block.
  *
  * Each is <name>.elf in the programs_output folder, linked against service_kit's library and any PROGRAM_LIBRARIES
- * names for it, and given programs_output's c folder to find C libraries in, which tools/c_libraries.py builds there. hello has a second build, hello_next.elf, with hello_build=next, for the test of generations applied
- * live (decisions/0126).
+ * names for it, and given the folder of C libraries tools/c_libraries.py builds beside them (c_libraries_folder). hello
+ * has a second build, hello_next.elf, with hello_build=next, for the test of generations applied live (decisions/0126).
  *
  * @param folder The folder whose subfolders are programs, relative to src/build.
  */
@@ -371,12 +371,8 @@ add_programs :: fn(folder : string) {
         }
         program.libraries = linked
         // The C libraries tools/c_libraries.py built beside the programs, for #library("<program>_c") (decisions/0201)
-        c_storage : u8[512]
-        c_folder := text_buffer.make(c_storage)
-        text_buffer.append(&c_folder, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
-        text_buffer.append(&c_folder, "/c")
         c_paths : string[..]
-        runtime.array_add(&c_paths, strings.clone(text_buffer.as_string(&c_folder)) or_else "")
+        runtime.array_add(&c_paths, c_libraries_folder())
         program.target_options.library_paths = c_paths
         target :: compiler.add_target(program)
         // hello's second build, which says so, for the test of generations applied live (decisions/0126)
@@ -394,6 +390,36 @@ add_programs :: fn(folder : string) {
             next_target :: compiler.add_target(second)
         }
     }
+}
+
+/**
+ * Find the folder of the C libraries tools/c_libraries.py built beside the programs (decisions/0201, 20l): c/key.txt
+ * names it, a folder in c/ named by the hash of every library's bytes, so the programs' library folder changes when
+ * any C does, and with it their key in Hemera's build cache, which doesn't see a library change on its own.
+ *
+ * @return The folder, programs_output's c/<key>, on the heap, the caller's; c/ itself, where c_libraries.py hasn't
+ *     written a key, as where no program has C.
+ */
+c_libraries_folder :: fn() -> string {
+    storage : u8[512]
+    folder := text_buffer.make(storage)
+    text_buffer.append(&folder, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
+    text_buffer.append(&folder, "/c")
+    key_storage : u8[512]
+    key_path := text_buffer.make(key_storage)
+    text_buffer.append(&key_path, text_buffer.as_string(&folder))
+    text_buffer.append(&key_path, "/key.txt")
+    match os.read_entire_file(text_buffer.as_string(&key_path)) {
+        case Ok(key) => {
+            if key.count > 0 {
+                text_buffer.append(&folder, "/")
+                text_buffer.append(&folder, strings.trim(key))
+            }
+            strings.free_string(key)
+        }
+        case Error(error) => {}
+    }
+    return strings.clone(text_buffer.as_string(&folder)) or_else ""
 }
 
 /** A program that calls a library other than service_kit, which all do (decisions/0120, 0121), by their names. */

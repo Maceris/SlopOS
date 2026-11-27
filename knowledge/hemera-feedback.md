@@ -54,7 +54,24 @@ Known limits, each an error rather than wrong code. Severity: nice.
   thresholds). `docs/types.md` says one "kept below a count keeps that". Found in Before M19's N2, where the powerbox
   needed an `if` it can't reach. Severity: friction (2026-11-23).
 
+- An identifier can't start with `_`, so an `#export` can't be named `_Exit` or `__libc_open`, and `#link_name` is only
+  for `#foreign`: 20l's libc (`decisions/0201`) names its Hemera primitives `slopos_libc_*` and writes `_Exit` and
+  `_exit` in C. An `#export`'s own `#link_name` would let a C library's reserved names be Hemera's. Severity: nice
+  (2026-11-27).
+
 ### Targets and runtime
+
+- **SlopOS's address reservation keeps a failed one** (`base/runtime/slop_os.hsc`'s `reserve_addresses`): the offset
+  is added before it's checked against the free range, so one allocation bigger than the 1 TiB range (C's
+  `malloc(SIZE_MAX / 2)`, which ported code does to probe) leaves the offset past the end, and every later mapping, a
+  file's buffer or a block of pages of its own, fails with OutOfMemory for the rest of the process. Found in 20l; the
+  libc refuses an allocation over the budget's limit before asking the heap. A compare-and-swap that only moves the
+  offset when it fits would fix it. Severity: friction (2026-11-27).
+- **The build cache doesn't see a C library change**: a program's key has its library folders' paths but not what's in
+  them (`docs/compilation.md`, *The Build Cache*), so a program linking a C library that changed is taken from the
+  cache, linked against the old one, even into a new folder. Found in 20l; `tools/c_libraries.py` puts the libraries
+  in a folder named by their hash, which the build package gives as the library folder, so the key changes with them.
+  Hashing the libraries a link finds into the key would fix it in Hemera. Severity: friction (2026-11-27).
 
 From the survey of Hemera's docs against its compiler (2026-10-24):
 

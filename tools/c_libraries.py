@@ -1,8 +1,12 @@
 """
-Build SlopOS's C libraries (decisions/0201, 20k and 20l): each program folder's c/ folder of C sources, compiled by a
-stock clang as freestanding, position-independent ELF for the programs' architecture, into lib<program>_c.a in a c/
-folder beside the programs, which the build package gives every program as a library path, so a program's
-#library("<program>_c") links it.
+Build SlopOS's C libraries (decisions/0201, 20k and 20l): each program folder's c/ folder of C sources, and the libc
+package's (src/libc/c), compiled by a stock clang as freestanding, position-independent ELF for the programs'
+architecture, into lib<program>_c.a (liblibc_c.a for the libc) in a c/ folder beside the programs, then copied into
+c/<key>, the key a hash of every library's bytes, which c/key.txt names. The build package gives every program that
+folder as a library path, so a program's #library("<program>_c") links it, and as Hemera's build cache keys a program
+by its library folders but not by what's in them, a change to any C changes the key and relinks the programs. Every
+source is compiled with the libc's headers (src/libc/include) and clang's own freestanding ones (stddef.h, stdint.h,
+stdarg.h, limits.h, float.h, stdbool.h), and no others.
 
     python -I tools/c_libraries.py <programs folder> <architecture>
 
@@ -17,6 +21,7 @@ Environment:
     LLVM_AR   llvm-ar, or its folder (default: beside clang)
     LLC       llc, or its folder, for an architecture clang has no backend for
 """
+import hashlib
 import os
 import shutil
 import subprocess
@@ -26,6 +31,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 # Where programs are: every folder of each is one, as the build package's add_programs takes them
 PROGRAM_FOLDERS = [ROOT / "src" / "services", ROOT / "src" / "apps", ROOT / "src" / "tests", ROOT / "src" / "drivers"]
+# Packages that aren't programs but have C of their own, each built into lib<package>_c.a as a program's is
+C_PACKAGES = [ROOT / "src" / "libc"]
+# The libc's headers, which every C source is compiled with (decisions/0201, 20l)
+LIBC_HEADERS = ROOT / "src" / "libc" / "include"
 # Visual Studio's LLVM, where a Windows machine with it has clang
 VISUAL_STUDIO_LLVM = Path("C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin")
 # Each architecture's target and flags: the programs' baseline, and the control-flow integrity they're built with
@@ -34,7 +43,9 @@ TARGETS = {
     "aarch64": ["--target=aarch64-unknown-none-elf", "-mbranch-protection=standard"],
     "riscv64": ["--target=riscv64-unknown-none-elf", "-march=rv64gc", "-mabi=lp64d"],
 }
-FLAGS = ["-ffreestanding", "-fPIC", "-O2", "-g", "-fno-stack-protector", "-fno-common", "-Wall", "-Werror"]
+FLAGS = ["-ffreestanding", "-fPIC", "-O2", "-g", "-fno-stack-protector", "-fno-common", "-Wall", "-Werror",
+         # Only the libc's headers and clang's own, never the host's
+         "-nostdlibinc", "-isystem", str(LIBC_HEADERS), "-D__slopos__"]
 # What llc is told for bitcode of each architecture: its triple and the features clang's flags give
 LLC_TARGETS = {
     "x86_64": ["-mtriple=x86_64-unknown-none-elf", "-mcpu=x86-64-v3"],
@@ -92,6 +103,7 @@ def main() -> int:
     architecture = sys.argv[2]
     programs = [folder for parent in PROGRAM_FOLDERS if parent.exists() for folder in sorted(parent.iterdir())
                 if (folder / "c").is_dir() and any((folder / "c").glob("*.c"))]
+    programs += [package for package in C_PACKAGES if (package / "c").is_dir() and any((package / "c").glob("*.c"))]
     if not programs:
         return 0
     clang = find_tool("CLANG", "clang")
@@ -131,6 +143,26 @@ def main() -> int:
         if subprocess.run([str(archiver), "rcs", str(library), *objects]).returncode != 0:
             print(f"c_libraries.py: {library} couldn't be made", file=sys.stderr)
             return 1
+    return keyed(output, [output / f"lib{program.name}_c.a" for program in programs])
+
+
+def keyed(output: Path, libraries: list[Path]) -> int:
+    """
+    Copy the libraries into c/<key>, the key a hash of their names and bytes (llvm-ar's archives are deterministic, so
+    the same C gives the same key), name it in c/key.txt, and remove the folders of keys before: 0.
+    """
+    digest = hashlib.sha256()
+    for library in sorted(libraries):
+        digest.update(library.name.encode() + b"\0" + library.read_bytes())
+    key = digest.hexdigest()[:16]
+    folder = output / key
+    folder.mkdir(exist_ok=True)
+    for library in libraries:
+        shutil.copyfile(library, folder / library.name)
+    (output / "key.txt").write_text(key + "\n", encoding="utf-8")
+    for other in output.iterdir():
+        if other.is_dir() and other != folder and len(other.name) == 16 and all(c in "0123456789abcdef" for c in other.name):
+            shutil.rmtree(other)
     return 0
 
 

@@ -253,7 +253,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 111 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 114 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -1404,6 +1404,22 @@ TESTS = [
         "--expect-console-line=error: remove --path: NotFound: There's nothing at that path to remove.",
         # Done once it's all shown: P on the secure attention key's screen shuts it down (decisions/0180)
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
+    # C from the shell on the libc (decisions/0201, 20l): test_libc's C beneath the shell's directory, its file test
+    # too, its stdout the terminal; then wc, a C tool, given its arguments as a list, counting the file it left there
+    # on the terminal, and with a file that isn't there, which it says on stderr and ends with 1
+    ("runs C from the shell on the libc: its tests beneath the shell's directory, and wc on the terminal", 7,
+     with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=240")
+                       for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
+        "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
+        "\\w\\>test_libc_files\\r\\>"
+        "wc [\"libc_words.txt\"]\\r\\>"
+        "wc [\"-l\", \"libc_words.txt\", \"nothing.txt\"]\\r",
+        "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
+        "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
+        f"--expect-console-line={summary(11, 11)}",
+        "--expect-console-line=      3       6      28 libc_words.txt",
+        "--expect-console-line=      3 libc_words.txt", "--expect-console-line=wc: nothing.txt: No such file or directory",
+        "--expect-console-line=      3 total", "--expect-console-line=error: wc ended with 1"])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then
@@ -1914,6 +1930,11 @@ TESTS = [
     # C calling back into Hemera (decisions/0201's 20k): a stock clang's freestanding C, sorting by a Hemera comparison
     # with the carrier register spoiled, the comparison's shim finding its carrier block through the thread pointer
     program_test("calls back into Hemera from C, through the thread pointer", "test_callbacks", 1),
+    # The libc (decisions/0201's 20l): C's strings, formatting, memory, sorting, numbers, math, jumps, time and the
+    # rest, through SlopOS's libc, its stdout the debug log; its file test is skipped, as the root task gives no
+    # working directory, and runs beneath the shell's in the test after the file tools'
+    program_test("runs C on the libc: strings, formatting, memory, sorting, numbers, math, jumps and time", "test_libc",
+                 "11 tests: 10 passed, 0 failed, 1 skipped"),
     ("refuses a typed library whose export's type changed", 7, [WITH_PROGRAMS, "--command-line=test_exit test_changed_library test_program=test_libraries",
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
