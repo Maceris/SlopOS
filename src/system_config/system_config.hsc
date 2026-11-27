@@ -21,6 +21,7 @@ import power_button from "../drivers/power_button"
 import ahci from "../drivers/ahci"
 import nvme from "../drivers/nvme"
 import usb_hid from "../drivers/usb_hid"
+import usb_storage from "../drivers/usb_storage"
 import xhci from "../drivers/xhci"
 import virtio_blk from "../drivers/virtio_blk"
 import virtio_console from "../drivers/virtio_console"
@@ -721,6 +722,17 @@ SERVICES :: Service.[
         budget = 2 * MIB,
         entry = type_of(usb_hid.main),
         usb = UsbMatch.{class = 3, subclass = USB_ANY, protocol = USB_ANY},
+    },
+    // A USB stick or disk: an interface of mass storage's class (8), SCSI's transparent command set (6), bulk-only (0x50)
+    Service.{
+        name = "usb_storage",
+        boot_set = true,
+        module = "usb_storage.elf",
+        starter = .Supervisor,
+        by_manager = true,
+        budget = 2 * MIB,
+        entry = type_of(usb_storage.main),
+        usb = UsbMatch.{class = 8, subclass = 6, protocol = 0x50},
     },
     // An AHCI controller, by its class (mass storage, SATA, AHCI 1.0); its buffers are its clients' DMA memory
     Service.{

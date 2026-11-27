@@ -253,7 +253,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 109 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 110 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -550,6 +550,17 @@ TESTS = [
         "--expect-line=[info] root task ended with code 0", "--",
         "-device", "qemu-xhci,id=usb", "-device", "usb-kbd,bus=usb.0,port=1", "-device", "usb-hub,bus=usb.0,port=2",
         "-device", "usb-mouse,bus=usb.0,port=2.1", "-device", "usb-tablet,bus=usb.0,port=3"]),
+    # The same on a USB stick (20f): the storage driver the supervisor starts for its interface, bulk-only and SCSI
+    ("reads and writes a disk on a USB stick", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host", "--disk-bus=usb",
+        "--expect-line=[user] usb_storage: serving 77824 blocks, 512 bytes each",
+        "--expect-line=[user] partition_server: 3 partitions on a disk of 77824 blocks",
+        "--expect-line=[user] storage_manager: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
+        "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
+        "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
+        f"--expect-line={tests_passed('disk_check', 13, 9)}",
+        "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
     # loading only the boot set; the storage stack finding its partitions and its SlopOS
     # container, every other program read from the system volume, and the disk check passing on it as on the test disk
@@ -564,6 +575,10 @@ TESTS = [
     ("boots from a disk on an AHCI controller", 7, ["--disk-bus=ahci"] + [
         argument.replace("[user] virtio_blk: serving 272384 blocks",
                          "[user] ahci: serving 272384 blocks, 512 bytes each on port 0, with a write cache, queued")
+        for argument in BOOT_DISK_ARGUMENTS]),
+    # And from a USB stick (20f), the firmware booting from it and the storage driver serving it
+    ("boots from a disk on a USB stick", 7, ["--disk-bus=usb"] + [
+        argument.replace("[user] virtio_blk: serving 272384 blocks", "[user] usb_storage: serving 272384 blocks, 512 bytes each")
         for argument in BOOT_DISK_ARGUMENTS]),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,

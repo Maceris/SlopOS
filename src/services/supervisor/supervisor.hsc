@@ -75,6 +75,7 @@ import ahci from "../../drivers/ahci"
 import nvme from "../../drivers/nvme"
 import xhci from "../../drivers/xhci"
 import usb_hid from "../../drivers/usb_hid"
+import usb_storage from "../../drivers/usb_storage"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
 import virtio_gpu from "../../drivers/virtio_gpu"
@@ -818,6 +819,8 @@ Modules :: struct {
     xhci : slop_os.Memory?,
     /** The USB HID driver's module. */
     usb_hid : slop_os.Memory?,
+    /** The USB storage driver's module. */
+    usb_storage : slop_os.Memory?,
     /** The virtio console driver's module. */
     virtio_console : slop_os.Memory?,
     /** The virtio input driver's module. */
@@ -1361,6 +1364,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param ahci_module The AHCI driver's program.
  * @param xhci_module The xHCI driver's program.
  * @param usb_hid_module The USB HID driver's program.
+ * @param usb_storage_module The USB storage driver's program.
  * @param virtio_console_module The virtio console driver's program.
  * @param virtio_input_module The virtio input driver's program.
  * @param virtio_rng_module The virtio entropy driver's program.
@@ -1420,6 +1424,7 @@ main :: fn(
     ahci_module : slop_os.Memory?,
     xhci_module : slop_os.Memory?,
     usb_hid_module : slop_os.Memory?,
+    usb_storage_module : slop_os.Memory?,
     virtio_console_module : slop_os.Memory?,
     virtio_input_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
@@ -1546,6 +1551,7 @@ main :: fn(
         ahci = ahci_module,
         xhci = xhci_module,
         usb_hid = usb_hid_module,
+        usb_storage = usb_storage_module,
         virtio_console = virtio_console_module,
         virtio_input = virtio_input_module,
         virtio_rng = virtio_rng_module,
@@ -5228,6 +5234,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     else if name == "usb_hid" {
         modules.usb_hid
     }
+    else if name == "usb_storage" {
+        modules.usb_storage
+    }
     else if name == "virtio_input" {
         modules.virtio_input
     }
@@ -5765,6 +5774,30 @@ start_usb_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, usb : us
             case Error(error) => failed(supervisor, service.name, error)
         }
     }
+    else if service.name == "usb_storage" {
+        name = "usb_storage"
+        speaks = .Block
+        pair :: os.channel_for[block.Block](supervisor.block.budget, 0) or_return void
+        listener = pair.b
+        grants := UsbGrants[block.Block].{
+            log = duplicate_log(supervisor),
+            device = device,
+            clients = os.Listener[block.Block].{end = pair.a},
+        }
+        match os.launch(
+            supervisor.manager,
+            supervisor.manager_port,
+            service.name,
+            module_of(supervisor, service.name),
+            service.budget,
+            type_of(usb_storage.main),
+            grants,
+            options_for(supervisor, service.name)
+        ) {
+            case Ok(made) => launched = kept(supervisor, made)
+            case Error(error) => failed(supervisor, service.name, error)
+        }
+    }
     else {
         _ = slop_os.handle_close(cast[slop_os.Handle](device.end))
         return void
@@ -5786,6 +5819,9 @@ start_usb_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, usb : us
     entry.usb_slot = usb + 1
     if speaks == .Input && supervisor.first_keyboard == NOWHERE {
         supervisor.first_keyboard = slot
+    }
+    if speaks == .Block && supervisor.first_disk == NOWHERE {
+        supervisor.first_disk = slot
     }
 }
 

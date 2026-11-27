@@ -516,6 +516,8 @@ DISK_BUSES = {
     "nvme": ["-device", "nvme,drive=disk,serial=slopos-disk"],
     # On virt, an ICH9 AHCI controller of its own; on q35, its own (see disk_device)
     "ahci": ["-device", "ich9-ahci,id=ahci", "-device", "ide-hd,drive=disk,bus=ahci.0"],
+    # A USB stick on an xHCI controller of its own
+    "usb": ["-device", "qemu-xhci,id=usbdisk", "-device", "usb-storage,bus=usbdisk.0,drive=disk"],
 }
 
 
@@ -2290,7 +2292,7 @@ def fat32_volume(sectors: int, files: list) -> bytes:
 BOOT_DISK_SECTORS = 272384
 # The programs the bootloader loads from the boot disk, enough to reach the system volume, which holds every program; the rest
 # come from it (src/system_config's boot_set, decisions/0089)
-BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "nvme", "ahci", "xhci", "usb_hid", "storage_manager", "partition_server",
+BOOT_SET = ["root_task", "entropy", "process_manager", "scheduler", "platform", "supervisor", "events_service", "bundle_store_service", "clock", "acpi_service", "power_button", "virtio_blk", "nvme", "ahci", "xhci", "usb_hid", "usb_storage", "storage_manager", "partition_server",
             "fat_server", "container_service", "volume_server"]
 # The system configuration, which the build writes beside the programs
 SYSTEM_RECORDS = "system.records"
@@ -2572,7 +2574,7 @@ def main() -> int:
                              "shows its banner; may be repeated")
     parser.add_argument("--disk", help="add a virtio block device, a GPT disk image with this mark in its SlopOS check partition's block 0 (make_disk)")
     parser.add_argument("--disk-bus", choices=list(DISK_BUSES), default="virtio",
-                        help="what --disk or --boot-disk is attached through: a virtio block device, an NVMe controller, or an AHCI controller")
+                        help="what --disk or --boot-disk is attached through: a virtio block device, an NVMe controller, an AHCI controller, or a USB stick")
     parser.add_argument("--boot-disk", action="store_true",
                         help="boot from a disk the image builder makes rather than from the ISO (make_boot_disk), the --disk mark in "
                              "its SlopOS check partition")
