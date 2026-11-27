@@ -19,14 +19,15 @@
 package system_records
 
 /**
- * What system records start with, "SLOPSYS2" as little-endian bytes; records without it aren't system records. 2 since
- * MAX_SERVICES grew from 32 to 48 (decisions/0188, 13c), so records of the layout before are refused, not misread.
+ * What system records start with, "SLOPSYS3" as little-endian bytes; records without it aren't system records. 2 since
+ * MAX_SERVICES grew from 32 to 48 (decisions/0188, 13c), 3 since it grew to 64 and MAX_PARAMETERS from 320 to 448 for
+ * M20's drivers (decisions/0201, 20c), so records of a layout before are refused, not misread.
  */
-MAGIC : u64 : 0x32535953504f4c53
-/** The most services records hold: 48. */
-MAX_SERVICES :: 48
-/** The most parameters records hold, every service's together: 320. */
-MAX_PARAMETERS :: 320
+MAGIC : u64 : 0x33535953504f4c53
+/** The most services records hold: 64. */
+MAX_SERVICES :: 64
+/** The most parameters records hold, every service's together: 448. */
+MAX_PARAMETERS :: 448
 /** The most protocols records say a starter serves itself: 8. */
 MAX_SERVED :: 8
 /** The bytes of a name's place, its zero included, so a name has at most 31 bytes. */

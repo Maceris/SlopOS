@@ -504,6 +504,17 @@ TESTS = [
         f"--expect-line={tests_passed('disk_check', 13, 9)}",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The same through an AHCI controller (decisions/0201's 20c), the disk on its port 0 and its reads and writes queued
+    ("reads and writes a disk on an AHCI controller", 7, [WITH_PROGRAMS,
+        "--command-line=test_exit test_services", "--disk=SlopOS disk check: from the host", "--disk-bus=ahci",
+        "--expect-line=[user] ahci: serving 77824 blocks, 512 bytes each on port 0, with a write cache, queued",
+        "--expect-line=[user] partition_server: 3 partitions on a disk of 77824 blocks",
+        "--expect-line=[user] storage_manager: disk 0 partition 0: SlopOS check, 2048 blocks from 2048",
+        "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
+        "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
+        f"--expect-line={tests_passed('disk_check', 13, 9)}",
+        "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
     # loading only the boot set; the storage stack finding its partitions and its SlopOS
     # container, every other program read from the system volume, and the disk check passing on it as on the test disk
@@ -513,6 +524,11 @@ TESTS = [
     ("boots from a disk on an NVMe controller", 7, ["--disk-bus=nvme"] + [
         argument.replace("[user] virtio_blk: serving 272384 blocks",
                          "[user] nvme: serving 272384 blocks, 512 bytes each on the namespace, with a write cache")
+        for argument in BOOT_DISK_ARGUMENTS]),
+    # And on a SATA port of an AHCI controller (20c), q35's own on x86-64, whose CD the driver passes over elsewhere
+    ("boots from a disk on an AHCI controller", 7, ["--disk-bus=ahci"] + [
+        argument.replace("[user] virtio_blk: serving 272384 blocks",
+                         "[user] ahci: serving 272384 blocks, 512 bytes each on port 0, with a write cache, queued")
         for argument in BOOT_DISK_ARGUMENTS]),
     # Behind a root port, with firmware's bus numbers and BARs taken as unset
     ("numbers buses and places BARs behind a bridge", 7, [WITH_PROGRAMS,
@@ -1902,7 +1918,9 @@ AARCH64_LEFT_OUT = {"refuses a CPU below x86-64-v3", "resumes after an NMI",
                     "skips a branch to no landing pad in the kernel without landing pads",
                     "skips a write to the kernel's shadow stack without one",
                     # virt has no framebuffer without ramfb, which this test doesn't add
-                    "draws the GUI on the firmware's framebuffer, and gives it back to the console"}
+                    "draws the GUI on the firmware's framebuffer, and gives it back to the console",
+                    # AArch64's edk2 has no AHCI driver to boot from; its reads and writes are tested from the CD
+                    "boots from a disk on an AHCI controller"}
 AARCH64_NAMES = {
     "routes a device's interrupts through the I/O APIC": "routes a device's interrupts through the GIC",
 }

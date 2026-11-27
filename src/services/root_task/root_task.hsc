@@ -107,6 +107,8 @@ SupervisorGrants :: struct {
     virtio_blk_module : slop_os.Memory?,
     /** The NVMe driver's module. */
     nvme_module : slop_os.Memory?,
+    /** The AHCI driver's module. */
+    ahci_module : slop_os.Memory?,
     /** The virtio console driver's module. */
     virtio_console_module : slop_os.Memory?,
     /** The virtio input driver's module. */
@@ -575,6 +577,7 @@ main :: fn(
         disk_check_module = module_copy(root, "disk_check", program_rights),
         virtio_blk_module = module_copy(root, "virtio_blk", program_rights),
         nvme_module = module_copy(root, "nvme", program_rights),
+        ahci_module = module_copy(root, "ahci", program_rights),
         virtio_console_module = module_copy(root, "virtio_console", program_rights),
         virtio_input_module = module_copy(root, "virtio_input", program_rights),
         virtio_rng_module = module_copy(root, "virtio_rng", program_rights),

@@ -536,3 +536,43 @@ enable_msix :: fn(config : u64, msix : ptr[Msix]) {
     control :: read_u16(config, msix.capability + 2)
     write_u16(config, msix.capability + 2, (control | MSIX_ENABLE) & ~MSIX_FUNCTION_MASK)
 }
+
+/** The PCI capability ID of MSI (PCI 3.0 §6.8.1). */
+CAPABILITY_MSI : u8 : 0x05
+/** MSI's Message Control: its Enable bit (0), its 64-bit address bit (7), and its per-vector masking bit (8). */
+MSI_ENABLE : u16 : 1
+MSI_64_BIT : u16 : 1 << 7
+MSI_PER_VECTOR_MASK : u16 : 1 << 8
+/** The command register's interrupt disable: the function sends no INTx, as one with MSI on mustn't. */
+COMMAND_INTX_DISABLE : u16 : 1 << 10
+
+/**
+ * Point a function's MSI at one message and turn it on, one vector, unmasked, its INTx off.
+ *
+ * @param config Where the function's configuration space is mapped, writable.
+ * @param address The message's address, as the kernel gave it (slop_os.irq_message).
+ * @param data The message's data, of which MSI sends the low 16 bits.
+ * @return False, nothing written, if the function has no MSI, or address is past 4 GiB and its MSI takes only 32-bit
+ *     addresses.
+ */
+enable_msi :: fn(config : u64, address : u64, data : u32) -> bool {
+    capability :: find_capability(config, CAPABILITY_MSI) or_return false
+    control :: read_u16(config, capability + 2)
+    wide :: control & MSI_64_BIT != 0
+    if !wide && address >> 32 != 0 {
+        return false
+    }
+    write_u32(config, capability + 4, cast[u32](address))
+    data_at :: if wide { capability + 12 } else { capability + 8 }
+    if wide {
+        write_u32(config, capability + 8, cast[u32](address >> 32))
+    }
+    write_u16(config, data_at, cast[u16](data))
+    if control & MSI_PER_VECTOR_MASK != 0 {
+        write_u32(config, data_at + 4, 0)
+    }
+    write_u16(config, COMMAND, read_u16(config, COMMAND) | COMMAND_INTX_DISABLE)
+    // One vector (Multiple Message Enable, bits 6:4, 0), then on
+    write_u16(config, capability + 2, (control & ~cast[u16](0x70)) | MSI_ENABLE)
+    return true
+}

@@ -71,6 +71,7 @@ import bundle from "../../bundle"
 import edu_dma from "../../drivers/edu_dma"
 import i6300esb from "../../drivers/i6300esb"
 import power_button from "../../drivers/power_button"
+import ahci from "../../drivers/ahci"
 import nvme from "../../drivers/nvme"
 import virtio_blk from "../../drivers/virtio_blk"
 import virtio_console from "../../drivers/virtio_console"
@@ -805,6 +806,8 @@ Modules :: struct {
     virtio_blk : slop_os.Memory?,
     /** The NVMe driver's module. */
     nvme : slop_os.Memory?,
+    /** The AHCI driver's module. */
+    ahci : slop_os.Memory?,
     /** The virtio console driver's module. */
     virtio_console : slop_os.Memory?,
     /** The virtio input driver's module. */
@@ -1331,6 +1334,7 @@ MAX_LOADED :: system_records.MAX_SERVICES
  * @param disk_check_module The disk check's program.
  * @param virtio_blk_module The virtio block driver's program.
  * @param nvme_module The NVMe driver's program.
+ * @param ahci_module The AHCI driver's program.
  * @param virtio_console_module The virtio console driver's program.
  * @param virtio_input_module The virtio input driver's program.
  * @param virtio_rng_module The virtio entropy driver's program.
@@ -1387,6 +1391,7 @@ main :: fn(
     disk_check_module : slop_os.Memory?,
     virtio_blk_module : slop_os.Memory?,
     nvme_module : slop_os.Memory?,
+    ahci_module : slop_os.Memory?,
     virtio_console_module : slop_os.Memory?,
     virtio_input_module : slop_os.Memory?,
     virtio_rng_module : slop_os.Memory?,
@@ -1510,6 +1515,7 @@ main :: fn(
         disk_check = disk_check_module,
         virtio_blk = virtio_blk_module,
         nvme = nvme_module,
+        ahci = ahci_module,
         virtio_console = virtio_console_module,
         virtio_input = virtio_input_module,
         virtio_rng = virtio_rng_module,
@@ -2914,6 +2920,13 @@ start_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, device : pla
         pair :: listener_for[block.Block](supervisor, &device) or_return void
         listener = pair.b
         launched = launch_serving[block.Block](supervisor, service, device, pair.a, type_of(virtio_blk.main))
+    }
+    else if service.name == "ahci" {
+        name = "ahci"
+        speaks = .Block
+        pair :: listener_for[block.Block](supervisor, &device) or_return void
+        listener = pair.b
+        launched = launch_serving[block.Block](supervisor, service, device, pair.a, type_of(ahci.main))
     }
     else if service.name == "nvme" {
         name = "nvme"
@@ -5162,6 +5175,9 @@ module_of :: fn(supervisor : ptr[mut Supervisor], name : string) -> slop_os.Memo
     }
     else if name == "nvme" {
         modules.nvme
+    }
+    else if name == "ahci" {
+        modules.ahci
     }
     else if name == "virtio_input" {
         modules.virtio_input

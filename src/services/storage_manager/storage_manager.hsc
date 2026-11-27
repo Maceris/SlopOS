@@ -504,8 +504,8 @@ kill_and_restart :: fn(state : ptr[mut Manager], index : usize) -> bool {
  * @param state The storage manager's state, whose disks, disk_running and partition_server_starts are set.
  * @param index Which disk, counted from 0, whose connector in connectors is dialed and whose disks and disk_running
  *     slots are set; one at MAX_DISKS or past gives false with nothing done.
- * @return Whether it started; false if the driver couldn't be dialed, a channel or a port for it made, or the launch
- *     failed. The port is made before the launch, so a server that's launched is always kept.
+ * @return Whether it started; false if the driver couldn't be dialed, says its disk has no blocks (as a controller with
+ *     no disk on it does), a channel or a port for it made, or the launch failed. The port is made before the launch, so a server that's launched is always kept.
  */
 start_partition_server :: fn(state : ptr[mut Manager], index : usize) -> bool {
     startup :: slop_os.startup_block()
@@ -514,6 +514,11 @@ start_partition_server :: fn(state : ptr[mut Manager], index : usize) -> bool {
     }
     dialing :: state.connectors[index]
     disk :: connector.dial[block.Block](dialing.end, dialing.port) or_return false
+    if !has_blocks(disk.end) {
+        runtime.log_info("passed over a disk with no blocks")
+        _ = slop_os.handle_close(cast[slop_os.Handle](disk.end))
+        return false
+    }
     pair :: os.channel_for[partitions.Partitions](startup.budget, 0) or_return false
     // The port first: one that couldn't be made after the launch would leave a server running unrecorded
     server_port :: match os.port_for(startup.budget, pair.b) {
@@ -551,6 +556,36 @@ start_partition_server :: fn(state : ptr[mut Manager], index : usize) -> bool {
     state.disks[index] = Disk.{end = pair.b, port = server_port}
     state.partition_server_starts += 1
     return true
+}
+
+/**
+ * Ask a block driver whether its disk has any blocks, on a connection of its, with a port of its own for the answer.
+ *
+ * @param end The connection, with nothing in flight on it; it stays the caller's.
+ * @return False if the driver answered Describe with no blocks; true otherwise, so a disk whose driver couldn't be
+ *     asked is left to its partition server, as before.
+ */
+has_blocks :: fn(end : slop_os.Channel) -> bool {
+    startup :: slop_os.startup_block()
+    port :: os.port_for(startup.budget, end) or_return true
+    blocks := true
+    out := os.Outgoing.{}
+    made :: os.begin[block.Request](&out)
+    made^ = .Describe
+    if block.send_request(end, port, &out) is_none {
+        into := os.Incoming.{}
+        match block.receive_response(end, port, &into, true) {
+            case Received => {
+                match os.message_of[block.Response](&into)^ {
+                    case Described(info) => blocks = info.block_count > 0
+                    case _ => {}
+                }
+            }
+            case _ => {}
+        }
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](port))
+    return blocks
 }
 
 /**
