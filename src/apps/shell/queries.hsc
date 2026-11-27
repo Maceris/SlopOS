@@ -18,10 +18,13 @@ import shell_language as language from "../../shell_language"
  *
  * Comparisons are joined by and, or and not, not binding tightest and or loosest, and grouped by parentheses. As or and
  * parentheses are the shell's own syntax between commands, a predicate that uses them is given as one text, which
- * query reads itself; a value with spaces or parentheses in it is quoted there with ':
+ * query reads itself; a value with spaces or parentheses in it is quoted there with '. Only a text that's the type's
+ * one argument is read so; among several, a quoted text or a name's value is one value, however it's spaced, as
+ * "to do" below:
  *
  *     query --index Note level
  *     query Note level >= 3 and not title == draft
+ *     query Note title == "to do"
  *     query Note "level >= 3 and (title == 'to do' or done == true)"
  */
 
@@ -44,6 +47,8 @@ Reading :: struct {
     tokens : Token[..],
     /** The next word's place among them. */
     next : usize,
+    /** How many nots and parentheses the word being read is inside, at most query_protocol.MAX_TERMS. */
+    depth : usize,
     /** The terms, in postfix order, as the query protocol has them. */
     terms : query_protocol.Term[..],
     /** The text constants' bytes, each text term's at its text_offset. */
@@ -149,6 +154,8 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
     defer runtime.array_free(&reading.tokens)
     defer runtime.array_free(&reading.terms)
     defer runtime.array_free(&reading.texts)
+    // A text that's the one argument is the whole predicate, read for its words; among several, it's one value
+    whole :: children.count == first + 2
     for i in first + 1..<children.count {
         child :: children[i]
         if child.kind == .Word {
@@ -156,7 +163,12 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
             continue
         }
         text :: word_of(shell, child)?
-        predicate_words(&reading.tokens, text, child.at)?
+        if whole {
+            predicate_words(&reading.tokens, text, child.at)?
+        }
+        else {
+            runtime.array_add(&reading.tokens, Token.{text = text, at = child.at, quoted = true})
+        }
     }
     if reading.tokens.count == 0 {
         return error_at(tree.at, usage)
@@ -359,7 +371,8 @@ read_and :: fn(reading : ptr[mut Reading]) -> Result[void, EvalError] {
  * Read a comparison, one with not before it, or a parenthesized predicate, into postfix terms.
  *
  * @param reading The predicate being read, moved past it.
- * @return Void once it's read; an error for words that aren't a predicate, a ( with no ), a field with no index, or a
+ * @return Void once it's read; an error for words that aren't a predicate, a ( with no ), nots and parentheses nested
+ *     more than query_protocol.MAX_TERMS deep, which no query of MAX_TERMS terms needs, a field with no index, or a
  *     value that isn't the field's.
  */
 read_not :: fn(reading : ptr[mut Reading]) -> Result[void, EvalError] {
@@ -367,16 +380,24 @@ read_not :: fn(reading : ptr[mut Reading]) -> Result[void, EvalError] {
         at :: if reading.tokens.count > 0 { reading.tokens[reading.tokens.count - 1].at } else { cast[usize](0) }
         return .Error(EvalError.{message = "a comparison is missing: field op value", at = at})
     }
+    // Bounded, so a text of thousands of ( or nots is refused rather than running the shell's stack out
+    if (next_is(reading, "not") || next_is(reading, "(")) && reading.depth >= cast[usize](query_protocol.MAX_TERMS) {
+        return .Error(EvalError.{message = "nots and parentheses are nested too deeply", at = reading.tokens[reading.next].at})
+    }
     if next_is(reading, "not") {
         reading.next += 1
+        reading.depth += 1
         read_not(reading)?
+        reading.depth -= 1
         runtime.array_add(&reading.terms, query_protocol.Term.{kind = cast[u32](query_protocol.TermKind.Not)})
         return .Ok
     }
     if next_is(reading, "(") {
         open :: reading.tokens[reading.next]
         reading.next += 1
+        reading.depth += 1
         read_or(reading)?
+        reading.depth -= 1
         if !next_is(reading, ")") {
             return .Error(EvalError.{message = "this ( has no )", at = open.at})
         }

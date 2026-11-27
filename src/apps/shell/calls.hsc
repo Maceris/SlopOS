@@ -31,11 +31,25 @@ import shell_language as language from "../../shell_language"
  */
 PROGRAM_BUDGET : u64 : 4 * 1024 * 1024
 /**
- * The most memory the shell gives a program that declares what it asks for (its PROGRAM_MEMORY, decisions/0202, 21f),
- * in bytes: 24 MiB, so it and the shell's own fit in the shell's budget, as a pipeline's smaller programs do beside it.
- * A program that asks for more isn't run.
+ * What the shell keeps of its budget for itself, in bytes, past what a program it runs may take (decisions/0202, 21i):
+ * 8 MiB. A program is given what its bundle asks for (its PROGRAM_MEMORY) when the shell's budget has that much
+ * uncharged beyond this reserve (program_room), with no fixed cap; one that asks for more isn't run.
  */
-MAX_PROGRAM_BUDGET : u64 : 24 * 1024 * 1024
+SHELL_RESERVE : u64 : 8 * 1024 * 1024
+
+/**
+ * Find how much memory the shell can give a program now: its budget's limit less what's charged to it, its programs'
+ * running already among that, and less SHELL_RESERVE.
+ *
+ * @return The bytes; 0 when there's no more than the reserve left, or the budget can't be described.
+ */
+program_room :: fn() -> u64 {
+    info :: slop_os.memory_budget_info(slop_os.startup_block().budget) or_return 0
+    if info.used >= info.limit || info.limit - info.used <= SHELL_RESERVE {
+        return 0
+    }
+    return info.limit - info.used - SHELL_RESERVE
+}
 
 /** One of a program's parameters, as its manifest has it, and what it's given. */
 Parameter :: struct {
@@ -59,6 +73,11 @@ Parameter :: struct {
     argument : ptr[Node]?,
     /** Whether it's a bool given by its --name alone, so it's true. */
     flag : bool,
+    /**
+     * Whether its argument is the list bare words and the arguments after its name were gathered into (words_of); one
+     * of them alone whose value is itself a list, as a [list] or a $name holding one, is taken as the list.
+     */
+    gathered : bool,
 }
 
 /**
@@ -118,14 +137,15 @@ prepare_call :: fn(
     if entry.kind != .Function {
         return .Error(EvalError.{message = message("%'s manifest isn't an entry's", tree.text), at = tree.at})
     }
-    if call.budget > MAX_PROGRAM_BUDGET {
+    room :: program_room()
+    if call.budget > room {
         return .Error(
             EvalError.{
                 message = message(
-                    "% asks for % MiB to run on, more than the shell gives one (% MiB)",
+                    "% asks for % MiB to run on, more than the shell has to give now (% MiB)",
                     tree.text,
                     (call.budget + (1 << 20) - 1) >> 20,
-                    MAX_PROGRAM_BUDGET >> 20
+                    room >> 20
                 ),
                 at = tree.at,
             }
@@ -230,8 +250,8 @@ Call :: struct {
     /** What its program's entry gave back as an Ok, once it's ended (read_result); Null for nothing. */
     returned : Value,
     /**
-     * The memory it's given to run on, in bytes: what its bundle asks for, at most MAX_PROGRAM_BUDGET; 0 for
-     * PROGRAM_BUDGET, a program's that asks for none; SCRIPT_BUDGET for a script's.
+     * The memory it's given to run on, in bytes: what its bundle asks for, at most what the shell has room for
+     * (program_room); 0 for PROGRAM_BUDGET, a program's that asks for none; SCRIPT_BUDGET for a script's.
      */
     budget : u64,
     /**
@@ -714,8 +734,9 @@ is_text_list :: fn(manifest : ptr[schema.Schema], held : ptr[schema.Type]) -> bo
  * after it are that list's items, each one item, in order: a bare word as written (wc -l file gives ["-l", "file"]),
  * anything else as it evaluates, which has to be text. A --name after the first item still names a parameter of the
  * program's if it has one; one that names none is an item, as written with its -- and what follows its name with no
- * space between (--exit=-1), the list's first if it's where the list would begin. One argument alone that isn't a
- * bare word, a [list] or a $name, is the parameter's value as before, so wc ["-l", "file"] still works. The arguments
+ * space between (--exit=-1), the list's first if it's where the list would begin. One argument alone whose value is a
+ * list, a [list] or a $name holding one, is the list itself (unwrapped), so wc ["-l", "file"] still works; a text
+ * alone, quoted or a name's, is the list's one item, as wc "my file.txt" gives ["my file.txt"]. The arguments
  * end where the call does, at | ; ) } ? & or `or`, which the shell's own syntax keeps; a word with one of those in it is
  * given as "text".
  *
@@ -744,6 +765,7 @@ match_arguments :: fn(tree : ptr[Node], parameters : ptr[mut Parameter[..]]) -> 
                             filling = next
                             items = list
                             next.argument = list
+                            next.gathered = true
                         }
                     }
                     case None => {}
@@ -818,25 +840,38 @@ match_arguments :: fn(tree : ptr[Node], parameters : ptr[mut Parameter[..]]) -> 
             filling = parameter
             items = list
             parameter.argument = list
+            parameter.gathered = true
             continue
         }
         parameter.argument = argument
     }
-    // One argument alone that isn't a bare word is the list's value itself, as a [list] or a $name is
-    match filling {
-        case Some(parameter) => {
-            match items {
-                case Some(list) => {
-                    if list.children.count == 1 && list.children[0].kind != .Word {
-                        parameter.argument = list.children[0]
-                    }
+    return .Ok(.Null)
+}
+
+/**
+ * Take a gathered list's one item as the list, when it's a list itself, as a [list] or a $name holding one given
+ * alone after a program's name is; a text alone, quoted or a name's, stays an item of the list.
+ *
+ * @param given The parameter's value, as evaluated.
+ * @param gathered Whether the parameter's argument is a list bare words were gathered into (Parameter.gathered).
+ * @return The one item, if gathered and given is a list of just a list; given otherwise.
+ */
+unwrapped :: fn(given : Value, gathered : bool) -> Value {
+    if !gathered {
+        return given
+    }
+    match given {
+        case List(list) => {
+            if list.items.count == 1 {
+                match list.items[0] {
+                    case List(inner) => return .List(inner)
+                    case _ => {}
                 }
-                case None => {}
             }
         }
-        case None => {}
+        case _ => {}
     }
-    return .Ok(.Null)
+    return given
 }
 
 /** The longest word joined_word makes, in bytes, its -- among them. */
@@ -1007,6 +1042,7 @@ value_for :: fn(
             }
             else {
                 given = evaluate(shell, argument)?
+                given = unwrapped(given, parameter.gathered)
             }
         }
         case None => {

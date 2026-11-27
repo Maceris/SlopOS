@@ -760,14 +760,15 @@ indexes_changed :: fn(server : ptr[mut Server], schema : u8[32], dropped : u64) 
  * Begin every live query again, its next answer Resync, as after a commit that failed and went back to the one before,
  * whose changes it may have seen.
  *
- * @param server The server, whose live queries are marked.
+ * @param server The server, whose live queries are marked, and those waiting answered.
  */
 restart_lives :: fn(server : ptr[mut Server]) {
-    for live in server.lives {
+    for live, i in server.lives {
         match live.state {
             case Some(state) => {
                 state.resync = true
                 state.pending_count = 0
+                answer_live(server, i)
             }
             case None => {}
         }

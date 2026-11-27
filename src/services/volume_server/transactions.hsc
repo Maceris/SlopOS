@@ -503,6 +503,34 @@ undo :: fn(server : ptr[mut Server], committed : slopfs.VolumeRecord) {
     _ = ask(server, .Abandon)
     slopfs.forget(server.volume, committed)
     server.commit_at = 0
+    end_forgotten(server, cast[u64](committed.next_object))
+}
+
+/**
+ * End the connections to objects a going back forgot, made since the commit gone back to, whose numbers the volume
+ * gives out again: a client's writes through one would otherwise reach the next object given its number. Their
+ * clients see the connection end, as when the server restarts.
+ *
+ * @param server The server, whose live volume's connections to an object numbered next_object or more are dropped; a
+ *     snapshot's, which reads only what was committed, are left.
+ * @param next_object The volume's next object as the commit gone back to has it.
+ */
+end_forgotten :: fn(server : ptr[mut Server], next_object : u64) {
+    for i in 0..<server.connections.count {
+        if i >= server.count {
+            break
+        }
+        connection :: &server.connections[i]
+        if connection.kind == .Free || connection.past != 0 || connection.object < next_object {
+            continue
+        }
+        if connection.kind == .Dir || connection.kind == .ReadOnlyDir || connection.kind == .File
+            || connection.kind == .ReadOnlyFile || connection.kind == .FileSet || connection.kind == .TransactionFile
+            || connection.kind == .Replacement {
+            // What drop gives back for it is gone already, so its release finds nothing and changes nothing
+            drop(server, i)
+        }
+    }
 }
 
 // Replace and orphans

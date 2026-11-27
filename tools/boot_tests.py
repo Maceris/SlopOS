@@ -1459,7 +1459,8 @@ TESTS = [
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # C from the shell on the libc (decisions/0201, 20l): test_libc's C beneath the shell's directory, its file test
     # too, its stdout the terminal, its records the serial log's under its name (decisions/0202, 21f); then wc, a C
-    # tool, given its arguments as bare words and as a list, counting the file it left there on the terminal, and with
+    # tool, given its arguments as a quoted text alone (the list's one item, 21i), as bare words and as a list, counting
+    # the file it left there on the terminal, and with
     # a file that isn't there, which it says on stderr and ends with 1; then the tests' C calling exit(-1), --exit=-1 a
     # bare word too, which ends it with 255, a POSIX exit status's 8 bits
     ("runs C from the shell on the libc: its tests beneath the shell's directory, and wc on the terminal", 7,
@@ -1467,7 +1468,7 @@ TESTS = [
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\w\\>test_libc_files\\r\\>"
-        "wc libc_words.txt\\r\\>"
+        "wc \"libc_words.txt\"\\r\\>"
         "wc -l libc_words.txt nothing.txt\\r\\>"
         "wc [\"-l\", \"libc_words.txt\"]\\r\\>"
         "test_libc_files --exit=-1\\r",
@@ -1477,7 +1478,9 @@ TESTS = [
         "--expect-console-line=      3       6      28 libc_words.txt",
         "--expect-console-line=      3 libc_words.txt", "--expect-console-line=wc: nothing.txt: No such file or directory",
         "--expect-console-line=      3 total", "--expect-console-line=error: wc ended with 1",
-        "--expect-line=[user] test_libc_files: the C ended with 0, given 0 arguments",
+        # Under its session's prefix, s0_ (its session, the first), never the bare name a system source could have
+        "--expect-line=[user] s0_test_libc_files: the C ended with 0, given 0 arguments",
+        "--refuse-line=[user] test_libc_files:",
         "--expect-console-line=error: test_libc_files ended with 255"])),
     # C ports from the shell (decisions/0202, 21g): test_c_ports' files beneath the shell's directory; Lua's checks,
     # given arguments, an error nothing catches (its message and 1), and -e; then minigzip compressing a file, its .gz
@@ -1527,6 +1530,10 @@ TESTS = [
         "query TreeMade \"files > 3 or (directories == 1 and not files == 1)\" | map path\\r\\>"
         "query TreeMade \"files == 3 and directories == 2\"\\r\\>"
         "query TreeMade \"(files == 3\"\\r\\>"
+        # A quoted value among several arguments is one value, and, or and not among them (21i)
+        "query TreeMade directories == \"and\"\\r\\>"
+        # Nots nested past MAX_TERMS refused, not run down the shell's stack
+        "query TreeMade \"" + "not " * 40 + "files == 3\"\\r\\>"
         "view reading/long.txt | page\\r\\u{lines 1-22 of 60} \\u{lines 23-44 of 60}G\\u{lines 39-60 of 60}k\\u{lines 38-59 of 60}xq\\>"
         "view reading/todo.txt | page\\r\\>"
         "view reading/CAFE\\u0301.txt\\r\\>"
@@ -1545,6 +1552,8 @@ TESTS = [
         "--expect-console-contains=of TreeMade.files", "--expect-console-contains=of TreeMade.directories",
         "--expect-console-line=reading/made.value", "--expect-console-line=no file matches",
         "--expect-console-contains=this ( has no )",
+        "--expect-console-contains=TreeMade.directories is a number, not and",
+        "--expect-console-contains=nots and parentheses are nested too deeply",
         "--expect-console-line=00000010  10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f  |................|",
         "--expect-console-line=files: 3", "--expect-console-line=directories: 1",
         "--expect-console-line=lines 1-22 of 60: Space and b page, Up and Down scroll, q quits",

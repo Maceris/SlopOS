@@ -53,13 +53,15 @@ copy ~/notes/plan.md usb:/backup/ or { warn "no stick" }   # handling an error
   parameter and it's a `string[]` (or `string[]?`), that argument and every one after it are the list's items, in
   order, as a C program's `argv` is: `wc -l file` is `wc ["-l", "file"]`. A bare word is an item as written; anything
   else as it evaluates, which has to be text. A `--name` the program has still names its parameter; one it hasn't is an
-  item, joined to what follows its name with no space between (`--exit=-1`). One argument alone that isn't a bare word
-  (a `[list]`, a `$name`) is the list itself, as before. The call still ends at `|`, `;`, `)`, `}`, `?`, `&` and `or`,
+  item, joined to what follows its name with no space between (`--exit=-1`). One argument alone whose value is a list
+  (a `[list]`, a `$name` holding one) is the list itself, as before; a text alone, quoted or a name's, is the list's one
+  item (`wc "my file.txt"`). The call still ends at `|`, `;`, `)`, `}`, `?`, `&` and `or`,
   and a word with `(` or `"` in it is given as `"text"`.
-- **Memory**: a program runs on what its root package's `PROGRAM_MEMORY` asks for, which its bundle carries, up to the
-  shell's limit (`MAX_PROGRAM_BUDGET`, 24 MiB; asking for more isn't run), or 4 MiB when it asks for none.
+- **Memory**: a program runs on what its root package's `PROGRAM_MEMORY` asks for, which its bundle carries, or 4 MiB
+  when it asks for none. There's no fixed cap: the shell gives it when its budget has that much uncharged beyond what
+  it keeps for itself (`SHELL_RESERVE`, 8 MiB), and says so and doesn't run it when it hasn't.
 - **Logs**: each program it runs gets a log ring from the session manager (`programs`' `Events`), so its records reach
-  the log service under its name, as the session's own programs' do; the shell gives the ring back once it's ended.
+  the log service under its name, prefixed with its session's (`s0_wc`), so it can't write as a system's source; the shell gives the ring back once it's ended.
 - **Before anything runs**, the whole command line is checked: unknown parameters, missing ones, values that don't
   parse, pipelines whose types don't meet. The error points at the word.
 

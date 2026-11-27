@@ -403,36 +403,31 @@ sweep_orphans :: fn(volume : ptr[mut Volume]) -> Result[u64, Error] {
  * Forget everything changed in a volume since its last commit, its tree and next object as a record has them.
  *
  * Its dirty nodes are dropped without giving their blocks back, which the container reverts (abandon_volume)
- * instead. Without the memory to list them all, some stay dirty, written with the next commit though nothing points
- * at them. The volume is no longer failed.
+ * instead; it allocates nothing, so it does as much when memory has run out, as a going back for want of it does.
+ * The volume is no longer failed.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param record The volume's record as its last commit left it.
  */
 forget :: fn(volume : ptr[mut Volume], record : VolumeRecord) {
-    dropped : u64[..]
-    defer runtime.array_free(&dropped)
     dirty :: &volume.nodes.dirty
-    used :: dirty.used
-    values :: dirty.values
-    keys :: dirty.keys
-    for i in 0..<used.count {
-        if i < values.count && i < keys.count && used[i] {
-            node :: values[i]
-            // Without the memory to list it, a node stays among the dirty ones, written with the next commit
-            if cast[u64](header_of(node).owner) == volume.id && runtime.array_try_add(&dropped, keys[i]) != null {
-                break
-            }
+    /*
+     * Each of the volume's nodes taken out where it is, its slot looked at again, as map_remove moves a later key back
+     * into it; a key it moves from before the slot, round the map's end, was looked at already and kept, as every
+     * one of the volume's before the slot is gone
+     */
+    i : usize = 0
+    for step in 0..<dirty.used.count * 2 + 1 {
+        if i >= dirty.used.count || i >= dirty.values.count || i >= dirty.keys.count {
+            break
         }
-    }
-    for address in dropped {
-        match maps.map_get(dirty, address) {
-            case Some(node) => {
-                _ = maps.map_remove(dirty, address)
-                runtime.free(node)
-            }
-            case None => {}
+        if !dirty.used[i] || cast[u64](header_of(dirty.values[i]).owner) != volume.id {
+            i += 1
+            continue
         }
+        node :: dirty.values[i]
+        _ = maps.map_remove(dirty, dirty.keys[i])
+        runtime.free(node)
     }
     volume.tree.root = record.root
     volume.next_object = cast[u64](record.next_object)

@@ -111,8 +111,8 @@ MAX_SESSIONS :: 4
 /** echo's memory budget, in bytes. */
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
 /**
- * The shell's memory budget, in bytes, which the programs it runs have theirs split off: 40 MiB, room for its own and
- * for a program as big as the shell lets one ask for (its MAX_PROGRAM_BUDGET, 24 MiB).
+ * The shell's memory budget, in bytes, which the programs it runs have theirs split off: 40 MiB, its own and room for
+ * what they ask for, a program being given what the shell has left beyond its reserve (the shell's program_room).
  */
 SHELL_BUDGET : u64 : 40 * 1024 * 1024
 /** How long a program has to answer a Ping, in nanoseconds. */
@@ -4107,21 +4107,59 @@ port_of :: fn(end : slop_os.Channel) -> slop_os.Port {
 }
 
 /**
- * Open a log ring for a program a session's shell starts, for Events (decisions/0202, 21f): a source of the program's
- * name, its records kept to the session's budget for its programs', as prepare does for the session's own programs.
+ * Open a log ring for a program a session's shell starts, for Events (decisions/0202, 21f): a source named for the
+ * session and the program, s<number>_<name>, its records kept to the session's budget for its programs', as prepare
+ * does for the session's own programs. As the name always begins so, a shell can't write as, or change the budget
+ * of, a source of the system's, like clock, nor another session's.
  *
  * @param sessions The session manager, whose events service connection is asked, waiting for each answer.
  * @param number The session's number, whose events_budget is the source's budget; one past them takes
  *     events.SESSION_BUDGET.
- * @param name The program's name, 1 to programs.MAX_NAME bytes, which the service checks as a source's name.
+ * @param name The program's name, 1 to programs.MAX_NAME bytes; with its session's prefix, at most SOURCE_NAME bytes,
+ *     which the service checks as a source's name (lowercase letters, digits and underscores).
  * @return EventsOpened with the ring's owning handle and the doorbell's end, both moving to the shell; Missing without
- *     an events service, for a name out of range, or if the service refused it.
+ *     an events service, for a name out of range or too long with its prefix, or if the service refused it.
  */
 events_for :: fn(sessions : ptr[mut Manager], number : u32, name : u8[]) -> programs.Response {
     if sessions.events_end == NONE || name.count == 0 || name.count > programs.MAX_NAME {
         return .Missing
     }
-    text :: string_of(&name[0], name.count)
+    // s, the number's digits, _, then the name
+    source : u8[SOURCE_NAME]
+    digits : u8[10]
+    digit_count := cast[usize](0)
+    left := number
+    loop {
+        digits[digit_count] = cast[u8]('0') + cast[u8](left % 10)
+        digit_count += 1
+        left /= 10
+        if left == 0 || digit_count >= digits.count {
+            break
+        }
+    }
+    length :: 2 + digit_count + name.count
+    if length > source.count {
+        return .Missing
+    }
+    source[0] = cast[u8]('s')
+    for i in 0..<digit_count {
+        here :: 1 + i
+        from :: digit_count - 1 - i
+        if here < source.count && from < digits.count {
+            source[here] = digits[from]
+        }
+    }
+    underscore :: 1 + digit_count
+    if underscore < source.count {
+        source[underscore] = cast[u8]('_')
+    }
+    for character, i in name {
+        here :: 2 + digit_count + i
+        if here < source.count {
+            source[here] = character
+        }
+    }
+    text :: string_of(&source[0], length)
     opened :: events.open(sessions.events_end, sessions.events_port, text) or_return .Missing
     configured :: if cast[usize](number) < sessions.sessions.count {
         sessions.sessions[cast[usize](number)].events_budget
@@ -4137,6 +4175,9 @@ events_for :: fn(sessions : ptr[mut Manager], number : u32, name : u8[]) -> prog
     )
     return .EventsOpened(events.Source.{ring = opened.ring, doorbell = opened.doorbell})
 }
+
+/** The most bytes of a source's name, as the events service takes them (its NAME_BYTES). */
+SOURCE_NAME :: 32
 
 /**
  * Give an ended program's log ring back to the events service (Retire), which reads what's left in it; or close it,

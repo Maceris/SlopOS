@@ -1014,7 +1014,13 @@ an_index_that_cant_be_made_at_commit_leaves_the_changes_to_be_forgotten_whole #t
         undone : slopfs.Change[..]
         defer runtime.array_free(&undone)
         slopfs.abandon_volume(container, volume.id, &undone)
-        slopfs.forget(volume, committed)
+        // Forgotten with no memory to be had, as a going back for want of it is: every dirty node goes all the same
+        none_left :: testing.require_some(t, memory.make_failing(1), "a failing allocator is made")?
+        push_context forgetting_context (allocator = memory.failing_allocator(none_left)) {
+            slopfs.forget(volume, committed)
+        }
+        memory.free_failing(none_left)
+        testing.expect_eq(t, volume.nodes.dirty.count, 0, "no dirty node is left, its block given back already")
         testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 1)]), 1, "the file's committed value is found")
         testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 2)]), 0, "its forgotten write isn't")
         testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 3)]), 0, "nor the file made with it")
