@@ -110,8 +110,11 @@ MAX_PROGRAMS :: 48
 MAX_SESSIONS :: 4
 /** echo's memory budget, in bytes. */
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
-/** The shell's memory budget, in bytes, which the programs it runs have theirs split off. */
-SHELL_BUDGET : u64 : 16 * 1024 * 1024
+/**
+ * The shell's memory budget, in bytes, which the programs it runs have theirs split off: 40 MiB, room for its own and
+ * for a program as big as the shell lets one ask for (its MAX_PROGRAM_BUDGET, 24 MiB).
+ */
+SHELL_BUDGET : u64 : 40 * 1024 * 1024
 /** How long a program has to answer a Ping, in nanoseconds. */
 PING_WAIT : u64 : 200_000_000
 /** How long a program has to stop once asked, in nanoseconds, before it's killed. */
@@ -652,6 +655,8 @@ KnownRefers :: struct {
     bundle : bundle.Hash,
     /** What it refers to, in its order, on the heap. */
     refers : bundle.Hash[..],
+    /** The memory it asks its program to run on, in bytes (bundle.bundle_memory); 0 for none declared. */
+    memory : u64,
 }
 
 /** The most bundles whose references are kept; past them, they're all forgotten, and kept again as they're read. */
@@ -2069,6 +2074,11 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
                 case EntryOf(name) => response^ = entry_of(sessions, os.items(into, name))
                 case ManifestOf(name) => response^ = manifest_of(sessions, os.items(into, name))
+                case Events(name) => response^ = events_for(sessions, cast[u32](number), os.items(into, name))
+                case RetireEvents(ring) => {
+                    retire_ring(sessions, ring)
+                    response^ = .Done
+                }
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
@@ -2131,7 +2141,12 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
             // Kept, to name the programs loaded from it, which are given the installation's window (decisions/0197, N2)
             given :: hand_out(sessions, object.memory, name)
             return .Found(
-                programs.Program.{executable = given, manifest = manifest.memory, manifest_size = manifest.size}
+                programs.Program.{
+                    executable = given,
+                    manifest = manifest.memory,
+                    manifest_size = manifest.size,
+                    memory = known_memory(sessions, found),
+                }
             )
         }
         case _ => {
@@ -2139,6 +2154,22 @@ find_program :: fn(sessions : ptr[mut Manager], name : u8[]) -> programs.Respons
             return .Missing
         }
     }
+}
+
+/**
+ * Give the memory a bundle asks its program to run on, as refers_of read it from the bundle's record.
+ *
+ * @param sessions The session manager, whose known bundles are looked in.
+ * @param bundle_hash The bundle, which refers_of has just read.
+ * @return Its bytes; 0 for none declared, or a bundle not known.
+ */
+known_memory :: fn(sessions : ptr[Manager], bundle_hash : bundle.Hash) -> u64 {
+    for each in sessions.refers {
+        if bundle.same(each.bundle, bundle_hash) {
+            return each.memory
+        }
+    }
+    return 0
 }
 
 /**
@@ -3580,7 +3611,7 @@ refers_of :: fn(sessions : ptr[mut Manager], bundle_hash : bundle.Hash, into : p
         }
     }
     record :: stored_object(sessions, bundle_hash) or_return false
-    made := KnownRefers.{bundle = bundle_hash}
+    made := KnownRefers.{bundle = bundle_hash, memory = bundle.bundle_memory(record.bytes) or_else 0}
     read :: bundle.bundle_refers(record.bytes, &made.refers) or_else false
     let_go_of_object(record)
     if !read {
@@ -4073,6 +4104,38 @@ user_of :: fn(made : ptr[Session]) -> u8[] {
  */
 port_of :: fn(end : slop_os.Channel) -> slop_os.Port {
     return os.port_for(slop_os.startup_block().budget, end) or_else cast[slop_os.Port](slop_os.NO_HANDLE)
+}
+
+/**
+ * Open a log ring for a program a session's shell starts, for Events (decisions/0202, 21f): a source of the program's
+ * name, its records kept to the session's budget for its programs', as prepare does for the session's own programs.
+ *
+ * @param sessions The session manager, whose events service connection is asked, waiting for each answer.
+ * @param number The session's number, whose events_budget is the source's budget; one past them takes
+ *     events.SESSION_BUDGET.
+ * @param name The program's name, 1 to programs.MAX_NAME bytes, which the service checks as a source's name.
+ * @return EventsOpened with the ring's owning handle and the doorbell's end, both moving to the shell; Missing without
+ *     an events service, for a name out of range, or if the service refused it.
+ */
+events_for :: fn(sessions : ptr[mut Manager], number : u32, name : u8[]) -> programs.Response {
+    if sessions.events_end == NONE || name.count == 0 || name.count > programs.MAX_NAME {
+        return .Missing
+    }
+    text :: string_of(&name[0], name.count)
+    opened :: events.open(sessions.events_end, sessions.events_port, text) or_return .Missing
+    configured :: if cast[usize](number) < sessions.sessions.count {
+        sessions.sessions[cast[usize](number)].events_budget
+    }
+    else {
+        cast[u64](0)
+    }
+    _ = events.set_budget(
+        sessions.events_end,
+        sessions.events_port,
+        text,
+        if configured != 0 { configured } else { events.SESSION_BUDGET }
+    )
+    return .EventsOpened(events.Source.{ring = opened.ring, doorbell = opened.doorbell})
 }
 
 /**

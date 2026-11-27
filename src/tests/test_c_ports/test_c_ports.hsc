@@ -14,9 +14,11 @@ CHECKS :: #file_data("scripts/checks.lua")
 FAILS :: #file_data("scripts/fails.lua")
 /** A script describing what minigzip made and gave back. */
 COMPARE :: #file_data("scripts/compare.lua")
+/** A script holding 6 MiB, more than a program that asks for no memory is given (decisions/0202, 21f). */
+BIG :: #file_data("scripts/big.lua")
 
 /** How many files it makes. */
-FILE_COUNT : u64 : 5
+FILE_COUNT : u64 : 6
 
 /** An error naming the parameter it came from. */
 Problem :: struct {
@@ -45,7 +47,7 @@ main :: fn(here : os.Channel[dir.Dir]) -> Result[u64, PortsError] {
     }
     if !put(directory, "checks.lua", CHECKS) || !put(directory, "fails.lua", FAILS)
         || !put(directory, "compare.lua", COMPARE) || !put(directory, "gzip_input.txt", CHECKS)
-        || !put(directory, "gzip_expected.txt", CHECKS) {
+        || !put(directory, "gzip_expected.txt", CHECKS) || !put(directory, "big.lua", BIG) {
         return .Error(.Unwritable(problem))
     }
     return .Ok(FILE_COUNT)

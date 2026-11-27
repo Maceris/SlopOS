@@ -1,12 +1,14 @@
 /**
  * test_libc_files (decisions/0201, 20l): test_libc's C, run from the shell beneath the shell's directory, so its file
  * test runs too: stdio's streams, file descriptors, stat, rename, a directory listed and removed, all beneath it. It
- * leaves libc_words.txt there, for wc's part of the boot test. Its stdout is the shell's terminal, as a program the
- * shell runs has no debug log, and its logger's records don't reach the serial log; it links test_libc's C library,
- * which tools/c_libraries.py builds from src/tests/test_libc/c.
+ * leaves libc_words.txt there, for wc's part of the boot test. Its stdout is the shell's terminal, and its logger's
+ * records reach the log service under its name, as every program the shell runs has its own (decisions/0202, 21f),
+ * so it logs how the C ended too (but for exit's, which ends the process there); it links test_libc's C library, which tools/c_libraries.py builds from
+ * src/tests/test_libc/c.
  */
 package test_libc_files
 
+import runtime from "base:runtime"
 import os from "std:os"
 import dir from "std:os/slop_os/dir"
 import terminal from "std:os/slop_os/terminal"
@@ -36,5 +38,7 @@ c_main #foreign(TEST_C) #link_name("main") : fn(argc : i32, argv : ptr[mut cstri
  */
 main :: fn(arguments : string[]?, here : os.Channel[dir.Dir], console : os.Channel[terminal.Terminal]) -> int {
     given :: arguments or_else string.[]
-    return libc.run(libc.Start.{name = "test_libc_files", arguments = given, here = here, console = console}, c_main)
+    ended :: libc.run(libc.Start.{name = "test_libc_files", arguments = given, here = here, console = console}, c_main)
+    runtime.log_info("the C ended with %, given % arguments", ended, given.count)
+    return ended
 }

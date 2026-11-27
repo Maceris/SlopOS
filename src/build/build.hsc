@@ -11,7 +11,8 @@
  * to this folder, src/build. Checking (hemera --check) writes nothing.
  * - kernel_output: the kernel's ELF, build/kernel.elf by default.
  * - programs_output: the folder programs go in, each <name>.elf, build/programs by default, each with its manifest
- *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), and <name>.docs, its documentation
+ *   beside it, <name>.manifest: the schema of its entry's type (decisions/0044), <name>.memory, the memory it asks to
+ *   run on (its PROGRAM_MEMORY, decisions/0202), and <name>.docs, its documentation
  *   (decisions/0174), which the store builder puts in its bundle (decisions/0094); and beside the root task,
  *   system.records, the system configuration as data (decisions/0110).
  * - tests_output: the folder test programs go in, build/tests by default.
@@ -180,7 +181,43 @@ write_manifest :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler
         compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
         return false
     }
-    return write_documentation(target, program, main)
+    return write_memory(target, program) && write_documentation(target, program, main)
+}
+
+/**
+ * Write the memory a SlopOS program asks to run on (decisions/0202, 21f) beside its manifest, as <name>.memory: its
+ * root package's PROGRAM_MEMORY, a u64 of bytes, in decimal; 0 for a program that doesn't declare one. The store
+ * builder puts it in the program's bundle, and a shell grants it up to a limit of its own.
+ *
+ * @param target The target being built, a SlopOS program whose output ends in .elf.
+ * @param program The target's program, whose root package's constant is read.
+ * @return True once it's written; false, with an error reported, if PROGRAM_MEMORY isn't a u64 or the file couldn't
+ *     be written.
+ */
+write_memory :: fn(target : ptr[compiler.BuildOptions], program : ptr[compiler.ProgramInfo]) -> bool {
+    memory := cast[u64](0)
+    match compiler.find_constant(program.root, "PROGRAM_MEMORY") {
+        case Some(found) => {
+            if found.value.data == null || found.value.type != u64 {
+                compiler.report_error(program.root.location, "%'s PROGRAM_MEMORY isn't a u64 constant", target.name)
+                return false
+            }
+            memory = cast[ptr[u64]](found.value.data)^
+        }
+        case None => {}
+    }
+    text_storage : u8[32]
+    text := text_buffer.make(text_storage)
+    text_buffer.append_format(&text, "%", memory)
+    path_storage : u8[512]
+    path := text_buffer.make(path_storage)
+    text_buffer.append(&path, string_of(cast[ptr[u8]](target.output_path.data), target.output_path.count - 4))
+    text_buffer.append(&path, ".memory")
+    if !compiler.checking() && os.write_entire_file(text_buffer.as_string(&path), text_buffer.as_string(&text)) != null {
+        compiler.report_error(program.root.location, "couldn't write %", text_buffer.as_string(&path))
+        return false
+    }
+    return true
 }
 
 /**

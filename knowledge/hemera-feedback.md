@@ -304,6 +304,10 @@ call for a debugger; a launched program's budget with `RIGHT_BUDGET_WATCH`. 21e:
 `parse` calls the assertion handler (a failed list's add noted in `Schema.short_of_memory`, what was read freed); files'
 `NotVolumeRoot`, mapped to `AccessDenied`; dir's `Indexes` on any directory, so `index_of`, `where_number` and
 `where_text` take any directory of the volume; `where_text`'s long constants compared whole.
+21f: base's page heap gives every block over 2 KiB pages of its own, a memory object with a page in front for its
+handle, so a block a little over 2 KiB takes three pages; C that allocates many 2 to 8 KiB blocks, as Lua's strings,
+needs several times their size (a 6 MB script of 4000-byte strings ran out of 16 MiB). Size classes up to a page or
+two, carved from chunks as the small ones are, would fix it. Severity: friction (2026-11-27).
 
 ## 4. Features That Look Like a Strong Fit
 

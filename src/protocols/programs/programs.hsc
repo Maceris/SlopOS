@@ -4,6 +4,7 @@ import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
 import process_manager from "std:os/slop_os/process_manager"
+import events from "../events"
 import powerbox from "../powerbox"
 
 /*
@@ -60,6 +61,11 @@ Program :: struct {
     manifest : slop_os.Memory,
     /** How many bytes from manifest's start are the manifest. */
     manifest_size : u64,
+    /**
+     * The memory it asks to run on, in bytes, from its bundle (decisions/0202, 21f), which the shell grants up to a
+     * limit of its own; 0 for a program that declares none.
+     */
+    memory : u64,
 }
 
 /** What a session's shell asks the session manager. */
@@ -190,6 +196,19 @@ Request :: union {
      * finding connection or in a session that isn't a GUI session; Refused(Failed) when it couldn't start.
      */
     Start(Starting),
+    /**
+     * Ask for a log ring for a program the shell starts (decisions/0202, 21f), by its name's bytes, 1 to MAX_NAME of
+     * them, which its records are labeled with: lowercase letters, digits and underscores, as the events service takes
+     * a source's. Its records are kept to the session's budget for its programs', as the session's own programs' are.
+     * Answered with EventsOpened, its ring's owning handle the shell's to give back with RetireEvents once the program
+     * has ended; Missing without an events service, or for a name it refuses.
+     */
+    Events(slop_os.Relative[u8]),
+    /**
+     * Give back a ring Events gave, by its owning handle, which moves, once its program has ended: the events service
+     * reads what's left in it, then closes it. Answered with Done.
+     */
+    RetireEvents(slop_os.Memory),
 }
 
 /** A GUI program to start, as Start asks for it. */
@@ -427,6 +446,11 @@ Response :: union {
     EntryIs(EntryHash),
     /** The answer to ManifestOf: a copy of the program's manifest, whose handle moves to the shell, and its size. */
     Manifest(ProgramDocumentation),
+    /**
+     * The answer to Events: the ring's owning handle, the shell's to keep, giving the program a duplicate, and the
+     * doorbell's end, the program's; both move to the shell.
+     */
+    EventsOpened(events.Source),
 }
 
 /**
@@ -443,6 +467,8 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case Powerbox(_) => false
         case Start(_) => false
         case ConnectScript(_) => false
+        case Events(_) => false
+        case RetireEvents(_) => false
         case _ => true
     }
 }

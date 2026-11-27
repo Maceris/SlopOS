@@ -401,7 +401,7 @@ SERVICES :: Service.[
         module = "session_manager.elf",
         starter = .Supervisor,
         by_manager = true,
-        budget = 96 * MIB,
+        budget = 128 * MIB,
         entry = type_of(session_manager.main),
         cpu = SESSIONS_CPU,
         cpu_splits = true,

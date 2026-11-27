@@ -23,6 +23,12 @@ LUA_C :: #library("lua_c")
 c_main #foreign(LUA_C) #link_name("main") : fn(argc : i32, argv : ptr[mut cstring?]) -> i32 : ---
 
 /**
+ * The memory Lua asks to run on (decisions/0202, 21f): 16 MiB, for scripts whose tables and strings outgrow the 4 MiB a
+ * program that asks for none is given.
+ */
+PROGRAM_MEMORY : u64 : 16 * 1024 * 1024
+
+/**
  * Run Lua, as its own lua does.
  *
  * @param arguments What C's lua is given after its name: its options (-e code, -l module, -i, -v, -E, -W, -), then a

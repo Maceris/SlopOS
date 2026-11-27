@@ -687,6 +687,12 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                 case Find(name) => response^ = find_program(sessions, os.items(into, name))
                 case EntryOf(name) => response^ = entry_of(sessions, os.items(into, name))
                 case ManifestOf(name) => response^ = manifest_of(sessions, os.items(into, name))
+                // A script's shell's programs log as its session's shell's do
+                case Events(name) => response^ = events_for(sessions, sessions.finders[i].session, os.items(into, name))
+                case RetireEvents(ring) => {
+                    retire_ring(sessions, ring)
+                    response^ = .Done
+                }
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))

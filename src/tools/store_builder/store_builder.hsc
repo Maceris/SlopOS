@@ -8,7 +8,8 @@
  *
  * A bundle's manifest is the program's <name>.manifest beside it, which the build writes (the schema of its entry's
  * type, decisions/0044), and its documentation <name>.docs (decisions/0174), each put as an object of its own; all
- * zeros if there's none. With --debug-files, its debug file <name>.debug too (decisions/0185), which is several times
+ * zeros if there's none. The memory it asks to run on is its <name>.memory, the decimal number the build writes
+ * (decisions/0202), kept in the bundle itself; 0 without one. With --debug-files, its debug file <name>.debug too (decisions/0185), which is several times
  * the program's size, so a test system that doesn't debug leaves it out.
  *
  * A file that isn't a program, as a font GUI programs are given (decisions/0193, 16f), is put the same way: an object
@@ -69,6 +70,11 @@ main :: fn() -> int {
             case Ok(manifest) => made.manifest = put(objects, bit_cast[u8[]](manifest)) or_return 4
             case Error(error) => {}
         }
+        memory_storage : u8[1024]
+        match os.read_entire_file(joined(without_extension(path), ".memory", &memory_storage)) {
+            case Ok(memory) => made.memory = decimal(memory)
+            case Error(error) => {}
+        }
         documentation_storage : u8[1024]
         documentation_path :: joined(without_extension(path), ".docs", &documentation_storage)
         match os.read_entire_file(documentation_path) {
@@ -119,6 +125,27 @@ put :: fn(objects : string, bytes : u8[]) -> bundle.Hash? {
         return null
     }
     return hash
+}
+
+/**
+ * Read a number written in decimal, as the build writes a program's <name>.memory.
+ *
+ * @param text The text: digits, then anything after them, which is passed over.
+ * @return The number its leading digits make; 0 for none, or one past a u64.
+ */
+decimal :: fn(text : string) -> u64 {
+    value := cast[u64](0)
+    for character in text {
+        if character < '0' || character > '9' {
+            break
+        }
+        digit :: cast[u64](cast[u32](character) - cast[u32]('0'))
+        if value > (~cast[u64](0) - digit) / 10 {
+            return 0
+        }
+        value = value * 10 + digit
+    }
+    return value
 }
 
 /**

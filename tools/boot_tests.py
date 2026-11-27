@@ -1458,27 +1458,31 @@ TESTS = [
         # Done once it's all shown: P on the secure attention key's screen shuts it down (decisions/0180)
         "--shut-down-when-done", "--expect-line=[user] root task: shutting down, as the console asked"])),
     # C from the shell on the libc (decisions/0201, 20l): test_libc's C beneath the shell's directory, its file test
-    # too, its stdout the terminal; then wc, a C tool, given its arguments as a list, counting the file it left there
-    # on the terminal, and with a file that isn't there, which it says on stderr and ends with 1; then the tests' C
-    # calling exit(-1), which ends it with 255, a POSIX exit status's 8 bits
+    # too, its stdout the terminal, its records the serial log's under its name (decisions/0202, 21f); then wc, a C
+    # tool, given its arguments as bare words and as a list, counting the file it left there on the terminal, and with
+    # a file that isn't there, which it says on stderr and ends with 1; then the tests' C calling exit(-1), --exit=-1 a
+    # bare word too, which ends it with 255, a POSIX exit status's 8 bits
     ("runs C from the shell on the libc: its tests beneath the shell's directory, and wc on the terminal", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=240")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
         "--console-input=\\wAdmin\\radmin\\rcorrect horse battery staple\\rcorrect horse battery staple\\r\\w\\r\\wadmin\\rcorrect horse battery staple\\r"
         "\\w\\>test_libc_files\\r\\>"
-        "wc [\"libc_words.txt\"]\\r\\>"
-        "wc [\"-l\", \"libc_words.txt\", \"nothing.txt\"]\\r\\>"
-        "test_libc_files [\"--exit=-1\"]\\r",
+        "wc libc_words.txt\\r\\>"
+        "wc -l libc_words.txt nothing.txt\\r\\>"
+        "wc [\"-l\", \"libc_words.txt\"]\\r\\>"
+        "test_libc_files --exit=-1\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         f"--expect-console-line={summary(11, 11)}",
         "--expect-console-line=      3       6      28 libc_words.txt",
         "--expect-console-line=      3 libc_words.txt", "--expect-console-line=wc: nothing.txt: No such file or directory",
         "--expect-console-line=      3 total", "--expect-console-line=error: wc ended with 1",
+        "--expect-line=[user] test_libc_files: the C ended with 0, given 0 arguments",
         "--expect-console-line=error: test_libc_files ended with 255"])),
     # C ports from the shell (decisions/0202, 21g): test_c_ports' files beneath the shell's directory; Lua's checks,
     # given arguments, an error nothing catches (its message and 1), and -e; then minigzip compressing a file, its .gz
-    # the same bytes on every architecture, and giving it back, the bytes it was
+    # the same bytes on every architecture, and giving it back, the bytes it was; then Lua holding 6 MiB, more than a
+    # program that asks for no memory is given, as it asks for 16 MiB (21f), given its script as a bare word
     ("runs Lua and minigzip from the shell, C ports on the libc", 7,
      with_before_qemu([argument.replace("test_services", "test_services test_settle=90").replace("--timeout=120", "--timeout=240")
                        for argument in BOOT_DISK_BASE], ["--shut-down-when-done",
@@ -1490,14 +1494,16 @@ TESTS = [
         "minigzip [\"gzip_input.txt\"]\\r\\>"
         "lua [\"compare.lua\", \"gz\"]\\r\\>"
         "minigzip [\"-d\", \"gzip_input.txt.gz\"]\\r\\>"
-        "lua [\"compare.lua\", \"back\"]\\r",
+        "lua [\"compare.lua\", \"back\"]\\r\\>"
+        "lua big.lua\\r",
         "--console-input-after=  First-boot setup", "--console-input-after=  Press Enter once you have.",
         "--console-input-after=  Log in", "--console-input-after=SlopOS shell",
         "--expect-console-line=lua checks: 39 of 39 passed",
         "--expect-console-line=lua: fails.lua:3: on purpose", "--expect-console-line=error: lua ended with 1",
         "--expect-console-line=42",
         "--expect-console-line=gz: 1865 bytes, hash dd37d4ba",
-        "--expect-console-line=gunzipped: true, 4373 bytes"])),
+        "--expect-console-line=gunzipped: true, 4373 bytes",
+        "--expect-console-line=big: 6270000 bytes, 3300 pieces"])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then

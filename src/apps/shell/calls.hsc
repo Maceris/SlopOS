@@ -11,6 +11,8 @@ import sound from "../../protocols/sound"
 import process_manager from "std:os/slop_os/process_manager"
 import terminal as protocol from "std:os/slop_os/terminal"
 import schema from "std:schema"
+import strings from "std:strings"
+import text_buffer from "std:text_buffer"
 import programs from "../../protocols/programs"
 import shell_language as language from "../../shell_language"
 
@@ -23,8 +25,17 @@ import shell_language as language from "../../shell_language"
  * before it in a pipeline (decisions/0172).
  */
 
-/** The memory a program the shell runs is given to run on, in bytes, split off the shell's budget: 4 MiB. */
+/**
+ * The memory a program the shell runs is given to run on, in bytes, split off the shell's budget, when it declares
+ * none: 4 MiB.
+ */
 PROGRAM_BUDGET : u64 : 4 * 1024 * 1024
+/**
+ * The most memory the shell gives a program that declares what it asks for (its PROGRAM_MEMORY, decisions/0202, 21f),
+ * in bytes: 24 MiB, so it and the shell's own fit in the shell's budget, as a pipeline's smaller programs do beside it.
+ * A program that asks for more isn't run.
+ */
+MAX_PROGRAM_BUDGET : u64 : 24 * 1024 * 1024
 
 /** One of a program's parameters, as its manifest has it, and what it's given. */
 Parameter :: struct {
@@ -38,6 +49,8 @@ Parameter :: struct {
     optional : bool,
     /** Whether it's a bool, whose --name alone is true. */
     is_bool : bool,
+    /** Whether it's a list of text (string[], or a dynamic array of strings), which bare words can fill (words_of). */
+    is_text_list : bool,
     /** What it's given. */
     giving : Giving,
     /** An input's or output's records' type's place; schema.NOWHERE for other parameters. */
@@ -85,6 +98,7 @@ prepare_call :: fn(
     call := runtime.new(Call)
     call.tree = tree
     call.executable = found.executable
+    call.budget = found.memory
     ready := false
     defer {
         if !ready {
@@ -103,6 +117,19 @@ prepare_call :: fn(
         )
     if entry.kind != .Function {
         return .Error(EvalError.{message = message("%'s manifest isn't an entry's", tree.text), at = tree.at})
+    }
+    if call.budget > MAX_PROGRAM_BUDGET {
+        return .Error(
+            EvalError.{
+                message = message(
+                    "% asks for % MiB to run on, more than the shell gives one (% MiB)",
+                    tree.text,
+                    (call.budget + (1 << 20) - 1) >> 20,
+                    MAX_PROGRAM_BUDGET >> 20
+                ),
+                at = tree.at,
+            }
+        )
     }
     for input in entry.inputs {
         runtime.array_add(&call.parameters, parameter_of(&call.manifest, input))
@@ -190,10 +217,21 @@ Call :: struct {
     result : slop_os.Memory,
     /** Whether result was made, for an entry that gives back more than an exit code (result_grant). */
     has_result : bool,
+    /**
+     * Its log ring's owning handle, which the session manager opened for it (open_events), given back by end_call with
+     * RetireEvents on ring_end; with has_ring.
+     */
+    ring : slop_os.Memory,
+    /** Whether ring was opened. */
+    has_ring : bool,
+    /** The programs connection the ring came from, and the port bound to it, which end_call gives it back on. */
+    ring_end : slop_os.Channel,
+    ring_port : slop_os.Port,
     /** What its program's entry gave back as an Ok, once it's ended (read_result); Null for nothing. */
     returned : Value,
     /**
-     * The memory it's given to run on, in bytes; 0 for PROGRAM_BUDGET, a program's, and SCRIPT_BUDGET for a script's.
+     * The memory it's given to run on, in bytes: what its bundle asks for, at most MAX_PROGRAM_BUDGET; 0 for
+     * PROGRAM_BUDGET, a program's that asks for none; SCRIPT_BUDGET for a script's.
      */
     budget : u64,
     /**
@@ -258,6 +296,10 @@ end_call :: fn(call : ptr[mut Call]) {
     }
     if call.has_result {
         _ = slop_os.handle_close(cast[slop_os.Handle](call.result))
+    }
+    if call.has_ring {
+        retire_events(call.ring_end, call.ring_port, call.ring)
+        call.has_ring = false
     }
     for &each in call.written {
         runtime.array_free(each)
@@ -344,6 +386,8 @@ start_call :: fn(shell : ptr[mut Shell], call : ptr[mut Call], key : u64) -> Eva
     options.clock = copy_of_grant("clock")
     options.locale = copy_of_grant("locale")
     options.result = result_grant(call)
+    // Its records to the log service, under its name (decisions/0202, 21f)
+    options.events = open_events(shell, call, tree.text)
     // On a CPU budget of its own, a child of its session's (decisions/0187)
     own_cpu :: program_cpu_budget(shell)
     options.cpu_budget = bindable_copy(own_cpu)
@@ -505,6 +549,79 @@ find_program :: fn(shell : ptr[mut Shell], name : string) -> programs.Program? {
 }
 
 /**
+ * Ask the session manager for a log ring for a call's program (Events), so its records reach the log service under its
+ * name, as the session's own programs' do.
+ *
+ * @param shell The shell, whose programs connection is asked, waiting for the answer.
+ * @param call The call, which keeps the ring's owning handle, and the connection to give it back on, for end_call.
+ * @param name The program's name, the source's.
+ * @return What to launch it with: a duplicate of the ring that can be read, written and moved, and the doorbell's
+ *     end; null without a programs connection, if the session manager didn't open one, or the ring couldn't be
+ *     duplicated, when the program runs without a log, as before.
+ */
+open_events :: fn(shell : ptr[mut Shell], call : ptr[mut Call], name : string) -> os.LaunchEvents? {
+    connection :: shell.programs or_return null
+    if name.count == 0 || name.count > programs.MAX_NAME {
+        return null
+    }
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Events(os.append(&out, string_bytes(name)))
+    if programs.send_request(connection.end, shell.programs_port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match programs.receive_response(connection.end, shell.programs_port, &into, true) {
+            case Received => break
+            case _ => return null
+        }
+    }
+    source :: match os.message_of[programs.Response](&into)^ {
+        case EventsOpened(opened) => opened
+        case _ => return null
+    }
+    call.ring = source.ring
+    call.has_ring = true
+    call.ring_end = connection.end
+    call.ring_port = shell.programs_port
+    rights :: cast[slop_os.Rights](cast[u32](slop_os.RIGHT_MEMORY_READ)
+        | cast[u32](slop_os.RIGHT_MEMORY_WRITE)
+        | cast[u32](slop_os.RIGHT_TRANSFER))
+    match slop_os.handle_duplicate(cast[slop_os.Handle](source.ring), rights) {
+        case Ok(given) => return os.LaunchEvents.{ring = cast[slop_os.Memory](given), doorbell = source.doorbell}
+        case Error(error) => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](source.doorbell))
+            return null
+        }
+    }
+}
+
+/**
+ * Give a program's log ring back to the session manager once it's ended (RetireEvents), and wait for the answer.
+ *
+ * @param end The programs connection it came from.
+ * @param port The port bound to end, waited on.
+ * @param ring Its owning handle, which moves; closed here if it couldn't be sent.
+ */
+retire_events :: fn(end : slop_os.Channel, port : slop_os.Port, ring : slop_os.Memory) {
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .RetireEvents(ring)
+    if programs.send_request(end, port, &out) is_some {
+        _ = slop_os.handle_close(cast[slop_os.Handle](ring))
+        return void
+    }
+    into := os.Incoming.{}
+    loop {
+        match programs.receive_response(end, port, &into, true) {
+            case Received => return void
+            case _ => return void
+        }
+    }
+}
+
+/**
  * Read a program's manifest from its memory, mapped while it's parsed.
  *
  * @param found The program, whose manifest memory stays the caller's to close.
@@ -564,18 +681,46 @@ parameter_of :: fn(manifest : ptr[schema.Schema], input : schema.Input) -> Param
         }
     }
     match schema.type_in(manifest, schema.unaliased_place(manifest, made.held)) {
-        case Some(held) => made.is_bool = held.kind == .Boolean
+        case Some(held) => {
+            made.is_bool = held.kind == .Boolean
+            made.is_text_list = is_text_list(manifest, held)
+        }
         case None => {}
     }
     return made
 }
 
 /**
+ * Tell whether a type is a list of text: an array of one dimension, a view or dynamic, whose elements are strings.
+ *
+ * @param manifest The manifest the type is in, which its elements' type is looked up in; only read.
+ * @param held The type, unaliased.
+ * @return True for string[] and string[..]; false for any other, a static array of strings among them.
+ */
+is_text_list :: fn(manifest : ptr[schema.Schema], held : ptr[schema.Type]) -> bool {
+    if held.kind != .Array || held.dimensions.count != 1 || held.dimensions[0].kind == .Static {
+        return false
+    }
+    elements :: schema.type_in(manifest, schema.unaliased_place(manifest, held.base)) or_return false
+    return elements.kind == .String
+}
+
+/**
  * Match each argument to a parameter: --name to the parameter of that name, the argument after it its value but for a
  * bool's, which is true alone; the rest in order to the parameters left that take arguments (next_positional).
  *
- * It fails for a --name the program hasn't, one given twice, one for the terminal or a pipeline's input or output,
- * one without a value after it, or more arguments than parameters to take them.
+ * The words after a program's name can fill a list of text (decisions/0202, 21f): when the argument a positional
+ * parameter would take goes to the last such parameter, and it's a list of text (is_text_list), it and every argument
+ * after it are that list's items, each one item, in order: a bare word as written (wc -l file gives ["-l", "file"]),
+ * anything else as it evaluates, which has to be text. A --name after the first item still names a parameter of the
+ * program's if it has one; one that names none is an item, as written with its -- and what follows its name with no
+ * space between (--exit=-1), the list's first if it's where the list would begin. One argument alone that isn't a
+ * bare word, a [list] or a $name, is the parameter's value as before, so wc ["-l", "file"] still works. The arguments
+ * end where the call does, at | ; ) } ? & or `or`, which the shell's own syntax keeps; a word with one of those in it is
+ * given as "text".
+ *
+ * It fails for a --name the program hasn't, but in a list of text, one given twice, one for the terminal or a
+ * pipeline's input or output, one without a value after it, or more arguments than parameters to take them.
  *
  * @param tree The Call node, whose children are the arguments.
  * @param parameters The program's parameters, whose argument and flag are set.
@@ -583,9 +728,47 @@ parameter_of :: fn(manifest : ptr[schema.Schema], input : schema.Input) -> Param
  */
 match_arguments :: fn(tree : ptr[Node], parameters : ptr[mut Parameter[..]]) -> Result[Value, EvalError] {
     at : usize = 0
+    // The list of text the words fill, once its first is met, and the List node of them its argument
+    filling : ptr[mut Parameter]? = null
+    items : ptr[mut Node]? = null
     loop {
         argument :: child(tree, at) or_break
         at += 1
+        // A --name the program hasn't is an item of a list of text, as written, once it's begun or as its first
+        if argument.kind == .Named && (named_parameter(parameters, argument.text) is_none) {
+            if filling is_none {
+                match next_positional(parameters) {
+                    case Some(next) => {
+                        if next.is_text_list && last_positional(parameters, next) {
+                            list :: language.node(.List, argument.at)
+                            filling = next
+                            items = list
+                            next.argument = list
+                        }
+                    }
+                    case None => {}
+                }
+            }
+            match items {
+                case Some(list) => {
+                    word :: language.node(.Word, argument.at)
+                    word.text = message("--%", argument.text)
+                    // What follows its name with nothing between, as =-1 in --exit=-1, is the same word
+                    match child(tree, at) {
+                        case Some(next) => {
+                            if next.kind == .Word && next.at == argument.at + 2 + argument.text.count {
+                                word.text = joined_word(argument.text, next.text) or_else word.text
+                                at += 1
+                            }
+                        }
+                        case None => {}
+                    }
+                    language.add(list, word)
+                    continue
+                }
+                case None => {}
+            }
+        }
         if argument.kind == .Named {
             parameter :: named_parameter(parameters, argument.text)
                 or_return error_at(argument.at, message("% takes no --%", tree.text, argument.text))
@@ -620,11 +803,84 @@ match_arguments :: fn(tree : ptr[Node], parameters : ptr[mut Parameter[..]]) -> 
             at += 1
             continue
         }
+        match items {
+            case Some(list) => {
+                language.add(list, cast[ptr[mut Node]](argument))
+                continue
+            }
+            case None => {}
+        }
         parameter :: next_positional(parameters)
             or_return error_at(argument.at, message("% takes no more arguments", tree.text))
+        if parameter.is_text_list && last_positional(parameters, parameter) {
+            list :: language.node(.List, argument.at)
+            language.add(list, cast[ptr[mut Node]](argument))
+            filling = parameter
+            items = list
+            parameter.argument = list
+            continue
+        }
         parameter.argument = argument
     }
+    // One argument alone that isn't a bare word is the list's value itself, as a [list] or a $name is
+    match filling {
+        case Some(parameter) => {
+            match items {
+                case Some(list) => {
+                    if list.children.count == 1 && list.children[0].kind != .Word {
+                        parameter.argument = list.children[0]
+                    }
+                }
+                case None => {}
+            }
+        }
+        case None => {}
+    }
     return .Ok(.Null)
+}
+
+/** The longest word joined_word makes, in bytes, its -- among them. */
+MAX_JOINED_WORD :: 512
+
+/**
+ * Join a --name and the word right after it, as --exit=-1 is typed, into one item.
+ *
+ * @param name The name, without its --.
+ * @param after The word after it, which the parser took as one of its own.
+ * @return "--", the name, then the word, on the heap, never freed; null past MAX_JOINED_WORD bytes or without the memory.
+ */
+joined_word :: fn(name : string, after : string) -> string? {
+    if 2 + name.count + after.count > MAX_JOINED_WORD {
+        return null
+    }
+    storage : u8[MAX_JOINED_WORD]
+    text := text_buffer.make(storage)
+    text_buffer.append(&text, "--")
+    text_buffer.append(&text, name)
+    text_buffer.append(&text, after)
+    return strings.clone(text_buffer.as_string(&text)) or_return null
+}
+
+/**
+ * Tell whether a parameter is the last that takes arguments by position: none after it does (next_positional's
+ * kinds), given an argument yet or not.
+ *
+ * @param parameters The program's parameters, in its entry's order.
+ * @param parameter One of them.
+ * @return True if no parameter after it takes a value, a directory or a file.
+ */
+last_positional :: fn(parameters : ptr[mut Parameter[..]], parameter : ptr[mut Parameter]) -> bool {
+    after := false
+    for &each in parameters^ {
+        if after
+            && (each.giving == .Value || each.giving == .Dir || each.giving == .File || each.giving == .ReadOnlyFile) {
+            return false
+        }
+        if each == parameter {
+            after = true
+        }
+    }
+    return true
 }
 
 /**

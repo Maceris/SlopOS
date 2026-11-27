@@ -36,6 +36,12 @@ Bundle :: struct {
      * its locals' types as schemas (Hemera's docs/compilation.md, Debug Info); all zeros for a program without one.
      */
     debug : Hash,
+    /**
+     * The memory it asks to run on, in bytes, as its root package's PROGRAM_MEMORY declares it (decisions/0202, 21f),
+     * which a shell grants up to a limit of its own; 0 for a program that declares none, which is given the shell's
+     * default.
+     */
+    memory : u64,
     /** The typed libraries it's linked against. */
     libraries : Hash[],
     /** Its resources, other objects it's given. */
@@ -279,6 +285,20 @@ bundle_refers :: fn(record : u8[], each : ptr[mut Hash[..]]) -> Result[bool, run
         }
     }
     return .Ok(true)
+}
+
+/**
+ * Read the memory a bundle asks for (Bundle's memory).
+ *
+ * @param record The bundle's record, as the store keeps it; only read.
+ * @return The bytes it asks for, 0 for none declared; null if the bytes aren't a bundle's record.
+ */
+bundle_memory :: fn(record : u8[]) -> u64? {
+    value :: value_of(record, BUNDLE_SCHEMA) or_return null
+    if value.count < size_of(Bundle) {
+        return null
+    }
+    return word(value, offset_of(Bundle, memory))
 }
 
 /**

@@ -49,6 +49,17 @@ copy ~/notes/plan.md usb:/backup/ or { warn "no stick" }   # handling an error
   a `Dir` as a directory beneath the shell's handle, a `FileSet` from a glob as a directory plus a filter. A
   `File[]` given a glob is expanded to handles, up to a limit, with a suggestion to declare `FileSet` beyond it.
   `Channel[P]` parameters come from what the session can reach, or from the powerbox.
+- **Words fill a list of text** (`decisions/0202`, 21f): when the arguments reach a program's last positional
+  parameter and it's a `string[]` (or `string[]?`), that argument and every one after it are the list's items, in
+  order, as a C program's `argv` is: `wc -l file` is `wc ["-l", "file"]`. A bare word is an item as written; anything
+  else as it evaluates, which has to be text. A `--name` the program has still names its parameter; one it hasn't is an
+  item, joined to what follows its name with no space between (`--exit=-1`). One argument alone that isn't a bare word
+  (a `[list]`, a `$name`) is the list itself, as before. The call still ends at `|`, `;`, `)`, `}`, `?`, `&` and `or`,
+  and a word with `(` or `"` in it is given as `"text"`.
+- **Memory**: a program runs on what its root package's `PROGRAM_MEMORY` asks for, which its bundle carries, up to the
+  shell's limit (`MAX_PROGRAM_BUDGET`, 24 MiB; asking for more isn't run), or 4 MiB when it asks for none.
+- **Logs**: each program it runs gets a log ring from the session manager (`programs`' `Events`), so its records reach
+  the log service under its name, as the session's own programs' do; the shell gives the ring back once it's ended.
 - **Before anything runs**, the whole command line is checked: unknown parameters, missing ones, values that don't
   parse, pipelines whose types don't meet. The error points at the word.
 
