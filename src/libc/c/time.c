@@ -124,6 +124,8 @@ size_t strftime(char *into, size_t size, const char *format, const struct tm *mo
             add_text(&out, at, 1);
             continue;
         }
+        /* Where the conversion starts, its %, so one C hasn't is written whole, an E or O modifier with it */
+        const char *directive = at;
         at++;
         /* C99's E and O modifiers change nothing in the C locale */
         if (*at == 'E' || *at == 'O') {
@@ -265,13 +267,13 @@ size_t strftime(char *into, size_t size, const char *format, const struct tm *mo
             text = "%";
             break;
         case '\0':
-            /* A % at the end: written as it is */
-            add_text(&out, "%", 1);
+            /* A % at the end, or a modifier: written as it is */
+            add_text(&out, directive, (size_t)(at - directive));
             at--;
             break;
         default:
-            /* Not one C has: written as it is */
-            add_text(&out, at - 1, 2);
+            /* Not one C has: written as it is, from its % */
+            add_text(&out, directive, (size_t)(at - directive) + 1);
             break;
         }
         if (text != NULL) {

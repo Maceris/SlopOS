@@ -1,9 +1,11 @@
 /*
  * format.c, SlopOS's libc (decisions/0201, 20l): the printf family's formatting and sscanf's reading, in C as they're
  * variadic. printf's conversions are C99's: d i u o x X c s p n % and the floats f F e E g G a A, with the flags - + space
- * # 0, a width and a precision (either may be *), and the lengths hh h l ll j z t (L is taken as none: long double is
- * double's here). A float is written from its exact decimal value, worked out with a big integer, then rounded once,
- * halfway to even, as glibc does; a precision past 1000 is taken as 1000.
+ * # 0, a width and a precision (either may be *), and the lengths hh h l ll j z t, and L for a float's long double
+ * (x86-64's 80-bit x87 one, AArch64's and RISC-V's 128-bit quad), which is read as one and written as the double
+ * nearest it, so its digits past a double's are lost and one past a double's range is written as inf or 0. A float
+ * is written from its exact decimal value, worked out with a big integer, then rounded once, halfway to even, as
+ * glibc does; a precision past 1000 is taken as 1000. A result past INT_MAX bytes gives -1 with errno EOVERFLOW.
  */
 #include <errno.h>
 #include <limits.h>
@@ -65,6 +67,11 @@ static void put(struct output *out, const char *text, size_t count) {
 
 /* Put a byte out count times. */
 static void put_many(struct output *out, char byte, int count) {
+    /* Only counted, as snprintf(NULL, 0, ...) and a full buffer are, a width of billions takes no time */
+    if (out->stream == NULL && (out->buffer == NULL || out->count + 1 >= out->size)) {
+        out->count += count > 0 ? (size_t)count : 0;
+        return;
+    }
     char run[32];
     memset(run, byte, sizeof run);
     while (count > 0) {
@@ -335,7 +342,10 @@ static size_t without_trailing_zeros(char *text, size_t length) {
     return kept + (length - end);
 }
 
-/* Write a double as %a does: hexadecimal, with precision hex digits, or as many as it needs with -1. */
+/*
+ * Write a double as %a does after its 0x, which is the prefix's, so the 0 flag's zeros come after it: hexadecimal,
+ * with precision hex digits, or as many as it needs with -1.
+ */
 static size_t hex_text(double x, int precision, int upper, char *text) {
     uint64_t bits;
     memcpy(&bits, &x, sizeof bits);
@@ -360,8 +370,6 @@ static size_t hex_text(double x, int precision, int upper, char *text) {
     }
     const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
     size_t at = 0;
-    text[at++] = '0';
-    text[at++] = upper ? 'X' : 'x';
     text[at++] = digits[lead];
     int shown = precision;
     if (shown < 0) {
@@ -397,7 +405,16 @@ static void put_float(struct output *out, double x, char conversion, int flags, 
     }
     size_t length;
     if (conversion == 'a' || conversion == 'A') {
+        /* The sign, then 0x or 0X */
+        char hex_prefix[4];
+        size_t sign_length = strlen(prefix);
+        memcpy(hex_prefix, prefix, sign_length);
+        hex_prefix[sign_length] = '0';
+        hex_prefix[sign_length + 1] = upper ? 'X' : 'x';
+        hex_prefix[sign_length + 2] = '\0';
         length = hex_text(magnitude, precision, upper, text);
+        put_padded(out, hex_prefix, 0, text, length, width, flags);
+        return;
     } else {
         struct decimal value;
         exact_decimal(magnitude, &value);
@@ -427,8 +444,127 @@ static void put_float(struct output *out, double x, char conversion, int flags, 
     put_padded(out, prefix, 0, text, length, width, flags);
 }
 
-/* The lengths an integer conversion can have. */
-enum length { PLAIN, CHAR_LENGTH, SHORT_LENGTH, LONG_LENGTH, LONG_LONG_LENGTH, MAX_LENGTH, SIZE_LENGTH, DIFFERENCE_LENGTH };
+/* The lengths a conversion can have: L is a float's long double, and taken as ll for an integer, as glibc does. */
+enum length {
+    PLAIN,
+    CHAR_LENGTH,
+    SHORT_LENGTH,
+    LONG_LENGTH,
+    LONG_LONG_LENGTH,
+    MAX_LENGTH,
+    SIZE_LENGTH,
+    DIFFERENCE_LENGTH,
+    LONG_DOUBLE_LENGTH
+};
+
+#if __LDBL_MANT_DIG__ == 113
+/*
+ * AArch64's and RISC-V's long double is IEEE 754's 128-bit quad, which their hardware has no arithmetic for, and
+ * converting it to and from double would call compiler-rt's __trunctfdf2 and __extenddftf2, which a freestanding
+ * program hasn't; so it's done here by its bits. A quad is a sign, 15 bits of exponent biased by 16383, and 112 of
+ * fraction, its high 64 bits in the second 8 bytes, as both are little-endian.
+ */
+
+/* Shift a significand right by dropped bits, rounding to nearest, halfway to even; sticky if bits below it were lost. */
+static uint64_t rounded_right(uint64_t significand, int dropped, int sticky) {
+    if (dropped <= 0) {
+        return significand;
+    }
+    if (dropped > 64) {
+        return 0;
+    }
+    uint64_t kept = dropped == 64 ? 0 : significand >> dropped;
+    uint64_t rest = dropped == 64 ? significand : significand & ((UINT64_C(1) << dropped) - 1);
+    uint64_t half = UINT64_C(1) << (dropped - 1);
+    if (rest > half || (rest == half && (sticky || (kept & 1)))) {
+        kept++;
+    }
+    return kept;
+}
+
+/* A long double, a quad, as the double nearest it: ±inf past the largest, ±0 or a subnormal below the least normal. */
+static double double_of_long(long double value) {
+    uint64_t halves[2];
+    memcpy(halves, &value, sizeof halves);
+    uint64_t low = halves[0];
+    uint64_t high = halves[1];
+    uint64_t sign = high & (UINT64_C(1) << 63);
+    int field = (int)((high >> 48) & 0x7fff);
+    uint64_t fraction_high = high & ((UINT64_C(1) << 48) - 1);
+    uint64_t bits;
+    if (field == 0x7fff) {
+        /* Infinity, or a NaN, kept quiet with its fraction's top bits */
+        bits = sign | (UINT64_C(0x7ff) << 52);
+        if ((fraction_high | low) != 0) {
+            bits |= (UINT64_C(1) << 51) | (fraction_high << 4) | (low >> 60);
+        }
+    } else if (field == 0) {
+        /* Zero, or a quad's subnormal, far below a double's least */
+        bits = sign;
+    } else {
+        /* 1.fraction × 2^exponent: the 1 and the fraction's first 63 bits as a significand, the rest as sticky */
+        int exponent = field - 16383;
+        uint64_t significand = (UINT64_C(1) << 63) | (fraction_high << 15) | (low >> 49);
+        int sticky = (low & ((UINT64_C(1) << 49) - 1)) != 0;
+        if (exponent > 1023) {
+            bits = sign | (UINT64_C(0x7ff) << 52);
+        } else if (exponent >= -1022) {
+            uint64_t kept = rounded_right(significand, 11, sticky);
+            /* Rounding up to 2^53 carries into the exponent, as adding to the bits does */
+            bits = sign | ((uint64_t)(exponent + 1022) << 52);
+            bits += kept;
+            if (((bits >> 52) & 0x7ff) == 0x7ff) {
+                bits = sign | (UINT64_C(0x7ff) << 52);
+            }
+        } else {
+            /* A double's subnormal: fewer bits kept, each step below 2^-1022 one more dropped */
+            bits = sign | rounded_right(significand, 11 + (-1022 - exponent), sticky);
+        }
+    }
+    double made;
+    memcpy(&made, &bits, sizeof made);
+    return made;
+}
+
+/* A double as a long double, a quad, exactly, as every double is one. */
+static long double long_of_double(double value) {
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    uint64_t sign = bits & (UINT64_C(1) << 63);
+    int field = (int)((bits >> 52) & 0x7ff);
+    uint64_t fraction = bits & ((UINT64_C(1) << 52) - 1);
+    uint64_t halves[2] = {0, sign};
+    if (field == 0x7ff) {
+        halves[1] |= (UINT64_C(0x7fff) << 48) | (fraction >> 4);
+        halves[0] = fraction << 60;
+    } else if (field != 0 || fraction != 0) {
+        int exponent = field - 1023;
+        if (field == 0) {
+            /* A subnormal, 0.fraction × 2^-1022, made normal for the quad's wider exponent */
+            exponent = -1022;
+            while ((fraction & (UINT64_C(1) << 52)) == 0) {
+                fraction <<= 1;
+                exponent--;
+            }
+            fraction &= (UINT64_C(1) << 52) - 1;
+        }
+        halves[1] |= ((uint64_t)(exponent + 16383) << 48) | (fraction >> 4);
+        halves[0] = fraction << 60;
+    }
+    long double made;
+    memcpy(&made, halves, sizeof made);
+    return made;
+}
+#else
+/* x86-64's long double is the x87's 80-bit one, which its hardware converts to and from double. */
+static double double_of_long(long double value) {
+    return (double)value;
+}
+
+static long double long_of_double(double value) {
+    return (long double)value;
+}
+#endif
 
 /* Format into out, as vfprintf does: how many bytes it made. */
 static int format(struct output *out, const char *pattern, va_list arguments) {
@@ -510,6 +646,7 @@ static int format(struct output *out, const char *pattern, va_list arguments) {
             at++;
             break;
         case 'L':
+            length = LONG_DOUBLE_LENGTH;
             at++;
             break;
         default:
@@ -531,6 +668,7 @@ static int format(struct output *out, const char *pattern, va_list arguments) {
                 value = va_arg(arguments, long);
                 break;
             case LONG_LONG_LENGTH:
+            case LONG_DOUBLE_LENGTH:
                 value = va_arg(arguments, long long);
                 break;
             case MAX_LENGTH:
@@ -564,6 +702,7 @@ static int format(struct output *out, const char *pattern, va_list arguments) {
                 value = va_arg(arguments, unsigned long);
                 break;
             case LONG_LONG_LENGTH:
+            case LONG_DOUBLE_LENGTH:
                 value = va_arg(arguments, unsigned long long);
                 break;
             case MAX_LENGTH:
@@ -611,7 +750,11 @@ static int format(struct output *out, const char *pattern, va_list arguments) {
         case 'G':
         case 'a':
         case 'A':
-            put_float(out, va_arg(arguments, double), conversion, flags, width, precision);
+            if (length == LONG_DOUBLE_LENGTH) {
+                put_float(out, double_of_long(va_arg(arguments, long double)), conversion, flags, width, precision);
+            } else {
+                put_float(out, va_arg(arguments, double), conversion, flags, width, precision);
+            }
             break;
         case 'n': {
             void *place = va_arg(arguments, void *);
@@ -624,6 +767,7 @@ static int format(struct output *out, const char *pattern, va_list arguments) {
                 break;
             case LONG_LENGTH:
             case LONG_LONG_LENGTH:
+            case LONG_DOUBLE_LENGTH:
             case MAX_LENGTH:
             case SIZE_LENGTH:
             case DIFFERENCE_LENGTH:
@@ -653,7 +797,11 @@ static int format(struct output *out, const char *pattern, va_list arguments) {
     if (out->failed) {
         return -1;
     }
-    return out->count > INT_MAX ? INT_MAX : (int)out->count;
+    if (out->count > INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return (int)out->count;
 }
 
 int vfprintf(FILE *stream, const char *pattern, va_list arguments) {
@@ -726,6 +874,7 @@ static void store_integer(void *place, enum length length, uintmax_t value) {
         break;
     case LONG_LENGTH:
     case LONG_LONG_LENGTH:
+    case LONG_DOUBLE_LENGTH:
     case MAX_LENGTH:
     case SIZE_LENGTH:
     case DIFFERENCE_LENGTH:
@@ -739,8 +888,10 @@ static void store_integer(void *place, enum length length, uintmax_t value) {
 
 /*
  * Read values from text as C's sscanf: d i u o x X p, the floats, s c [ n and %, with * to skip and a width, and the
- * lengths hh h l ll j z t (and L, for double, as printf takes it). How many were stored, or EOF if the text ended
- * before the first.
+ * lengths hh h l ll j z t, and L for a float's long double (ll for an integer). A number is read by strtoll, strtoull
+ * or strtod from the text itself, however long, or without a width from a copy of what the width allows, so a long
+ * field's every digit is read and counts. How many were stored, or EOF if the text ended before the first; a width
+ * past what malloc gives stops it there.
  */
 int vsscanf(const char *text, const char *pattern, va_list arguments) {
     const char *in = text;
@@ -785,6 +936,7 @@ int vsscanf(const char *text, const char *pattern, va_list arguments) {
             length = *at == 'j' ? MAX_LENGTH : *at == 'z' ? SIZE_LENGTH : DIFFERENCE_LENGTH;
             at++;
         } else if (*at == 'L') {
+            length = LONG_DOUBLE_LENGTH;
             at++;
         }
         char conversion = *at;
@@ -871,24 +1023,37 @@ int vsscanf(const char *text, const char *pattern, va_list arguments) {
             stored += !skip;
             continue;
         }
-        /* A number: as much of it as the width allows, read by strtoll, strtoull or strtod */
-        char number[64];
-        int most = width == 0 || width > (int)sizeof number - 1 ? (int)sizeof number - 1 : width;
-        int count = 0;
-        while (count < most && in[count] != '\0') {
-            number[count] = in[count];
-            count++;
+        /* A number: the text itself without a width; with one, a copy of what it allows, on the heap past 63 bytes */
+        char small[64];
+        char *copy = NULL;
+        const char *number = in;
+        if (width > 0) {
+            int count = 0;
+            while (count < width && in[count] != '\0') {
+                count++;
+            }
+            copy = count < (int)sizeof small ? small : malloc((size_t)count + 1);
+            if (copy == NULL) {
+                return stored;
+            }
+            memcpy(copy, in, (size_t)count);
+            copy[count] = '\0';
+            number = copy;
         }
-        number[count] = '\0';
-        char *end = number;
+        char *end = (char *)number;
         if (conversion == 'f' || conversion == 'e' || conversion == 'g' || conversion == 'a' || conversion == 'E' ||
             conversion == 'G' || conversion == 'F' || conversion == 'A') {
             double value = strtod(number, &end);
             if (end == number) {
+                if (copy != small) {
+                    free(copy);
+                }
                 return stored;
             }
             if (!skip) {
-                if (length == LONG_LENGTH || length == LONG_LONG_LENGTH) {
+                if (length == LONG_DOUBLE_LENGTH) {
+                    *va_arg(arguments, long double *) = long_of_double(value);
+                } else if (length == LONG_LENGTH || length == LONG_LONG_LENGTH) {
                     *va_arg(arguments, double *) = value;
                 } else {
                     *va_arg(arguments, float *) = (float)value;
@@ -901,11 +1066,17 @@ int vsscanf(const char *text, const char *pattern, va_list arguments) {
                        : conversion == 'x' || conversion == 'X' || conversion == 'p' ? 16
                                                                                      : -1;
             if (base < 0) {
+                if (copy != small) {
+                    free(copy);
+                }
                 return stored;
             }
             uintmax_t value = conversion == 'd' || conversion == 'i' ? (uintmax_t)strtoll(number, &end, base)
                                                                       : strtoull(number, &end, base);
             if (end == number) {
+                if (copy != small) {
+                    free(copy);
+                }
                 return stored;
             }
             if (!skip) {
@@ -917,6 +1088,9 @@ int vsscanf(const char *text, const char *pattern, va_list arguments) {
             }
         }
         in += end - number;
+        if (copy != small) {
+            free(copy);
+        }
         stored += !skip;
     }
     return stored;

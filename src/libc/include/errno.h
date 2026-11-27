@@ -42,6 +42,7 @@ int *__errno_location(void);
 #define ENAMETOOLONG 36 /* A path or name too long */
 #define ENOSYS 38       /* Not on SlopOS */
 #define ENOTEMPTY 39    /* A directory with something in it */
+#define EOVERFLOW 75    /* A value too large for its type */
 #define EILSEQ 84       /* Not a valid character */
 #define ENOTSUP 95      /* Not supported */
 #define EOPNOTSUPP ENOTSUP

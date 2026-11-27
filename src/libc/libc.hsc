@@ -182,7 +182,8 @@ E_NOTEMPTY : i32 : 39
  *
  * @param start What the program was given; its strings are copied, and its channels kept for as long as run runs.
  * @param entry C's main, declared #foreign from the program's own C library.
- * @return main's return, the program's exit code; 2 if there wasn't the memory to start it.
+ * @return main's return, the program's exit code, reduced to its low 8 bits as POSIX does (0 to 255: -1 is 255); 2 if
+ *     there wasn't the memory to start it.
  */
 run :: fn(start : Start, entry : CMain) -> int {
     state :: runtime.new(State)
@@ -245,7 +246,7 @@ run :: fn(start : Start, entry : CMain) -> int {
         flush_lines(state)
     }
     close_all(state)
-    return code
+    return code & 0xff
 }
 
 /**
@@ -349,14 +350,15 @@ close_all :: fn(state : ptr[mut State]) {
  * End the program at once with a code, after what stdout and stderr have of a line is written: C's exit calls it, after
  * running what atexit registered and flushing every stream; so does _exit, without those.
  *
- * @param code The exit code.
+ * @param code The exit code, any int: the program's is its low 8 bits, as POSIX's exit status, so -1 is 255 and 256
+ *     is 0.
  */
 slopos_libc_exit #export #calling_convention(.c) :: fn(code : i32) #never_returns {
     match state_of() {
         case Some(state) => flush_lines(state)
         case None => {}
     }
-    os.exit(cast[u32](code))
+    os.exit(cast[u32](code & 0xff))
 }
 
 /**

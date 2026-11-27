@@ -18,20 +18,23 @@ TEST_C :: #library("test_libc_c")
 /**
  * test_libc's C main (src/tests/test_libc/c/test_libc.c).
  *
- * @param argc How many arguments argv has: 1, the program's name.
+ * @param argc How many arguments argv has: the program's name, and --exit=-1 if it was given.
  * @param argv The arguments, then NULL.
- * @return How many of its tests failed.
+ * @return How many of its tests failed; with --exit=-1 it doesn't return, but calls exit(-1).
  */
 c_main #foreign(TEST_C) #link_name("main") : fn(argc : i32, argv : ptr[mut cstring?]) -> i32 : ---
 
 /**
- * Run test_libc's C tests beneath the shell's directory, reporting on the shell's terminal.
+ * Run test_libc's C tests beneath the shell's directory, reporting on the shell's terminal; or, given --exit=-1, only
+ * C's exit(-1), which ends it with 255, the 8 bits of a POSIX exit status.
  *
+ * @param arguments What C's main is given after its name: nothing to run the tests, or --exit=-1.
  * @param here The shell's directory, given without asking, which the file test works beneath, leaving libc_words.txt.
  * @param console The shell's terminal, given without asking, where each check that fails and the tests' count are
  *     written.
- * @return How many tests failed: 0 when every one passed, which the shell shows as nothing.
+ * @return How many tests failed: 0 when every one passed, which the shell shows as nothing; 255 for --exit=-1.
  */
-main :: fn(here : os.Channel[dir.Dir], console : os.Channel[terminal.Terminal]) -> int {
-    return libc.run(libc.Start.{name = "test_libc_files", here = here, console = console}, c_main)
+main :: fn(arguments : string[]?, here : os.Channel[dir.Dir], console : os.Channel[terminal.Terminal]) -> int {
+    given :: arguments or_else string.[]
+    return libc.run(libc.Start.{name = "test_libc_files", arguments = given, here = here, console = console}, c_main)
 }

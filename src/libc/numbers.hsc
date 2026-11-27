@@ -288,10 +288,12 @@ digits_at :: fn(text : ptr[u8], at : usize, radix : u64) -> usize {
  * @param text The string.
  * @param at Where its first digit or point is, after the 0x.
  * @param negative Whether a minus came before it.
- * @return value The value, rounded once to the nearest double; 0 when there are no digits.
+ * @return value The value, rounded once to the nearest double, halfway to even, a subnormal too: ±infinity past the
+ *     largest, ±0 below half the least subnormal; 0 when there are no digits.
  * @return end Where it ended, in bytes from text: at itself when there are no digits.
+ * @return out_of_range True if digits that aren't all 0 gave ±infinity or ±0, which strtod gives ERANGE for.
  */
-read_hex_float :: fn(text : ptr[u8], at : usize, negative : bool) -> (value : f64, end : usize) {
+read_hex_float :: fn(text : ptr[u8], at : usize, negative : bool) -> (value : f64, end : usize, out_of_range : bool) {
     mantissa : u64 = 0
     exponent : i64 = 0
     sticky := false
@@ -326,7 +328,7 @@ read_hex_float :: fn(text : ptr[u8], at : usize, negative : bool) -> (value : f6
         i += 1
     }
     if digits == 0 {
-        return 0.0, at
+        return 0.0, at, false
     }
     if lowered(byte_at(text, i)) == cast[u8]('p') {
         sign_at := i + 1
@@ -347,13 +349,51 @@ read_hex_float :: fn(text : ptr[u8], at : usize, negative : bool) -> (value : f6
             i = sign_at + count
         }
     }
-    if sticky {
-        mantissa |= 1
+    zero :: if negative { -0.0 } else { 0.0 }
+    if mantissa == 0 {
+        return zero, i, false
     }
-    clamped :: if exponent > 10000 { cast[i64](10000) } else if exponent < -10000 { cast[i64](-10000) } else { exponent }
-    value :: math.scale_by_power_of_two(cast[f64](mantissa), cast[i32](clamped))
+    // mantissa × 2^exponent, its top bit made bit 63; what was dropped past 64 bits is all below it, in sticky
+    clamped := if exponent > 10000 { cast[i64](10000) } else if exponent < -10000 { cast[i64](-10000) } else { exponent }
+    loop {
+        if mantissa >> 63 != 0 {
+            break
+        }
+        mantissa = mantissa << 1
+        clamped -= 1
+    }
+    // The value is in [2^top, 2^(top + 1))
+    top :: clamped + 63
+    if top > 1023 {
+        infinite :: if negative { -math.infinity[f64]() } else { math.infinity[f64]() }
+        return infinite, i, true
+    }
+    /*
+     * Rounded once, to a double's 53 bits, or to fewer for a subnormal, one fewer for each power below 2^-1022, so the
+     * result is exact and scale_by_power_of_two doesn't round it again.
+     */
+    dropped : i64 = if top >= -1022 { 11 } else { 11 + (-1022 - top) }
+    kept : u64 = 0
+    if dropped < 64 {
+        kept = mantissa >> cast[u64](dropped)
+        rest :: mantissa & ((cast[u64](1) << cast[u64](dropped)) - 1)
+        half :: cast[u64](1) << cast[u64](dropped - 1)
+        if rest > half || (rest == half && (sticky || (kept & 1) == 1)) {
+            kept += 1
+        }
+    }
+    else if dropped == 64 {
+        // Half the least subnormal or more, as bit 63 is set: up unless it's exactly half, which goes to even, 0
+        if mantissa != cast[u64](1) << 63 || sticky {
+            kept = 1
+        }
+    }
+    if kept == 0 {
+        return zero, i, true
+    }
+    value :: math.scale_by_power_of_two(cast[f64](kept), cast[i32](clamped + dropped))
     signed :: if negative { -value } else { value }
-    return signed, i
+    return signed, i, math.is_infinite(value)
 }
 
 /**
@@ -398,10 +438,10 @@ strtod #export #calling_convention(.c) :: fn(text #escaping : ptr[u8], end : ptr
         return if negative { -math.nan[f64]() } else { math.nan[f64]() }
     }
     if byte_at(text, at) == cast[u8]('0') && lowered(byte_at(text, at + 1)) == cast[u8]('x') {
-        value, stop :: read_hex_float(text, at + 2, negative)
+        value, stop, out_of_range :: read_hex_float(text, at + 2, negative)
         if stop > at + 2 {
             set_end(text, end, stop)
-            if math.is_infinite(value) {
+            if out_of_range {
                 set_errno(E_RANGE)
             }
             return value

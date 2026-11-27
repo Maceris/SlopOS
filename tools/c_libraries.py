@@ -13,7 +13,8 @@ stdarg.h, limits.h, float.h, stdbool.h), and no others.
 The architecture is x86_64, aarch64 or riscv64. clang and llvm-ar are CLANG and LLVM_AR if set, else found on the PATH,
 else beside Visual Studio's LLVM. A clang without the architecture's backend, as Visual Studio's has no RISC-V, gives
 LLVM bitcode instead, which llc compiles: LLC if set, else the one built in Hemera's LLVM beside the hemera on the PATH.
-Nothing's built, and it succeeds, where no program has C. It ends with 1 if a source doesn't compile or the tools
+Nothing's built, and it succeeds, where no program has C, and a c/key.txt and keyed folders left from a build before
+are removed, so the build package doesn't give an old folder as the library path. It ends with 1 if a source doesn't compile or the tools
 aren't found.
 
 Environment:
@@ -105,6 +106,7 @@ def main() -> int:
                 if (folder / "c").is_dir() and any((folder / "c").glob("*.c"))]
     programs += [package for package in C_PACKAGES if (package / "c").is_dir() and any((package / "c").glob("*.c"))]
     if not programs:
+        forget_keys(output)
         return 0
     clang = find_tool("CLANG", "clang")
     if clang is None:
@@ -160,10 +162,21 @@ def keyed(output: Path, libraries: list[Path]) -> int:
     for library in libraries:
         shutil.copyfile(library, folder / library.name)
     (output / "key.txt").write_text(key + "\n", encoding="utf-8")
-    for other in output.iterdir():
-        if other.is_dir() and other != folder and len(other.name) == 16 and all(c in "0123456789abcdef" for c in other.name):
-            shutil.rmtree(other)
+    forget_keys(output, folder)
     return 0
+
+
+def forget_keys(output: Path, kept: Path | None = None) -> None:
+    """
+    Remove the keyed folders in c/ but kept, and c/key.txt itself when nothing's kept: nothing's done where c/ isn't.
+    """
+    if not output.is_dir():
+        return
+    if kept is None:
+        (output / "key.txt").unlink(missing_ok=True)
+    for other in output.iterdir():
+        if other.is_dir() and other != kept and len(other.name) == 16 and all(c in "0123456789abcdef" for c in other.name):
+            shutil.rmtree(other)
 
 
 if __name__ == "__main__":

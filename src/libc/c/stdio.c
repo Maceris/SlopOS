@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* How many bytes ungetc can push back before a read. */
@@ -75,13 +76,14 @@ static int write_out(FILE *stream) {
 }
 
 /*
- * Give back what a reading stream read ahead, its file descriptor moved back to where the stream's reader is; for a
- * stream that can't seek, like stdin, it's dropped. ungetc's bytes are dropped too, as C says a seek does.
+ * Give back what a reading stream read ahead, its file descriptor moved back to where the stream's reader is, as
+ * ftell gives it: before the bytes read ahead and one byte more for each ungetc pushed back, which are dropped, as C
+ * says a seek drops them. For a stream that can't seek, like stdin, they're all dropped.
  */
 static void give_back_read(FILE *stream) {
-    size_t ahead = stream->read_end - stream->read_at;
-    if (ahead > 0) {
-        lseek(stream->fd, -(off_t)ahead, SEEK_CUR);
+    off_t back = (off_t)(stream->read_end - stream->read_at) + stream->pushed;
+    if (back > 0) {
+        lseek(stream->fd, -back, SEEK_CUR);
     }
     stream->read_at = stream->read_end = 0;
     stream->pushed = 0;
@@ -102,16 +104,20 @@ static int ensure_buffer(FILE *stream) {
     return 0;
 }
 
+/*
+ * fflush(NULL) flushes only the streams with something written still to go, as POSIX says: a reading stream keeps
+ * what it read ahead and ungetc's bytes, which for stdin, which can't seek back, would be lost.
+ */
 int fflush(FILE *stream) {
     if (stream == NULL) {
         int result = 0;
         for (int i = 0; i < 3; i++) {
-            if (standard[i].open && fflush(&standard[i]) != 0) {
+            if (standard[i].open && standard[i].written > 0 && write_out(&standard[i]) != 0) {
                 result = EOF;
             }
         }
         for (int i = 0; i < FOPEN_MAX; i++) {
-            if (streams[i].open && fflush(&streams[i]) != 0) {
+            if (streams[i].open && streams[i].written > 0 && write_out(&streams[i]) != 0) {
                 result = EOF;
             }
         }
@@ -191,6 +197,11 @@ FILE *fopen(const char *path, const char *mode) {
 FILE *fdopen(int fd, const char *mode) {
     int flags;
     if (flags_of(mode, &flags) != 0) {
+        return NULL;
+    }
+    /* A descriptor that isn't open is EBADF, as fstat says */
+    struct stat described;
+    if (fstat(fd, &described) != 0) {
         return NULL;
     }
     for (int i = 0; i < FOPEN_MAX; i++) {
@@ -355,14 +366,22 @@ int ungetc(int c, FILE *stream) {
     return (unsigned char)c;
 }
 
+/*
+ * fgets gives NULL on a read error during it, even after some bytes were read, as C says; what's in into is then
+ * unspecified. A stream whose error indicator was set before (ferror) fails only for its end or nothing read.
+ */
 char *fgets(char *into, int size, FILE *stream) {
     if (size <= 0) {
         return NULL;
     }
+    int failed_before = stream->failed;
     int count = 0;
     while (count < size - 1) {
         int c = fgetc(stream);
         if (c == EOF) {
+            if (stream->failed && !failed_before) {
+                return NULL;
+            }
             break;
         }
         into[count++] = (char)c;

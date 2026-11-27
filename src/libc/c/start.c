@@ -57,10 +57,22 @@ void _exit(int code) {
     slopos_libc_exit(code);
 }
 
+/* Each signal's handler, which signal sets and raise and abort call. */
+static sighandler_t handlers[NSIG];
+
 /* abort's exit code: 128 and SIGABRT, as a shell reports a program that aborted, and as Hemera's assertions end. */
 #define ABORT_CODE 134
 
+/*
+ * abort raises SIGABRT: a handler signal set is called, once, its own reset to SIG_DFL first, and may leave by
+ * longjmp; one that returns, SIG_IGN or SIG_DFL ends the program with 134, its streams but stderr not flushed.
+ */
 void abort(void) {
+    sighandler_t handler = handlers[SIGABRT];
+    if (handler != SIG_DFL && handler != SIG_IGN) {
+        handlers[SIGABRT] = SIG_DFL;
+        handler(SIGABRT);
+    }
     fflush(stderr);
     slopos_libc_exit(ABORT_CODE);
 }
@@ -82,9 +94,6 @@ int system(const char *command) {
     }
     return -1;
 }
-
-/* Each signal's handler, which signal sets and raise calls. */
-static sighandler_t handlers[NSIG];
 
 sighandler_t signal(int number, sighandler_t handler) {
     if (number <= 0 || number >= NSIG) {

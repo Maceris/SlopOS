@@ -242,8 +242,8 @@ descriptor_of :: fn(state : ptr[mut State], fd : i32) -> ptr[mut Descriptor]? {
  * Open a file beneath the working directory, as C's open, called by it (c/files.c) with its mode dropped.
  *
  * @param path The path, a C string, resolved as resolve says.
- * @param flags O_RDONLY, O_WRONLY or O_RDWR, with any of O_CREAT, O_EXCL, O_TRUNC and O_APPEND; others are taken and
- *     change nothing.
+ * @param flags O_RDONLY, O_WRONLY or O_RDWR, with any of O_CREAT, O_EXCL, O_TRUNC and O_APPEND, which starts the
+ *     descriptor at the file's end, as every write is; others are taken and change nothing.
  * @return The lowest free file descriptor from 3; -1 with errno ENOENT for a missing file without O_CREAT, EEXIST
  *     with O_EXCL for one there, EISDIR for a directory, EMFILE when 64 are open, EINVAL for a bad access mode, or
  *     std's error.
@@ -290,6 +290,16 @@ slopos_libc_open #export #calling_convention(.c) :: fn(path : ptr[u8], flags : i
     file :: match os.open_in(state.working, resolved.path, mode) {
         case Ok(opened) => opened
         case Error(error) => return failed(errno_of(error))
+    }
+    // Appending starts at the end, so lseek and ftell say so before the first write, as every write goes there too
+    if (flags & O_APPEND) != 0 {
+        match os.file_size(file) {
+            case Ok(size) => os.file_seek(file, size)
+            case Error(error) => {
+                os.close(file)
+                return failed(errno_of(error))
+            }
+        }
     }
     made := Descriptor.{
         kind = .File,

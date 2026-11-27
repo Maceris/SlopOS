@@ -3,7 +3,7 @@
  * stdout as Hemera's tests are: a line for each check that fails, then "N tests: P passed, F failed" and ", S skipped"
  * for the file test without a working directory. test_libc runs it from the root task, its stdout the debug log;
  * test_libc_files runs it from the shell beneath the shell's directory, where its file test runs too. main returns how
- * many tests failed.
+ * many tests failed; given --exit=-1, it runs none and calls exit(-1), for the exit status's 8 bits.
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -44,6 +44,16 @@ static void note(int passed, const char *what, int line) {
         }                                                                                                              \
     } while (0)
 #define CHECK_NEAR(value, expected, tolerance) note(fabs((value) - (expected)) <= (tolerance), #value, __LINE__)
+
+/*
+ * The bytes of a long double that hold its value: x86-64's 80-bit one has 6 of padding after them, which a store
+ * needn't write. Long doubles are compared by them, as comparing AArch64's and RISC-V's quads would call compiler-rt.
+ */
+#define LONG_DOUBLE_BYTES (__LDBL_MANT_DIG__ == 64 ? 10 : 16)
+
+/* 99 significant digits of pi, 100 bytes, longer than any buffer a scanned number could have been cut to. */
+static const char LONG_PI[] =
+    "3.14159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706";
 
 /* snprintf into a buffer of its own, for CHECK_TEXT. */
 static char formatted[512];
@@ -156,6 +166,16 @@ static void formatting_test(void) {
                "67640880074652742780142494579258788820056842838115669472196386865459400540160");
     CHECK_TEXT(FORMAT("%.3g", 5e-324), "4.94e-324");
     CHECK_TEXT(FORMAT("%a %a %.1a %A", 1.0, 0.5, 1.75, -3.0), "0x1p+0 0x1p-1 0x1.cp+0 -0X1.8P+1");
+    /* The 0 flag's zeros come after the sign and 0x */
+    CHECK_TEXT(FORMAT("%010a|%-10a|%+010A|%010a", 1.0, 1.0, 2.0, -0.5), "0x00001p+0|0x1p+0    |+0X0001P+1|-0x0001p-1");
+    /* A long double, read as one, so what comes after it isn't shifted, and written as the double nearest it */
+    CHECK_TEXT(FORMAT("%Lf %d %.3Le %La %s", 2.5L, 7, 0.125L, -3.0L, "after"), "2.500000 7 1.250e-01 -0x1.8p+1 after");
+    CHECK_TEXT(FORMAT("%.17Lg %Lg %Lg %.3Lg", 0.1L, 1e400L, -1e-400L, 1e-310L), "0.10000000000000001 inf -0 1e-310");
+    CHECK_TEXT(FORMAT("%Lg %LG", (long double)NAN, -(long double)INFINITY), "nan -INF");
+    /* Past INT_MAX bytes: -1, EOVERFLOW */
+    errno = 0;
+    CHECK(snprintf(NULL, 0, "%*d%*d", INT_MAX, 1, INT_MAX, 1) == -1 && errno == EOVERFLOW);
+    CHECK(snprintf(NULL, 0, "%*d", INT_MAX, 1) == INT_MAX);
     CHECK_TEXT(FORMAT("%5s|%-3c|", "", 'z'), "     |z  |");
     char small[6];
     CHECK(snprintf(small, sizeof small, "%s", "truncated") == 9);
@@ -178,6 +198,32 @@ static void formatting_test(void) {
     CHECK_TEXT(set, "key");
     CHECK(sscanf("", "%d", &number) == EOF);
     CHECK(sscanf("x", "%d", &number) == 0);
+    /* %Lf stores a long double, and what follows it is read into its own */
+    long double extended = 0;
+    static const long double TWO_AND_A_HALF = 2.5L;
+    static const long double LEAST = (long double)4.9406564584124654e-324;
+    static const long double HUGE_LONG = (long double)HUGE_VAL;
+    CHECK(sscanf("2.5 9", "%Lf %d", &extended, &number) == 2 && number == 9);
+    CHECK(memcmp(&extended, &TWO_AND_A_HALF, LONG_DOUBLE_BYTES) == 0);
+    CHECK(sscanf("4.9406564584124654e-324", "%Lg", &extended) == 1 && memcmp(&extended, &LEAST, LONG_DOUBLE_BYTES) == 0);
+    CHECK(sscanf("1e999", "%Le", &extended) == 1 && memcmp(&extended, &HUGE_LONG, LONG_DOUBLE_BYTES) == 0);
+    float single = 0;
+    CHECK(sscanf("0.25", "%f", &single) == 1 && single == 0.25f);
+    /* A number longer than 63 bytes is read whole, with or without a width, every digit counting */
+    char long_field[160];
+    snprintf(long_field, sizeof long_field, "%s 42", LONG_PI);
+    real = 0;
+    number = 0;
+    CHECK(sscanf(long_field, "%lf %d", &real, &number) == 2 && real == M_PI && number == 42);
+    int consumed = 0;
+    real = 0;
+    number = 0;
+    CHECK(sscanf(long_field, "%100lf%n %d", &real, &consumed, &number) == 2 && real == M_PI && consumed == 100 &&
+          number == 42);
+    CHECK(sscanf(long_field, "%5lf%n", &real, &consumed) == 1 && real == 3.141 && consumed == 5);
+    CHECK(sscanf("00000000000000000000000000000000000000000000000000000000000000000000000000000000042 x", "%d %c", &number,
+                 word) == 2 &&
+          number == 42 && word[0] == 'x');
 }
 
 static void memory_test(void) {
@@ -307,6 +353,23 @@ static void numbers_test(void) {
     CHECK(strtod("  .5x", &end) == 0.5 && *end == 'x');
     CHECK(strtod("0x1.8p1", NULL) == 3.0);
     CHECK(strtod("0x10", NULL) == 16.0);
+    /* A hex float out of range: ERANGE both ways; a subnormal rounded once, not first to 53 bits and then again */
+    errno = 0;
+    CHECK(strtod("0x1p-1100", NULL) == 0.0 && errno == ERANGE);
+    errno = 0;
+    CHECK(strtod("-0x1p-1075", NULL) == 0.0 && signbit(strtod("-0x1p-1075", NULL)) && errno == ERANGE);
+    errno = 0;
+    CHECK(strtod("0x1p1024", NULL) == HUGE_VAL && errno == ERANGE);
+    errno = 0;
+    CHECK(strtod("0x1.fffffffffffffp1023", NULL) == 0x1.fffffffffffffp1023 && errno == 0);
+    CHECK(strtod("0x1.fffffffffffff8p1023", NULL) == HUGE_VAL);
+    errno = 0;
+    CHECK(strtod("0x0p99999", NULL) == 0.0 && errno == 0);
+    CHECK(strtod("0x1.7ffffffffffffffp-1074", NULL) == 0x1p-1074 && errno == 0);
+    CHECK(strtod("0x1.8p-1074", NULL) == 0x1p-1073);
+    CHECK(strtod("0x1.000001p-1075", NULL) == 0x1p-1074);
+    CHECK(strtod("0x1.ffffffffffffffp-1023", NULL) == 0x1p-1022);
+    CHECK(strtod("0x0.0000000000001p-1022", NULL) == 0x1p-1074);
     CHECK(strtod("1e", &end) == 1.0 && *end == 'e');
     CHECK(strtod("0.1", NULL) == 0.1);
     CHECK(strtod("2.2250738585072014e-308", NULL) == 2.2250738585072014e-308);
@@ -434,6 +497,9 @@ static void time_test(void) {
     CHECK(strftime(text, sizeof text, "%A %B %e %I %p %y %Z %u %V", &day) > 0);
     CHECK_TEXT(text, "Tuesday November 14 10 PM 23 UTC 2 46");
     CHECK(strftime(text, 4, "%Y-%m", &day) == 0);
+    /* A conversion C hasn't is written as it is, its % and any modifier with it */
+    CHECK(strftime(text, sizeof text, "%Q|%EQ|%Oq|%E", &day) > 0);
+    CHECK_TEXT(text, "%Q|%EQ|%Oq|%E");
     CHECK_TEXT(asctime(&day), "Tue Nov 14 22:13:20 2023\n");
     CHECK(difftime(100, 40) == 60.0);
     clock_t first = clock();
@@ -449,6 +515,16 @@ static void at_exit_handler(void) {
     fflush(stdout);
 }
 
+/* Where abort's handler goes back to, and the signal it was called with. */
+static jmp_buf abort_back;
+static int abort_signal;
+
+/* A SIGABRT handler that doesn't return, so abort doesn't end the test. */
+static void on_abort(int number) {
+    abort_signal = number;
+    longjmp(abort_back, 1);
+}
+
 static void environment_test(void) {
     CHECK(getenv("PATH") == NULL);
     CHECK(system(NULL) == 0);
@@ -456,6 +532,12 @@ static void environment_test(void) {
     CHECK(localeconv()->decimal_point[0] == '.');
     CHECK(atexit(at_exit_handler) == 0);
     CHECK(signal(SIGINT, SIG_IGN) == SIG_DFL && raise(SIGINT) == 0);
+    /* abort raises SIGABRT, its handler reset to SIG_DFL first */
+    CHECK(signal(SIGABRT, on_abort) == SIG_DFL);
+    if (setjmp(abort_back) == 0) {
+        abort();
+    }
+    CHECK(abort_signal == SIGABRT && signal(SIGABRT, SIG_DFL) == SIG_DFL);
     CHECK(getpid() == 1);
     char place[8];
     CHECK(getcwd(place, sizeof place) != NULL && strcmp(place, "/") == 0);
@@ -515,9 +597,21 @@ static void files_test(void) {
     CHECK(!feof(file) && fgetc(file) == 'l');
     CHECK(ungetc('L', file) == 'L' && fgetc(file) == 'L' && fgetc(file) == 'i');
     CHECK(fseek(file, 5, SEEK_SET) == 0 && fgetc(file) == '1' && ftell(file) == 6);
+    /* ungetc's bytes count in a seek from where the stream is, as in ftell, and in a flush */
+    rewind(file);
+    CHECK(fgetc(file) == 'l' && fgetc(file) == 'i' && fgetc(file) == 'n' && ungetc('N', file) == 'N');
+    CHECK(ftell(file) == 2 && fseek(file, 0, SEEK_CUR) == 0 && ftell(file) == 2 && fgetc(file) == 'n');
+    CHECK(ungetc('E', file) == 'E' && ungetc('N', file) == 'N' && fseek(file, 1, SEEK_CUR) == 0 && fgetc(file) == 'n');
+    CHECK(ungetc('X', file) == 'X' && fflush(file) == 0 && ftell(file) == 2 && fgetc(file) == 'n');
+    /* fflush(NULL) leaves a reading stream as it is: what it read ahead, and ungetc's byte */
+    CHECK(ungetc('Y', file) == 'Y' && fflush(NULL) == 0 && ftell(file) == 2 && fgetc(file) == 'Y' && fgetc(file) == 'e');
     fclose(file);
+    /* Appending starts at the end, before anything's written */
     file = fopen(FOLDER "/streams.txt", "a");
-    CHECK(file != NULL && fputs("\nappended", file) == 0 && fclose(file) == 0);
+    CHECK(file != NULL && ftell(file) == 17);
+    CHECK(file != NULL && fputs("\nappended", file) == 0 && ftell(file) == 26 && fclose(file) == 0);
+    int appending = open(FOLDER "/streams.txt", O_WRONLY | O_APPEND);
+    CHECK(appending >= 3 && lseek(appending, 0, SEEK_CUR) == 26 && close(appending) == 0);
     CHECK(read_whole(FOLDER "/streams.txt", text, sizeof text) == 26);
     CHECK_TEXT(text, "line 1\nline two\n3\nappended");
     file = fopen(FOLDER "/streams.txt", "r+");
@@ -525,6 +619,28 @@ static void files_test(void) {
     CHECK(read_whole(FOLDER "/streams.txt", text, sizeof text) == 26 && strncmp(text, "LINE 1\n", 7) == 0);
     CHECK(fopen(FOLDER "/missing.txt", "r") == NULL && errno == ENOENT);
     CHECK(fopen(FOLDER "/streams.txt", "wx") == NULL && errno == EEXIST);
+    /* Reading back what a "w+" stream wrote, and a short fread at the end counting only whole items */
+    file = fopen(FOLDER "/both.txt", "w+");
+    CHECK(file != NULL);
+    if (file != NULL) {
+        CHECK(fputs("0123456789", file) == 0 && fseek(file, 0, SEEK_SET) == 0 && fgets(text, sizeof text, file) != NULL);
+        CHECK_TEXT(text, "0123456789");
+        rewind(file);
+        char items[12] = {0};
+        CHECK(fread(items, 4, 3, file) == 2 && feof(file) && !ferror(file) && memcmp(items, "0123456789", 10) == 0);
+        clearerr(file);
+        CHECK(fseek(file, 8, SEEK_SET) == 0 && fread(items, 1, 5, file) == 2 && feof(file));
+        CHECK(fread(items, 1, 5, file) == 0 && fclose(file) == 0);
+    }
+    /* A read error during fgets is NULL, even with a byte read: here a stream that only writes, a byte pushed back */
+    file = fopen(FOLDER "/both.txt", "w");
+    CHECK(file != NULL);
+    if (file != NULL) {
+        CHECK(ungetc('x', file) == 'x' && fgets(text, sizeof text, file) == NULL && ferror(file));
+        CHECK(fclose(file) == 0);
+    }
+    CHECK(fdopen(99, "r") == NULL && errno == EBADF);
+    CHECK(remove(FOLDER "/both.txt") == 0);
     int fd = open(FOLDER "/descriptors.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     CHECK(fd >= 3);
     unsigned char bytes[300];
@@ -550,6 +666,27 @@ static void files_test(void) {
     CHECK(access(FOLDER "/descriptors.bin", R_OK) == 0 && access(FOLDER "/nothing", F_OK) == -1);
     CHECK(rename(FOLDER "/streams.txt", FOLDER "/renamed.txt") == 0);
     CHECK(access(FOLDER "/streams.txt", F_OK) == -1 && access(FOLDER "/renamed.txt", F_OK) == 0);
+    /* Renaming over a file replaces it */
+    file = fopen(FOLDER "/replacing.txt", "w");
+    CHECK(file != NULL && fputs("new", file) == 0 && fclose(file) == 0);
+    file = fopen(FOLDER "/replaced.txt", "w");
+    CHECK(file != NULL && fputs("old and longer", file) == 0 && fclose(file) == 0);
+    CHECK(rename(FOLDER "/replacing.txt", FOLDER "/replaced.txt") == 0 && access(FOLDER "/replacing.txt", F_OK) == -1);
+    CHECK(read_whole(FOLDER "/replaced.txt", text, sizeof text) == 3);
+    CHECK_TEXT(text, "new");
+    /*
+     * Unlinking an open file takes its name away at once, and the file stays, as POSIX's does, for as long as it's
+     * open: SlopOS keeps it as an orphan, which a volume server sweeps once nothing has it open (decisions/0089, 8d2).
+     */
+    fd = open(FOLDER "/replaced.txt", O_RDWR);
+    CHECK(fd >= 3);
+    if (fd >= 3) {
+        CHECK(unlink(FOLDER "/replaced.txt") == 0 && access(FOLDER "/replaced.txt", F_OK) == -1);
+        CHECK(read(fd, text, 3) == 3 && memcmp(text, "new", 3) == 0);
+        CHECK(write(fd, "er", 2) == 2 && lseek(fd, 0, SEEK_SET) == 0 && read(fd, text, 10) == 5);
+        CHECK(memcmp(text, "newer", 5) == 0 && fstat(fd, &described) == 0 && described.st_size == 5);
+        CHECK(close(fd) == 0 && access(FOLDER "/replaced.txt", F_OK) == -1);
+    }
     CHECK(mkdir(FOLDER "/inner", 0755) == 0);
     DIR *directory = opendir(FOLDER);
     CHECK(directory != NULL);
@@ -586,6 +723,10 @@ struct test {
 };
 
 int main(int argc, char **argv) {
+    /* Given --exit=-1, it only exits with -1, which the program's exit status is 255 of, as POSIX's */
+    if (argc == 2 && strcmp(argv[1], "--exit=-1") == 0) {
+        exit(-1);
+    }
     static const struct test TESTS[] = {
         {"strings", strings_test},     {"characters", characters_test}, {"formatting", formatting_test},
         {"memory", memory_test},       {"sorting", sorting_test},       {"numbers", numbers_test},
@@ -617,7 +758,5 @@ int main(int argc, char **argv) {
     } else {
         printf("%d tests: %d passed, %d failed\n", total, total - failed, failed);
     }
-    (void)argc;
-    (void)argv;
     return failed;
 }

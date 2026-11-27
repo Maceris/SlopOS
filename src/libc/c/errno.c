@@ -53,6 +53,7 @@ static const struct error_words ERROR_WORDS[] = {
     {ENAMETOOLONG, "File name too long"},
     {ENOSYS, "Not available on SlopOS"},
     {ENOTEMPTY, "Directory not empty"},
+    {EOVERFLOW, "Value too large for defined data type"},
     {EILSEQ, "Invalid character"},
     {ENOTSUP, "Not supported"},
 };
