@@ -60,6 +60,8 @@ Volume :: struct {
     opened : VolumeRecord,
     /** The chunks read and checked that are kept (CHUNK_CACHE); null until one is. Freed by free_volume. */
     chunks : ptr[mut ChunkCache]?,
+    /** The objects changed since the last commit, whose index entries are made again at the next (index.hsc). */
+    indexing : Indexing,
 }
 
 /**
@@ -623,19 +625,22 @@ record_of :: fn(volume : ptr[Volume]) -> VolumeRecord {
  * Write a volume's dirty nodes, children first, and make its record as it then is: what a volume server gives the
  * container service to commit (decisions/0089), once the writes have finished.
  *
- * Nothing is flushed: the record names nodes that are durable only after the commit's flush.
+ * The objects changed since the last commit are indexed again first (index_changes), so the indexes are written with
+ * what they index. Nothing is flushed: the record names nodes that are durable only after the commit's flush.
  *
  * @param volume The volume; it's no longer dirty once this succeeds.
  * @return The record, its root's seal set.
  * @error Failed A data write failed since the volume was opened (or forget was last called).
  * @error DeviceError A node couldn't be written.
- * @error OutOfMemory No memory to seal an encrypted node in.
- * @error Corrupt An encrypted node couldn't be sealed.
+ * @error OutOfMemory No memory to seal an encrypted node in, or to index a file again.
+ * @error NoSpace No free extent for an index's node.
+ * @error Corrupt An encrypted node couldn't be sealed, or an index's record didn't check out.
  */
 write_volume :: fn(volume : ptr[mut Volume]) -> Result[VolumeRecord, Error] {
     if volume.failed {
         return .Error(.Failed)
     }
+    index_changes(volume)?
     tree_write(volume.nodes, &volume.tree)?
     volume.dirty = false
     return .Ok(record_of(volume))
@@ -998,7 +1003,8 @@ info :: fn(volume : ptr[mut Volume], object : u64) -> Result[Info, Error] {
 /**
  * Make a file typed (decisions/0046, 0108): its schema hash kept in its record, durable with the next commit.
  *
- * Only a new file's is given one; this doesn't check that it's new, or a file, and changes no time.
+ * Only a new file's is given one; this doesn't check that it's new, or a file, and changes no time. It's indexed
+ * again at the next commit, as a file of its new schema.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param object The ID of the file, as a rule new; one with no record is NotFound, and its kind isn't checked.
@@ -1012,6 +1018,7 @@ set_schema :: fn(volume : ptr[mut Volume], object : u64, schema : u8[32]) -> Res
     record := get_object(volume, object)?
     record.schema = schema
     put_object(volume, object, &record)?
+    note_indexed(volume, object)
     return .Ok
 }
 
@@ -1630,6 +1637,8 @@ remove :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> Result
  * @error Corrupt A chunk found can't be taken out, or a node couldn't be read or didn't check out.
  */
 destroy :: fn(volume : ptr[mut Volume], object : u64) -> Result[void, Error] {
+    // Its index entries taken out at the next commit, with its records of them
+    note_indexed(volume, object)
     _ = tree_delete(volume.nodes, &volume.tree, key_of(object, .Link, 0))?
     loop {
         extent := ExtentRecord.{}
@@ -1783,6 +1792,10 @@ rename :: fn(
     }
     remove_entry(volume, from, from_name)?
     add_entry(volume, to, to_name, object, kind)?
+    // What's beneath a directory moved is beneath another now, which a live query has to look at again
+    if kind == .Directory {
+        volume.indexing.moved = true
+    }
     record.parent = cast[u64le](to)
     touch(volume, object, &record)?
     from_record = get_object(volume, from)?

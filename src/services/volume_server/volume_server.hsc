@@ -1043,6 +1043,8 @@ file_error :: fn(error : slopfs.Error) -> files.FileError {
         case .IsALink => files.FileError.IsALink
         case .OutOfMemory => files.FileError.NoMemory
         case .WrongType => files.FileError.WrongType
+        // A type an index can't be of is a wrong one for it
+        case .NotIndexable => files.FileError.WrongType
     }
 }
 
@@ -1251,12 +1253,18 @@ info_of :: fn(out : ptr[mut os.Outgoing], kind : files.Kind, size : u64, name : 
 }
 
 /**
- * Say what slopfs does that FAT doesn't: atomic replace, transactions, snapshots and change cursors.
+ * Say what slopfs does that FAT doesn't: atomic replace, transactions, snapshots, change cursors and indexes.
  *
- * @return Always atomic_replace, transactions, snapshots and change_cursors true; ignores_case false.
+ * @return Always atomic_replace, transactions, snapshots, change_cursors and indexes true; ignores_case false.
  */
 features :: fn() -> files.Features {
-    return files.Features.{atomic_replace = true, transactions = true, snapshots = true, change_cursors = true}
+    return files.Features.{
+        atomic_replace = true,
+        transactions = true,
+        snapshots = true,
+        change_cursors = true,
+        indexes = true,
+    }
 }
 
 /**
@@ -1547,6 +1555,18 @@ serve_dir :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incom
                     response^ = snapshot_answer(server, index, .OpenSnapshot(at), os.items(into, at), &out)
                 }
             }
+            // Indexes, of the whole volume (indexes.hsc); none changed on a transaction
+            case DeclareIndex(declaring) => {
+                if !in_transaction {
+                    response^ = declared(server, index, os.items(into, declaring.schema), os.items(into, declaring.field))
+                }
+            }
+            case DropIndex(number) => {
+                if !in_transaction {
+                    response^ = dropped(server, index, number)
+                }
+            }
+            case Indexes(cursor) => response^ = index_listed(volume, cursor, &out)
         }
         _ = dir.send_response(end, server.port, &out)
     }

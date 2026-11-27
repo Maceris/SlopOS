@@ -53,6 +53,11 @@ Error :: enum {
     OutOfMemory,
     /** A typed file of another type than the one asked for (decisions/0108). */
     WrongType,
+    /**
+     * A schema or a field an index can't be of, or a query its indexes can't answer (index.hsc, query.hsc): bytes that
+     * aren't a schema, a field that isn't an integer, a bool or text, or a predicate that doesn't hold together.
+     */
+    NotIndexable,
 }
 
 /**

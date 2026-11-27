@@ -148,6 +148,17 @@ RecordKind :: enum #backed_by(u8) {
      * volume key, keyed (volume, KeyFloor, 0).
      */
     KeyFloor = 16,
+    /** A volume: an index's declaration (index.hsc), keyed (0, IndexDecl, its number from 1). */
+    IndexDecl = 17,
+    /**
+     * A volume: an index's bucket, the files whose value has a key, keyed (INDEX_OBJECT_BASE | number, IndexEntry,
+     * key).
+     */
+    IndexEntry = 18,
+    /** A volume: a file in an index past its full bucket, keyed (INDEX_OBJECT_BASE | number, IndexSpill, file). */
+    IndexSpill = 19,
+    /** A volume: a file's record of an index it's in, its key and text, keyed (file, IndexedBy, number). */
+    IndexedBy = 20,
 }
 
 /** A key as it's stored: ordered by object, then kind, then offset, each compared as an unsigned number. */

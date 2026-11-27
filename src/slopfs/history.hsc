@@ -43,9 +43,10 @@ history_state :: fn(volume : ptr[mut Volume]) -> Result[ChangeState, Error] {
  *
  * A file written again in the same transaction, with no change between, is one change, so the second isn't noted.
  * The newest change is never dropped, even past the budget. Like every change to the volume, it's durable with the
- * volume's next commit.
+ * volume's next commit. The object is noted for its index entries to be made again at that commit (note_indexed),
+ * whether or not the volume keeps a history.
  *
- * @param volume The volume; nothing is noted when its history_bytes is 0.
+ * @param volume The volume; nothing is noted in its history when its history_bytes is 0.
  * @param kind What was done.
  * @param object The object it was done to.
  * @param parent The directory its name is in.
@@ -60,6 +61,7 @@ note_change :: fn(
     parent : u64,
     name : string
 ) -> Result[void, Error] {
+    note_indexed(volume, object)
     if volume.history_bytes == 0 {
         return .Ok
     }
@@ -310,6 +312,8 @@ install :: fn(volume : ptr[mut Volume], directory : u64, name : string, replacem
             remove_entry(volume, directory, name)?
             scratch : u8[1]
             tree_put(volume.nodes, &volume.tree, orphan_key(old), scratch[0..<0])?
+            // Orphaned, it has no name, so it's taken out of every index at the next commit
+            note_indexed(volume, old)
         }
         case None => {}
     }
@@ -432,6 +436,7 @@ forget :: fn(volume : ptr[mut Volume], record : VolumeRecord) {
     }
     volume.tree.root = record.root
     volume.next_object = cast[u64](record.next_object)
+    forget_indexed(volume)
     volume.dirty = false
     volume.failed = false
     volume.failed_count = 0
