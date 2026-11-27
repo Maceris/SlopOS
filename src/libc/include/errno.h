@@ -44,7 +44,27 @@ int *__errno_location(void);
 #define ENOTEMPTY 39    /* A directory with something in it */
 #define EOVERFLOW 75    /* A value too large for its type */
 #define EILSEQ 84       /* Not a valid character */
+#define ENOTSOCK 88     /* Not a socket */
+#define EDESTADDRREQ 89 /* No address to send to */
+#define EMSGSIZE 90     /* A datagram too long */
+#define EPROTOTYPE 91   /* The wrong kind of socket for the protocol */
+#define ENOPROTOOPT 92  /* An option the socket hasn't */
+#define EPROTONOSUPPORT 93 /* A protocol there's none of */
 #define ENOTSUP 95      /* Not supported */
+#define EAFNOSUPPORT 97 /* An address family there's none of */
+#define EADDRINUSE 98   /* The port's taken */
+#define EADDRNOTAVAIL 99 /* Not an address of this machine's */
+#define ENETUNREACH 101 /* No route to the network */
+#define ECONNABORTED 103 /* The connection was given up */
+#define ECONNRESET 104  /* The peer reset the connection */
+#define ENOBUFS 105     /* No room for it */
+#define EISCONN 106     /* Connected already */
+#define ENOTCONN 107    /* Not connected */
+#define ETIMEDOUT 110   /* Nothing answered in time */
+#define ECONNREFUSED 111 /* Nothing listens there */
+#define EHOSTUNREACH 113 /* No route to the host */
+#define EALREADY 114    /* Under way already */
+#define EINPROGRESS 115 /* Under way, not done */
 #define EOPNOTSUPP ENOTSUP
 #define EWOULDBLOCK EAGAIN
 

@@ -10,7 +10,8 @@
  * called back from C finds, and calls main through the C start-up (c/start.c), which flushes every stream once main
  * returns or exit's called. Files are beneath the program's working directory: its "here", or its working_directory
  * grant; there's no global filesystem. stdin reads its terminal; stdout and stderr write to it, or without one to its
- * debug log or, without that, its logger, a line at a time. There's no fork, exec, pipe or signal, and no sockets yet.
+ * debug log or, without that, its logger, a line at a time. Sockets (sockets.hsc) are over the connection to the
+ * network service it's given, if it is. There's no fork, exec, pipe or signal.
  */
 package libc
 
@@ -18,6 +19,7 @@ import runtime from "base:runtime"
 import os from "std:os"
 import slop_os from "std:os/slop_os"
 import dir from "std:os/slop_os/dir"
+import network from "std:os/slop_os/network"
 import terminal as protocol from "std:os/slop_os/terminal"
 import terminal from "std:terminal"
 import time as std_time from "std:time"
@@ -58,6 +60,12 @@ Start :: struct {
     console : os.Channel[protocol.Terminal]?,
     /** The debug log stdout and stderr write a line at a time to without a console; None for the program's logger. */
     log : slop_os.DebugLog?,
+    /**
+     * The connection to the network service sockets are made through, the caller's, kept for as long as run runs;
+     * None for none, when a socket's connect, listen or UDP socket fails with ENETUNREACH and getaddrinfo with
+     * EAI_FAIL. A program the shell runs asks for one with an entry parameter of type os.Channel[network.Network].
+     */
+    network : os.Channel[network.Network]?,
 }
 
 /** Where stdout and stderr go. */
@@ -80,6 +88,8 @@ DescriptorKind :: enum {
     Output,
     /** A file beneath the working directory. */
     File,
+    /** A socket (sockets.hsc). */
+    Socket,
 }
 
 /** A file descriptor: its index in State's descriptors is its number. */
@@ -96,6 +106,10 @@ Descriptor :: struct {
     append : bool,
     /** FD_CLOEXEC, as fcntl's F_SETFD sets it; it changes nothing, as there's no exec. */
     close_on_exec : bool,
+    /** The socket, for a Socket; owned, freed by close. */
+    socket : ptr[mut Socket]?,
+    /** O_NONBLOCK, as fcntl's F_SETFL or socket's SOCK_NONBLOCK sets it: a socket's calls that would wait fail with EAGAIN. */
+    nonblocking : bool,
 }
 
 /** An open directory's listing, from opendir: its names, read a name at a time. */
@@ -140,6 +154,12 @@ State :: struct {
     listings : Listing[..],
     /** When run started, for clock. */
     started : runtime.MonotonicTime,
+    /** The connection to the network service sockets are made through, when has_network: Start's. */
+    network : os.Channel[network.Network],
+    has_network : bool,
+    /** The port every socket's channel is bound to, under its descriptor's number, once has_socket_port; closed by run. */
+    socket_port : slop_os.Port,
+    has_socket_port : bool,
 }
 
 /*
@@ -211,6 +231,13 @@ run :: fn(start : Start, entry : CMain) -> int {
         case Some(log) => {
             state.log = log
             state.output = .Log
+        }
+        case None => {}
+    }
+    match start.network {
+        case Some(given) => {
+            state.network = given
+            state.has_network = true
         }
         case None => {}
     }
@@ -319,11 +346,18 @@ c_copy :: fn(text : string) -> cstring? {
  * @param state The libc's state; what it holds is given back.
  */
 close_all :: fn(state : ptr[mut State]) {
-    for &descriptor in state.descriptors {
+    for &descriptor, i in state.descriptors {
         if descriptor.kind == .File {
             os.close(descriptor.file)
             descriptor.kind = .Closed
         }
+        else if descriptor.kind == .Socket {
+            close_socket(state, cast[i32](i))
+        }
+    }
+    if state.has_socket_port {
+        _ = slop_os.handle_close(cast[slop_os.Handle](state.socket_port))
+        state.has_socket_port = false
     }
     runtime.array_free(&state.descriptors)
     for &listing in state.listings {

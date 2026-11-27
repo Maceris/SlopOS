@@ -54,6 +54,8 @@ DIRECTORY_MODE : u32 : 0o040755
 FILE_MODE : u32 : 0o100644
 /** sys/stat.h's S_IFCHR, a terminal's or log's kind, with 0620. */
 DEVICE_MODE : u32 : 0o020620
+/** What fstat says of a socket: S_IFSOCK, rwx for its owner, r-x for the rest. */
+SOCKET_MODE : u32 : 0o140755
 
 /** C's struct stat, as include/sys/stat.h lays it out. */
 Stat :: struct {
@@ -334,9 +336,10 @@ slopos_libc_open #export #calling_convention(.c) :: fn(path : ptr[u8], flags : i
  *
  * @param fd The descriptor.
  * @param command F_GETFD, F_SETFD, F_GETFL or F_SETFL.
- * @param argument For F_SETFD, FD_CLOEXEC or 0; for F_SETFL, flags whose O_APPEND is kept and the rest dropped, as
- *     the access mode can't change and files never block. Unread otherwise.
- * @return F_GETFD: FD_CLOEXEC or 0. F_GETFL: O_RDONLY, O_WRONLY or O_RDWR, with O_APPEND if it has it; stdin's is
+ * @param argument For F_SETFD, FD_CLOEXEC or 0; for F_SETFL, flags whose O_APPEND is kept for a file and O_NONBLOCK
+ *     for a socket, and the rest dropped, as the access mode can't change and files never block. Unread otherwise.
+ * @return F_GETFD: FD_CLOEXEC or 0. F_GETFL: O_RDONLY, O_WRONLY or O_RDWR, with O_APPEND and O_NONBLOCK if it has
+ *     them; stdin's is
  *     O_RDONLY, stdout's and stderr's O_WRONLY. 0 for the others. -1, errno EBADF for a descriptor that isn't open,
  *     or EINVAL for another command.
  */
@@ -357,10 +360,14 @@ slopos_libc_fcntl #export #calling_convention(.c) :: fn(fd : i32, command : i32,
             case _ => if descriptor.readable && descriptor.writable { O_RDWR } else if descriptor.writable { O_WRONLY } else { cast[i32](0) }
         }
         return access | (if descriptor.append { O_APPEND } else { cast[i32](0) })
+            | (if descriptor.nonblocking { O_NONBLOCK } else { cast[i32](0) })
     }
     if command == F_SETFL {
         if descriptor.kind == .File {
             descriptor.append = (argument & cast[i64](O_APPEND)) != 0
+        }
+        if descriptor.kind == .Socket {
+            descriptor.nonblocking = (argument & cast[i64](O_NONBLOCK)) != 0
         }
         return 0
     }
@@ -377,6 +384,10 @@ slopos_libc_fcntl #export #calling_convention(.c) :: fn(fd : i32, command : i32,
 close #export #calling_convention(.c) :: fn(fd : i32) -> i32 {
     state :: state_of() or_return failed(E_BADF)
     descriptor :: descriptor_of(state, fd) or_return failed(E_BADF)
+    if descriptor.kind == .Socket {
+        close_socket(state, fd)
+        return 0
+    }
     if descriptor.kind == .File {
         os.close(descriptor.file)
     }
@@ -404,6 +415,9 @@ read #export #calling_convention(.c) :: fn(fd : i32, into : ptr[mut u8], count :
     if descriptor.kind == .Input {
         return cast[i64](read_input(state, view_of(into, count)))
     }
+    if descriptor.kind == .Socket {
+        return read_socket(state, descriptor, fd, view_of(into, count))
+    }
     if descriptor.kind != .File {
         return failed(E_BADF)
     }
@@ -430,6 +444,9 @@ write #export #calling_convention(.c) :: fn(fd : i32, from : ptr[u8], count : us
     }
     if count == 0 {
         return 0
+    }
+    if descriptor.kind == .Socket {
+        return write_socket(state, descriptor, fd, view_of(from, count))
     }
     bytes :: string_of(from, count)
     if descriptor.kind == .Output {
@@ -609,7 +626,7 @@ fstat #export #calling_convention(.c) :: fn(fd : i32, into : ptr[mut Stat]) -> i
     state :: state_of() or_return failed(E_BADF)
     descriptor :: descriptor_of(state, fd) or_return failed(E_BADF)
     if descriptor.kind != .File {
-        into^ = described(DEVICE_MODE, 0)
+        into^ = described(if descriptor.kind == .Socket { SOCKET_MODE } else { DEVICE_MODE }, 0)
         return 0
     }
     match os.file_size(descriptor.file) {

@@ -21,6 +21,9 @@
  * - with nts_forged=<port> too, NTS (13g) with forged.slopos.test, boot.py's forging server: NTS-KE on that port gives
  *   keys and cookies, and its NTP answers, which it can't seal with the server's key it doesn't have, are refused.
  *
+ * With c_sockets, none of those: the libc's sockets from C (c/sockets.c, decisions/0202, 21h), against the same
+ * peers and as the same server on 7, its lines this program's.
+ *
  * A connection refused isn't among them: QEMU's user-mode network doesn't answer a SYN for a closed port on the
  * development machine at all, so the stack's retries would run a minute to a timeout. net_stack's hosted tests check
  * refusal.
@@ -38,7 +41,20 @@ import read_only_dir from "std:os/slop_os/read_only_dir"
 import text_buffer from "std:text_buffer"
 import tls from "std:tls"
 import service_kit from "../../libraries/service_kit"
+import libc from "../../libc"
 import connector from "../../protocols/connector"
+
+/** The libc's sockets from C (decisions/0202, 21h), c/sockets.c, test_network_c's library. */
+SOCKETS_C :: #library("test_network_c")
+
+/**
+ * c/sockets.c's main: the libc's sockets checked against the peers on the development machine, then a server on 7.
+ *
+ * @param argc 4: its name, the peer's address, the TCP echo's port and the UDP echo's.
+ * @param argv The arguments, then NULL.
+ * @return 0 once every check's passed; 1 if one hasn't; 2 without its arguments.
+ */
+c_sockets #foreign(SOCKETS_C) #link_name("main") : fn(argc : i32, argv : ptr[mut cstring?]) -> i32 : ---
 
 /** How many bytes the TCP echo exchanges: 64 KiB. */
 ECHO_BYTES : usize : 65536
@@ -80,6 +96,15 @@ main :: fn(
     }
     port :: os.port_for(startup.budget, dialing.end) or_return 2
     service :: connector.dial[network.Network](dialing.end, port) or_return 2
+    // c_sockets on the command line: the libc's sockets from C, in place of the checks here, its lines this program's
+    if service_kit.has_word(text, "c_sockets") {
+        arguments :: string.[
+            "10.0.2.2",
+            service_kit.word_after(text, "tcp_echo=") or_else "",
+            service_kit.word_after(text, "udp_echo=") or_else ""
+        ]
+        return libc.run(libc.Start.{name = "test_network", arguments = arguments, log = log, network = service}, c_sockets)
+    }
     peer :: net_address.v4(10, 0, 2, 2)
     echo_tcp(service, net_address.Endpoint.{address = peer, port = tcp_echo})
     echo_udp(service, net_address.Endpoint.{address = peer, port = udp_echo})

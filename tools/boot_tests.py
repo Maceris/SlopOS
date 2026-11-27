@@ -354,6 +354,22 @@ TESTS = [
         "--expect-line=[user] test_network: listening on 7",
         "--expect-line=[user] test_network: echoed 40000 bytes back to 10.0.2.2",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # The libc's sockets from C (decisions/0202, 21h): test_network with c_sockets runs c/sockets.c, through BSD sockets
+    # over the network service, against the same peers: a TCP echo of 64 KiB through poll and non-blocking receives, a
+    # UDP echo sent to and connected, names by getaddrinfo, calls a socket can't take; then a server on 7 through select
+    # and accept, which echoes back what this machine sends through QEMU's forward, which boot.py checks. It ends once
+    # its lines are all there (--end-when-done); test_settle is only how long the root task gives it at most, which a
+    # RISC-V run, without a power button to end it early, takes all of (RISCV_SETTLE_ROOM): the C's work takes some
+    # 40 s there
+    ("reaches peers and serves one through the libc's sockets, from C", 7, [WITH_PROGRAMS, "--network-peers",
+        "--command-line=test_exit test_services test_settle=60 test_network c_sockets tcp_echo={tcp_echo} udp_echo={udp_echo} dns=10.0.2.2:{dns}",
+        "--expect-line=[user] test_network: TCP echo of 65536 bytes from 10.0.2.2:{tcp_echo}, whole",
+        "--expect-line=[user] test_network: UDP echo from 10.0.2.2:{udp_echo}, both ways",
+        "--expect-line=[user] test_network: peer.slopos.test reached by name: yes; missing.slopos.test: Name or service not known",
+        "--expect-line=[user] test_network: listening on 7",
+        "--expect-line=[user] test_network: echoed 40000 bytes back to 10.0.2.2",
+        "--expect-line=[user] test_network: sockets: every check passed",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # The display (decisions/0192, 15b): virtio-gpu in 2D mode at the size QEMU prefers, a frame drawn with std/canvas into
     # the buffer not shown and presented, an arrow on the device's cursor plane moved by a virtio tablet, and a click
     # marked in the other buffer; the screen taken and checked for each (--display)
