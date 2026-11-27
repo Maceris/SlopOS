@@ -520,7 +520,24 @@ DISK_BUSES = {
     "ahci": ["-device", "ich9-ahci,id=ahci", "-device", "ide-hd,drive=disk,bus=ahci.0"],
     # A USB stick on an xHCI controller of its own
     "usb": ["-device", "qemu-xhci,id=usbdisk", "-device", "usb-storage,bus=usbdisk.0,drive=disk"],
+    # The xHCI controller alone, the stick plugged in later by --hotplug (decisions/0202, 21d): USB_STICK
+    "usb-later": ["-device", "qemu-xhci,id=usbdisk"],
 }
+
+# What --hotplug's add:stick plugs into --disk-bus=usb-later's controller: the drive --disk made, as a USB stick
+USB_STICK = {"driver": "usb-storage", "bus": "usbdisk.0", "drive": "disk", "id": "stick"}
+# What --hotplug's add:keyboard plugs into --input-bus=usb-later's controller
+USB_KEYBOARD = {"driver": "usb-kbd", "bus": "usb.0", "id": "keyboard"}
+
+
+def disk_drive(disk: Path, bus: str) -> list[str]:
+    """
+    QEMU's arguments for the disk's drive, named disk: for usb-later a block node, which outlives the stick that's
+    plugged in on it, so it can be plugged in again, as a drive made with -drive is deleted with its device.
+    """
+    if bus == "usb-later":
+        return ["-blockdev", f"driver=raw,node-name=disk,file.driver=file,file.filename={disk}"]
+    return ["-drive", f"file={disk},if=none,id=disk,format=raw"]
 
 
 def disk_device(bus: str, boot: bool) -> list[str]:
@@ -572,10 +589,11 @@ class Keyboard:
 
     def qemu_arguments(self) -> list[str]:
         keyboard = ["-device", "qemu-xhci,id=usb", "-device", "usb-kbd,bus=usb.0,id=keyboard"] if INPUT_BUS == "usb" \
+            else ["-device", "qemu-xhci,id=usb"] if INPUT_BUS == "usb-later" \
             else ["-device", "virtio-keyboard-pci,disable-legacy=on,iommu_platform=on,id=keyboard"]
         return keyboard + ["-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
 
-    def command(self, name: str, arguments: dict | None = None) -> None:
+    def command(self, name: str, arguments: dict | None = None) -> dict:
         message = {"execute": name} | ({"arguments": arguments} if arguments is not None else {})
         self.connection.sendall(json.dumps(message).encode() + b"\n")
         # Its reply, skipping the events QEMU sends between
@@ -588,7 +606,7 @@ class Keyboard:
             line, _, self.replies = self.replies.partition(b"\n")
             reply = json.loads(line)
             if "return" in reply or "error" in reply:
-                return
+                return reply
 
     def connect(self) -> bool:
         deadline = time.monotonic() + 30
@@ -611,7 +629,7 @@ class Keyboard:
             {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": qcode}}}]})
         # QEMU's usb-kbd holds only 16 key events until the driver's next report, as a real keyboard's poll rate
         # limits it too; typed at QMP's pace, the rest would be dropped. So a USB keyboard is typed at a person's pace
-        if INPUT_BUS == "usb":
+        if INPUT_BUS in ("usb", "usb-later"):
             time.sleep(USB_KEY_GAP)
 
     def type_line(self, line: str) -> None:
@@ -1075,6 +1093,61 @@ class PowerButton(Keyboard):
                 self.command("system_powerdown")
         except OSError:
             pass
+
+
+class Hotplug(Keyboard):
+    """
+    --hotplug (decisions/0202, 21d): USB devices plugged in and unplugged through QEMU's machine protocol, as steps in
+    turn: add:keyboard and add:stick plug in USB_KEYBOARD and USB_STICK (device_add), del:ID unplugs the device of that
+    ID (device_del), and wait:TEXT waits for a line of the serial output, after the one the last wait found, with TEXT
+    in it, up to HOTPLUG_WAIT seconds. A wait that runs out ends the steps, so the run's expected lines fail it.
+    """
+
+    DEVICES = {"keyboard": USB_KEYBOARD, "stick": USB_STICK}
+
+    def __init__(self, serial: Path, steps: list[str]):
+        super().__init__()
+        self.serial = serial
+        self.steps = steps
+        self.seen = 0
+        self.thread = threading.Thread(target=self.run_steps, daemon=True)
+
+    def qemu_arguments(self) -> list[str]:
+        return ["-qmp", f"tcp:127.0.0.1:{self.port},server=on,wait=off"]
+
+    def wait_for(self, text: str) -> bool:
+        deadline = time.monotonic() + HOTPLUG_WAIT
+        while time.monotonic() < deadline:
+            lines = self.serial.read_text(errors="replace").splitlines() if self.serial.exists() else []
+            for i in range(self.seen, len(lines)):
+                if text in lines[i]:
+                    self.seen = i + 1
+                    return True
+            time.sleep(0.1)
+        print(f"boot.py: --hotplug waited {HOTPLUG_WAIT} s for a line with {text}, and stopped", flush=True)
+        return False
+
+    def run_steps(self) -> None:
+        try:
+            if not self.connect():
+                return
+            for step in self.steps:
+                kind, _, value = step.partition(":")
+                if kind == "wait" and not self.wait_for(value):
+                    return
+                reply = {}
+                if kind == "add":
+                    reply = self.command("device_add", self.DEVICES[value])
+                if kind == "del":
+                    reply = self.command("device_del", {"id": value})
+                if "error" in reply:
+                    print(f"boot.py: --hotplug's {step} failed: {reply['error']}", flush=True)
+        except OSError:
+            pass
+
+
+# How long each of --hotplug's waits waits, in seconds
+HOTPLUG_WAIT = 120
 
 
 class EndWhenDone(Keyboard):
@@ -1775,6 +1848,8 @@ class ConsoleLink:
         # How many of the serial output's lines \\l's waits have looked through
         self.serial_seen = 0
         self.keyed = keyed
+        # Where in shown the next \\code looks for a new keyboard's code from: past the last one's
+        self.code_from = 0
         self.keyboard = keyboard
         # Once the console shows this line, the screen's taken through the machine protocol into screenshot
         self.screen_after = screen_after
@@ -1996,15 +2071,23 @@ class ConsoleLink:
             if not self.keyboard.connect():
                 return
             for line in self.keyed:
+                # \l{text}: a line of the serial output with text in it, waited for up to 120 seconds
+                if line.startswith("\\l{") and line.endswith("}"):
+                    deadline = time.monotonic() + 120
+                    while not self.serial_has(line[3:-1]) and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    continue
                 if line != "\\code":
                     self.keyboard.type_line(line)
                     continue
                 deadline = time.monotonic() + 30
                 found = None
                 while found is None and time.monotonic() < deadline:
-                    found = KEYBOARD_CODE.search(self.shown)
+                    found = KEYBOARD_CODE.search(self.shown, self.code_from)
                     time.sleep(0.1)
                 if found is not None:
+                    # The next \\code looks past this one, for another keyboard's
+                    self.code_from = found.end()
                     self.keyboard.type_line(found.group(1))
                     deadline = time.monotonic() + 10
                     while KEYBOARD_CODE.search(self.status()) and time.monotonic() < deadline:
@@ -2570,8 +2653,13 @@ def main() -> int:
     parser.add_argument("--restart-when-done", action="store_true",
                         help="as --shut-down-when-done, but R, which restarts the system (decisions/0182); with test_power on "
                         "the command line the machine resets, which QEMU, without --allow-reboot, takes as its end")
-    parser.add_argument("--input-bus", choices=["virtio", "usb"], default="virtio",
-                        help="what --keyboard-input types on: a virtio keyboard, or a USB keyboard on an xHCI controller")
+    parser.add_argument("--input-bus", choices=["virtio", "usb", "usb-later"], default="virtio",
+                        help="what --keyboard-input types on: a virtio keyboard, a USB keyboard on an xHCI controller, or "
+                        "one plugged in later into one by --hotplug's add:keyboard")
+    parser.add_argument("--hotplug", action="append", default=[],
+                        help="a step plugging in or unplugging USB devices, through QEMU's machine protocol, in turn: "
+                        "add:keyboard or add:stick (with --input-bus or --disk-bus usb-later), del:ID, or wait:TEXT for a "
+                        "serial line with TEXT in it (Hotplug); may be repeated. A keyboard line \\l{text} waits for one too")
     parser.add_argument("--keyboard-input", action="append", default=[],
                         help="a line to type on a virtio keyboard, which this adds with a virtio console, once the console "
                              "shows its banner; may be repeated")
@@ -2727,11 +2815,15 @@ def main() -> int:
             phases.append(("making the disk", time.monotonic() - phase_started))
         elif arguments.disk is not None:
             make_disk(disk, arguments.disk)
-            extra += ["-drive", f"file={disk},if=none,id=disk,format=raw", *disk_device(arguments.disk_bus, False)]
+            extra += [*disk_drive(disk, arguments.disk_bus), *disk_device(arguments.disk_bus, False)]
         if arguments.power_button_after is not None:
             button = PowerButton(serial, arguments.power_button_after)
             extra += button.qemu_arguments()
             button.thread.start()
+        if arguments.hotplug:
+            plugger = Hotplug(serial, arguments.hotplug)
+            extra += plugger.qemu_arguments()
+            plugger.thread.start()
         keyboard = None
         if arguments.keyboard_input or arguments.screen_after:
             keyboard = Keyboard()

@@ -561,6 +561,43 @@ TESTS = [
         f"--expect-line={tests_passed('disk_check', 14, 10)}",
         "--expect-disk-block=2049=SlopOS disk check: from the guest", "--expect-disk-text=Written by the guest, through std's files",
         "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # USB devices plugged in after start-up (decisions/0202, 21d): a keyboard reaches the input service, new, so its code
+    # is typed on it before what it types goes on; unplugged, its driver's let go of and its place in the seat freed; and
+    # plugged in again, it's new again in the same place, its driver started in the entry the last one left
+    ("plugs in, types on, unplugs and plugs in again a USB keyboard", 7, [WITH_PROGRAMS, "--timeout=240",
+        "--command-line=test_exit test_services test_settle=60", "--end-when-done", "--input-bus=usb-later",
+        "--hotplug=wait:root task: the supervisor started all", "--hotplug=add:keyboard",
+        "--hotplug=wait:echo: read after the code", "--hotplug=del:keyboard", "--hotplug=wait:input: keyboard 0 is gone",
+        "--hotplug=add:keyboard", "--hotplug=wait:echo: read replugged", "--hotplug=del:keyboard",
+        "--keyboard-input=\\l{input: keyboard 0 was plugged in}", "--keyboard-input=before the code",
+        "--keyboard-input=\\code", "--keyboard-input=after the code",
+        "--keyboard-input=\\l{input: keyboard 0 was plugged in}", "--keyboard-input=again", "--keyboard-input=\\code",
+        "--keyboard-input=replugged",
+        "--expect-line=[user] usb_hid: serving 1575:1 as a keyboard", "--expect-line=[user] input: keyboard 0 was plugged in",
+        "--expect-line=[user] input: keyboard 0 accepted", "--expect-line=[user] echo: read after the code",
+        "--expect-line=[user] supervisor: usb_hid for 1575:1 let go: its device is gone",
+        "--expect-line=[user] input: keyboard 0 is gone", "--expect-line=[user] echo: read replugged",
+        "--refuse-console-line=echo: before the code", "--refuse-console-line=echo: again",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
+    # And a USB stick: the storage manager started for it, as there was no disk before, its partitions listed and the
+    # disk check run on its FAT volume; unplugged, its partition server and FAT server let go of; plugged in again, held
+    # in the place it left, through the storage manager's devices channel
+    ("plugs in, checks, unplugs and plugs in again a USB stick", 7, [WITH_PROGRAMS, "--timeout=240",
+        "--command-line=test_exit test_services test_hotplug test_settle=60", "--end-when-done",
+        "--disk=SlopOS disk check: from the host", "--disk-bus=usb-later",
+        "--hotplug=wait:root task: the supervisor started all", "--hotplug=add:stick",
+        f"--hotplug=wait:{tests_passed('disk_check', 14, 10)[len('[user] '):]}", "--hotplug=del:stick",
+        "--hotplug=wait:storage_manager: disk 0 is gone", "--hotplug=add:stick",
+        "--hotplug=wait:storage_manager: disk 0 partition 2: EFI system partition",
+        "--expect-line=[user] usb_storage: serving 77824 blocks, 512 bytes each",
+        "--expect-line=[user] storage_manager: disk 0 partition 2: EFI system partition, 69632 blocks from 6144",
+        "--expect-line=[user] supervisor: test_hotplug: the disk plugged in is there; checking it",
+        "--expect-line=[user] fat_server: serving a FAT32 volume of 68512 clusters of 512 bytes",
+        f"--expect-line={tests_passed('disk_check', 14, 10)}",
+        "--expect-line-start=[user] supervisor: usb_storage for ",
+        "--expect-line=[user] storage_manager: disk 0 is gone", "--expect-line=[user] storage_manager: a disk was plugged in",
+        "--expect-disk-block=2049=SlopOS disk check: from the guest",
+        "--expect-line=[info] root task ended with code 0", "--", "-smp", "2"]),
     # Booted from a disk the image builder made rather than the ISO: the bootloader read from its EFI system partition,
     # loading only the boot set; the storage stack finding its partitions and its SlopOS
     # container, every other program read from the system volume, and the disk check passing on it as on the test disk

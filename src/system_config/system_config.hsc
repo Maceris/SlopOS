@@ -33,6 +33,7 @@ import config from "../protocols/config"
 import connector from "../protocols/connector"
 import links from "../protocols/links"
 import usb_device from "../protocols/usb_device"
+import hotplug from "../protocols/hotplug"
 import platform as platform_protocol from "../protocols/platform"
 import power from "../protocols/power"
 import powerbox from "../protocols/powerbox"
@@ -897,7 +898,12 @@ SUPERVISOR_SERVES :: type.[
     os.Listener[power.Power],
     os.Listener[read_only_dir.ReadOnlyDir],
     // Each USB class driver's interface, through the connection its host controller's driver gave
-    os.Listener[usb_device.UsbDevice]
+    os.Listener[usb_device.UsbDevice],
+    /*
+     * The input service's and storage manager's devices channels (decisions/0202, 21d), which the supervisor makes and
+     * sends devices plugged in later on
+     */
+    os.Listener[hotplug.Hotplug]
 ]
 
 /**

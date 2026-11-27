@@ -95,6 +95,7 @@ import config as config_protocol from "../../protocols/config"
 import connector from "../../protocols/connector"
 import display from "../../protocols/display"
 import entropy from "../../protocols/entropy"
+import hotplug from "../../protocols/hotplug"
 import events from "../../protocols/events"
 import input from "../../protocols/input"
 import net from "../../protocols/net"
@@ -201,6 +202,11 @@ SYSTEM_RETRY : u64 : 100_000_000
 ROOT_SERVICE_KEY : u64 : 7000
 /** The port key of the timer that tries again to start what ended and didn't start again (retry_restarts). */
 RESTART_RETRY_KEY : u64 : 8000
+/**
+ * The port key a USB host controller's driver's connection is watched under once start-up's devices are all there
+ * (serve_usb), for what it finds or loses later, is this plus the driver's index in Supervisor.started.
+ */
+USB_KEY : u64 : 10000
 /** How long after a restart's launch failed the next try is made, in nanoseconds: 250 ms. */
 RESTART_RETRY : u64 : 250_000_000
 /**
@@ -396,6 +402,8 @@ InputGrants :: struct {
     keyboard3 : os.Channel[connector.Connector]?,
     /** The listener for its client, the terminal service; the supervisor keeps its other end and dials it. */
     clients : os.Listener[seat.Seat],
+    /** Where the supervisor sends keyboards plugged in later (decisions/0202, 21d); it keeps the other end. */
+    devices : os.Channel[hotplug.Hotplug]?,
     /** A read-only copy of the kernel's command line, for test_new_keyboards; null without one. */
     command_line : slop_os.Memory?,
 }
@@ -683,6 +691,8 @@ StorageGrants :: struct {
     disk3 : os.Channel[connector.Connector]?,
     /** The listener for its clients; the supervisor keeps its other end, and dials it for connectors to it. */
     clients : os.Listener[storage.Storage],
+    /** Where the supervisor sends disks plugged in later (decisions/0202, 21d); it keeps the other end. */
+    devices : os.Channel[hotplug.Hotplug]?,
     /**
      * A copy of the kernel's command line, readable and duplicable, for its test words and the partition servers it
      * starts (decisions/0112); null without one.
@@ -890,6 +900,16 @@ Started :: struct {
     address : u32,
     /** A USB class driver's interface, 1 more than its index in the supervisor's usb; 0 for anything else. */
     usb_slot : usize,
+    /**
+     * Whether a USB class driver's device is gone, unplugged: it isn't started again, and its entry is the next class
+     * driver's (keep_usb).
+     */
+    usb_gone : bool,
+    /** A USB host controller's driver's: whether its connection is watched on the port (serve_usb), and which end. */
+    usb_watched : bool,
+    usb_watched_end : slop_os.Channel,
+    /** A USB host controller's driver's: whether a Next is held on its connection, waiting for its answer. */
+    usb_asked : bool,
     /** How many times it's been started again since restarts_since, 0 to RESTARTS. */
     restarts : u32,
     /** When its RESTART_WINDOW began, in nanoseconds of the monotonic clock. */
@@ -1148,9 +1168,30 @@ Supervisor :: struct {
     connector_count : usize,
     /** The port it waits on: what it started ending, connectors' Dials, DMA faults, and its connections' closes. */
     port : slop_os.Port,
-    /** The USB interfaces the host controllers' drivers have told of, usb_count of them. */
+    /** The USB interfaces the host controllers' drivers have told of, usb_count of them, gone ones among them. */
     usb : UsbInterface[MAX_USB_INTERFACES],
     usb_count : usize,
+    /**
+     * Whether start-up's USB devices are all there (start_usb), so the host controllers' drivers are watched for what
+     * they find and lose from then on (serve_usb), and what's found is given to the services that take it.
+     */
+    usb_watching : bool,
+    /**
+     * Whether serve_usb is taking a host controller's answers, so a wait it makes meanwhile (hotplug_disk_check) doesn't
+     * take them too.
+     */
+    usb_serving : bool,
+    /** The supervisor's end of the input service's devices channel (hotplug); NONE while it isn't running. */
+    input_devices : slop_os.Channel,
+    /** The supervisor's end of the storage manager's devices channel (hotplug); NONE while it isn't running. */
+    storage_devices : slop_os.Channel,
+    /**
+     * test_hotplug on the kernel's command line: the disk check started for the first disk plugged in once start-up's
+     * devices are all there, once the storage manager has its EFI system partition (hotplug_disk_check).
+     */
+    test_hotplug : bool,
+    /** Whether test_hotplug's disk check has been started. */
+    hotplug_checked : bool,
     /** The first serial line's driver, by index in started; NOWHERE without one. */
     first_serial : usize,
     /** The first disk's driver, by index in started; NOWHERE without one. */
@@ -1498,6 +1539,8 @@ main :: fn(
         scheduler_connector = NONE,
         entropy_connector = NONE,
         first_serial = NOWHERE,
+        input_devices = NONE,
+        storage_devices = NONE,
         first_disk = NOWHERE,
         first_keyboard = NOWHERE,
         first_nic = NOWHERE,
@@ -1655,6 +1698,7 @@ main :: fn(
             test_system_config = service_kit.has_word(text, "test_system_config")
             test_degraded = service_kit.has_word(text, "test_degraded")
             test_crash = service_kit.has_word(text, "test_crash")
+            supervisor.test_hotplug = service_kit.has_word(text, "test_hotplug")
             test_trace = service_kit.has_word(text, "test_trace")
             if test_trace {
                 // The trace on, if the kernel's trace_boot hasn't already, and drained as each service starts
@@ -1955,6 +1999,15 @@ wait_and_handle_until :: fn(supervisor : ptr[mut Supervisor], deadline : u64) {
             retry_restarts(supervisor)
         }
     }
+    if supervisor.usb_watching && !supervisor.usb_serving {
+        supervisor.usb_serving = true
+        defer supervisor.usb_serving = false
+        for i in 0..<supervisor.started_count {
+            if i < supervisor.started.count && supervisor.started[i].speaks == .UsbBus {
+                serve_usb(supervisor, i)
+            }
+        }
+    }
     serve_power(supervisor)
     for i in 0..<supervisor.connector_count {
         serve_connector(supervisor, i)
@@ -2040,7 +2093,7 @@ ended :: fn(supervisor : ptr[mut Supervisor], index : usize, code : u64) {
         }
         case None => {}
     }
-    if code == 0 || not_restarted || entry.ended_on_request {
+    if code == 0 || not_restarted || entry.ended_on_request || entry.usb_gone {
         entry.done = true
         return void
     }
@@ -5633,6 +5686,8 @@ UsbInterface :: struct {
     found : usb_bus.Interface,
     /** The host controller's driver's entry in started. */
     controller : usize,
+    /** Whether it's gone, its device unplugged or its host controller's driver ended: its place is the next one's. */
+    gone : bool,
 }
 
 /**
@@ -5675,7 +5730,178 @@ start_usb :: fn(supervisor : ptr[mut Supervisor]) {
         _ = slop_os.handle_close(cast[slop_os.Handle](port))
         if !settled {
             log_line.write(supervisor.log, "supervisor: %'s USB devices didn't settle", supervisor.started[i].name)
+            // Its last Next may still be answered, on the port once it's watched
+            supervisor.started[i].usb_asked = true
         }
+    }
+    supervisor.usb_watching = true
+    // Watched from now, a Next held on each, so what's found later wakes the port
+    for i in 0..<supervisor.started_count {
+        if i < supervisor.started.count && supervisor.started[i].speaks == .UsbBus {
+            serve_usb(supervisor, i)
+        }
+    }
+}
+
+/**
+ * Watch a USB host controller's driver's connection on the port, once start-up's devices are all there, and take what
+ * it answers: each interface found kept and its class driver started, and given to the service that takes it
+ * (keep_usb); each one lost let go of (detach_usb). A Next is held on it whenever none is. A driver started again has
+ * a new connection, watched in place of the last, and what it had found before is let go of, as it finds it all again.
+ *
+ * @param supervisor The supervisor, whose entry's connection is bound under USB_KEY plus index.
+ * @param index The driver's index in started; one that isn't running, or has no connection, is left alone.
+ */
+serve_usb :: fn(supervisor : ptr[mut Supervisor], index : usize) {
+    if index >= supervisor.started.count || index >= supervisor.started_count {
+        return void
+    }
+    entry :: &supervisor.started[index]
+    if !entry.running || entry.listener == NONE {
+        return void
+    }
+    if !entry.usb_watched || entry.usb_watched_end != entry.listener {
+        // Started again: what the last one found went with it
+        if entry.usb_watched {
+            _ = slop_os.port_unbind(supervisor.port, USB_KEY + cast[u64](index))
+            for usb in 0..<supervisor.usb_count {
+                if usb < supervisor.usb.count && supervisor.usb[usb].controller == index && !supervisor.usb[usb].gone {
+                    detach_usb(supervisor, usb)
+                }
+            }
+            entry.usb_asked = false
+        }
+        signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+        match slop_os.port_bind(
+            supervisor.port,
+            USB_KEY + cast[u64](index),
+            cast[slop_os.Handle](entry.listener),
+            signals,
+            .Persistent
+        ) {
+            case Ok => {}
+            case Error(error) => return void
+        }
+        entry.usb_watched = true
+        entry.usb_watched_end = entry.listener
+    }
+    end :: entry.listener
+    into := os.Incoming.{}
+    loop {
+        if !supervisor.started[index].usb_asked {
+            out := os.Outgoing.{}
+            made :: os.begin[usb_bus.Request](&out)
+            made^ = .Next
+            if usb_bus.send_request(end, supervisor.port, &out) is_some {
+                return void
+            }
+            supervisor.started[index].usb_asked = true
+        }
+        match usb_bus.receive_response(end, supervisor.port, &into, false) {
+            case Received => {}
+            case _ => return void
+        }
+        supervisor.started[index].usb_asked = false
+        match os.message_of[usb_bus.Response](&into)^ {
+            case Attached(found) => keep_usb(supervisor, index, found)
+            case Detached(key) => {
+                for usb in 0..<supervisor.usb_count {
+                    if usb < supervisor.usb.count && supervisor.usb[usb].controller == index
+                        && supervisor.usb[usb].found.key == key && !supervisor.usb[usb].gone {
+                        detach_usb(supervisor, usb)
+                    }
+                }
+            }
+            case _ => {}
+        }
+    }
+}
+
+/**
+ * Let go of a USB interface whose device is gone, unplugged, or whose host controller's driver ended: its class
+ * driver's connectors closed, so the service that dials them sees it gone, then the driver killed, not to be started
+ * again, and the interface's connection closed. Its places in usb and started are the next interface's.
+ *
+ * @param supervisor The supervisor, whose interface and its class driver's entry are marked gone.
+ * @param usb The interface, by its index in usb; one past usb_count, or gone, is left alone.
+ */
+detach_usb :: fn(supervisor : ptr[mut Supervisor], usb : usize) {
+    if usb >= supervisor.usb_count || usb >= supervisor.usb.count || supervisor.usb[usb].gone {
+        return void
+    }
+    supervisor.usb[usb].gone = true
+    found :: supervisor.usb[usb].found
+    for slot in 0..<supervisor.started_count {
+        if slot >= supervisor.started.count || supervisor.started[slot].usb_slot != usb + 1
+            || supervisor.started[slot].usb_gone {
+            continue
+        }
+        entry :: &supervisor.started[slot]
+        entry.usb_gone = true
+        log_line.write(
+            supervisor.log,
+            "supervisor: %1 for %2:%3 let go: its device is gone",
+            entry.name,
+            found.vendor,
+            found.product
+        )
+        for i in 0..<supervisor.connector_count {
+            if i < supervisor.connectors.count && supervisor.connectors[i].target == slot
+                && supervisor.connectors[i].end != NONE {
+                _ = slop_os.port_unbind(supervisor.port, CONNECTOR_KEY + cast[u64](i))
+                _ = slop_os.handle_close(cast[slop_os.Handle](supervisor.connectors[i].end))
+                supervisor.connectors[i].end = NONE
+            }
+        }
+        if entry.running {
+            _ = slop_os.process_kill(entry.process)
+            // Not running from here, though its end arrives on the port later
+            entry.running = false
+        }
+    }
+    _ = slop_os.handle_close(cast[slop_os.Handle](found.device.end))
+}
+
+/**
+ * Give a USB class driver started once start-up's devices are all there to the service that takes what it serves: an
+ * input device's to the input service, a disk's to the storage manager, each as a connector on its devices channel;
+ * a disk's starts the storage manager, if it isn't running, as there was no disk before.
+ *
+ * @param supervisor The supervisor, which serves a new connector to the driver.
+ * @param slot The class driver's index in started.
+ */
+announce_usb :: fn(supervisor : ptr[mut Supervisor], slot : usize) {
+    if slot >= supervisor.started.count || !supervisor.started[slot].running {
+        return void
+    }
+    speaks :: supervisor.started[slot].speaks
+    devices := NONE
+    if speaks == .Input && is_running(supervisor, supervisor.input) {
+        devices = supervisor.input_devices
+    }
+    else if speaks == .Block && is_running(supervisor, supervisor.storage_slot) {
+        devices = supervisor.storage_devices
+    }
+    else if speaks == .Block && supervisor.storage_slot == NOWHERE {
+        // The first disk: the storage manager started for it, given it as it's given the disks found at start
+        supervisor.storage_slot = start_storage(supervisor, NOWHERE)
+        hotplug_disk_check(supervisor)
+        return void
+    }
+    if devices == NONE {
+        return void
+    }
+    defer if speaks == .Block {
+        hotplug_disk_check(supervisor)
+    }
+    given :: connector_to(supervisor, slot) or_return void
+    port :: os.port_for(supervisor.block.budget, devices) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
+    out := os.Outgoing.{}
+    made :: os.begin[hotplug.Request](&out)
+    made^ = .Added(given)
+    if hotplug.send_request(devices, port, &out) is_some {
+        log_line.write(supervisor.log, "supervisor: % couldn't be given to its service", supervisor.started[slot].name)
     }
 }
 
@@ -5688,13 +5914,21 @@ start_usb :: fn(supervisor : ptr[mut Supervisor]) {
  * @param found What it said; its connection is the supervisor's, closed if there's no room.
  */
 keep_usb :: fn(supervisor : ptr[mut Supervisor], controller : usize, found : usb_bus.Interface) {
-    if supervisor.usb_count >= supervisor.usb.count {
+    // A gone interface's place first, then the next
+    usb := supervisor.usb_count
+    for i in 0..<supervisor.usb_count {
+        if usb == supervisor.usb_count && i < supervisor.usb.count && supervisor.usb[i].gone {
+            usb = i
+        }
+    }
+    if usb >= supervisor.usb.count {
         _ = slop_os.handle_close(cast[slop_os.Handle](found.device.end))
         return void
     }
-    usb :: supervisor.usb_count
     supervisor.usb[usb] = UsbInterface.{found = found, controller = controller}
-    supervisor.usb_count += 1
+    if usb == supervisor.usb_count {
+        supervisor.usb_count += 1
+    }
     for index in 0..<cast[usize](supervisor.records.service_count) {
         service :: service_at(supervisor, index) or_break
         if service.usb_flags & system_records.USB_CLASS_DRIVER == 0 || service.usb_class != found.class
@@ -5702,7 +5936,32 @@ keep_usb :: fn(supervisor : ptr[mut Supervisor], controller : usize, found : usb
             || (service.usb_flags & system_records.USB_ANY_PROTOCOL == 0 && service.usb_protocol != found.protocol) {
             continue
         }
-        start_usb_driver(supervisor, index, usb, NOWHERE)
+        // A gone device's driver's entry, ended, first, so plugging in again and again doesn't fill started
+        again := NOWHERE
+        for slot in 0..<supervisor.started_count {
+            if again == NOWHERE && slot < supervisor.started.count && supervisor.started[slot].usb_gone
+                && supervisor.started[slot].done && !supervisor.started[slot].running {
+                again = slot
+            }
+        }
+        /*
+         * Launched into that entry, its end watched under its key, which the last process's binding, though it fired,
+         * still has
+         */
+        if again != NOWHERE {
+            _ = slop_os.port_unbind(supervisor.port, cast[u64](again))
+        }
+        supervisor.relaunching = again
+        start_usb_driver(supervisor, index, usb, again)
+        supervisor.relaunching = NOWHERE
+        if supervisor.usb_watching {
+            for slot in 0..<supervisor.started_count {
+                if slot < supervisor.started.count && supervisor.started[slot].usb_slot == usb + 1
+                    && !supervisor.started[slot].usb_gone && supervisor.started[slot].running {
+                    announce_usb(supervisor, slot)
+                }
+            }
+        }
         return void
     }
     log_line.write(
@@ -5738,7 +5997,7 @@ UsbGrants :: struct[P] {
  */
 start_usb_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, usb : usize, again : usize) {
     service :: service_at(supervisor, index) or_return void
-    if usb >= supervisor.usb_count || usb >= supervisor.usb.count {
+    if usb >= supervisor.usb_count || usb >= supervisor.usb.count || supervisor.usb[usb].gone {
         return void
     }
     interface :: supervisor.usb[usb].found.device.end
@@ -5817,6 +6076,7 @@ start_usb_driver :: fn(supervisor : ptr[mut Supervisor], index : usize, usb : us
     entry.speaks = speaks
     entry.service = index
     entry.usb_slot = usb + 1
+    entry.usb_gone = false
     if speaks == .Input && supervisor.first_keyboard == NOWHERE {
         supervisor.first_keyboard = slot
     }
@@ -5839,7 +6099,7 @@ start_input :: fn(supervisor : ptr[mut Supervisor], again : usize) {
     keyboards : MaybeConnector[4]
     found : usize = 0
     for entry, i in supervisor.started {
-        if i < supervisor.started_count && entry.speaks == .Input && found < keyboards.count {
+        if i < supervisor.started_count && entry.speaks == .Input && !entry.usb_gone && found < keyboards.count {
             keyboards[found] = connector_to(supervisor, i)
             found += 1
         }
@@ -5851,6 +6111,15 @@ start_input :: fn(supervisor : ptr[mut Supervisor], again : usize) {
         keyboard2 = keyboards[2],
         keyboard3 = keyboards[3],
         clients = os.Listener[seat.Seat].{end = pair.a},
+    }
+    // For keyboards plugged in later; the supervisor's end replaces the last service's
+    devices := NONE
+    match os.channel_for[hotplug.Hotplug](supervisor.block.budget, 0) {
+        case Ok(made) => {
+            grants.devices = os.Channel[hotplug.Hotplug].{end = made.a}
+            devices = made.b
+        }
+        case Error(error) => {}
     }
     match supervisor.command_line {
         case Some(text) => {
@@ -5880,12 +6149,64 @@ start_input :: fn(supervisor : ptr[mut Supervisor], again : usize) {
                 supervisor.started[slot].speaks = .Seat
                 supervisor.input = slot
             }
+            replace_devices(&supervisor.input_devices, devices)
         }
         case Error(error) => {
             failed(supervisor, service.name, error)
             _ = slop_os.handle_close(cast[slop_os.Handle](pair.b))
+            replace_devices(&devices, NONE)
         }
     }
+}
+
+/** How long test_hotplug waits for the storage manager to have a disk plugged in's EFI system partition: 20 s. */
+HOTPLUG_WAIT : u64 : 20_000_000_000
+/** How long apart test_hotplug asks the storage manager for it: 100 ms. */
+HOTPLUG_ASK_EVERY : u64 : 100_000_000
+
+/**
+ * test_hotplug: start the disk check on the first disk plugged in, once the storage manager has its EFI system
+ * partition, asked for every HOTPLUG_ASK_EVERY up to HOTPLUG_WAIT, the port handled meanwhile, as the storage manager
+ * dials the disk through its connector. Only once; without test_hotplug, nothing's done.
+ *
+ * @param supervisor The supervisor, whose port is handled while it waits; the disk check gets an entry.
+ */
+hotplug_disk_check :: fn(supervisor : ptr[mut Supervisor]) {
+    if !supervisor.test_hotplug || supervisor.hotplug_checked || !is_running(supervisor, supervisor.storage_slot) {
+        return void
+    }
+    supervisor.hotplug_checked = true
+    deadline :: (slop_os.clock_monotonic() or_else 0) + HOTPLUG_WAIT
+    loop {
+        match files_of_type(supervisor, supervisor.storage_slot, storage_manager.ESP_TYPE) {
+            case Some(root) => {
+                _ = slop_os.handle_close(cast[slop_os.Handle](root.end))
+                log_line.write(supervisor.log, "supervisor: test_hotplug: the disk plugged in is there; checking it")
+                start_disk_check(supervisor, supervisor.storage_slot)
+                return void
+            }
+            case None => {}
+        }
+        now :: slop_os.clock_monotonic() or_else deadline
+        if now >= deadline {
+            log_line.write(supervisor.log, "supervisor: test_hotplug: the disk plugged in didn't come")
+            return void
+        }
+        wait_and_handle_until(supervisor, now + HOTPLUG_ASK_EVERY)
+    }
+}
+
+/**
+ * Put a service's new devices channel in place of the last one's, which is closed.
+ *
+ * @param kept The supervisor's end that's kept, closed if it's open.
+ * @param devices The new end, or NONE.
+ */
+replace_devices :: fn(kept : ptr[mut slop_os.Channel], devices : slop_os.Channel) {
+    if kept^ != NONE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](kept^))
+    }
+    kept^ = devices
 }
 
 /**
@@ -6676,7 +6997,8 @@ start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
     // Only disks with blocks, as a controller with nothing on it serves none of (decisions/0201, 20c); with none, no storage
     any_blocks := false
     for i in 0..<supervisor.started_count {
-        if i < supervisor.started.count && supervisor.started[i].speaks == .Block && has_blocks(supervisor, i) {
+        if i < supervisor.started.count && supervisor.started[i].speaks == .Block && !supervisor.started[i].usb_gone
+            && has_blocks(supervisor, i) {
             any_blocks = true
         }
     }
@@ -6704,7 +7026,8 @@ start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
     disks : MaybeConnector[4]
     found : usize = 0
     for entry, i in supervisor.started {
-        if i < supervisor.started_count && entry.speaks == .Block && found < disks.count && has_blocks(supervisor, i) {
+        if i < supervisor.started_count && entry.speaks == .Block && !entry.usb_gone && found < disks.count
+            && has_blocks(supervisor, i) {
             disks[found] = connector_to(supervisor, i)
             found += 1
         }
@@ -6721,6 +7044,15 @@ start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
         disk2 = disks[2],
         disk3 = disks[3],
         clients = os.Listener[storage.Storage].{end = pair.a},
+    }
+    // For disks plugged in later; the supervisor's end replaces the last storage manager's
+    devices := NONE
+    match os.channel_for[hotplug.Hotplug](supervisor.block.budget, 0) {
+        case Ok(made) => {
+            grants.devices = os.Channel[hotplug.Hotplug].{end = made.a}
+            devices = made.b
+        }
+        case Error(error) => {}
     }
     match supervisor.command_line {
         case Some(text) => {
@@ -6751,10 +7083,12 @@ start_storage :: fn(supervisor : ptr[mut Supervisor], again : usize) -> usize {
                 supervisor.started[slot].listener = pair.b
                 supervisor.started[slot].speaks = .Storage
             }
+            replace_devices(&supervisor.storage_devices, devices)
             return slot
         }
         case Error(error) => {
             failed(supervisor, service.name, error)
+            replace_devices(&devices, NONE)
             return NOWHERE
         }
     }

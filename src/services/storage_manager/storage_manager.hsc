@@ -20,6 +20,12 @@
  *
  * Automatic snapshots (decisions/0179): every hour, each writable volume served, unlocked, gets a snapshot, and those
  * older than a day, its automatic ones and those a dir's Snapshot took, are deleted (automatic_snapshots).
+ *
+ * Disks plugged in later (decisions/0202, 21d): the supervisor sends a connector to each on the devices channel, which
+ * is held as the disks given at start are, in a gone disk's place or the next, its partitions in gone partitions'
+ * places or after the rest. A disk whose connector's other end closes, as the supervisor closes it once the disk's
+ * unplugged, is gone: its partition server and everything served from its partitions killed, its partitions left
+ * listed with nothing in them (a type of all zeros, as an unused GPT entry has), so the indexes of the others stay.
  */
 package storage_manager
 
@@ -37,6 +43,7 @@ import log_line from "../../log_line"
 import block from "../../protocols/block"
 import connector from "../../protocols/connector"
 import container from "../../protocols/container"
+import hotplug from "../../protocols/hotplug"
 import links from "../../protocols/links"
 import partitions from "../../protocols/partitions"
 import storage from "../../protocols/storage"
@@ -85,6 +92,13 @@ LINKS_KEY : u64 : 1000
  * dialed again when it does (decisions/0140).
  */
 MANAGER_KEY : u64 : 900
+/** The key the devices channel is bound to the port with, for what the supervisor sends and for its closing. */
+DEVICES_KEY : u64 : 800
+/**
+ * The key a disk's connector is watched under for its other end closing, plus its disk's index, as the supervisor
+ * closes it when the disk's unplugged.
+ */
+DISK_GONE_KEY : u64 : 700
 /** The key a partition server is watched under from its launch, plus its disk's index. */
 PARTITION_SERVER_KEY : u64 : 2000
 /** The key of the timer that tries again to start a disk's partition server, plus its disk's index. */
@@ -234,8 +248,14 @@ Manager :: struct {
     command_line : slop_os.Memory,
     /** Each disk's partition server's end; NO_HANDLE while it isn't running. */
     disks : Disk[MAX_DISKS],
-    /** How many disks have a partition server started. */
+    /** How many disks have a partition server started, gone ones among them. */
     disk_count : usize,
+    /** Whether each disk is gone, unplugged: its place is the next disk plugged in's. */
+    disk_gone : bool[MAX_DISKS],
+    /** Whether each partition is gone with its disk: listed with nothing in it, its place the next one listed's. */
+    partition_gone : bool[MAX_PARTITIONS],
+    /** The devices channel, which the supervisor sends disks plugged in on; NO_HANDLE without one, or once it fails. */
+    devices : slop_os.Channel,
     /** Each disk's connector, kept to dial its driver again for a restarted partition server. */
     connectors : Disk[MAX_DISKS],
     /** Each disk's partition server's process. */
@@ -312,6 +332,8 @@ Manager :: struct {
  * @param disk2 A connector to the third disk's driver; without it, there's no such disk.
  * @param disk3 A connector to the fourth disk's driver; without it, there's no such disk.
  * @param clients The listener its clients' connections arrive on; more arrive as Connects on those.
+ * @param devices Where the supervisor sends connectors to disks plugged in after it started (the hotplug protocol);
+ *     without it, there are only the disks given.
  * @param command_line The kernel's command line, for test_storage_restart and the partition servers' faulty_block;
  *     without it, neither is asked for.
  * @return 1 if its port couldn't be made or the process manager couldn't be dialed, and 2 if clients couldn't be
@@ -329,10 +351,12 @@ main :: fn(
     disk2 : os.Channel[connector.Connector]?,
     disk3 : os.Channel[connector.Connector]?,
     clients : os.Listener[storage.Storage],
+    devices : os.Channel[hotplug.Hotplug]?,
     command_line : slop_os.Memory?
 ) -> int {
     startup :: slop_os.startup_block()
     state := Manager.{
+        devices = cast[slop_os.Channel](slop_os.NO_HANDLE),
         log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE),
         manager_connector = manager.end,
         fat_server_module = fat_server_module,
@@ -368,17 +392,17 @@ main :: fn(
     // A partition server for each disk, and its partitions
     for maybe in DiskConnector.[disk0, disk1, disk2, disk3] {
         dialing :: maybe or_continue
-        dial_port :: os.port_for(startup.budget, dialing.end) or_continue
-        index :: state.disk_count
-        if index >= MAX_DISKS {
-            break
+        _ = add_disk(&state, dialing)
+    }
+    match devices {
+        case Some(channel) => {
+            signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+            match slop_os.port_bind(state.port, DEVICES_KEY, cast[slop_os.Handle](channel.end), signals, .Persistent) {
+                case Ok => state.devices = channel.end
+                case Error(error) => _ = slop_os.handle_close(cast[slop_os.Handle](channel.end))
+            }
         }
-        state.connectors[index] = Disk.{end = dialing.end, port = dial_port}
-        if !start_partition_server(&state, index) {
-            continue
-        }
-        state.disk_count = index + 1
-        list_partitions(&state, index)
+        case None => {}
     }
     // test_storage_restart: the first disk's partition server killed, and waited for until it's started again
     if state.test_restart && state.disk_count > 0 {
@@ -406,6 +430,7 @@ main :: fn(
         for i in 0..<state.served_count {
             serve_links(&state, i, &into)
         }
+        take_devices(&state, &into)
         if state.serve_again {
             state.serve_again = false
             continue
@@ -432,8 +457,119 @@ main :: fn(
             if i < cast[usize](taken) && packet.key >= DISK_RETRY_KEY && packet.key < DISK_RETRY_KEY + MAX_DISKS {
                 restart_disk(&state, cast[usize](packet.key - DISK_RETRY_KEY))
             }
+            if i < cast[usize](taken) && packet.kind == .Signal && packet.key >= DISK_GONE_KEY
+                && packet.key < DISK_GONE_KEY + MAX_DISKS {
+                disk_gone(&state, cast[usize](packet.key - DISK_GONE_KEY))
+            }
         }
     }
+}
+
+/**
+ * Hold a disk: its connector kept, in a gone disk's place or the next, its partition server started and its
+ * partitions listed, and its connector watched for its other end closing (disk_gone).
+ *
+ * @param state The storage manager's state, whose connectors, disk_count and partitions may grow.
+ * @param dialing The connector to the disk's driver, which moves to the storage manager; closed if there's no place
+ *     for it, a port for it can't be made, or its partition server can't be started, as for a disk with no blocks.
+ * @return Whether it's held.
+ */
+add_disk :: fn(state : ptr[mut Manager], dialing : os.Channel[connector.Connector]) -> bool {
+    index := state.disk_count
+    for i in 0..<state.disk_count {
+        if index == state.disk_count && i < MAX_DISKS && state.disk_gone[i] {
+            index = i
+        }
+    }
+    if index >= MAX_DISKS {
+        runtime.log_info("a disk past the % held is passed over", MAX_DISKS)
+        _ = slop_os.handle_close(cast[slop_os.Handle](dialing.end))
+        return false
+    }
+    dial_port :: match os.port_for(slop_os.startup_block().budget, dialing.end) {
+        case Some(made) => made
+        case None => {
+            _ = slop_os.handle_close(cast[slop_os.Handle](dialing.end))
+            return false
+        }
+    }
+    state.connectors[index] = Disk.{end = dialing.end, port = dial_port}
+    state.disk_running[index] = Running.{process = cast[slop_os.Process](slop_os.NO_HANDLE),
+        budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)}
+    state.disk_retries[index] = 0
+    if !start_partition_server(state, index) {
+        close_disk(&state.connectors[index])
+        return false
+    }
+    state.disk_gone[index] = false
+    // Its connector's other end closing: the supervisor closes it once the disk's unplugged
+    _ = slop_os.port_bind(
+        state.port,
+        DISK_GONE_KEY + cast[u64](index),
+        cast[slop_os.Handle](dialing.end),
+        slop_os.SIGNAL_PEER_CLOSED,
+        .Once
+    )
+    if index == state.disk_count {
+        state.disk_count = index + 1
+    }
+    list_partitions(state, index)
+    return true
+}
+
+/**
+ * Take what the supervisor sent on the devices channel, until there's nothing more: each disk plugged in held
+ * (add_disk). A channel that fails is closed, and nothing more comes.
+ *
+ * @param state The storage manager's state, whose devices is NO_HANDLE once it fails.
+ * @param into Where each request is received, reused.
+ */
+take_devices :: fn(state : ptr[mut Manager], into : ptr[mut os.Incoming]) {
+    if cast[slop_os.Handle](state.devices) == slop_os.NO_HANDLE {
+        return void
+    }
+    loop {
+        match hotplug.receive_request(state.devices, state.port, into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = hotplug.answer_unsupported(state.devices, state.port)
+                continue
+            }
+            case _ => {
+                _ = slop_os.port_unbind(state.port, DEVICES_KEY)
+                _ = slop_os.handle_close(cast[slop_os.Handle](state.devices))
+                state.devices = cast[slop_os.Channel](slop_os.NO_HANDLE)
+                return void
+            }
+        }
+        match os.message_of[hotplug.Request](into)^ {
+            case Added(found) => {
+                runtime.log_info("a disk was plugged in")
+                _ = add_disk(state, found)
+            }
+        }
+    }
+}
+
+/**
+ * Let go of a disk that's gone, unplugged: its partition server killed and everything served from its partitions
+ * with it (ended), its partitions left listed with nothing in them, and its connector closed.
+ *
+ * @param state The storage manager's state, whose disk's place and partitions' places are free for the next.
+ * @param index Which disk; past disk_count, or one already gone, does nothing.
+ */
+disk_gone :: fn(state : ptr[mut Manager], index : usize) {
+    if index >= MAX_DISKS || index >= state.disk_count || state.disk_gone[index] {
+        return void
+    }
+    state.disk_gone[index] = true
+    runtime.log_info("disk % is gone", index)
+    if cast[slop_os.Handle](state.disk_running[index].process) != slop_os.NO_HANDLE {
+        kill_running(&state.disk_running[index])
+    }
+    ended(state, PARTITION_SERVER_KEY + cast[u64](index))
+    close_disk(&state.connectors[index])
 }
 
 /**
@@ -735,6 +871,16 @@ ended :: fn(state : ptr[mut Manager], key : u64) {
             }
         }
     }
+    // Unplugged: its partitions left listed with nothing in them, their places the next ones'
+    if state.disk_gone[index] {
+        for i in 0..<state.partition_count {
+            if i < MAX_PARTITIONS && cast[usize](state.partitions[i].disk) == index && !state.partition_gone[i] {
+                state.partition_gone[i] = true
+                state.partitions[i] = storage.Partition.{disk = state.partitions[i].disk, index = state.partitions[i].index}
+            }
+        }
+        return void
+    }
     if !may_start(&state.disk_running[index]) {
         runtime.log_info("the partition server for disk % isn't started again", index)
         return void
@@ -752,7 +898,8 @@ ended :: fn(state : ptr[mut Manager], key : u64) {
  * @param index Which disk; past MAX_DISKS, or one whose server is running, does nothing.
  */
 restart_disk :: fn(state : ptr[mut Manager], index : usize) {
-    if index >= MAX_DISKS || cast[slop_os.Handle](state.disk_running[index].process) != slop_os.NO_HANDLE {
+    if index >= MAX_DISKS || cast[slop_os.Handle](state.disk_running[index].process) != slop_os.NO_HANDLE
+        || state.disk_gone[index] {
         return void
     }
     if start_partition_server(state, index) {
@@ -861,7 +1008,8 @@ close_disk :: fn(disk : ptr[mut Disk]) {
 }
 
 /**
- * List a disk's partitions, from 0 until its partition server has no more, each added to the partitions and logged.
+ * List a disk's partitions, from 0 until its partition server has no more, each added to the partitions, in a gone
+ * partition's place or after the rest, and logged.
  *
  * @param state The storage manager's state.
  * @param disk The disk's index. Listing stops once MAX_PARTITIONS are listed, from every disk.
@@ -870,12 +1018,21 @@ list_partitions :: fn(state : ptr[mut Manager], disk : usize) {
     for index in 0..<cast[u32](MAX_PARTITIONS) {
         match ask(state, disk, .Describe(index)) {
             case Described(info) => {
-                slot :: state.partition_count
-                if slot >= state.partitions.count {
+                // A gone partition's place first, then the next
+                slot := state.partition_count
+                for i in 0..<state.partition_count {
+                    if slot == state.partition_count && i < MAX_PARTITIONS && state.partition_gone[i] {
+                        slot = i
+                    }
+                }
+                if slot >= state.partitions.count || slot >= MAX_PARTITIONS {
                     return void
                 }
                 state.partitions[slot] = storage.Partition.{disk = cast[u32](disk), index = index, info = info}
-                state.partition_count = slot + 1
+                state.partition_gone[slot] = false
+                if slot == state.partition_count {
+                    state.partition_count = slot + 1
+                }
                 described := info
                 runtime.log_info(
                     "disk % partition %: %, % blocks from %",

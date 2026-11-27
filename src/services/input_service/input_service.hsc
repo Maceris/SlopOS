@@ -12,6 +12,10 @@
  * test_new_keyboards on the kernel's command line, is new: its first key makes a random six-digit code, which the
  * terminal service shows on the status line, and nothing it types reaches anyone until that code is typed on it, and
  * Enter. A keyboard that's dialed again, after its driver's restart, is the same keyboard.
+ *
+ * One plugged in later comes from the supervisor as a connector on the devices channel (decisions/0202, 21d), into a
+ * place no keyboard has, and is new. A keyboard whose driver can't be dialed again once its channel fails, as when it's
+ * unplugged and the supervisor closes its connector, is gone: its place is free for the next.
  */
 package input_service
 
@@ -23,6 +27,7 @@ import random from "std:random"
 import keymaps from "../../keymaps"
 import service_kit from "../../libraries/service_kit"
 import connector from "../../protocols/connector"
+import hotplug from "../../protocols/hotplug"
 import input from "../../protocols/input"
 import seat from "../../protocols/seat"
 
@@ -30,6 +35,8 @@ import seat from "../../protocols/seat"
 MAX_KEYBOARDS :: 4
 /** The port key keyboard i's channel is bound at, plus i: above the clients' keys. */
 KEYBOARD_KEY : u64 : 1000
+/** The port key the devices channel is bound at, for what the supervisor sends and for its closing. */
+DEVICES_KEY : u64 : 2000
 /** No channel: a keyboard's connector or end when it has none. */
 NONE : slop_os.Channel : cast[slop_os.Channel](slop_os.NO_HANDLE)
 
@@ -92,6 +99,8 @@ QUEUED_TEXT :: 2048
 Service :: struct {
     /** The port every keyboard and client is bound to, waited on for all of them. */
     port : slop_os.Port,
+    /** The devices channel, the supervisor's to send keyboards plugged in later on; NONE without it, or once it fails. */
+    devices : slop_os.Channel,
     /** The layout keys are typed through: US until a client's SetLayout names another. */
     keymap : keymaps.Keymap,
     /** The keyboards, by grant: keyboards[i] from keyboard{i}. */
@@ -134,6 +143,8 @@ Service :: struct {
  * @param keyboard2 The connector to the third keyboard's driver, as keyboard0's.
  * @param keyboard3 The connector to the fourth keyboard's driver, as keyboard0's.
  * @param clients Where connections from the seat's clients, the terminal service, arrive; more come through Connect.
+ * @param devices Where the supervisor sends connectors to keyboards plugged in after the service started (the hotplug
+ *     protocol), each new. Without it, the seat has only the keyboards it was given.
  * @param command_line The kernel's command line, read for test_new_keyboards, which treats every keyboard as new.
  *     Without it, the keyboards given are the machine's own, and accepted.
  * @return 2 if its port couldn't be made; 3 if the clients' listener couldn't be bound to it. It doesn't return
@@ -146,12 +157,24 @@ main :: fn(
     keyboard2 : os.Channel[connector.Connector]?,
     keyboard3 : os.Channel[connector.Connector]?,
     clients : os.Listener[seat.Seat],
+    devices : os.Channel[hotplug.Hotplug]?,
     command_line : slop_os.Memory?
 ) -> int {
     startup :: slop_os.startup_block()
     service := runtime.new(Service)
     service.keymap = keymaps.US
     service.port = slop_os.port_create(startup.budget) or_return 2
+    service.devices = NONE
+    match devices {
+        case Some(channel) => {
+            signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
+            match slop_os.port_bind(service.port, DEVICES_KEY, cast[slop_os.Handle](channel.end), signals, .Persistent) {
+                case Ok => service.devices = channel.end
+                case Error(error) => _ = slop_os.handle_close(cast[slop_os.Handle](channel.end))
+            }
+        }
+        case None => {}
+    }
     _ = service_kit.watch_stop(service.port)
     connected := service_kit.Clients.{}
     if !service_kit.add_client(&connected, service.port, clients.end) {
@@ -179,6 +202,7 @@ main :: fn(
             i += 1
         }
         while i < connected.count
+        take_devices(service, &into)
         for i in cast[usize](0)..<MAX_KEYBOARDS {
             take_keys(service, i, &into)
         }
@@ -215,6 +239,54 @@ adopt :: fn(service : ptr[mut Service], index : usize, found : os.Channel[connec
 }
 
 /**
+ * Take what the supervisor sent on the devices channel, until there's nothing more: each keyboard plugged in, into the
+ * first place no keyboard has, new, so its code has to be typed on it; one with no place left is closed. A channel
+ * that fails is closed, and nothing more comes.
+ *
+ * @param service The service, whose keyboards may gain one, and whose devices is NONE once it fails.
+ * @param into Where each request is received, reused.
+ */
+take_devices :: fn(service : ptr[mut Service], into : ptr[mut os.Incoming]) {
+    if cast[slop_os.Handle](service.devices) == slop_os.NO_HANDLE {
+        return void
+    }
+    loop {
+        match hotplug.receive_request(service.devices, service.port, into, false) {
+            case Received => {}
+            case Empty => return void
+            case Unsupported => {
+                _ = hotplug.answer_unsupported(service.devices, service.port)
+                continue
+            }
+            case _ => {
+                _ = slop_os.port_unbind(service.port, DEVICES_KEY)
+                _ = slop_os.handle_close(cast[slop_os.Handle](service.devices))
+                service.devices = NONE
+                return void
+            }
+        }
+        match os.message_of[hotplug.Request](into)^ {
+            case Added(found) => {
+                place : usize = MAX_KEYBOARDS
+                for i in cast[usize](0)..<MAX_KEYBOARDS {
+                    if place == MAX_KEYBOARDS && cast[slop_os.Handle](service.keyboards[i].connector) == slop_os.NO_HANDLE {
+                        place = i
+                    }
+                }
+                if place == MAX_KEYBOARDS {
+                    runtime.log_info("a keyboard was plugged in, but the seat has %", MAX_KEYBOARDS)
+                    _ = slop_os.handle_close(cast[slop_os.Handle](found.end))
+                    continue
+                }
+                service.keyboards[place] = Keyboard.{connector = NONE, end = NONE}
+                runtime.log_info("keyboard % was plugged in", place)
+                adopt(service, place, found, true)
+            }
+        }
+    }
+}
+
+/**
  * Dial a keyboard through its connector for the input protocol, bind it to the port, and hold a Read on it.
  *
  * Its modifiers are cleared, since what was held down isn't known. On any failure the keyboard's left without an end,
@@ -233,6 +305,7 @@ dial :: fn(service : ptr[mut Service], index : usize) {
         return void
     }
     port :: os.port_for(slop_os.startup_block().budget, keyboard.connector) or_return void
+    defer slop_os.handle_close(cast[slop_os.Handle](port))
     keys :: connector.dial[input.Input](keyboard.connector, port) or_return void
     signals :: cast[slop_os.Signals](cast[u32](slop_os.SIGNAL_READABLE) | cast[u32](slop_os.SIGNAL_PEER_CLOSED))
     match slop_os.port_bind(
@@ -401,7 +474,11 @@ take_keys :: fn(service : ptr[mut Service], index : usize, into : ptr[mut os.Inc
                 keyboard.end = NONE
                 runtime.log_info("keyboard % went; dialing again", index)
                 dial(service, index)
+                // Not there to dial, as once it's unplugged: gone, its place free
                 if cast[slop_os.Handle](keyboard.end) == slop_os.NO_HANDLE {
+                    _ = slop_os.handle_close(cast[slop_os.Handle](keyboard.connector))
+                    service.keyboards[index] = Keyboard.{connector = NONE, end = NONE}
+                    runtime.log_info("keyboard % is gone", index)
                     return void
                 }
                 continue
