@@ -9,8 +9,9 @@ import schema from "std:schema"
  * together, forget undoes both, and a snapshot or a clone has the indexes its tree had.
  *
  * An index's records: its declaration, (0, IndexDecl, number); each value's bucket, (INDEX_OBJECT_BASE | number,
- * IndexEntry, key), the files whose value has that key, up to BUCKET_FILES of them, each one past those spilled to a
- * record of its own, (INDEX_OBJECT_BASE | number, IndexSpill, file); and for each file indexed, (file, IndexedBy,
+ * IndexEntry, key), the files whose value has that key, up to BUCKET_FILES of them in order of ID, so a walk can go on
+ * from the last one it answered whatever's taken out meanwhile, each one past those spilled to a record of its own,
+ * (INDEX_OBJECT_BASE | number, IndexSpill, file); and for each file indexed, (file, IndexedBy,
  * number), its key and a text's bytes, so the file's old entry is found when it changes, and a query's predicate is
  * evaluated without reading the file. A key orders as the value does: an unsigned integer as it is, a signed one with
  * its sign bit flipped, a bool as 0 or 1, and a text by its first 8 bytes, big-endian, zeros after its end.
@@ -18,7 +19,8 @@ import schema from "std:schema"
  * Every object a transaction changes is noted (note_indexed), and at commit, before the tree is written, each one is
  * indexed again (index_changes): its old entries taken out, and if it's still a file with a name, of a schema an
  * index is declared for, whose value holds every indexed field, its new ones put in. A file whose value doesn't hold
- * one, as a typed file emptied and not yet written again does, isn't indexed until it does.
+ * one, as a typed file emptied and not yet written again does, isn't indexed until it does. An object destroyed is
+ * taken out of every index then and there (destroy), so one gone is never left in a bucket, however many changed.
  */
 
 /** The bit an index's own records' object has, so they're kept apart from, and after, every object's. */
@@ -31,7 +33,10 @@ INDEX_FIELD_BYTES :: 64
 INDEX_TEXT_BYTES :: 255
 /** The most files a bucket names, MAX_VALUE_BYTES of their IDs; a file past them is spilled to a record of its own. */
 BUCKET_FILES :: 512
-/** The most objects noted changed between commits; past them, every file is indexed again at commit. */
+/**
+ * The most objects noted changed between commits; past them, every file is indexed again at commit, those destroyed
+ * having been taken out of the indexes as they were.
+ */
 MAX_CHANGED :: 1024
 
 /** What an indexed field holds, and so how its key is made. */
@@ -132,7 +137,7 @@ Keyed :: struct {
 
 /** A bucket's file IDs, as its record holds them; from make. */
 Bucket :: struct {
-    /** The files, the first count of them. */
+    /** The files, the first count of them, in order of ID, least first, each once. */
     files : u64le[BUCKET_FILES],
     /** How many of files are used, 0 to BUCKET_FILES. */
     count : usize,
@@ -196,6 +201,7 @@ forget_indexed :: fn(volume : ptr[mut Volume]) {
  * @param volume The volume, whose indexes change with it in its transaction.
  * @error OutOfMemory No memory for a buffer or a node.
  * @error NoSpace No free extent for a node.
+ * @error DeviceError A changed file's value couldn't be read, so its entries couldn't be made.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
 index_changes :: fn(volume : ptr[mut Volume]) -> Result[void, Error] {
@@ -237,6 +243,10 @@ index_changes :: fn(volume : ptr[mut Volume]) -> Result[void, Error] {
  * The schema is read from its bytes and its hash worked out from them (schema.hash_rooted), so the index is of the
  * files whose schema hash that is, laid out as the bytes say. Declaring one there is already gives its number again.
  *
+ * Building it walks every object of the volume, and indexes each one of the schema again by every index of it, all
+ * in this call: a file that doesn't hold the new index's field drops out of the schema's other indexes too, as a file
+ * is in all of its schema's indexes or none.
+ *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param schema_bytes A schema's bytes, as schema.write writes them, of a struct; only read, and not kept.
  * @param field The name of one of the struct's own members: an integer of 1 to 8 bytes, signed or not, a bool, or
@@ -245,7 +255,9 @@ index_changes :: fn(volume : ptr[mut Volume]) -> Result[void, Error] {
  * @error NotIndexable The bytes aren't a schema, its type isn't a struct, it has no member of the name, or the
  *     member's of a type an index can't hold; or the name's empty or past INDEX_FIELD_BYTES.
  * @error TooLarge The volume has MAX_INDEXES already.
- * @error OutOfMemory No memory for a buffer or a node; the schema's own reading fails context.assertion_handler.
+ * @error OutOfMemory No memory for a buffer or a node, or for working out the schema's hash; the schema's own reading
+ *     fails context.assertion_handler.
+ * @error DeviceError A file of the schema couldn't be read.
  * @error NoSpace No free extent for a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
@@ -312,6 +324,7 @@ declare_index :: fn(volume : ptr[mut Volume], schema_bytes : u8[], field : strin
  * @return The declaration: the schema's hash, and the field's offset, size, kind and name.
  * @error NotIndexable The bytes aren't a schema, its type isn't a struct, it has no member of the name, or the
  *     member's of a type an index can't hold, or doesn't fit in the struct.
+ * @error OutOfMemory The schema's hash couldn't be worked out, which hash_rooted gives as all zeros.
  */
 field_of :: fn(schema_bytes : u8[], field : string) -> Result[IndexRecord, Error] {
     parsed := schema.parse(schema_bytes) or_return .Error(.NotIndexable)
@@ -353,6 +366,10 @@ field_of :: fn(schema_bytes : u8[], field : string) -> Result[IndexRecord, Error
             return .Error(.NotIndexable)
         }
         record.size = cast[u32le](cast[u32](size))
+        // An untyped file's hash is all zeros, as hash_rooted's is when it hasn't the memory to write the schema
+        if all_zero(record.schema) {
+            return .Error(.OutOfMemory)
+        }
         return .Ok(record)
     }
     return .Error(.NotIndexable)
@@ -427,14 +444,19 @@ same_field :: fn(record : ptr[IndexRecord], field : string) -> bool {
  * Take an index out: its declaration, every bucket and spilled entry, and every file's record of it; durable with the
  * volume's next commit. Its number may be given to the next index declared.
  *
+ * Every file of its schema is then indexed again by the schema's other indexes, all in this call, as one that didn't
+ * hold the dropped index's field was in none of them and may now be in all.
+ *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param number The index's number.
  * @error NotFound No index has the number.
  * @error OutOfMemory No memory for a buffer or a node.
  * @error NoSpace No free extent for a node's copy.
+ * @error DeviceError A file of the schema couldn't be read.
  * @error Corrupt A record or a node couldn't be read or didn't check out.
  */
 drop_index :: fn(volume : ptr[mut Volume], number : u64) -> Result[void, Error] {
+    dropped :: index_record(volume, number)? or_return .Error(.NotFound)
     if !(tree_delete(volume.nodes, &volume.tree, key_of(0, .IndexDecl, number))?) {
         return .Error(.NotFound)
     }
@@ -466,6 +488,28 @@ drop_index :: fn(volume : ptr[mut Volume], number : u64) -> Result[void, Error] 
         _ = tree_delete(volume.nodes, &volume.tree, key_of(found.key.offset, .IndexedBy, number))?
         if !(tree_delete(volume.nodes, &volume.tree, found.key)?) {
             return .Error(.Corrupt)
+        }
+    }
+    // What the dropped field kept out of the schema's other indexes, put back in them
+    set :: make(IndexSet)?
+    defer runtime.free(set)
+    read_indexes(volume, set)?
+    of_schema := false
+    for i in 0..<set.count {
+        if i < set.indexes.count && set.indexes[i].record.schema == dropped.schema {
+            of_schema = true
+        }
+    }
+    if !of_schema {
+        return .Ok
+    }
+    at := cast[u64](1)
+    loop {
+        object :: next_object_from(volume, at)? or_break
+        at = object + 1
+        found :: get_object(volume, object)?
+        if found.schema == dropped.schema {
+            reindex(volume, set, object)?
         }
     }
     return .Ok
@@ -585,7 +629,8 @@ next_object_from :: fn(volume : ptr[mut Volume], from : u64) -> Result[u64?, Err
  * @param object The object's ID; one that isn't there only has its old entries taken out.
  * @error OutOfMemory No memory for a buffer or a node.
  * @error NoSpace No free extent for a node.
- * @error Corrupt A record or a node couldn't be read or didn't check out.
+ * @error DeviceError Its value couldn't be read; its old entries are out, its new ones not yet in.
+ * @error Corrupt A record or a node couldn't be read or didn't check out, or its value's chunks don't.
  */
 reindex :: fn(volume : ptr[mut Volume], set : ptr[IndexSet], object : u64) -> Result[void, Error] {
     unindex(volume, object)?
@@ -646,8 +691,12 @@ all_zero :: fn(bytes : u8[32]) -> bool {
  * @param index The index's declaration: where the field is, and what it holds.
  * @param into Where the key and a text's bytes go; left as it was if the field doesn't hold.
  * @return True if the value holds the field: at least its fixed part, the field within it, a bool of 0 or 1, a
- *     text's bytes after the fixed part and within the value; false otherwise, or if the file couldn't be read.
+ *     text empty (its key 0, wherever its Relative's offset points, as a message's empty Relative may point
+ *     anywhere) or with its bytes after the fixed part and within the value; false otherwise, or if the file ends
+ *     before what's read.
  * @error OutOfMemory No memory for a buffer or a node.
+ * @error DeviceError The file's chunks couldn't be read.
+ * @error Corrupt A chunk's record or seal, or a node, didn't check out.
  */
 key_in :: fn(
     volume : ptr[mut Volume],
@@ -679,6 +728,11 @@ key_in :: fn(
     if kind == cast[u32](FieldKind.Text) {
         start :: little_endian(part(bytes, 0, 4))
         count :: little_endian(part(bytes, 4, 8))
+        if count == 0 {
+            into.text_bytes = 0
+            into.key = 0
+            return .Ok(true)
+        }
         if start < fixed || start + count > size {
             return .Ok(false)
         }
@@ -711,8 +765,11 @@ key_in :: fn(
  * @param file The file's ID.
  * @param offset Where they start, in bytes from the file's start.
  * @param into Where they go; its whole count is read.
- * @return True if every byte was read; false if the file ends before them, or couldn't be read.
+ * @return True if every byte was read; false if the file ends before them, or isn't a file there (NotFound,
+ *     IsADirectory, IsALink).
  * @error OutOfMemory No memory for a buffer or a node.
+ * @error DeviceError A chunk's blocks couldn't be read, or a failed write was for one.
+ * @error Corrupt A chunk's record or seal, or a node, didn't check out.
  */
 read_exactly :: fn(volume : ptr[mut Volume], file : u64, offset : u64, into : mut u8[]) -> Result[bool, Error] {
     if into.count == 0 {
@@ -721,10 +778,10 @@ read_exactly :: fn(volume : ptr[mut Volume], file : u64, offset : u64, into : mu
     match read(volume, file, offset, into) {
         case Ok(count) => return .Ok(count == into.count)
         case Error(error) => {
-            if error == .OutOfMemory {
-                return .Error(error)
+            if error == .NotFound || error == .IsADirectory || error == .IsALink {
+                return .Ok(false)
             }
-            return .Ok(false)
+            return .Error(error)
         }
     }
 }
@@ -792,7 +849,8 @@ text_key :: fn(text : u8[]) -> u64 {
 }
 
 /**
- * Put a file in an index: in its key's bucket, or a record of its own if that's full, and its record of the index.
+ * Put a file in an index: in its key's bucket, in order of ID, or a record of its own if that's full, and its record of
+ * the index.
  *
  * @param volume The volume, marked dirty.
  * @param number The index's number.
@@ -812,7 +870,22 @@ enter :: fn(volume : ptr[mut Volume], number : u64, file : u64, keyed : ptr[Keye
     spilled := false
     count :: bucket.count
     if count < bucket.files.count {
-        bucket.files[count] = cast[u64le](file)
+        // In order of ID: those after it moved up one
+        at := count
+        loop {
+            if at == 0 || at >= bucket.files.count {
+                break
+            }
+            before :: at - 1
+            if cast[u64](bucket.files[before]) <= file {
+                break
+            }
+            bucket.files[at] = bucket.files[before]
+            at = before
+        }
+        if at < bucket.files.count {
+            bucket.files[at] = cast[u64le](file)
+        }
         bucket.count = count + 1
         tree_put(volume.nodes, &volume.tree, key, part(bucket_bytes(bucket), 0, bucket.count * 8))?
     }
@@ -841,7 +914,8 @@ enter :: fn(volume : ptr[mut Volume], number : u64, file : u64, keyed : ptr[Keye
 }
 
 /**
- * Take an object out of every index it's in: out of each bucket or its spilled record, and its records of them.
+ * Take an object out of every index it's in: out of each bucket, the rest kept in order, or its spilled record, and
+ * its records of them.
  *
  * @param volume The volume, marked dirty if it was in any.
  * @param object The object's ID.
@@ -872,15 +946,22 @@ unindex :: fn(volume : ptr[mut Volume], object : u64) -> Result[void, Error] {
         else if found.bytes >= size_of(IndexedRecord) {
             key :: key_of(index_object, .IndexEntry, cast[u64](head.key))
             bucket.count = files_in(tree_get(volume.nodes, &volume.tree, key, bucket_bytes(bucket))? or_else 0)?
+            // Those after it moved down one, so the bucket stays in order of ID
             left := bucket.count
+            at := bucket.count
             for i in 0..<bucket.count {
-                if i < bucket.files.count && cast[u64](bucket.files[i]) == object && left > 0 {
-                    last :: left - 1
-                    if last < bucket.files.count {
-                        bucket.files[i] = bucket.files[last]
-                    }
-                    left = last
+                if i < bucket.files.count && cast[u64](bucket.files[i]) == object {
+                    at = i
                     break
+                }
+            }
+            if at < bucket.count && left > 0 {
+                left -= 1
+                for i in at..<left {
+                    after :: i + 1
+                    if i < bucket.files.count && after < bucket.files.count {
+                        bucket.files[i] = bucket.files[after]
+                    }
                 }
             }
             if left == 0 {

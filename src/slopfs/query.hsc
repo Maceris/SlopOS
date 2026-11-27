@@ -10,11 +10,14 @@ import runtime from "base:runtime"
  * those in the first index it names, or the one that bounds it. A comparison at its top, or one arm of an and at its
  * top, bounds the keys walked to its own range of that index; anything else walks the whole of the first index named.
  * Each file walked is then tested against the whole predicate, from its records of the indexes (IndexedRecord), so
- * nothing of it is read, and a text's comparisons see its first INDEX_TEXT_BYTES bytes alone.
+ * nothing of it is read, and a text's comparisons see its first INDEX_TEXT_BYTES bytes alone. A walk looks at a
+ * bounded number of files a call, and goes on from a cursor: a key and the last file of its bucket answered.
  */
 
 /** The most terms a predicate has. */
 MAX_TERMS :: 32
+/** The limit a server gives query_next for a client's request, files of the index looked at; then it answers file 0. */
+QUERY_LOOKS : u64 : 4096
 
 /** How a field is compared with a constant. */
 Comparison :: enum #backed_by(u32) {
@@ -88,7 +91,7 @@ Plan :: struct {
 
 /** Where a query's walk is: in the walked index's buckets, its spilled records, or done. */
 WalkPhase :: enum #backed_by(u32) {
-    /** In the buckets, from key and the skip'th file of its bucket. */
+    /** In the buckets, from key's bucket's first file whose ID is at least after. */
     Buckets = 0,
     /** In the spilled records, from the file key names. */
     Spills = 1,
@@ -102,13 +105,16 @@ QueryCursor :: struct {
     phase : WalkPhase,
     /** In the buckets, the key walked from; in the spilled records, the file. */
     key : u64,
-    /** In the buckets, how many of key's bucket's files are done. */
-    skip : u64,
+    /**
+     * In the buckets, the least ID of key's bucket's files not yet done: one more than the last answered, as a
+     * bucket's files are in order of ID. Unused in the spilled records.
+     */
+    after : u64,
 }
 
 /** A file a query found, and where to go on from. */
 QueryFound :: struct {
-    /** The file's ID. */
+    /** The file's ID; 0 for none, the walk having looked at as many files as it was let without answering one. */
     file : u64,
     /** The cursor after it. */
     next : QueryCursor,
@@ -399,17 +405,21 @@ compared :: fn(order : int, comparison : Comparison) -> bool {
 }
 
 /**
- * Find the next file a planned query answers beneath a directory, from a cursor: its walk's buckets in key order, then
- * its spilled records in order of file.
+ * Find the next file a planned query answers beneath a directory, from a cursor: its walk's buckets in key order, each
+ * bucket's files in order of ID, then its spilled records in order of file.
  *
  * A file changed between one call and the next may be answered again, or not at all, as its key moves past the cursor
- * or before it. Each call walks as far as it must to find one, which may be the whole index.
+ * or before it; one taken out meanwhile leaves the rest as they were, as the cursor is the last file answered, not a
+ * place among them. Each call looks at up to limit files of the index, so one finding none in them answers file 0,
+ * with the cursor to go on from.
  *
  * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
  * @param plan The query, from plan_query.
  * @param directory The directory it's asked beneath.
  * @param cursor Where to go on from: all zeros to start, or a QueryFound's next.
- * @return The file found and the cursor after it; null past the last.
+ * @param limit The most files of the index looked at, at least 1; 0 is taken as 1.
+ * @return The file found and the cursor after it, or file 0 and the cursor to go on from, if limit files were looked
+ *     at and none was answered; null past the last.
  * @error OutOfMemory No memory for a buffer or a node.
  * @error Corrupt A record or a node couldn't be read or didn't check out, or a directory's parents loop.
  */
@@ -417,16 +427,19 @@ query_next :: fn(
     volume : ptr[mut Volume],
     plan : ptr[Plan],
     directory : u64,
-    cursor : QueryCursor
+    cursor : QueryCursor,
+    limit : u64
 ) -> Result[QueryFound?, Error] {
     at := cursor
+    most :: if limit == 0 { cast[u64](1) } else { limit }
+    looked := cast[u64](0)
     object :: INDEX_OBJECT_BASE | plan.walk
     if at.phase == .Buckets {
         bucket :: make(Bucket)?
         defer runtime.free(bucket)
         if at.key < plan.low {
             at.key = plan.low
-            at.skip = 0
+            at.after = 0
         }
         loop {
             found :: tree_next(volume.nodes, &volume.tree, key_of(object, .IndexEntry, at.key), bucket_bytes(bucket))?
@@ -437,7 +450,7 @@ query_next :: fn(
                 break
             }
             if found.key.offset != at.key {
-                at.skip = 0
+                at.after = 0
             }
             at.key = found.key.offset
             bucket.count = files_in(found.bytes)?
@@ -445,16 +458,19 @@ query_next :: fn(
                 if i >= bucket.count {
                     break
                 }
-                if cast[u64](i) < at.skip {
+                file :: cast[u64](each)
+                if file < at.after {
                     continue
                 }
-                file :: cast[u64](each)
+                if looked >= most {
+                    return .Ok(
+                        QueryFound.{file = 0, next = QueryCursor.{phase = .Buckets, key = at.key, after = file}}
+                    )
+                }
+                looked += 1
                 if query_matches(volume, plan, directory, file)? {
                     return .Ok(
-                        QueryFound.{
-                            file = file,
-                            next = QueryCursor.{phase = .Buckets, key = at.key, skip = cast[u64](i) + 1},
-                        }
+                        QueryFound.{file = file, next = QueryCursor.{phase = .Buckets, key = at.key, after = file + 1}}
                     )
                 }
             }
@@ -462,7 +478,7 @@ query_next :: fn(
                 break
             }
             at.key += 1
-            at.skip = 0
+            at.after = 0
         }
         at = QueryCursor.{phase = .Spills}
     }
@@ -479,6 +495,10 @@ query_next :: fn(
                 break
             }
             file :: found.key.offset
+            if looked >= most {
+                return .Ok(QueryFound.{file = 0, next = QueryCursor.{phase = .Spills, key = file}})
+            }
+            looked += 1
             key :: cast[u64](value)
             if found.bytes == 8 && key >= plan.low && key <= plan.high && (query_matches(volume, plan, directory, file)?) {
                 next := QueryCursor.{phase = .Spills, key = file + 1}
@@ -494,4 +514,52 @@ query_next :: fn(
         }
     }
     return .Ok(null)
+}
+
+/** Where a file is, as it's indexed now, in a query's walk from a cursor. */
+WalkPlace :: enum {
+    /** Not in the index walked, or with a key outside the keys walked: the query can't answer it. */
+    Outside,
+    /** In what's walked, before the cursor: a walk from it won't come to it. */
+    Behind,
+    /** In what's walked, at or after the cursor: a walk from it comes to it. */
+    Ahead,
+}
+
+/**
+ * Tell where a file is in a planned query's walk from a cursor, by its record of the index walked, so a live query
+ * walking needn't look again at a file the walk is yet to come to.
+ *
+ * @param volume The volume, open: what it reads includes its transaction's changes not yet committed.
+ * @param plan The query, from plan_query.
+ * @param cursor Where the walk is: a QueryFound's next, or all zeros for its start; a Done one has every file Behind.
+ * @param file The file's ID.
+ * @return Where it is.
+ * @error OutOfMemory No memory for a node.
+ * @error Corrupt A node couldn't be read or didn't check out.
+ */
+walk_place :: fn(
+    volume : ptr[mut Volume],
+    plan : ptr[Plan],
+    cursor : QueryCursor,
+    file : u64
+) -> Result[WalkPlace, Error] {
+    head := IndexedRecord.{}
+    bytes :: tree_get(
+        volume.nodes,
+        &volume.tree,
+        key_of(file, .IndexedBy, plan.walk),
+        view_of(cast[ptr[mut u8]](&head), size_of(IndexedRecord))
+    )? or_return .Ok(.Outside)
+    key :: cast[u64](head.key)
+    if bytes < size_of(IndexedRecord) || key < plan.low || key > plan.high {
+        return .Ok(.Outside)
+    }
+    ahead :: if cursor.phase == .Buckets {
+        head.spilled != 0
+            || key > cursor.key
+            || (key == cursor.key && file >= cursor.after)
+    }
+    else if cursor.phase == .Spills { head.spilled != 0 && file >= cursor.key } else { false }
+    return .Ok(if ahead { WalkPlace.Ahead } else { WalkPlace.Behind })
 }

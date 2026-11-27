@@ -12,8 +12,9 @@ import shell_language as language from "../../shell_language"
 /*
  * query (decisions/0201's 20j): the typed files beneath the shell's directory whose indexed fields compare as asked,
  * as a table of their paths, like any program's results; and query --index, an index of a type's field declared on
- * the directory's volume. A type is named as its programs name it, found among the manifests of the programs the
- * shell can run, as view finds a typed file's.
+ * the home's volume. Indexes are declared and listed on a volume's root alone, so both are asked of the shell's home,
+ * which has to be one; the query itself is asked beneath the shell's directory. A type is named as its programs name
+ * it, found among the manifests of the programs the shell can run, as view finds a typed file's.
  *
  *     query --index Note level
  *     query Note level >= 3 and title != draft
@@ -38,10 +39,11 @@ FoundType :: struct {
  * an integer, true or false, or text.
  *
  * It fails without a home, for arguments that aren't one of those, a type no program's manifest has, a field with no
- * index declared (or one that can't be indexed, for --index), a value that isn't the field's, or what the directory
- * answers.
+ * index declared (or one that can't be indexed, for --index), a value that isn't the field's, a home that isn't its
+ * volume's root, or what the directory answers.
  *
- * @param shell The shell, whose directory is asked, and whose programs' manifests are where the type's found.
+ * @param shell The shell, whose directory is queried, whose home's volume's indexes are listed or declared, and whose
+ *     programs' manifests are where the type's found.
  * @param tree The Call node of query.
  * @return A list of records, path, beneath the shell's directory, and file, its number in its volume; Null when none
  *     matches, or after --index, which is said.
@@ -68,6 +70,18 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
     defer slop_os.handle_close(handle)
     port :: os.port_for(slop_os.startup_block().budget, end) or_return error_at(tree.at, "there's no memory for a port")
     defer slop_os.handle_close(cast[slop_os.Handle](port))
+    // The volume's indexes, on its root, which the home is
+    root_handle :: match opened_beneath_home(shell, "~", .Dir) {
+        case Ok(made) => made
+        case Error(problem) => return error_at(tree.at, message("the home: %", problem))
+    }
+    root :: cast[slop_os.Channel](root_handle)
+    defer slop_os.handle_close(root_handle)
+    root_port :: os.port_for(slop_os.startup_block().budget, root) or_return error_at(
+        tree.at,
+        "there's no memory for a port"
+    )
+    defer slop_os.handle_close(cast[slop_os.Handle](root_port))
     if declaring {
         if children.count != 3 {
             return error_at(tree.at, usage)
@@ -79,7 +93,7 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
             files.IndexOf.{schema = os.append(&out, view_of(&found.bytes[0], found.bytes.count)), field = os.append(&out, string_bytes(field))}
         )
         into := os.Incoming.{}
-        match asked(end, port, &out, &into) {
+        match asked(root, root_port, &out, &into) {
             case Declared(number) => {
                 say(shell, message("index % of %.%", number, type_name, field))
                 return .Ok(.Null)
@@ -87,6 +101,9 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
             case Failed(failure) => {
                 if failure == .WrongType {
                     return error_at(children[2].at, message("%1.%2 can't be indexed: it isn't an integer, a bool or text", type_name, field))
+                }
+                if failure == .ReadOnly {
+                    return error_at(tree.at, "indexes are declared on a volume's root, which the shell's home isn't")
                 }
                 return error_at(tree.at, message("the index couldn't be declared: %", file_problem(failure)))
             }
@@ -110,7 +127,7 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
             children[at + 1].at,
             message("% isn't a comparison: ==, !=, <, <=, > or >=", operator)
         )
-        index :: index_named(end, port, found.hash, field) or_return error_at(
+        index :: index_named(root, root_port, found.hash, field) or_return error_at(
             field_node.at,
             message("there's no index of %1.%2: query --index %1 %2 declares one", type_name, field)
         )
@@ -173,6 +190,11 @@ query_files :: fn(shell : ptr[mut Shell], tree #escaping : ptr[Node]) -> Result[
         into := os.Incoming.{}
         match asked(end, port, &out, &into) {
             case Matched(matched) => {
+                // None in what the volume looked at this time: on from where it got to
+                if matched.file == 0 {
+                    cursor = matched.next
+                    continue
+                }
                 if made.items.count >= MAX_QUERIED {
                     say(shell, message("more than % match; the first % are listed", MAX_QUERIED, MAX_QUERIED))
                     break
@@ -258,7 +280,7 @@ NamedIndex :: struct {
 /**
  * Find the index of a type's field on a directory's volume, by listing them.
  *
- * @param end The directory's connection.
+ * @param end The directory's connection: its volume's root, as only that lists them.
  * @param port A port bound to end.
  * @param hash The type's schema hash.
  * @param field The field's name.

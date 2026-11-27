@@ -147,8 +147,10 @@ Connection :: struct {
     loan : slop_os.CpuBudget,
     /** The loan's priority, which orders whose request is served next; 0 without one. */
     priority : u32,
-    /** A live query's slot in the server's lives (queries.hsc). */
+    /** A live query's slot in the server's lives (queries.hsc); past them once it's ended, its slot freed. */
     live : usize,
+    /** Why a live query's connection ended, which each Next is answered with; null while it goes on. */
+    live_ended : files.FileError?,
 }
 
 /**
@@ -274,7 +276,9 @@ main :: fn(
         return 99
     }
     server :: server_made
-    server^ = Server.{log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE), links = stored_links.end}
+    // Set a field at a time, as the whole is too big a value to build on the stack; the rest keep new_aligned's
+    server.log = log or_else cast[slop_os.DebugLog](slop_os.NO_HANDLE)
+    server.links = stored_links.end
     server.port = slop_os.port_create(startup.budget) or_return 1
     described :: match reach(&server.own, volume.end) {
         case Ok(made) => made
@@ -372,6 +376,10 @@ main :: fn(
         until := if server.commit_at != 0 { server.commit_at } else { slop_os.NO_DEADLINE }
         if server.resealing != 0 && now + RESEAL_PAUSE < until {
             until = now + RESEAL_PAUSE
+        }
+        // A live query's walk goes on a step at a time too, served again without waiting while it has more
+        if step_lives(server) {
+            until = now
         }
         packets : slop_os.Packet[8]
         _ = slop_os.port_wait(server.port, packets, until)
@@ -862,6 +870,9 @@ drop :: fn(server : ptr[mut Server], index : usize) {
     else if kind == .LiveQuery {
         end_live(server, connection.live)
     }
+    else if kind == .Dir {
+        forget_asker(server, index)
+    }
     else if kind == .File || kind == .ReadOnlyFile {
         release_if_unused(server, object, index)
     }
@@ -1316,7 +1327,8 @@ synced :: fn(server : ptr[mut Server]) -> bool {
  * Begin, Replace, Grant, Links, Revoke and the snapshots' requests are answered Unsupported, and Link IsALink. Commit
  * and Abort are a transaction's only. Room is the container's, answered Unsupported. Snapshot, Snapshots and
  * OpenSnapshot are snapshots.hsc's, waited for. Lend takes a loan for the connection's work; Connect adds a connection
- * to the same directory, with no answer. A connection whose end fails is dropped.
+ * to the same directory, with no answer. Indexes, queries and live queries are indexes.hsc's and queries.hsc's, none
+ * on a transaction. A connection whose end fails is dropped.
  *
  * @param server The server, whose volume changes with what's asked; once its handled is set, no further request is
  *     read.
@@ -1594,11 +1606,22 @@ serve_dir :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Incom
                     response^ = dropped(server, index, number)
                 }
             }
-            case Indexes(cursor) => response^ = index_listed(volume, cursor, &out)
-            // Queries over the indexes, of what's beneath this directory (queries.hsc)
-            case Query(ask) => response^ = query_answer(server, directory, into, ask, &out)
+            case Indexes(cursor) => {
+                if !in_transaction {
+                    response^ = index_listed(server, index, cursor, &out)
+                }
+            }
+            // Queries over the indexes, of what's beneath this directory (queries.hsc); none on a transaction
+            case Query(ask) => {
+                if !in_transaction {
+                    response^ = query_answer(server, directory, into, ask, &out)
+                }
+            }
             case LiveQuery(predicate) => {
-                response^ = live_query(server, directory, into, predicate, name_of(&server.connections[index]))
+                if !in_transaction {
+                    name :: name_of(&server.connections[index])
+                    response^ = live_query(server, index, directory, into, predicate, name)
+                }
             }
         }
         _ = dir.send_response(end, server.port, &out)

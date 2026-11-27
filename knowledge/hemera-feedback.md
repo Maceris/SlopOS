@@ -263,6 +263,10 @@ SlopOS packages: dir's `DeclareIndex`, `DropIndex`, `Indexes`, `Query` and `Live
 and os's typed API over them (`declare_index[T]`, `where_number[T]`, `where_text[T]`, `both`, `either`, `negate`,
 `query_in`, `open_live_query`, `next_live_event`). A predicate's `Term` holds its kind and comparison as `u32`s, as a
 Relative's items are plain data, no enums (friction: the server checks each one by hand that the validator would).
+20m's review of them: `drop_index`, the indexes declared, dropped and listed on a volume's root alone, a `Match` of
+file 0 for a page that found none in what the server looked at (`query_in` going on past it), `Resync` and `NotFound`
+for an index declared or dropped under a live query, and `where_number` refusing a negative value for an unsigned or
+bool field.
 
 ## 4. Features That Look Like a Strong Fit
 

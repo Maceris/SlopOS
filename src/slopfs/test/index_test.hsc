@@ -10,7 +10,9 @@ import slopfs from ".."
  * container: an index declared by a schema's bytes and a field, built from the typed files there are, kept with
  * writes, renames, removals and replacements as each commits, forgotten with what forget forgets, and kept in a
  * snapshot as its tree had it; and queries over them, bounded by an index's range or walking it, through and, or and
- * not, beneath a directory.
+ * not, beneath a directory, a bounded number of files a step, going on from a cursor that a removal doesn't move.
+ * What an index keeps is looked at record by record too (index_records), so a removal or a drop is seen to leave
+ * nothing behind.
  */
 
 /** Where a typed file's text is, from its value's start, as a message's Relative is; it names its elements' type. */
@@ -46,6 +48,25 @@ Value :: struct {
     bytes : u8[VALUE_BYTES],
     /** How many of bytes are the value's. */
     count : usize,
+}
+
+/**
+ * Make a Task's value whose name's Relative is as given, not followed by the name's bytes.
+ *
+ * @param size Its size field.
+ * @param offset The name's Relative's offset, in bytes from the value's start.
+ * @param count The name's Relative's count.
+ * @return The value: its fixed part alone.
+ */
+task_with_name_at :: fn(size : u64, offset : u32, count : u32) -> Value {
+    made := Value.{}
+    fixed :: size_of(Task)
+    task := Task.{size = size}
+    task.name.offset = offset
+    task.name.count = count
+    slopfs.copy_bytes(made.bytes, 0, view_of(cast[ptr[u8]](&task), fixed))
+    made.count = fixed
+    return made
 }
 
 /**
@@ -164,7 +185,60 @@ join :: fn(kind : slopfs.TermKind) -> slopfs.Term {
 }
 
 /**
- * Run a query beneath a directory, every file it finds counted.
+ * Plan a query.
+ *
+ * @param volume The volume.
+ * @param terms The predicate's terms, in postfix order.
+ * @return The plan, from slopfs.make, the caller's to free with runtime.free; or why it couldn't be planned.
+ */
+planned :: fn(volume : ptr[mut slopfs.Volume], terms : slopfs.Term[]) -> Result[ptr[mut slopfs.Plan], slopfs.Error] {
+    plan :: slopfs.make(slopfs.Plan)?
+    for term, i in terms {
+        if i < plan.terms.count {
+            plan.terms[i] = term
+        }
+    }
+    plan.count = terms.count
+    match slopfs.plan_query(volume, plan) {
+        case Ok => return .Ok(plan)
+        case Error(error) => {
+            runtime.free(plan)
+            return .Error(error)
+        }
+    }
+}
+
+/**
+ * Run a query beneath a directory, every file it finds counted, looking at up to a limit of files a step.
+ *
+ * @param volume The volume.
+ * @param directory The directory it's asked beneath.
+ * @param terms The predicate's terms, in postfix order.
+ * @param limit The most files a step looks at, as query_next takes it.
+ * @return How many files it found, each step that found none not counted; or why it couldn't be planned or run.
+ */
+run_limited :: fn(
+    volume : ptr[mut slopfs.Volume],
+    directory : u64,
+    terms : slopfs.Term[],
+    limit : u64
+) -> Result[u64, slopfs.Error] {
+    plan :: planned(volume, terms)?
+    defer runtime.free(plan)
+    count := cast[u64](0)
+    cursor := slopfs.QueryCursor.{}
+    loop {
+        found :: slopfs.query_next(volume, plan, directory, cursor, limit)? or_break
+        if found.file != 0 {
+            count += 1
+        }
+        cursor = found.next
+    }
+    return .Ok(count)
+}
+
+/**
+ * Run a query beneath a directory, every file it finds counted, as a server's request steps do.
  *
  * @param volume The volume.
  * @param directory The directory it's asked beneath.
@@ -172,24 +246,128 @@ join :: fn(kind : slopfs.TermKind) -> slopfs.Term {
  * @return How many files it found; or why it couldn't be planned or run.
  */
 run_query :: fn(volume : ptr[mut slopfs.Volume], directory : u64, terms : slopfs.Term[]) -> Result[u64, slopfs.Error] {
-    plan :: slopfs.make(slopfs.Plan)?
-    defer runtime.free(plan)
-    plan^ = slopfs.Plan.{}
-    for term, i in terms {
-        if i < plan.terms.count {
-            plan.terms[i] = term
+    return run_limited(volume, directory, terms, slopfs.QUERY_LOOKS)
+}
+
+/** What an index keeps, counted record by record. */
+IndexRecords :: struct {
+    /** Its buckets. */
+    buckets : u64,
+    /** The files its buckets name, all of them. */
+    bucket_files : u64,
+    /** Whether every bucket's files are in order of ID, each once. */
+    ordered : bool,
+    /** Its spilled records. */
+    spills : u64,
+    /** The files' records of it, (file, IndexedBy, number), of every object, there or not. */
+    indexed_by : u64,
+}
+
+/**
+ * Count what an index keeps in a volume's tree, whether its declaration is there or not.
+ *
+ * @param volume The volume, only read.
+ * @param number The index's number.
+ * @return Its buckets, their files, its spilled records and the files' records of it; or why the tree couldn't be
+ *     read.
+ */
+index_records :: fn(volume : ptr[mut slopfs.Volume], number : u64) -> Result[IndexRecords, slopfs.Error] {
+    counted := IndexRecords.{ordered = true}
+    bucket :: slopfs.make(slopfs.Bucket)?
+    defer runtime.free(bucket)
+    object :: slopfs.INDEX_OBJECT_BASE | number
+    key := cast[u64](0)
+    loop {
+        found :: slopfs.tree_next(
+            volume.nodes,
+            &volume.tree,
+            slopfs.key_of(object, .IndexEntry, key),
+            slopfs.bucket_bytes(bucket)
+        )? or_break
+        if found.key.object != object || found.key.kind != cast[u8](slopfs.RecordKind.IndexEntry) {
+            break
+        }
+        counted.buckets += 1
+        files :: slopfs.files_in(found.bytes)?
+        counted.bucket_files += cast[u64](files)
+        for i in 1..<files {
+            before :: i - 1
+            if i < bucket.files.count && before < bucket.files.count {
+                if cast[u64](bucket.files[before]) >= cast[u64](bucket.files[i]) {
+                    counted.ordered = false
+                }
+            }
+        }
+        if found.key.offset == 0xffffffffffffffff {
+            break
+        }
+        key = found.key.offset + 1
+    }
+    value : u8[8]
+    file := cast[u64](0)
+    loop {
+        found :: slopfs.tree_next(volume.nodes, &volume.tree, slopfs.key_of(object, .IndexSpill, file), value)?
+            or_break
+        if found.key.object != object || found.key.kind != cast[u8](slopfs.RecordKind.IndexSpill) {
+            break
+        }
+        counted.spills += 1
+        file = found.key.offset + 1
+    }
+    // Every object's (IndexedBy, number) record, by the tree's keys, so one left by a file that's gone is counted
+    at := cast[u64](1)
+    scratch : u8[1]
+    loop {
+        if at >= slopfs.INDEX_OBJECT_BASE {
+            break
+        }
+        found :: slopfs.tree_next(volume.nodes, &volume.tree, slopfs.key_of(at, .IndexedBy, number), scratch)?
+            or_break
+        owner :: found.key.object
+        if owner >= slopfs.INDEX_OBJECT_BASE {
+            break
+        }
+        if owner == at {
+            if found.key.kind == cast[u8](slopfs.RecordKind.IndexedBy) && found.key.offset == number {
+                counted.indexed_by += 1
+            }
+            at = owner + 1
+        }
+        else {
+            at = owner
         }
     }
-    plan.count = terms.count
-    slopfs.plan_query(volume, plan)?
-    count := cast[u64](0)
-    cursor := slopfs.QueryCursor.{}
-    loop {
-        found :: slopfs.query_next(volume, plan, directory, cursor)? or_break
-        count += 1
-        cursor = found.next
-    }
-    return .Ok(count)
+    return .Ok(counted)
+}
+
+/**
+ * Count what an index keeps, failing the test if the tree can't be read.
+ *
+ * @param t The test's state.
+ * @param volume The volume.
+ * @param number The index's number.
+ * @return What it keeps; Error(Failed), recorded, if the tree couldn't be read.
+ */
+records_of :: fn(
+    t : ptr[mut testing.T],
+    volume : ptr[mut slopfs.Volume],
+    number : u64
+) -> Result[IndexRecords, testing.Stopped] {
+    return testing.require_ok(t, index_records(volume, number), "an index's records are read")
+}
+
+/**
+ * Write a Task's value as a file's new value, whole.
+ *
+ * @param volume The volume.
+ * @param file The file, a typed one of Task's.
+ * @param value Its value.
+ * @return Done; or why it couldn't be written.
+ */
+rewrite :: fn(volume : ptr[mut slopfs.Volume], file : u64, value : Value) -> Result[void, slopfs.Error] {
+    slopfs.set_size(volume, file, 0)?
+    slopfs.write(volume, file, 0, slopfs.part(value.bytes, 0, value.count))?
+    return .Ok
 }
 
 /**
@@ -396,16 +574,169 @@ an_index_follows_writes_renames_removals_and_replacements_as_they_commit #test :
     testing.expect_eq(t, count_of(volume, root, slopfs.Term.[compare(size, .Equal, 8)]), 0, "what it replaced isn't")
     releasing :: slopfs.release_orphan(volume, replaced or_else 0)
     require_done(t, releasing, "the replaced file is given back")?
-    // Removed: gone from the index
+    // Removed: gone from the index, its bucket and its record of it with it
     removing :: slopfs.remove(volume, root, "b")
     require_done(t, removing, "the file is removed")?
     testing.require(t, commit_apart(kept.made), "the removal commits")?
     testing.expect_eq(t, count_of(volume, root, everything), 0, "a file removed isn't found")
+    removed :: records_of(t, volume, size)?
+    testing.expect_eq(t, removed.buckets, 0, "a removed file's bucket, its only one, goes with it")
+    testing.expect_eq(t, removed.indexed_by, 0, "and so does its record of the index")
     // Dropped, the index's records all go, and its number can't be asked
+    for i in 0..<3 {
+        text : u8[16]
+        length :: name_of_number(text, i)
+        name :: string_of(&text[0], length)
+        writing :: write_task(volume, root, name, task.hash, task_value(cast[u64](i), 0, false, "x"))
+        require_done(t, writing, "files are made for the index to hold when it's dropped")?
+    }
+    testing.require(t, commit_apart(kept.made), "the files commit")?
+    held :: records_of(t, volume, size)?
+    testing.expect_eq(t, held.indexed_by, 3, "each file has a record of the index")
+    testing.expect_eq(t, held.bucket_files, 3, "and is in a bucket")
     dropping :: slopfs.drop_index(volume, size)
     require_done(t, dropping, "the index is dropped")?
     testing.expect(t, run_query(volume, root, everything) is_error, "a dropped index can't be asked")
+    dropped :: records_of(t, volume, size)?
+    testing.expect_eq(t, dropped.buckets + dropped.spills + dropped.indexed_by, 0, "a dropped index leaves no record")
     testing.expect(t, commit_apart(kept.made), "the dropped index commits")
+    return .Ok
+}
+
+a_bucket_stays_in_order_so_a_walk_goes_on_past_a_removal_a_step_at_a_time #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
+    kept :: kept_volume(t)?
+    defer free_kept(kept)
+    volume :: kept.made.volume
+    root :: slopfs.ROOT_OBJECT
+    task := task_schema()
+    defer free_schema(&task)
+    declaring :: slopfs.declare_index(volume, task.bytes, "size")
+    size :: testing.require_ok(t, declaring, "an index is declared")?
+    // Ten files of one key, made in an order their IDs aren't, then written again in another, and two of another key
+    files : u64[10]
+    for i in 0..<10 {
+        text : u8[16]
+        length :: name_of_number(text, i)
+        writing :: write_task(volume, root, string_of(&text[0], length), task.hash, task_value(5, 0, false, "x"))
+        made :: testing.require_ok(t, writing, "a file of one key is made")?
+        if cast[usize](i) < files.count {
+            files[cast[usize](i)] = made
+        }
+    }
+    testing.require(t, commit_apart(kept.made), "the files commit")?
+    for i in 0..<10 {
+        at :: cast[usize](9 - i)
+        if at < files.count {
+            require_done(t, rewrite(volume, files[at], task_value(5, 0, false, "x")), "a file is written again")?
+        }
+    }
+    for i in 10..<12 {
+        text : u8[16]
+        length :: name_of_number(text, i)
+        writing :: write_task(volume, root, string_of(&text[0], length), task.hash, task_value(6, 0, false, "x"))
+        require_done(t, writing, "a file of another key is made")?
+    }
+    testing.require(t, commit_apart(kept.made), "the writes commit")?
+    held :: records_of(t, volume, size)?
+    testing.expect(t, held.ordered, "a bucket's files are in order of ID, however they were put in")
+    testing.expect_eq(t, held.bucket_files, 12, "each file is in its key's bucket once")
+    five :: slopfs.Term.[compare(size, .Equal, 5)]
+    testing.expect_eq(
+        t,
+        run_limited(volume, root, five, 1) or_else 0,
+        10,
+        "a walk a file at a step finds what a whole one does, going on from where each step got to"
+    )
+    six :: slopfs.Term.[compare(size, .Equal, 6)]
+    testing.expect_eq(
+        t,
+        run_limited(volume, root, six, 1) or_else 0,
+        2,
+        "a step looks at files before the range walked not at all"
+    )
+
+    // Three answered, then the first of them removed: the walk goes on from the third, missing none
+    planning :: planned(volume, five)
+    plan :: testing.require_ok(t, planning, "the query is planned")?
+    defer runtime.free(plan)
+    cursor := slopfs.QueryCursor.{}
+    answered := cast[u64](0)
+    first := cast[u64](0)
+    loop {
+        if answered == 3 {
+            break
+        }
+        stepping :: slopfs.query_next(volume, plan, root, cursor, slopfs.QUERY_LOOKS)
+        step :: testing.require_ok(t, stepping, "the walk steps")?
+        found :: testing.require_some(t, step, "the walk finds the first three")?
+        if answered == 0 {
+            first = found.file
+        }
+        answered += 1
+        cursor = found.next
+    }
+    testing.require(t, first == files[0], "the first file answered is the least ID")?
+    removing :: slopfs.remove(volume, root, "file-0")
+    require_done(t, removing, "the first file answered is removed")?
+    testing.require(t, commit_apart(kept.made), "the removal commits")?
+    rest := cast[u64](0)
+    loop {
+        stepping :: slopfs.query_next(volume, plan, root, cursor, slopfs.QUERY_LOOKS)
+        step :: testing.require_ok(t, stepping, "the walk goes on")?
+        found :: step or_break
+        if found.file != 0 {
+            rest += 1
+        }
+        cursor = found.next
+    }
+    testing.expect_eq(t, rest, 7, "the seven after the third are each found, none passed over for the removal")
+    after :: records_of(t, volume, size)?
+    testing.expect(t, after.ordered, "the bucket stays in order once a file's taken out")
+    testing.expect_eq(t, after.bucket_files, 11, "and the removed file's gone from it")
+    return .Ok
+}
+
+a_file_is_in_all_its_types_indexes_or_none_as_they_are_declared_and_dropped #test :: fn(
+    t : ptr[mut testing.T]
+) -> testing.Outcome {
+    kept :: kept_volume(t)?
+    defer free_kept(kept)
+    volume :: kept.made.volume
+    root :: slopfs.ROOT_OBJECT
+    task := task_schema()
+    defer free_schema(&task)
+    declaring :: slopfs.declare_index(volume, task.bytes, "size")
+    size :: testing.require_ok(t, declaring, "an index of the size is declared")?
+    good :: write_task(volume, root, "good", task.hash, task_value(1, 0, false, "good"))
+    require_done(t, good, "a file whose every field holds is made")?
+    // An empty text's Relative may point anywhere, as a message's may: it's indexed as empty
+    empty :: write_task(volume, root, "empty", task.hash, task_with_name_at(2, 0, 0))
+    require_done(t, empty, "a file with an empty name pointing before the value's end is made")?
+    broken :: write_task(volume, root, "broken", task.hash, task_with_name_at(3, 1000, 4))
+    require_done(t, broken, "a file whose name points past its value is made")?
+    testing.require(t, commit_apart(kept.made), "the files commit")?
+    everything :: slopfs.Term.[compare(size, .GreaterOrEqual, 0)]
+    testing.expect_eq(t, count_of(volume, root, everything), 3, "all three are indexed by the size alone")
+
+    by_name :: slopfs.declare_index(volume, task.bytes, "name")
+    name :: testing.require_ok(t, by_name, "an index of the name is declared")?
+    testing.expect_eq(t, count_of(volume, root, everything), 2, "the file whose name doesn't hold leaves the size's")
+    testing.expect_eq(
+        t,
+        count_of(volume, root, slopfs.Term.[compare_text(name, .Equal, "")]),
+        1,
+        "the empty name is found as empty"
+    )
+    testing.expect_eq(t, (records_of(t, volume, size)?).indexed_by, 2, "two files have a record of the size's index")
+    testing.require(t, commit_apart(kept.made), "the name's index commits")?
+
+    dropping :: slopfs.drop_index(volume, name)
+    require_done(t, dropping, "the name's index is dropped")?
+    testing.expect_eq(t, count_of(volume, root, everything), 3, "dropped, the file it kept out is in the size's again")
+    testing.expect_eq(t, (records_of(t, volume, size)?).indexed_by, 3, "with a record of it")
+    testing.expect(t, commit_apart(kept.made), "the drop commits")
     return .Ok
 }
 
@@ -452,6 +783,18 @@ a_bucket_full_of_one_value_spills_and_every_file_is_still_found #test :: fn(
         cast[u64](total) - 2,
         "and neither is found done"
     )
+    // Every file removed at once, past the changes noted: none is left in a bucket, a spilled record or a record of it
+    for i in 0..<total {
+        text : u8[16]
+        length :: name_of_number(text, cast[int](i))
+        removing :: slopfs.remove(volume, root, string_of(&text[0], length))
+        require_done(t, removing, "every file is removed")?
+    }
+    testing.require(t, commit_apart(kept.made), "the removals commit")?
+    left :: records_of(t, volume, done)?
+    testing.expect_eq(t, left.buckets, 0, "no bucket is left")
+    testing.expect_eq(t, left.spills, 0, "no spilled record is left")
+    testing.expect_eq(t, left.indexed_by, 0, "no file's record of the index is left")
     return .Ok
 }
 

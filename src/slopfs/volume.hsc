@@ -1625,19 +1625,23 @@ remove :: fn(volume : ptr[mut Volume], directory : u64, name : string) -> Result
 }
 
 /**
- * Destroy an object: its chunks and record taken out, its blocks given back, and a link's record.
+ * Destroy an object: its chunks and record taken out, its blocks given back, a link's record, and its index entries.
  *
  * Its name, if it has one, is the caller's to take out.
  *
  * @param volume The volume, marked dirty.
- * @param object The ID of the object; not checked, and its kind not read: whatever link and chunk records it has
- *     go, and its own record, if there.
- * @error OutOfMemory No memory for a node.
+ * @param object The ID of the object; not checked, and its kind not read: whatever link, chunk and index records it
+ *     has go, and its own record, if there.
+ * @error OutOfMemory No memory for a buffer or a node.
  * @error NoSpace No free extent for a node's copy.
  * @error Corrupt A chunk found can't be taken out, or a node couldn't be read or didn't check out.
  */
 destroy :: fn(volume : ptr[mut Volume], object : u64) -> Result[void, Error] {
-    // Its index entries taken out at the next commit, with its records of them
+    /*
+     * Its index entries taken out now, with its records of them, as a commit that indexes every file again after
+     * more changes than are noted walks only objects with records; and noted, for the live queries following it
+     */
+    unindex(volume, object)?
     note_indexed(volume, object)
     _ = tree_delete(volume.nodes, &volume.tree, key_of(object, .Link, 0))?
     loop {

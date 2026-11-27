@@ -13,18 +13,25 @@ import slopfs from "../../slopfs"
  * time from a cursor, through dir's Query; and live queries, each on a connection of its own (query's protocol),
  * which answer the files that match, then each one added, changed or gone as commits change them.
  *
- * A live query keeps the files it's answered as matching, up to MAX_MEMBERS, and the files each commit changed, up to
- * MAX_PENDING, which it looks at again a Next at a time. Past MAX_PENDING, or when a commit changed more files than
- * the volume noted, or moved a directory, it can't tell what changed, so it begins again: Resync, then every file
- * that matches Matched once more. Past MAX_MEMBERS it ends, answering NoSpace.
+ * A Query looks at up to slopfs.QUERY_LOOKS files of the index a request, answering file 0 and where it got to when
+ * none of them is answered; a live query's walk goes on likewise a step at a time, between clients' requests.
+ *
+ * A live query keeps the files it's answered as matching, up to MAX_MEMBERS, and the files commits changed that it
+ * has to look at again, up to MAX_PENDING: its members, and files of its index the walk has passed or finished, as
+ * the walk itself comes to those it hasn't. Past MAX_PENDING, or when a commit changed more files than the volume
+ * noted, or moved a directory, it can't tell what changed, so it begins again: Resync, then every file that matches
+ * Matched once more, as it does when an index of its type is declared or dropped. Past MAX_MEMBERS it ends, answering
+ * NoSpace, as one whose index is dropped ends answering NotFound, its slot freed for another.
  */
 
 /** The most live queries the server keeps at once; one more is refused with NoSpace. */
-MAX_LIVE :: 8
+MAX_LIVE :: 16
+/** The most live queries one dir connection may have open at once; one more is refused with NoSpace. */
+MAX_LIVE_PER_CONNECTION :: 2
 /** The most files a live query keeps as matching; past them, it ends (NoSpace). */
 MAX_MEMBERS :: 1024
 /** The most files changed since its last answer a live query keeps to look at; past them, it begins again. */
-MAX_PENDING :: 256
+MAX_PENDING :: slopfs.MAX_CHANGED
 
 /** Where a live query is in what it answers. */
 LivePhase :: enum {
@@ -32,11 +39,9 @@ LivePhase :: enum {
     Walking,
     /** Answering what each commit changes: Added, Changed and Gone. */
     Following,
-    /** Ended, past MAX_MEMBERS: every Next is answered NoSpace. */
-    Ended,
 }
 
-/** A live query's state, from slopfs.make, freed when its connection's dropped. */
+/** A live query's state, from slopfs.make, zeroed, and freed when it ends or its connection's dropped. */
 LiveState :: struct {
     /** Its predicate, planned, which holds its constants. */
     plan : slopfs.Plan,
@@ -46,18 +51,22 @@ LiveState :: struct {
     phase : LivePhase,
     /** Where its walk is, while it's Walking. */
     cursor : slopfs.QueryCursor,
-    /** The files it's answered as matching, and not as gone since: the first member_count. */
+    /** The files it's answered as matching, and not as gone since: the first member_count, each once. */
     members : u64[MAX_MEMBERS],
-    /** How many of members are used. */
+    /** How many of members are used, 0 to MAX_MEMBERS. */
     member_count : usize,
     /** The files commits changed that it's yet to look at again: the first pending_count, each once. */
     pending : u64[MAX_PENDING],
-    /** How many of pending are used. */
+    /** How many of pending are used, 0 to MAX_PENDING. */
     pending_count : usize,
     /** Whether it has to begin again, its next answer Resync. */
     resync : bool,
     /** Whether a Next is waiting for an answer. */
     asked : bool,
+    /** Whether its walk stopped at slopfs.QUERY_LOOKS files with a Next waiting, to go on once requests are served. */
+    stepping : bool,
+    /** Why it ends, once its answer is the last: NoSpace past MAX_MEMBERS; null while it goes on. */
+    ended : files.FileError?,
 }
 
 /** A live query's slot in the server. */
@@ -66,6 +75,11 @@ Live :: struct {
     state : ptr[mut LiveState]?,
     /** Its connection's slot, a LiveQuery's. */
     connection : usize,
+    /**
+     * The slot of the dir connection that opened it, which MAX_LIVE_PER_CONNECTION counts against; MAX_CONNECTIONS
+     * once that's dropped.
+     */
+    asker : usize,
 }
 
 /**
@@ -75,10 +89,12 @@ Live :: struct {
  * @param volume The volume whose indexes it's planned over, only read.
  * @param into The request, which the predicate's terms and texts are read from.
  * @param predicate The predicate's Relatives, as the request has them.
- * @param plan Where it's planned; filled whatever happens, and good only if null is given back.
+ * @param plan Where it's planned, zeroed as slopfs.make gives it; filled whatever happens, and good only if null is
+ *     given back.
  * @return Null once it's planned; WrongType if the terms don't hold together, there are none or past MAX_TERMS, a
- *     kind or comparison isn't one, a text isn't within the texts, or it names indexes of more than one type;
- *     NotFound for an index that isn't there; or why the volume couldn't be read.
+ *     kind or comparison isn't one, a text isn't within the texts, an = or ≠'s text is longer than an index keeps
+ *     (slopfs.INDEX_TEXT_BYTES, so it could equal another text alike in what's kept), or it names indexes of more
+ *     than one type; NotFound for an index that isn't there; or why the volume couldn't be read.
  */
 plan_of :: fn(
     volume : ptr[mut slopfs.Volume],
@@ -88,7 +104,6 @@ plan_of :: fn(
 ) -> files.FileError? {
     terms :: os.items(into, predicate.terms)
     texts :: os.items(into, predicate.texts)
-    plan^ = slopfs.Plan.{}
     if terms.count == 0 || terms.count > plan.terms.count {
         return files.FileError.WrongType
     }
@@ -106,6 +121,10 @@ plan_of :: fn(
                 return files.FileError.WrongType
             }
             text :: slopfs.part(texts, cast[usize](start), cast[usize](end))
+            exact :: made.comparison == .Equal || made.comparison == .NotEqual
+            if exact && text.count > made.text.count {
+                return files.FileError.WrongType
+            }
             kept :: if text.count < made.text.count { text.count } else { made.text.count }
             slopfs.copy_bytes(made.text, 0, slopfs.part(text, 0, kept))
             made.text_bytes = kept
@@ -152,7 +171,8 @@ comparison_of :: fn(comparison : u32) -> slopfs.Comparison? {
 }
 
 /**
- * Answer a Query: the first file beneath a directory, from a cursor, the predicate holds for.
+ * Answer a Query: the first file beneath a directory, from a cursor, the predicate holds for, among the next
+ * slopfs.QUERY_LOOKS files of the index walked.
  *
  * @param server The server, whose volume is read.
  * @param directory The directory object it's beneath.
@@ -160,7 +180,8 @@ comparison_of :: fn(comparison : u32) -> slopfs.Comparison? {
  * @param ask The request's predicate and cursor.
  * @param out The answer being built, which the file's path is appended to.
  * @return Matched with the file, its path from the directory (empty past 16 levels beneath it) and the cursor after
- *     it; End past the last; Failed as plan_of says, NoMemory without the memory for the plan, or why the volume
+ *     it, or with file 0, an empty path and the cursor to go on from when none of the files looked at is answered;
+ *     End past the last; Failed as plan_of says, NoMemory without the memory for the plan, or why the volume
  *     couldn't be read.
  */
 query_answer :: fn(
@@ -177,13 +198,13 @@ query_answer :: fn(
         case Some(error) => return .Failed(error)
         case None => {}
     }
-    cursor :: slopfs.QueryCursor.{phase = walk_phase(ask.cursor.phase), key = ask.cursor.key, skip = ask.cursor.skip}
-    match slopfs.query_next(volume, plan, directory, cursor) {
+    cursor :: slopfs.QueryCursor.{phase = walk_phase(ask.cursor.phase), key = ask.cursor.key, after = ask.cursor.skip}
+    match slopfs.query_next(volume, plan, directory, cursor, slopfs.QUERY_LOOKS) {
         case Ok(found) => {
             match found {
                 case Some(file) => {
                     path : u8[files.PATH_BYTES]
-                    length :: path_to(server, directory, file.file, path)
+                    length :: if file.file == 0 { cast[usize](0) } else { path_to(server, directory, file.file, path) }
                     return .Matched(
                         query.Match.{
                             name = os.append(out, slopfs.part(path, 0, length)),
@@ -191,7 +212,7 @@ query_answer :: fn(
                             next = query.Cursor.{
                                 phase = cast[u32](file.next.phase),
                                 key = file.next.key,
-                                skip = file.next.skip,
+                                skip = file.next.after,
                             },
                         }
                     )
@@ -220,32 +241,41 @@ walk_phase :: fn(phase : u32) -> slopfs.WalkPhase {
  * Answer a LiveQuery: the predicate planned, and a live query begun on a connection of its own.
  *
  * @param server The server, which keeps the live query in one of its lives and a LiveQuery connection.
+ * @param asker The asking dir connection's slot, which may have MAX_LIVE_PER_CONNECTION open.
  * @param directory The directory object it's beneath.
  * @param into The request, which the predicate is read from.
  * @param predicate The request's predicate.
  * @param name The asking connection's name, the new one's.
  * @return Live with the connection's other end, which the caller sends; Failed as plan_of says, NoMemory without the
- *     memory for its state, or NoSpace without a slot or a channel.
+ *     memory for its state, or NoSpace without a slot or a channel, or when the asker has as many open as it may.
  */
 live_query :: fn(
     server : ptr[mut Server],
+    asker : usize,
     directory : u64,
     into : ptr[os.Incoming],
     predicate : query.Predicate,
     name : string
 ) -> dir.Response {
     free := server.lives.count
+    held := 0
     for live, i in server.lives {
         if live.state is_none {
-            free = i
-            break
+            if free >= server.lives.count {
+                free = i
+            }
+        }
+        else if live.asker == asker {
+            held += 1
         }
     }
-    if free >= server.lives.count {
+    if free >= server.lives.count || held >= MAX_LIVE_PER_CONNECTION {
         return .Failed(.NoSpace)
     }
+    // Zeroed from make, as it's too big a value to build on the stack
     state :: slopfs.make(LiveState) or_return .Failed(.NoMemory)
-    state^ = LiveState.{directory = directory}
+    state.directory = directory
+    state.ended = null
     match plan_of(server.volume, into, predicate, &state.plan) {
         case Some(error) => {
             runtime.free(state)
@@ -265,7 +295,7 @@ live_query :: fn(
             if slot < server.connections.count {
                 server.connections[slot].live = free
             }
-            server.lives[free] = Live.{state = state, connection = slot}
+            server.lives[free] = Live.{state = state, connection = slot, asker = asker}
             return .Live(os.Channel[query.Query].{end = pair.b})
         }
         case None => {
@@ -277,8 +307,8 @@ live_query :: fn(
 }
 
 /**
- * Serve a live query's connection: each Next answered with its next event, at once or once a commit makes one. A
- * connection whose end fails is dropped.
+ * Serve a live query's connection: each Next answered with its next event, at once or once a commit makes one; one
+ * whose live query has ended answered with why. A connection whose end fails is dropped.
  *
  * @param server The server; once its handled is set, no further request is read.
  * @param index The connection's slot, a LiveQuery; one past them is left alone.
@@ -307,6 +337,11 @@ serve_live :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Inco
         }
         live :: server.connections[index].live
         if live >= server.lives.count {
+            // Ended, its slot freed: every Next is answered with why
+            out := os.Outgoing.{}
+            reason :: server.connections[index].live_ended or_else files.FileError.NoSpace
+            os.begin[query.Response](&out)^ = .Failed(reason)
+            _ = query.send_response(end, server.port, &out)
             continue
         }
         match server.lives[live].state {
@@ -321,7 +356,7 @@ serve_live :: fn(server : ptr[mut Server], index : usize, into : ptr[mut os.Inco
 
 /**
  * Answer a live query's waiting Next, if it has one and there's an event for it: sent on its connection, and the
- * query no longer asked.
+ * query no longer asked. An answer that ends it frees its slot (finish_live).
  *
  * @param server The server, whose volume is read.
  * @param live The live query's slot in the server's lives; a free one is left alone.
@@ -343,22 +378,55 @@ answer_live :: fn(server : ptr[mut Server], live : usize) {
     }
     state.asked = false
     _ = query.send_response(server.connections[connection].end, server.port, &out)
+    match state.ended {
+        case Some(reason) => finish_live(server, live, reason)
+        case None => {}
+    }
+}
+
+/**
+ * End a live query and free its slot: a Next waiting answered Failed with why, and every later one too (serve_live).
+ *
+ * @param server The server, whose live slot is freed and whose connection for it is marked ended.
+ * @param live The slot; a free one, or one past them, is left alone.
+ * @param reason Why it ended, which its Nexts are answered with.
+ */
+finish_live :: fn(server : ptr[mut Server], live : usize, reason : files.FileError) {
+    if live >= server.lives.count {
+        return void
+    }
+    state :: server.lives[live].state or_return void
+    connection :: server.lives[live].connection
+    if connection < server.connections.count && server.connections[connection].kind == .LiveQuery {
+        if state.asked {
+            state.asked = false
+            out := os.Outgoing.{}
+            os.begin[query.Response](&out)^ = .Failed(reason)
+            _ = query.send_response(server.connections[connection].end, server.port, &out)
+        }
+        server.connections[connection].live = server.lives.count
+        server.connections[connection].live_ended = reason
+    }
+    end_live(server, live)
 }
 
 /**
  * Work out a live query's next event, if it has one now.
  *
+ * Walking, a file already a member is passed over, as it's one whose change is still to be answered; one Matched is
+ * no longer pending, as it's been answered as it is.
+ *
  * @param server The server, whose volume is read.
- * @param state The live query, whose phase, members, pending and cursor move on with the event.
+ * @param state The live query, whose phase, members, pending and cursor move on with the event; its stepping is set
+ *     when its walk stops at slopfs.QUERY_LOOKS files, and its ended past MAX_MEMBERS.
  * @param out The answer being built, which an event's path is appended to.
- * @return The answer: Resync, Matched, Current, Added, Changed or Gone; Failed with NoSpace once it's ended, or why
- *     the volume couldn't be read; null if there's nothing to answer until a commit changes something.
+ * @return The answer: Resync, Matched, Current, Added, Changed or Gone; Failed with NoSpace past MAX_MEMBERS, or why
+ *     the volume couldn't be read; null if there's nothing to answer until a commit changes something, or until its
+ *     walk goes on.
  */
 next_event :: fn(server : ptr[mut Server], state : ptr[mut LiveState], out : ptr[mut os.Outgoing]) -> query.Response? {
     volume :: server.volume
-    if state.phase == .Ended {
-        return query.Response.Failed(.NoSpace)
-    }
+    state.stepping = false
     if state.resync {
         state.resync = false
         state.member_count = 0
@@ -368,24 +436,34 @@ next_event :: fn(server : ptr[mut Server], state : ptr[mut LiveState], out : ptr
         return query.Response.Event(query.Event.{kind = .Resync})
     }
     if state.phase == .Walking {
-        match slopfs.query_next(volume, &state.plan, state.directory, state.cursor) {
-            case Ok(found) => {
-                match found {
-                    case Some(file) => {
-                        state.cursor = file.next
-                        if !add_member(state, file.file) {
-                            state.phase = .Ended
-                            return query.Response.Failed(.NoSpace)
+        loop {
+            match slopfs.query_next(volume, &state.plan, state.directory, state.cursor, slopfs.QUERY_LOOKS) {
+                case Ok(found) => {
+                    match found {
+                        case Some(file) => {
+                            state.cursor = file.next
+                            if file.file == 0 {
+                                state.stepping = true
+                                return null
+                            }
+                            if member_at(state, file.file) is_some {
+                                continue
+                            }
+                            if !add_member(state, file.file) {
+                                state.ended = files.FileError.NoSpace
+                                return query.Response.Failed(.NoSpace)
+                            }
+                            remove_pending(state, file.file)
+                            return event_of(server, state, .Matched, file.file, out)
                         }
-                        return event_of(server, state, .Matched, file.file, out)
-                    }
-                    case None => {
-                        state.phase = .Following
-                        return query.Response.Event(query.Event.{kind = .Current})
+                        case None => {
+                            state.phase = .Following
+                            return query.Response.Event(query.Event.{kind = .Current})
+                        }
                     }
                 }
+                case Error(error) => return query.Response.Failed(file_error(error))
             }
-            case Error(error) => return query.Response.Failed(file_error(error))
         }
     }
     loop {
@@ -413,7 +491,7 @@ next_event :: fn(server : ptr[mut Server], state : ptr[mut LiveState], out : ptr
             case None => {
                 if matches {
                     if !add_member(state, file) {
-                        state.phase = .Ended
+                        state.ended = files.FileError.NoSpace
                         return query.Response.Failed(.NoSpace)
                     }
                     return event_of(server, state, .Added, file, out)
@@ -421,6 +499,28 @@ next_event :: fn(server : ptr[mut Server], state : ptr[mut LiveState], out : ptr
             }
         }
     }
+}
+
+/**
+ * Go on with the live queries whose walk stopped at slopfs.QUERY_LOOKS files, a step each, as main does once the
+ * clients' requests waiting are served.
+ *
+ * @param server The server, whose stepping live queries are answered as far as a step goes.
+ * @return Whether one still has a step to go, so main serves again without waiting.
+ */
+step_lives :: fn(server : ptr[mut Server]) -> bool {
+    more := false
+    for live, i in server.lives {
+        state :: live.state or_continue
+        if state.stepping && state.asked {
+            answer_live(server, i)
+        }
+    }
+    for live in server.lives {
+        state :: live.state or_continue
+        more = more || (state.stepping && state.asked)
+    }
+    return more
 }
 
 /**
@@ -506,8 +606,8 @@ remove_member :: fn(state : ptr[mut LiveState], at : usize) {
  * Note what a commit changed for every live query, and answer those waiting that now have an event.
  *
  * @param server The server, whose committed changes, as commit kept them, are given to each live query: each file
- *     to look at again, or, past what a query keeps, or when the commit's changes weren't all kept or moved a
- *     directory, a Resync.
+ *     it has to look at again (needs_look), or, past what a query keeps, or when the commit's changes weren't all
+ *     kept or moved a directory, a Resync.
  */
 feed_lives :: fn(server : ptr[mut Server]) {
     for live, i in server.lives {
@@ -515,18 +615,40 @@ feed_lives :: fn(server : ptr[mut Server]) {
         if server.committed_all {
             state.resync = true
         }
-        else {
+        else if !state.resync {
             for j in 0..<server.committed_count {
                 if j >= server.committed.count {
                     break
                 }
-                if !add_pending(state, server.committed[j]) {
+                file :: server.committed[j]
+                if needs_look(server.volume, state, file) && !add_pending(state, file) {
                     state.resync = true
                     break
                 }
             }
         }
         answer_live(server, i)
+    }
+}
+
+/**
+ * Tell whether a file a commit changed is one a live query has to look at again: a member, whose change it answers,
+ * or a file of its walked index's keys that its walk won't come to, as it's passed it or is done.
+ *
+ * @param volume The volume, as committed, only read.
+ * @param state The live query, only read.
+ * @param file The file changed.
+ * @return True for those, and for any whose place couldn't be read; false for a file it can't answer (not in its
+ *     index's keys walked) or one its walk has yet to come to.
+ */
+needs_look :: fn(volume : ptr[mut slopfs.Volume], state : ptr[LiveState], file : u64) -> bool {
+    if member_at(state, file) is_some {
+        return true
+    }
+    cursor :: if state.phase == .Walking { state.cursor } else { slopfs.QueryCursor.{phase = .Done} }
+    match slopfs.walk_place(volume, &state.plan, cursor, file) {
+        case Ok(place) => return place == .Behind
+        case Error(error) => return true
     }
 }
 
@@ -553,6 +675,30 @@ add_pending :: fn(state : ptr[mut LiveState], file : u64) -> bool {
     state.pending[count] = file
     state.pending_count = count + 1
     return true
+}
+
+/**
+ * Take a file out of those a live query has to look at again, the last put in its place.
+ *
+ * @param state The live query.
+ * @param file The file; one not among them is left alone.
+ */
+remove_pending :: fn(state : ptr[mut LiveState], file : u64) {
+    count :: state.pending_count
+    if count == 0 || count > state.pending.count {
+        return void
+    }
+    last :: count - 1
+    for each, i in state.pending {
+        if i >= count {
+            break
+        }
+        if each == file {
+            state.pending[i] = state.pending[last]
+            state.pending_count = last
+            return void
+        }
+    }
 }
 
 /**
@@ -583,7 +729,66 @@ keep_committed :: fn(server : ptr[mut Server]) {
 }
 
 /**
- * Let go of a live query, as its connection's dropped.
+ * Tell the live queries an index was declared or dropped: those using a dropped one end (NotFound), as its number
+ * may be another's next; those of its type begin again (Resync), as a file is in all of its type's indexes or none,
+ * so which of its files are indexed may have changed.
+ *
+ * @param server The server, whose live queries are told, and those waiting answered.
+ * @param schema The index's schema hash.
+ * @param dropped The dropped index's number; 0 for one declared.
+ */
+indexes_changed :: fn(server : ptr[mut Server], schema : u8[32], dropped : u64) {
+    for live, i in server.lives {
+        state :: live.state or_continue
+        if dropped != 0 && uses_index(&state.plan, dropped) {
+            finish_live(server, i, .NotFound)
+        }
+        else if state.plan.schema == schema {
+            state.resync = true
+            answer_live(server, i)
+        }
+    }
+}
+
+/**
+ * Tell whether a planned query names an index.
+ *
+ * @param plan The query, only read.
+ * @param number The index's number.
+ * @return Whether it walks it, or one of its comparisons names it.
+ */
+uses_index :: fn(plan : ptr[slopfs.Plan], number : u64) -> bool {
+    if plan.walk == number {
+        return true
+    }
+    for term, i in plan.terms {
+        if i >= plan.count {
+            break
+        }
+        if term.kind == .Compare && term.index == number {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * Forget which dir connection opened each live query, as it's dropped, so its slot, taken by another, isn't counted
+ * against them.
+ *
+ * @param server The server, whose lives' asker is cleared where it's the slot.
+ * @param asker The dir connection's slot.
+ */
+forget_asker :: fn(server : ptr[mut Server], asker : usize) {
+    for live, i in server.lives {
+        if live.state is_some && live.asker == asker && i < server.lives.count {
+            server.lives[i].asker = server.connections.count
+        }
+    }
+}
+
+/**
+ * Let go of a live query, as its connection's dropped or it ends.
  *
  * @param server The server, whose live slot is freed.
  * @param live The slot; a free one, or one past them, is left alone.

@@ -10,14 +10,18 @@ import test_kit from "../../test_kit"
 
 /*
  * Indexes and queries (decisions/0201's 20i and 20j), on the system volume, through std's typed API: indexes of a
- * typed file's fields declared, typed files written beneath a directory and committed, queried by a comparison and by
- * an and of two, and a live query that answers what matches, then a file added and one removed as each commits.
+ * typed file's fields declared on its root, and refused beneath it, typed files written beneath a directory and
+ * committed, queried by a comparison and by an and of two, and a live query that answers what matches, then a file
+ * added and one removed as each commits. What it made is taken away again, its indexes dropped and its notes and
+ * their directory removed, so later commits don't index them and the next run begins as this one did.
  */
 
 /** The directory the check's typed files go in, beneath the system volume's root. */
 QUERIED :: "Queried notes"
 /** How long an event of the live query is waited for, in nanoseconds: 10 s, as an emulated machine is slow. */
 EVENT_WAIT : u64 : 10_000_000_000
+/** The names of every note the check may write in QUERIED, each removed by clean_up. */
+NOTE_NAMES :: string.["one", "two", "three", "four"]
 
 /** The typed files the check writes and asks after: a level, whether it's done, and a title. */
 QueryNote :: struct {
@@ -45,11 +49,16 @@ indexes_answer_queries_and_live_queries_follow_commits #test :: fn(t : ptr[mut t
     connected :: second_connection(system, port)
     root :: testing.require_some(t, connected, "the system volume takes a second connection to its root")?
     defer os.close_directory(root)
+    // What an earlier run left, if it failed, taken away first; and what this one makes, once it's done
+    clean_up(root)
+    defer clean_up(root)
     made :: os.make_directory_in(root, QUERIED)
     testing.require_none(t, made, "a directory for the notes is made on the system volume")?
     opening :: os.open_directory_in(root, QUERIED)
     notes :: testing.require_ok(t, opening, "the notes' directory opens")?
     defer os.close_directory(notes)
+    beneath :: os.declare_index[QueryNote](notes, "level")
+    testing.expect(t, beneath is_error, "an index isn't declared from beneath the volume's root")
 
     declaring_level :: os.declare_index[QueryNote](root, "level")
     level :: testing.require_ok(t, declaring_level, "an index of a typed file's integer field is declared")?
@@ -126,7 +135,40 @@ indexes_answer_queries_and_live_queries_follow_commits #test :: fn(t : ptr[mut t
     gone :: next_event(t, &live, name)?
     testing.expect_eq(t, gone.kind, query.EventKind.Gone, "a note that matched and is removed is Gone")
     testing.expect_eq(t, gone.name_bytes, 0, "a note that's gone has no name")
+    // Its index dropped, the live query ends, its slot let go
+    testing.require_none(t, os.drop_index(root, level), "the level's index is dropped")?
+    ended :: os.next_live_event(&live, name, (slop_os.clock_monotonic() or_else 0) + EVENT_WAIT)
+    testing.expect(t, ended is_error, "a live query whose index is dropped ends")
     return .Ok
+}
+
+/**
+ * Take away what the check makes on the system volume: its indexes dropped, its notes and their directory removed,
+ * each one that isn't there passed over.
+ *
+ * @param root A connection to the system volume's root, which stays the caller's.
+ */
+clean_up :: fn(root : os.Directory) {
+    for field in string.["level", "title"] {
+        match os.index_of[QueryNote](root, field) {
+            case Ok(found) => _ = os.drop_index(root, found.number)
+            case Error(error) => {}
+        }
+    }
+    for note in NOTE_NAMES {
+        path : u8[64]
+        length : usize = 0
+        for part in string.[QUERIED, "/", note] {
+            for character in part {
+                if length < path.count {
+                    path[length] = cast[u8](character)
+                    length += 1
+                }
+            }
+        }
+        _ = os.delete_file_in(root, string_of(&path[0], length))
+    }
+    _ = os.remove_directory_in(root, QUERIED)
 }
 
 /** A note to write: its name and level. */
