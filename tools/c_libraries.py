@@ -1,11 +1,9 @@
 """
 Build SlopOS's C libraries (decisions/0201, 20k and 20l): each program folder's c/ folder of C sources, and the libc
 package's (src/libc/c), compiled by a stock clang as freestanding, position-independent ELF for the programs'
-architecture, into lib<program>_c.a (liblibc_c.a for the libc) in a c/ folder beside the programs, then copied into
-c/<key>, the key a hash of every library's bytes, which c/key.txt names. The build package gives every program that
-folder as a library path, so a program's #library("<program>_c") links it, and as Hemera's build cache keys a program
-by its library folders but not by what's in them, a change to any C changes the key and relinks the programs. Every
-source is compiled with the libc's headers (src/libc/include) and clang's own freestanding ones (stddef.h, stdint.h,
+architecture, into lib<program>_c.a (liblibc_c.a for the libc) in a c/ folder beside the programs. The build package
+gives every program that folder as a library path, so a program's #library("<program>_c") links it; Hemera's build
+cache keys a program by the bytes of the libraries it links, so a change to its C relinks it. Every source is compiled with the libc's headers (src/libc/include) and clang's own freestanding ones (stddef.h, stdint.h,
 stdarg.h, limits.h, float.h, stdbool.h), and no others.
 
     python -I tools/c_libraries.py <programs folder> <architecture>
@@ -13,16 +11,14 @@ stdarg.h, limits.h, float.h, stdbool.h), and no others.
 The architecture is x86_64, aarch64 or riscv64. clang and llvm-ar are CLANG and LLVM_AR if set, else found on the PATH,
 else beside Visual Studio's LLVM. A clang without the architecture's backend, as Visual Studio's has no RISC-V, gives
 LLVM bitcode instead, which llc compiles: LLC if set, else the one built in Hemera's LLVM beside the hemera on the PATH.
-Nothing's built, and it succeeds, where no program has C, and a c/key.txt and keyed folders left from a build before
-are removed, so the build package doesn't give an old folder as the library path. It ends with 1 if a source doesn't compile or the tools
-aren't found.
+Nothing's built, and it succeeds, where no program has C. A c/key.txt and keyed folders an earlier version left are
+removed. It ends with 1 if a source doesn't compile or the tools aren't found.
 
 Environment:
     CLANG     clang, or its folder
     LLVM_AR   llvm-ar, or its folder (default: beside clang)
     LLC       llc, or its folder, for an architecture clang has no backend for
 """
-import hashlib
 import os
 import shutil
 import subprocess
@@ -105,8 +101,8 @@ def main() -> int:
     programs = [folder for parent in PROGRAM_FOLDERS if parent.exists() for folder in sorted(parent.iterdir())
                 if (folder / "c").is_dir() and any((folder / "c").glob("*.c"))]
     programs += [package for package in C_PACKAGES if (package / "c").is_dir() and any((package / "c").glob("*.c"))]
+    forget_keys(output)
     if not programs:
-        forget_keys(output)
         return 0
     clang = find_tool("CLANG", "clang")
     if clang is None:
@@ -145,37 +141,19 @@ def main() -> int:
         if subprocess.run([str(archiver), "rcs", str(library), *objects]).returncode != 0:
             print(f"c_libraries.py: {library} couldn't be made", file=sys.stderr)
             return 1
-    return keyed(output, [output / f"lib{program.name}_c.a" for program in programs])
-
-
-def keyed(output: Path, libraries: list[Path]) -> int:
-    """
-    Copy the libraries into c/<key>, the key a hash of their names and bytes (llvm-ar's archives are deterministic, so
-    the same C gives the same key), name it in c/key.txt, and remove the folders of keys before: 0.
-    """
-    digest = hashlib.sha256()
-    for library in sorted(libraries):
-        digest.update(library.name.encode() + b"\0" + library.read_bytes())
-    key = digest.hexdigest()[:16]
-    folder = output / key
-    folder.mkdir(exist_ok=True)
-    for library in libraries:
-        shutil.copyfile(library, folder / library.name)
-    (output / "key.txt").write_text(key + "\n", encoding="utf-8")
-    forget_keys(output, folder)
     return 0
 
 
-def forget_keys(output: Path, kept: Path | None = None) -> None:
+def forget_keys(output: Path) -> None:
     """
-    Remove the keyed folders in c/ but kept, and c/key.txt itself when nothing's kept: nothing's done where c/ isn't.
+    Remove c/key.txt and the keyed folders (16 hex digits) an earlier version of this script copied the libraries into:
+    nothing's done where c/ isn't.
     """
     if not output.is_dir():
         return
-    if kept is None:
-        (output / "key.txt").unlink(missing_ok=True)
+    (output / "key.txt").unlink(missing_ok=True)
     for other in output.iterdir():
-        if other.is_dir() and other != kept and len(other.name) == 16 and all(c in "0123456789abcdef" for c in other.name):
+        if other.is_dir() and len(other.name) == 16 and all(c in "0123456789abcdef" for c in other.name):
             shutil.rmtree(other)
 
 

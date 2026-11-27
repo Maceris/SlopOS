@@ -8,7 +8,6 @@ package libc
  */
 
 import runtime from "base:runtime"
-import slop_os from "std:os/slop_os"
 
 /** A block's header's bytes, and malloc's alignment: 16, as C's max_align_t has. */
 HEADER_BYTES : usize : 16
@@ -32,7 +31,7 @@ Header :: struct {
  */
 allocate :: fn(size : usize, alignment : usize) -> ptr[mut u8]? {
     total :: size + alignment
-    if total < size || !could_fit(total) {
+    if total < size {
         set_errno(E_NOMEM)
         return null
     }
@@ -45,26 +44,6 @@ allocate :: fn(size : usize, alignment : usize) -> ptr[mut u8]? {
     header :: cast[ptr[mut Header]](cast[usize](block) - HEADER_BYTES)
     header^ = Header.{total = cast[u64](total), offset = cast[u64](alignment)}
     return block
-}
-
-/** The size from which an allocation is first checked against the budget: 1 MiB. */
-CHECKED_BYTES : usize : 1 << 20
-
-/**
- * Tell whether an allocation could fit in the program's memory budget at all, before the heap is asked: base's
- * runtime takes the addresses for a block of pages of its own before it makes the memory, and keeps them when that
- * fails, so one allocation bigger than its free range, which C asks for to probe, would leave the program unable to
- * map anything again.
- *
- * @param total The allocation's bytes, header and padding included.
- * @return True below CHECKED_BYTES, and up to the budget's limit; false above it.
- */
-could_fit :: fn(total : usize) -> bool {
-    if total < CHECKED_BYTES {
-        return true
-    }
-    info :: slop_os.memory_budget_info(slop_os.startup_block().budget) or_return true
-    return cast[u64](total) <= info.limit
 }
 
 /**

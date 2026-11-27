@@ -61,18 +61,6 @@ Known limits, each an error rather than wrong code. Severity: nice.
 
 ### Targets and runtime
 
-- **SlopOS's address reservation keeps a failed one** (`base/runtime/slop_os.hsc`'s `reserve_addresses`): the offset
-  is added before it's checked against the free range, so one allocation bigger than the 1 TiB range (C's
-  `malloc(SIZE_MAX / 2)`, which ported code does to probe) leaves the offset past the end, and every later mapping, a
-  file's buffer or a block of pages of its own, fails with OutOfMemory for the rest of the process. Found in 20l; the
-  libc refuses an allocation over the budget's limit before asking the heap. A compare-and-swap that only moves the
-  offset when it fits would fix it. Severity: friction (2026-11-27).
-- **The build cache doesn't see a C library change**: a program's key has its library folders' paths but not what's in
-  them (`docs/compilation.md`, *The Build Cache*), so a program linking a C library that changed is taken from the
-  cache, linked against the old one, even into a new folder. Found in 20l; `tools/c_libraries.py` puts the libraries
-  in a folder named by their hash, which the build package gives as the library folder, so the key changes with them.
-  Hashing the libraries a link finds into the key would fix it in Hemera. Severity: friction (2026-11-27).
-
 From the survey of Hemera's docs against its compiler (2026-10-24):
 
 - **macOS / Mach-O** is in `compilation.md`'s linking table, but only ELF and PE/COFF can be linked (E7000), and a
@@ -294,6 +282,12 @@ of `syscall_bit`; `syscall_count` for the kernel's size of one); `process_thread
 like, `u32`); `Lending` backed by `u32`; and `has_feature` and `add_feature` bounds-checked. Friction: a field's
 default can't be `size_of` its own struct (a circular dependency), so `ThreadDebug.size`'s is written out; and a build
 check's `BuildOptions` names an output-less target by its output's file, its `output_type` read as `Executable`.
+M21 (2026-11-27, `decisions/0202`), 21a: base's `map_pages` makes its memory before it takes the free range's
+addresses, `reserve_addresses` moves its offset only past what fits (a compare-and-swap), and `release_addresses` gives
+back the last taken, so an allocation the budget or the range can't give leaves later mappings working (the libc's
+check against the budget is gone); and the build cache keys a program by the bytes of each library it links found in
+its library folders, and a target's record by those folders' files, so a changed C library relinks its programs
+(`tools/c_libraries.py`'s keyed folders are gone).
 
 ## 4. Features That Look Like a Strong Fit
 

@@ -395,32 +395,16 @@ add_programs :: fn(folder : string) {
 }
 
 /**
- * Find the folder of the C libraries tools/c_libraries.py built beside the programs (decisions/0201, 20l): c/key.txt
- * names it, a folder in c/ named by the hash of every library's bytes, so the programs' library folder changes when
- * any C does, and with it their key in Hemera's build cache, which doesn't see a library change on its own.
+ * Find the folder of the C libraries tools/c_libraries.py built beside the programs (decisions/0201, 20l). Hemera's
+ * build cache keys a program by the bytes of the libraries it links, so a changed library relinks it.
  *
- * @return The folder, programs_output's c/<key>, on the heap, the caller's; c/ itself, where c_libraries.py hasn't
- *     written a key, as where no program has C.
+ * @return The folder, programs_output's c/, on the heap, the caller's; it may not exist, as where no program has C.
  */
 c_libraries_folder :: fn() -> string {
     storage : u8[512]
     folder := text_buffer.make(storage)
     text_buffer.append(&folder, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
     text_buffer.append(&folder, "/c")
-    key_storage : u8[512]
-    key_path := text_buffer.make(key_storage)
-    text_buffer.append(&key_path, text_buffer.as_string(&folder))
-    text_buffer.append(&key_path, "/key.txt")
-    match os.read_entire_file(text_buffer.as_string(&key_path)) {
-        case Ok(key) => {
-            if key.count > 0 {
-                text_buffer.append(&folder, "/")
-                text_buffer.append(&folder, strings.trim(key))
-            }
-            strings.free_string(key)
-        }
-        case Error(error) => {}
-    }
     return strings.clone(text_buffer.as_string(&folder)) or_else ""
 }
 

@@ -275,7 +275,8 @@ static void memory_test(void) {
     CHECK(made);
     errno = 0;
     CHECK(malloc((size_t)-1 / 2) == NULL && errno == ENOMEM);
-    /* Refused before the heap took addresses for it, so a block of pages of its own still maps */
+    /* Past the budget but within the address range, twice: neither takes addresses, so a block of its own still maps */
+    CHECK(malloc((size_t)1 << 39) == NULL && malloc((size_t)1 << 39) == NULL);
     void *after = malloc(65536);
     CHECK(after != NULL);
     free(after);
