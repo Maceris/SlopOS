@@ -19,7 +19,7 @@ import arch_interface from "../../arch_interface"
  * @return aarch64.FP_SIMD_STATE_SIZE, 528 bytes: v0 to v31, FPCR and FPSR.
  */
 vector_state_size :: fn(config : arch_interface.VectorConfig) -> usize {
-    return aarch64.FP_SIMD_STATE_SIZE
+    return size_of(VectorState)
 }
 
 /**
@@ -39,7 +39,7 @@ vector_state_alignment :: fn() -> usize {
  * @param config Ignored, as in vector_state_size.
  */
 init_vector_state :: fn(state : ptr[mut VectorState], config : arch_interface.VectorConfig) {
-    intrinsics.mem_zero(cast[mut rawptr](state), aarch64.FP_SIMD_STATE_SIZE)
+    intrinsics.mem_zero(cast[mut rawptr](state), size_of(VectorState))
 }
 
 /**
@@ -49,6 +49,7 @@ init_vector_state :: fn(state : ptr[mut VectorState], config : arch_interface.Ve
  */
 save_vector_state :: fn(state : ptr[mut VectorState]) {
     aarch64.save_fp_simd(cast[rawptr](state))
+    state.thread_pointer = aarch64.read_system_register(.TPIDR_EL0)
 }
 
 /**
@@ -58,4 +59,23 @@ save_vector_state :: fn(state : ptr[mut VectorState]) {
  */
 restore_vector_state :: fn(state : ptr[VectorState]) {
     aarch64.restore_fp_simd(cast[rawptr](state))
+    aarch64.write_system_register(.TPIDR_EL0, state.thread_pointer)
+}
+
+/**
+ * Set the calling CPU's thread's TPIDR_EL0 (arch_interface.set_thread_pointer), in the register now, which saving its
+ * state keeps.
+ *
+ * @param state The thread's vector state.
+ * @param registers Unused: TPIDR_EL0 isn't one of the frame's registers.
+ * @param value 0, or a user address.
+ * @return False, nothing changed, for a value outside user memory.
+ */
+set_thread_pointer :: fn(state : ptr[mut VectorState], registers : ptr[mut UserRegisters], value : u64) -> bool {
+    if value != 0 && (value < USER_LOW || value >= USER_HIGH) {
+        return false
+    }
+    state.thread_pointer = value
+    aarch64.write_system_register(.TPIDR_EL0, value)
+    return true
 }

@@ -130,6 +130,8 @@ ArchCpu :: struct #align(64) {
     stale_tags : u64[64],
     /** XCR0 as it's set now, which restoring a thread's vector state may change (vector.hsc). */
     xcr0 : u64,
+    /** The fs base last written to the MSR, a thread's thread pointer, so restoring one that's the same writes nothing. */
+    fs_base : u64,
     /** Whether the CPU has XSAVEOPT, which saving vector state then uses (vector.hsc). */
     xsaveopt : bool,
     /** Whether init_cpu turned on CET's shadow stacks for user mode (decisions/0186). */

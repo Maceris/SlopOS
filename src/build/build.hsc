@@ -40,6 +40,7 @@ import compiler from "base:compiler"
 import runtime from "base:runtime"
 import os from "std:os"
 import schema from "std:schema"
+import strings from "std:strings"
 import text_buffer from "std:text_buffer"
 import bundle from "../bundle"
 import checks from "../checks"
@@ -318,7 +319,7 @@ add_kernel :: fn() {
  * its startup block.
  *
  * Each is <name>.elf in the programs_output folder, linked against service_kit's library and any PROGRAM_LIBRARIES
- * names for it. hello has a second build, hello_next.elf, with hello_build=next, for the test of generations applied
+ * names for it, and given programs_output's c folder to find C libraries in, which tools/c_libraries.py builds there. hello has a second build, hello_next.elf, with hello_build=next, for the test of generations applied
  * live (decisions/0126).
  *
  * @param folder The folder whose subfolders are programs, relative to src/build.
@@ -369,6 +370,14 @@ add_programs :: fn(folder : string) {
             }
         }
         program.libraries = linked
+        // The C libraries tools/c_libraries.py built beside the programs, for #library("<program>_c") (decisions/0201)
+        c_storage : u8[512]
+        c_folder := text_buffer.make(c_storage)
+        text_buffer.append(&c_folder, compiler.target_setting("programs_output", default = DEFAULT_PROGRAMS))
+        text_buffer.append(&c_folder, "/c")
+        c_paths : string[..]
+        runtime.array_add(&c_paths, strings.clone(text_buffer.as_string(&c_folder)) or_else "")
+        program.target_options.library_paths = c_paths
         target :: compiler.add_target(program)
         // hello's second build, which says so, for the test of generations applied live (decisions/0126)
         if name == "hello" {

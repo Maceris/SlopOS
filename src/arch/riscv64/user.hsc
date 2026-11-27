@@ -120,6 +120,23 @@ restart_syscall :: fn(registers : ptr[mut UserRegisters]) {
 }
 
 /**
+ * Set the calling hart's thread's tp (arch_interface.set_thread_pointer), x4 in its saved registers, which returning to
+ * user mode loads.
+ *
+ * @param state Unused: tp is one of the frame's registers.
+ * @param registers The thread's saved registers.
+ * @param value 0, or a user address.
+ * @return False, nothing changed, for a value outside user memory.
+ */
+set_thread_pointer :: fn(state : ptr[mut VectorState], registers : ptr[mut UserRegisters], value : u64) -> bool {
+    if value != 0 && (value < USER_LOW || value >= USER_HIGH) {
+        return false
+    }
+    registers.frame.x[4] = value
+    return true
+}
+
+/**
  * Count the registers a debugger sees (arch_interface.user_register_count).
  *
  * @return USER_REGISTERS, 33: x0 to x31, then pc.

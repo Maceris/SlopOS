@@ -863,6 +863,17 @@ set_debug : fn(
 ) -> bool : ---
 
 /**
+ * Set the calling CPU's thread's thread pointer (slop_os.thread_set_pointer), kept in its vector state, which saving
+ * and restoring it carries across switches: x86-64's fs base, AArch64's TPIDR_EL0, RISC-V's tp.
+ *
+ * @param state The thread's vector state, the CPU's current one's.
+ * @param registers The thread's saved registers, which hold RISC-V's tp.
+ * @param value The pointer: 0, or a user address.
+ * @return False, nothing changed, for a value that isn't 0 or a user address.
+ */
+set_thread_pointer : fn(state : ptr[mut VectorState], registers : ptr[mut UserRegisters], value : u64) -> bool : ---
+
+/**
  * Load a thread's debugging state into the calling CPU, as it returns to user mode; one with none loads nothing.
  *
  * @param debug The thread's state.

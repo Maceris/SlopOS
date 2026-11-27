@@ -39,8 +39,10 @@ MXCSR_INITIAL : u32 : 0x1f80
 VectorState :: struct #align(64) {
     /** The state components the area holds, XCR0 bits, which XCR0 is set to while the thread runs. */
     components : u64,
+    /** The thread's thread pointer, its fs base (set_thread_pointer); 0 at first. */
+    thread_pointer : u64,
     /** Unused, 0, so the XSAVE area after the header is 64-byte aligned. */
-    reserved : u64[7],
+    reserved : u64[6],
 }
 
 #assert size_of(VectorState) == 64
@@ -150,6 +152,29 @@ restore_vector_state :: fn(state : ptr[VectorState]) {
         cpu.xcr0 = state.components
     }
     x86_64.xrstor(cast[rawptr](area_of(state)), state.components)
+    // fs base only when it's another, as a write to the MSR is slow
+    if cpu.fs_base != state.thread_pointer {
+        x86_64.wrmsr(IA32_FS_BASE, state.thread_pointer)
+        cpu.fs_base = state.thread_pointer
+    }
+}
+
+/**
+ * Set the calling CPU's thread's fs base (arch_interface.set_thread_pointer), in its state and in the MSR now.
+ *
+ * @param state The thread's vector state.
+ * @param registers Unused: fs base isn't one of the frame's registers.
+ * @param value 0, or a user address.
+ * @return False, nothing changed, for a value outside user memory.
+ */
+set_thread_pointer :: fn(state : ptr[mut VectorState], registers : ptr[mut UserRegisters], value : u64) -> bool {
+    if value != 0 && (value < USER_LOW || value >= USER_HIGH) {
+        return false
+    }
+    state.thread_pointer = value
+    x86_64.wrmsr(IA32_FS_BASE, value)
+    current_cpu().fs_base = value
+    return true
 }
 
 /**

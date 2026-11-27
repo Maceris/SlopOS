@@ -147,6 +147,8 @@ VectorState :: struct #align(16) {
     fpcr : u64,
     /** The floating-point status register: the cumulative exception flags. */
     fpsr : u64,
+    /** The thread's thread pointer, TPIDR_EL0, which it may write itself; 0 at first. */
+    thread_pointer : u64,
 }
 
 /**

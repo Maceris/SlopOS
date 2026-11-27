@@ -97,6 +97,7 @@ syscall 95 memory_kind : fn(memory : Memory) -> Result[MemoryKind, HandleError]
 syscall 96 handle_same : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
 syscall 97 handle_restrict : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]
 syscall 98 channel_peer_owned_by : fn(end : Channel, process : Process) -> Result[bool, ControlError]
+syscall 99 thread_set_pointer : fn(value : u64) -> Result[void, MemoryError]
 const ABI_VERSION : u32 = 14
 const CHANNEL_DEFAULT_RING : u32 = 1024
 const CHANNEL_MAX_RING : u32 = 131072
@@ -246,6 +247,7 @@ const SYSCALL_THREAD_READ_REGISTERS : u32 = 39
 const SYSCALL_THREAD_RESUME : u32 = 38
 const SYSCALL_THREAD_SET_DEBUG : u32 = 82
 const SYSCALL_THREAD_SET_PAGE : u32 = 92
+const SYSCALL_THREAD_SET_POINTER : u32 = 99
 const SYSCALL_THREAD_SUSPEND : u32 = 37
 const SYSCALL_THREAD_USE_CPU_BUDGET : u32 = 76
 const SYSCALL_THREAD_WRITE_REGISTERS : u32 = 40
@@ -674,7 +676,7 @@ type SyscallAnswer : struct size 24 align 8
 type SyscallAnswer field 0000 tag offset 0 : u64
 type SyscallAnswer field 0001 first offset 8 : u64
 type SyscallAnswer field 0002 second offset 16 : u64
-type Syscalls : struct size 792 align 8
+type Syscalls : struct size 800 align 8
 type Syscalls field 0000 handle_close offset 0 : fn(handle : Handle) -> Result[void, HandleError]
 type Syscalls field 0001 handle_duplicate offset 8 : fn(handle : Handle, rights : Rights) -> Result[Handle, HandleError]
 type Syscalls field 0002 handle_info offset 16 : fn(handle : Handle) -> Result[HandleInfo, HandleError]
@@ -774,6 +776,7 @@ type Syscalls field 0095 memory_kind offset 760 : fn(memory : Memory) -> Result[
 type Syscalls field 0096 handle_same offset 768 : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
 type Syscalls field 0097 handle_restrict offset 776 : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]
 type Syscalls field 0098 channel_peer_owned_by offset 784 : fn(end : Channel, process : Process) -> Result[bool, ControlError]
+type Syscalls field 0099 thread_set_pointer offset 792 : fn(value : u64) -> Result[void, MemoryError]
 type Result[void, HandleError] : union size 8 tag u8
 type Result[void, HandleError] variant 0000 Ok:
 type Result[void, HandleError] variant 0001 Error: HandleError@4

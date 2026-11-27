@@ -144,8 +144,10 @@ def build_slopos_tools(output: Path) -> None:
 
 
 def build_slopos_programs(output: Path, architecture: str = "x86_64") -> None:
-    """Builds SlopOS's programs through its build package, into the folder output."""
+    """Builds SlopOS's programs through its build package, into the folder output, their C libraries first."""
     output.mkdir(parents=True, exist_ok=True)
+    if subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "c_libraries.py"), str(output), architecture]).returncode != 0:
+        sys.exit("boot.py: the programs' C libraries don't build")
     run_hemera([f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}", str(BUILD_PACKAGE)],
                "SlopOS's programs")
 

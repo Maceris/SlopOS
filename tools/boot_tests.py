@@ -253,7 +253,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 110 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 111 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -1911,6 +1911,9 @@ TESTS = [
     program_test("sends and checks messages with generated protocol code, and ends a connection a broken request comes on",
                  "test_protocols", 6),
     program_test("binds a typed library from its grant, and calls its exports", "test_libraries", 1),
+    # C calling back into Hemera (decisions/0201's 20k): a stock clang's freestanding C, sorting by a Hemera comparison
+    # with the carrier register spoiled, the comparison's shim finding its carrier block through the thread pointer
+    program_test("calls back into Hemera from C, through the thread pointer", "test_callbacks", 1),
     ("refuses a typed library whose export's type changed", 7, [WITH_PROGRAMS, "--command-line=test_exit test_changed_library test_program=test_libraries",
         "--expect-line=[user] root task: test_libraries ended with 1, and its budget is back to nothing",
         "--expect-line=[info] objects left: only the kernel's own", "--", "-smp", "2"]),
@@ -2208,6 +2211,9 @@ def build_programs(output: Path, architecture: str = "x86_64", robustness: bool 
     setting += ",test_kdf=on" if test_kdf else ""
     if os.environ.get("SLOPOS_FUZZ_SECONDS"):
         setting += f",fuzz_seconds={int(os.environ['SLOPOS_FUZZ_SECONDS'])}"
+    # Their C libraries first (tools/c_libraries.py), which the programs link
+    if subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "c_libraries.py"), str(output), architecture]).returncode != 0:
+        return False
     command = ["hemera", f"--setting=targets=programs,programs_output={output.as_posix()},arch={architecture}{setting}",
                str(ROOT / "src" / "build")]
     if os.environ.get("HEMERA_INSTALL"):

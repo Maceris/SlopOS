@@ -3764,6 +3764,21 @@ sys_memory_budget_others :: fn(
 }
 
 /**
+ * Set the calling thread's thread pointer (slop_os.thread_set_pointer, decisions/0201's 20k), which Hemera's runtime
+ * keeps its carrier block's word at, for C calling back into Hemera to find.
+ *
+ * @param thread The calling thread, the CPU's current one, its vector state loaded.
+ * @param value The pointer: 0, or a user address.
+ * @error BadAddress value isn't 0 or a user address.
+ */
+sys_thread_set_pointer :: fn(thread : ptr[mut Thread], value : u64) -> Result[void, slop_os.MemoryError] {
+    if !arch.set_thread_pointer(cast[ptr[mut arch.VectorState]](thread.vector), &thread.registers, value) {
+        return .Error(.BadAddress)
+    }
+    return .Ok
+}
+
+/**
  * Set a process's breakpoints and watchpoints, which every thread of its, now and later, loads as it returns to user
  * mode, unless it's single-stepping (thread_set_debug), when it loads its own.
  *

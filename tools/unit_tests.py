@@ -47,12 +47,17 @@ def build(hemera: str, settings: str) -> bool:
     return subprocess.run(command).returncode == 0
 
 
+def c_libraries(programs: Path) -> bool:
+    """Builds the programs' C libraries for x86-64 into programs' c folder (tools/c_libraries.py), and whether it worked."""
+    return subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "c_libraries.py"), str(programs), "x86_64"]).returncode == 0
+
+
 def main() -> int:
     hemera = find_hemera()
     with tempfile.TemporaryDirectory(prefix="slopos-tests-") as temporary:
         programs = Path(temporary) / "programs"
         programs.mkdir()
-        if not build(hemera, f"targets=programs,programs_output={programs.as_posix()}"):
+        if not c_libraries(programs) or not build(hemera, f"targets=programs,programs_output={programs.as_posix()}"):
             print("FAILED: the programs don't build")
             return 1
         if not build(hemera, f"targets=tests,model_checked=on,tests_output={Path(temporary).as_posix()}"):
@@ -157,7 +162,7 @@ def robustness() -> int:
     with tempfile.TemporaryDirectory(prefix="slopos-tests-robustness-") as temporary:
         programs = Path(temporary) / "programs"
         programs.mkdir()
-        if not build(hemera, f"targets=programs,programs_output={programs.as_posix()}"):
+        if not c_libraries(programs) or not build(hemera, f"targets=programs,programs_output={programs.as_posix()}"):
             print("FAILED: the programs don't build")
             return 1
         if not build(hemera, f"targets=tests,robustness=on,tests_output={Path(temporary).as_posix()}"):
