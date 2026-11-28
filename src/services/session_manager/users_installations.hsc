@@ -693,6 +693,8 @@ serve_finders :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     retire_ring(sessions, ring)
                     response^ = .Done
                 }
+                // A script's shell's programs, and a GUI session's shells', come out of the sessions' as a shell's do
+                case Budget(bytes) => response^ = budget_for(bytes)
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))
