@@ -43,12 +43,7 @@ Shell :: struct {
     sound : os.Channel[sound.Sound]?,
     /** A port bound to sound, waited on while its ring is full. */
     sound_port : slop_os.Port,
-    /**
-     * The session's programs budget (decisions/0202, 21i), which the programs it runs' budgets are split off, with
-     * RIGHT_BUDGET_CHARGE and RIGHT_TRANSFER but not RIGHT_DUPLICATE; null to split them off the shell's own, beyond
-     * SHELL_RESERVE (program_room).
-     */
-    programs_budget : slop_os.MemoryBudget?,
+
     /** The scope names are bound in now: the shell's own, or a function's call's or a stage's item's while it runs. */
     scope : ptr[mut Scope],
     /** Whether exit has been run, so the shell ends before reading another line. */
@@ -146,12 +141,10 @@ main :: fn(
     cpu_budget : slop_os.CpuBudget?,
     network : os.Channel[network.Network]?,
     command : string?,
-    sound : os.Channel[sound.Sound]?,
-    programs_budget : slop_os.MemoryBudget?
+    sound : os.Channel[sound.Sound]?
 ) -> int {
     block :: slop_os.startup_block()
     shell := runtime.new(Shell)
-    shell.programs_budget = programs_budget
     shell.network = network
     shell.sound = sound
     match sound {

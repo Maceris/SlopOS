@@ -111,16 +111,15 @@ MAX_SESSIONS :: 4
 /** echo's memory budget, in bytes. */
 ECHO_BUDGET : u64 : 2 * 1024 * 1024
 /**
- * The shell's own memory budget, in bytes: 16 MiB. A session's first shell runs its programs on the session's programs
- * budget (PROGRAMS_BUDGET); a shell without one splits theirs off this, beyond its reserve (the shell's program_room).
+ * The shell's own memory budget, in bytes: 16 MiB. The programs it runs have budgets of their own, split off the
+ * session manager's as it asks (programs.Request.Budget, budget_for), not off this.
  */
 SHELL_BUDGET : u64 : 16 * 1024 * 1024
 /**
- * A session's programs budget, in bytes (decisions/0202, 21i): 48 MiB, split off the session manager's for its first
- * shell, which launches the programs it runs from it (os.LaunchOptions.memory_budget), so their memory comes out of
- * the session's, not the shell's own.
+ * What the session manager keeps of its budget for itself and the sessions' own programs, in bytes, past what a shell
+ * may ask for its programs (budget_for, decisions/0202, 21i): 24 MiB.
  */
-PROGRAMS_BUDGET : u64 : 48 * 1024 * 1024
+SESSIONS_RESERVE : u64 : 24 * 1024 * 1024
 /** How long a program has to answer a Ping, in nanoseconds. */
 PING_WAIT : u64 : 200_000_000
 /** How long a program has to stop once asked, in nanoseconds, before it's killed. */
@@ -190,13 +189,7 @@ ShellGrants :: struct {
     network : os.Channel[network.Network]?,
     /** One line to run in place of reading lines, as SSH's exec asks (decisions/0191); null to read lines. */
     command : string?,
-    /**
-     * The session's programs budget (PROGRAMS_BUDGET), which the shell splits the programs it runs' budgets off; null for
-     * a shell that doesn't start programs, or when it couldn't be made. Its rights are RIGHT_BUDGET_CHARGE, to split it
-     * (which is also to make objects on it directly, as no right splits budgets alone), and RIGHT_TRANSFER, so it can
-     * move to the shell; not RIGHT_DUPLICATE, so the shell can't copy it on.
-     */
-    programs_budget : slop_os.MemoryBudget?,
+
     /**
      * A sound connection in its session's group (decisions/0196, 17g), which more are made from for programs that take
      * one; null without an audio service.
@@ -473,11 +466,6 @@ Program :: struct {
     program_name : u8[session.NAME_BYTES],
     /** How many bytes program_name has. */
     program_bytes : u8,
-    /**
-     * The session's programs budget a shell was given a copy of, the owning handle, closed, so given back, once the
-     * shell's ended; NO_HANDLE for none.
-     */
-    programs_budget : slop_os.MemoryBudget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
 }
 
 /**
@@ -945,11 +933,7 @@ ended_in :: fn(sessions : ptr[mut Manager], packets : slop_os.Packet[], taken : 
             ] {
                 _ = slop_os.handle_close(handle)
             }
-            // A shell's programs budget, whose programs' charges, if any still run, move to the session manager's
-            if cast[slop_os.Handle](program.programs_budget) != slop_os.NO_HANDLE {
-                _ = slop_os.handle_close(cast[slop_os.Handle](program.programs_budget))
-                program.programs_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
-            }
+
             match program.faults {
                 case Some(faults) => {
                     _ = slop_os.handle_close(cast[slop_os.Handle](faults.intercept))
@@ -1963,23 +1947,6 @@ launch_shell :: fn(
     )
     // The session's own connection for its first shell; a GUI session's shells' can't start programs
     grants.programs = if first { programs_connection(sessions, number) } else { shell_connection(sessions, number) }
-    // The session's programs budget, for its first shell's programs; one that couldn't be made leaves them the shell's
-    owned := cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
-    if first {
-        match slop_os.memory_budget_create(slop_os.startup_block().budget, PROGRAMS_BUDGET) {
-            case Ok(made) => {
-                owned = made
-                match slop_os.handle_duplicate(
-                    cast[slop_os.Handle](made),
-                    slop_os.RIGHT_BUDGET_CHARGE | slop_os.RIGHT_TRANSFER
-                ) {
-                    case Ok(copy) => grants.programs_budget = cast[slop_os.MemoryBudget](copy)
-                    case Error(error) => runtime.log_info("no programs budget for the shell: %", error)
-                }
-            }
-            case Error(error) => runtime.log_info("no programs budget for the shell: %", error)
-        }
-    }
     // The session's network: public addresses, any port, no listening (decisions/0188)
     grants.network = session_network(sessions, true)
     // A sound connection in the session's group (decisions/0196, 17g)
@@ -1990,7 +1957,7 @@ launch_shell :: fn(
             case None => runtime.log_info("no data directory for the shell")
         }
     }
-    started :: placed(
+    return placed(
         sessions,
         number,
         "shell",
@@ -2008,14 +1975,26 @@ launch_shell :: fn(
         false,
         first = first
     )
-    // Kept with the shell, given back when it ends; or now, if it didn't start
-    if started && prepared.index < sessions.programs.count {
-        sessions.programs[prepared.index].programs_budget = owned
+}
+
+/**
+ * Make a memory budget for a program a shell starts (programs.Request.Budget, decisions/0202, 21i): split off the
+ * session manager's own, so it comes out of the sessions', while that has more than SESSIONS_RESERVE uncharged beyond
+ * it. The shell closes it once the program's ended, which gives its limit back.
+ *
+ * @param bytes Its limit, in bytes; 0 is refused.
+ * @return BudgetGiven, its owning handle moving to the shell; Missing for 0, more than there's room for, or if it
+ *     couldn't be made.
+ */
+budget_for :: fn(bytes : u64) -> programs.Response {
+    block :: slop_os.startup_block()
+    info :: slop_os.memory_budget_info(block.budget) or_return .Missing
+    if bytes == 0 || info.used >= info.limit || info.limit - info.used < SESSIONS_RESERVE
+        || bytes > info.limit - info.used - SESSIONS_RESERVE {
+        return .Missing
     }
-    else if cast[slop_os.Handle](owned) != slop_os.NO_HANDLE {
-        _ = slop_os.handle_close(cast[slop_os.Handle](owned))
-    }
-    return started
+    made :: slop_os.memory_budget_create(block.budget, bytes) or_return .Missing
+    return .BudgetGiven(made)
 }
 
 /**
@@ -2127,6 +2106,7 @@ serve_programs :: fn(sessions : ptr[mut Manager], into : ptr[mut os.Incoming]) {
                     retire_ring(sessions, ring)
                     response^ = .Done
                 }
+                case Budget(bytes) => response^ = budget_for(bytes)
                 case List(index) => response^ = program_at(sessions, index, &out)
                 case Describe(name) => response^ = program_documentation(sessions, os.items(into, name))
                 case Debug(name) => response^ = program_debug_file(sessions, os.items(into, name))

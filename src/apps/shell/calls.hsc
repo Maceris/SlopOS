@@ -30,30 +30,57 @@ import shell_language as language from "../../shell_language"
  */
 PROGRAM_BUDGET : u64 : 4 * 1024 * 1024
 /**
- * What the shell keeps of its own budget for itself, in bytes, when it splits a program's budget off its own (it has
- * no programs budget): 8 MiB. A program is given what its bundle asks for (its PROGRAM_MEMORY) when the budget it's
- * split off has that much uncharged (program_room), with no fixed cap; one that asks for more isn't run.
+ * What the shell keeps of its own budget for itself, in bytes, when it splits a program's budget off its own, as it
+ * does when the session manager doesn't give one (session_budget): 8 MiB (program_room).
  */
 SHELL_RESERVE : u64 : 8 * 1024 * 1024
 
 /**
- * Find how much memory the shell can give a program now (decisions/0202, 21i): its session's programs budget's limit
- * less what's charged to it, its programs' running already among that; or, without one, its own budget's so, less
- * SHELL_RESERVE.
+ * Find how much memory the shell can give a program now from its own budget: its limit less what's charged to it, its
+ * programs' running already among that, and less SHELL_RESERVE.
  *
- * @param shell The shell, whose programs_budget says which budget.
- * @return The bytes; 0 when there's nothing left (or no more than the reserve, of the shell's own), or the budget can't
- *     be described.
+ * @return The bytes; 0 when there's no more than the reserve left, or the budget can't be described.
  */
-program_room :: fn(shell : ptr[Shell]) -> u64 {
-    reserve :: if shell.programs_budget is_some { cast[u64](0) } else { SHELL_RESERVE }
-    budget :: shell.programs_budget or_else slop_os.startup_block().budget
-    info :: slop_os.memory_budget_info(budget) or_return 0
-    if info.used >= info.limit || info.limit - info.used <= reserve {
+program_room :: fn() -> u64 {
+    info :: slop_os.memory_budget_info(slop_os.startup_block().budget) or_return 0
+    if info.used >= info.limit || info.limit - info.used <= SHELL_RESERVE {
         return 0
     }
-    return info.limit - info.used - reserve
+    return info.limit - info.used - SHELL_RESERVE
 }
+
+/**
+ * Ask the session manager for a budget for a program (programs.Request.Budget, decisions/0202, 21i), which its own is
+ * split off, so its memory comes out of the session's, not the shell's.
+ *
+ * @param shell The shell, whose programs connection is asked, waiting for the answer.
+ * @param bytes The program's budget, in bytes, and its shadow stacks' and the budget's own room beside.
+ * @return The budget's owning handle, the caller's to close once the program's ended; null without a programs
+ *     connection, or when the session manager hasn't the room.
+ */
+session_budget :: fn(shell : ptr[mut Shell], bytes : u64) -> slop_os.MemoryBudget? {
+    connection :: shell.programs or_return null
+    out := os.Outgoing.{}
+    request :: os.begin[programs.Request](&out)
+    request^ = .Budget(bytes)
+    if programs.send_request(connection.end, shell.programs_port, &out) is_some {
+        return null
+    }
+    into := os.Incoming.{}
+    loop {
+        match programs.receive_response(connection.end, shell.programs_port, &into, true) {
+            case Received => break
+            case _ => return null
+        }
+    }
+    return match os.message_of[programs.Response](&into)^ {
+        case BudgetGiven(given) => given
+        case _ => null
+    }
+}
+
+/** What a program's budget asked of the session manager has beside the program's own: 1 MiB, for its shadow stacks. */
+SESSION_BUDGET_ROOM : u64 : 1024 * 1024
 
 /** One of a program's parameters, as its manifest has it, and what it's given. */
 Parameter :: struct {
@@ -141,19 +168,29 @@ prepare_call :: fn(
     if entry.kind != .Function {
         return .Error(EvalError.{message = message("%'s manifest isn't an entry's", tree.text), at = tree.at})
     }
-    room :: program_room(shell)
-    if call.budget > room {
-        return .Error(
-            EvalError.{
-                message = message(
-                    "% asks for % MiB to run on, more than the shell has to give now (% MiB)",
-                    tree.text,
-                    (call.budget + (1 << 20) - 1) >> 20,
-                    room >> 20
-                ),
-                at = tree.at,
+    /*
+     * Its memory out of the session's, through the session manager; or, without a programs connection or when the
+     * session hasn't the room, the shell's own, beyond its reserve
+     */
+    asked :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
+    match session_budget(shell, asked + SESSION_BUDGET_ROOM) {
+        case Some(given) => call.parent_budget = given
+        case None => {
+            room :: program_room()
+            if asked > room {
+                return .Error(
+                    EvalError.{
+                        message = message(
+                            "% asks for % MiB to run on, more than the session has to give now, or the shell (% MiB)",
+                            tree.text,
+                            (asked + (1 << 20) - 1) >> 20,
+                            room >> 20
+                        ),
+                        at = tree.at,
+                    }
+                )
             }
-        )
+        }
     }
     for input in entry.inputs {
         runtime.array_add(&call.parameters, parameter_of(&call.manifest, input))
@@ -264,6 +301,11 @@ Call :: struct {
      * by end_call; NO_HANDLE when it runs on the shell's.
      */
     cpu_budget : slop_os.CpuBudget,
+    /**
+     * The budget the session manager gave for it (session_budget), which its own is split off, the owning handle,
+     * closed by end_call, giving back what it didn't use; NO_HANDLE when it's split off the shell's own.
+     */
+    parent_budget : slop_os.MemoryBudget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE),
 }
 
 /**
@@ -317,6 +359,11 @@ end_call :: fn(call : ptr[mut Call]) {
     // Its CPU budget destroyed, now it's ended
     if cast[slop_os.Handle](call.cpu_budget) != slop_os.NO_HANDLE {
         _ = slop_os.handle_close(cast[slop_os.Handle](call.cpu_budget))
+    }
+    // The session's budget it was split off given back, after its own (closed above), whose charges move to it
+    if cast[slop_os.Handle](call.parent_budget) != slop_os.NO_HANDLE {
+        _ = slop_os.handle_close(cast[slop_os.Handle](call.parent_budget))
+        call.parent_budget = cast[slop_os.MemoryBudget](slop_os.NO_HANDLE)
     }
     if call.has_result {
         _ = slop_os.handle_close(cast[slop_os.Handle](call.result))
@@ -415,8 +462,10 @@ start_call :: fn(shell : ptr[mut Shell], call : ptr[mut Call], key : u64) -> Eva
     // On a CPU budget of its own, a child of its session's (decisions/0187)
     own_cpu :: program_cpu_budget(shell)
     options.cpu_budget = bindable_copy(own_cpu)
-    // Its memory out of the session's programs budget, where the shell has one (decisions/0202, 21i)
-    options.memory_budget = shell.programs_budget
+    // Its memory out of the budget the session manager gave for it, where it did (decisions/0202, 21i)
+    if cast[slop_os.Handle](call.parent_budget) != slop_os.NO_HANDLE {
+        options.memory_budget = call.parent_budget
+    }
     budget :: if call.budget == 0 { PROGRAM_BUDGET } else { call.budget }
     match os.launch_named(
         manager,

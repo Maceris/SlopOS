@@ -307,7 +307,11 @@ call for a debugger; a launched program's budget with `RIGHT_BUDGET_WATCH`. 21e:
 21i: base's page heap has size classes to 32 KiB (`PAGE_HEAP_CLASSES` 12, 16 bytes doubling), carved from chunks of
 64 KiB or four of a class's blocks (`page_heap_chunk`), so only blocks past 32 KiB get pages of their own; a
 4000-byte block takes 4112 bytes of a chunk, not a page of its own and one for its handle, and test_c_ports'
-big.lua holds 9.6 MB in 4000-byte strings on Lua's 16 MiB (19 MiB of pages before).
+big.lua holds 9.6 MB in 4000-byte strings on Lua's 16 MiB (19 MiB of pages before). And std's
+`os.LaunchOptions.memory_budget`: the budget a launched program's is split off, which needs `RIGHT_BUDGET_CHARGE`
+(null for the launcher's own), so a session's shell launches its programs from the session's programs budget rather
+than its own. Friction: no right splits a budget without also charging it directly, so the shell's copy can make
+objects on the session's budget too.
 
 ## 4. Features That Look Like a Strong Fit
 

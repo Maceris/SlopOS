@@ -253,7 +253,7 @@ TESTS = [
     ("runs a Hemera program under UEFI, its memory from the pool and its log on the console", 0, [WITH_PROGRAMS, "--efi=uefi_hello",
         "--expect-line=[info] uefi_hello: Hemera on UEFI, 1000 numbers from the pool adding up to 499500"]),
     ("starts the first services from the root task", 7, [WITH_PROGRAMS, "--command-line=test_exit test_services",
-        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 114 grants",
+        "--expect-line=[boot] module root_task.elf", "--expect-line=[user] root task: started, with 118 grants",
         "--expect-line=[user] entropy: serving", "--expect-line=[user] root task: started process_manager",
         "--expect-line=[user] scheduler: 6 budgets and the default split off the root's, 1000000 of its 1000000 millionths of a CPU",
         "--expect-line=[user] root task: started scheduler",
@@ -1519,7 +1519,7 @@ TESTS = [
         "--expect-console-line=gunzipped: true, 4373 bytes",
         "--expect-console-line=big: 20000000 bytes, 5000 pieces",
         "--expect-console-line=  test_memory_ask",
-        "--expect-console-contains=error: test_memory_ask asks for 96 MiB to run on, more than the shell has to give now ("])),
+        "--expect-console-contains=error: test_memory_ask asks for 96 MiB to run on, more than the session has to give now, or the shell ("])),
     # Reading values (decisions/0179, 11e3): search over the files, view of a text, a binary and a typed file, and
     # the pager, a screen at a time: a screen on with Space, to the end with G, a line back with k, and x, which it
     # doesn't know, drawing it again before q quits, so the last status line isn't the prompt's line too; then

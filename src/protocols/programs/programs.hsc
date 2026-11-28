@@ -209,6 +209,14 @@ Request :: union {
      * reads what's left in it, then closes it. Answered with Done.
      */
     RetireEvents(slop_os.Memory),
+    /**
+     * Ask for a memory budget for a program the shell starts (decisions/0202, 21i), of this many bytes, more than 0:
+     * the session manager splits it off its own, so a program's memory comes out of the session's, not the shell's.
+     * Answered with BudgetGiven, the budget's owning handle moving to the shell, which launches the program's budget
+     * split off it (os.LaunchOptions.memory_budget) and closes it once the program's ended, giving back what it
+     * didn't use; Missing when the session manager hasn't that much beyond what it keeps for itself.
+     */
+    Budget(u64),
 }
 
 /** A GUI program to start, as Start asks for it. */
@@ -451,6 +459,11 @@ Response :: union {
      * doorbell's end, the program's; both move to the shell.
      */
     EventsOpened(events.Source),
+    /**
+     * The answer to Budget: the budget's owning handle, with RIGHT_BUDGET_CHARGE, moving to the shell, its limit the
+     * bytes asked for.
+     */
+    BudgetGiven(slop_os.MemoryBudget),
 }
 
 /**
@@ -469,6 +482,7 @@ is_idempotent :: fn(request : ptr[Request]) -> bool {
         case ConnectScript(_) => false
         case Events(_) => false
         case RetireEvents(_) => false
+        case Budget(_) => false
         case _ => true
     }
 }
