@@ -7,6 +7,8 @@ Status: **accepted** 2026-10-13 (`../decisions/0025`, `0038`), apart from the re
   sets up the carrier register; stack overflow is caught by Hemera's prologue check.
 - *Decided* (`../decisions/0027`): nothing here is frozen until the OS design is thorough and
   development is under way.
+- *Decided* (`../decisions/0203`, 2026-11-27): **ABI v1 is declared**, `ABI_VERSION` 16. §1's table is stable from
+  it: system calls are append-only, and layouts grow only where they're size-prefixed.
 - *Proposed*: the rest of this note, including the Hemera-native conventions.
 
 Answers *"Is the system ABI Hemera-native, with a C-ABI shim only for ported code?"*, and
@@ -44,13 +46,14 @@ freestanding **ABI package** (`0025`). If it's not in this table, it isn't stabl
 syscall; `std`'s own API. `std` is versioned like any content-addressed library: programs pin
 the `std` they were built with, and the kernel promises only the table above.
 
-**Before v1** every row can change, and programs are rebuilt with the system. **From v1**,
-numbers are append-only, layouts grow only through size-prefixed structs or new versions,
-and the release tooling compares the ABI package against the previous release
-(`0025`). The comparison is `src/tools/abi_description` (M20's 20a, `0201`): the package's description, worked out
+**Before v1** every row could change, and programs were rebuilt with the system. **From v1**, declared 2026-11-27
+(`0203`), numbers are append-only, layouts grow only through size-prefixed structs or new versions, and the ABI
+package is compared against v1 as it was frozen (`0025`). The comparison is `src/tools/abi_description` (M20's 20a, `0201`): the package's description, worked out
 when `src/abi_describe` is compiled, for each architecture, as parts of the package differ by architecture
 (`THREAD_REGISTERS`), kept in `docs/specs/abi_description.<arch>.txt` for x86_64, aarch64 and riscv64, which
-`tools/unit_tests.py` checks the built ones against; exactly until v1, and from v1 by 0025's rules. Only the structs
+`tools/unit_tests.py` checks the built ones against exactly, so each change is made on purpose; and v1's, frozen in
+`docs/specs/abi_v1.<arch>.txt`, never rewritten, which it checks them against by 0025's rules, so a change v1
+forbids fails. `ABI_VERSION` may only grow. Only the structs
 the tool names as growable (`StartupBlock`, `ThreadDebug`) may grow, and none used inside another layout. Working the
 description out also fails on a struct whose fields leave unnamed bytes (every gap is a `reserved` field, zeros) and
 on an error tag that means two things.
@@ -121,7 +124,8 @@ On x86-64:
 - RISC-V gets the same rules with its own registers, generated from the same table, with the same
   numbers.
 
-**Numbering:** free until ABI v1, then append-only (`0025`).
+**Numbering:** append-only since ABI v1 (`0025`, `0203`): a number is never reused, and a call taken away answers
+`NoSuchCall`.
 
 **No vDSO by default.** Time is read through a syscall so it can be recorded (`0009`). Under
 `0024`, a mapped time page could come back as an opt-in direct mode if syscall cost for time
@@ -133,8 +137,8 @@ turns out to matter. It would then join the table in §1.
 - The startup block carries the version the kernel implements, and `std`'s startup code
   compares it with the version the program was built against: a kernel older than the program is a refusal to start
   (`EXIT_WRONG_ABI`), as is a block too small to hold what the program reads, through `cpu_features`; a newer kernel
-  starts it, so a newer kernel accepts older programs. Before v1 that's a promise nothing keeps yet, as layouts still
-  change and everything is rebuilt together.
+  starts it, so a newer kernel accepts older programs.
+- v1 is 16 (`0203`); a later version only adds to it, so the number only grows.
 - A content-addressed program's hash covers the ABI version it was built for.
 
 ## 6. Process Start and the Startup Block
@@ -166,8 +170,9 @@ function:
   a stack check in every prologue). SlopOS **names and pins the version** it builds against
   (`hemera-abi-v1` once there is one) and includes it in what a library's content hash and
   interface check cover. Libraries built for different versions are different hashes, never
-  silently mixed. The pin is **not a freeze**: SlopOS follows Hemera's changes until it
-  declares ABI v1 (`0027`).
+  silently mixed. The pin is **not a freeze**, before ABI v1 or after (§1's table, `0027`, `0203`): SlopOS can
+  follow Hemera's changes, each a new version and new hashes. What v1 froze is the system calls' own convention,
+  `CALLING_CONVENTION_VERSION`.
 - The `Context` layout is part of this ABI, since every call passes it. Changing its fields
   is an ABI version change (the 2026-10-04 redesign removed `stack_trace`, `thread_index` and
   the fiber fields, and added `assertion_handler`). Every fiber also embeds a copy, so its

@@ -4,8 +4,8 @@ The system calls user space makes, how it makes them, and what they answer. Defi
 Hemera's `std/os/slop_os` (`syscalls.hsc`), which the kernel and user space both import
 (`../../knowledge/design/system-abi.md`, `0025`, `0038`).
 
-Status: **implemented, and growing** (roadmap M5). Unstable until ABI v1 (`0027`): numbers, layouts and
-errors can still change. Four-digit numbers like `0008` refer to decision records in
+Status: **implemented, and growing** (roadmap M5). Stable since ABI v1, `ABI_VERSION` 16 (`0203`): numbers are
+append-only, and layouts and errors change only as `0025` allows. Four-digit numbers like `0008` refer to decision records in
 `../../knowledge/decisions/`.
 
 ## Making a Call

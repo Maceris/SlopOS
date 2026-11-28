@@ -99,7 +99,7 @@ syscall 97 handle_restrict : fn(handle : Handle, rights : Rights) -> Result[void
 syscall 98 channel_peer_owned_by : fn(end : Channel, process : Process) -> Result[bool, ControlError]
 syscall 99 thread_set_pointer : fn(value : u64) -> Result[void, MemoryError]
 syscall 100 cpu_budget_cpus : fn(budget : CpuBudget, cpus : u64[]) -> Result[u32, HandleError]
-const ABI_VERSION : u32 = 15
+const ABI_VERSION : u32 = 16
 const ARGUMENTS_MAGIC : u32 = 1196573000
 const CALLING_CONVENTION_VERSION : u32 = 1
 const CHANNEL_DEFAULT_RING : u32 = 1024

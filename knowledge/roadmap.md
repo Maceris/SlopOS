@@ -660,7 +660,8 @@ Planned 2026-11-27 (`decisions/0201`), with the owner, after Before ABI v1.
 - 21g: Lua and zlib's `minigzip`, with LLVM's clang. 21h: sockets in the libc.
 - 21i: a review. 21j: ABI v1.
 
-Planned 2026-11-27 (`decisions/0202`), with the owner, after M20.
+Planned 2026-11-27 (`decisions/0202`), with the owner, after M20. Built 2026-11-27: ABI v1 declared, `ABI_VERSION`
+16, frozen in `docs/specs/abi_v1.<arch>.txt` (`decisions/0203`).
 
 ## Later
 
@@ -708,4 +709,4 @@ Planned 2026-11-27 (`decisions/0202`), with the owner, after M20.
 | M19 | built 2026-11-27 (`decisions/0199`), R1 to R7: RISC-V on RVA23, Hemera hosted and for a kernel, the bootloader as a PE Hemera writes, the AIA and the PLIC, user mode and every boot test, the IOMMU and CFI, a review. R1 to R4 built 2026-11-25: Hemera on RISC-V hosted (83 of 83 Linux tests) and for a kernel; SlopOS booting through its bootloader, with interrupts on the PLIC and the AIA, the timer and every hart (21 boot tests). R5 built 2026-11-26: user mode, FP and vector state, virtio over PCI, and every boot test that applies on RISC-V. R6 built 2026-11-26: the RISC-V IOMMU, and Zicfilp's landing pads and Zicfiss's shadow stacks in the kernel and user mode. R7 built 2026-11-27: the review, its fixes, MRIFs for the RISC-V IOMMU, and the full suites on all three |
 | Before ABI v1 | built 2026-11-27 (`decisions/0200`), C1 and C2: the linker beside the compiler, its DLLs with it; the flaky boot tests fixed, two full runs with none; instruction caches synced for code mapped on RISC-V and AArch64 |
 | M20 | built 2026-11-27 (`decisions/0201`), 20a to 20m and 20n's fixes: the ABI comparison, NVMe, AHCI, xHCI with hubs, HID and storage, RISC-V's debug triggers and IMSIC groups, indexes and live queries, C-callable exports and a libc, a review; v1 moved to M21 |
-| M21 | planned 2026-11-27 (`decisions/0202`), 21a to 21j: Hemera's two fixes, the ABI's layouts, limits and rights, USB hot-plug, the rest of indexes and queries, programs' memory and logs, Lua and zlib, sockets, a review, ABI v1 |
+| M21 | built 2026-11-27 (`decisions/0202`), 21a to 21j: Hemera's two fixes, the ABI's layouts, limits and rights, USB hot-plug, the rest of indexes and queries, programs' memory and logs, Lua and zlib, sockets, a review, ABI v1 declared (`decisions/0203`), `ABI_VERSION` 16, frozen in a file for each architecture that a unit test compares against |

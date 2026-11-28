@@ -1,0 +1,1000 @@
+syscall 0 handle_close : fn(handle : Handle) -> Result[void, HandleError]
+syscall 1 handle_duplicate : fn(handle : Handle, rights : Rights) -> Result[Handle, HandleError]
+syscall 2 handle_info : fn(handle : Handle) -> Result[HandleInfo, HandleError]
+syscall 3 thread_exit : fn() #never_returns
+syscall 4 thread_create : fn(budget : MemoryBudget, space : AddressSpace, entry : u64, stack : u64, argument : u64) -> Result[Thread, HandleError]
+syscall 5 process_create : fn(budget : MemoryBudget) -> Result[Process, HandleError]
+syscall 6 address_space_create : fn(budget : MemoryBudget) -> Result[AddressSpace, HandleError]
+syscall 7 clock_monotonic : fn() -> Result[u64, HandleError]
+syscall 8 port_create : fn(budget : MemoryBudget) -> Result[Port, HandleError]
+syscall 9 port_bind_wake : fn(port : Port, key : u64) -> Result[void, PortError]
+syscall 10 port_wake : fn(port : Port, key : u64, bits : u64) -> Result[void, PortError]
+syscall 11 port_set_timer : fn(port : Port, key : u64, deadline : u64) -> Result[void, PortError]
+syscall 12 port_unbind : fn(port : Port, key : u64) -> Result[void, PortError]
+syscall 13 port_wait : fn(port : Port, packets : Packet[], deadline : u64) -> Result[u32, PortError]
+syscall 14 channel_create : fn(budget : MemoryBudget, ring_bytes : u32, tag : u64) -> Result[ChannelPair, ChannelError]
+syscall 15 channel_map : fn(end : Channel, space : AddressSpace, address : u64) -> Result[void, ChannelError]
+syscall 16 channel_unmap : fn(end : Channel) -> Result[void, ChannelError]
+syscall 17 channel_notify : fn(end : Channel, signals : Signals) -> Result[void, ChannelError]
+syscall 18 channel_write : fn(end : Channel, bytes : u8[], batch : u32) -> Result[void, ChannelError]
+syscall 19 channel_read : fn(end : Channel, buffer : u8[], size : ptr[mut u32]) -> Result[MessageInfo, ChannelError]
+syscall 20 channel_send_handles : fn(end : Channel, handles : Handle[], batch : u32) -> Result[void, ChannelError]
+syscall 21 channel_take_handles : fn(end : Channel, batch : u32, handles : Handle[], count : ptr[mut u32]) -> Result[u32, ChannelError]
+syscall 22 channel_notify_and_wait : fn(end : Channel, signals : Signals, port : Port, packets : Packet[], deadline : u64) -> Result[u32, ChannelError]
+syscall 23 port_bind : fn(port : Port, key : u64, object : Handle, signals : Signals, mode : BindMode) -> Result[void, PortError]
+syscall 24 memory_budget_create : fn(budget : MemoryBudget, limit : u64) -> Result[MemoryBudget, HandleError]
+syscall 25 memory_budget_info : fn(budget : MemoryBudget) -> Result[BudgetInfo, HandleError]
+syscall 26 memory_create : fn(budget : MemoryBudget, size : u64) -> Result[Memory, MemoryError]
+syscall 27 memory_map : fn(memory : Memory, space : AddressSpace, address : u64, offset : u64, size : u64, protection : Protection) -> Result[void, MemoryError]
+syscall 28 memory_unmap : fn(space : AddressSpace, address : u64) -> Result[void, MemoryError]
+syscall 29 controller_register : fn(platform : Platform, kind : ControllerKind, registers : u64) -> Result[ControllerInfo, DeviceError]
+syscall 30 irq_create : fn(platform : Platform, budget : MemoryBudget, controller : u32, line : u32, flags : u32) -> Result[Irq, DeviceError]
+syscall 31 irq_ack : fn(irq : Irq) -> Result[void, HandleError]
+syscall 32 memory_create_physical : fn(platform : Platform, budget : MemoryBudget, address : u64, size : u64, cache : CacheMode) -> Result[Memory, DeviceError]
+syscall 33 memory_create_window : fn(memory : Memory, budget : MemoryBudget, offset : u64, size : u64) -> Result[Memory, MemoryError]
+syscall 34 process_threads : fn(process : Process, from : u64, ids : u64[]) -> Result[u32, ControlError]
+syscall 35 process_read_memory : fn(process : Process, space : AddressSpace, address : u64, buffer : u8[]) -> Result[void, ControlError]
+syscall 36 process_write_memory : fn(process : Process, space : AddressSpace, address : u64, bytes : u8[]) -> Result[void, ControlError]
+syscall 37 thread_suspend : fn(process : Process, thread : u64) -> Result[void, ControlError]
+syscall 38 thread_resume : fn(process : Process, thread : u64) -> Result[void, ControlError]
+syscall 39 thread_read_registers : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
+syscall 40 thread_write_registers : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
+syscall 41 intercept_attach : fn(process : Process, port : Port, key : u64, calls : u64[], points : u32) -> Result[Intercept, ControlError]
+syscall 42 intercept_next : fn(intercept : Intercept, stop : ptr[mut StopInfo]) -> Result[void, ControlError]
+syscall 43 intercept_resume : fn(intercept : Intercept, thread : u64, action : InterceptAction) -> Result[void, ControlError]
+syscall 44 process_kill : fn(process : Process) -> Result[void, ControlError]
+syscall 45 process_exit : fn(code : u32) #never_returns
+syscall 46 debug_log : fn(log : DebugLog, text : u8[]) -> Result[void, HandleError]
+syscall 47 thread_create_in : fn(process : Process, budget : MemoryBudget, space : AddressSpace, entry : u64, stack : u64, argument : u64) -> Result[u64, ControlError]
+syscall 48 process_give_handles : fn(process : Process, handles : Handle[], given : Handle[]) -> Result[void, ControlError]
+syscall 49 memory_size : fn(memory : Memory) -> Result[u64, HandleError]
+syscall 50 channel_tag : fn(end : Channel) -> Result[u64, ChannelError]
+syscall 51 device_create : fn(platform : Platform, budget : MemoryBudget, address : u32, msi_source : u32, config : u64) -> Result[Device, DeviceError]
+syscall 52 device_attach : fn(platform : Platform, device : Device, domain : DmaDomain) -> Result[void, DeviceError]
+syscall 53 irq_create_msi : fn(device : Device, budget : MemoryBudget) -> Result[Irq, DeviceError]
+syscall 54 irq_message : fn(irq : Irq) -> Result[MsiMessage, DeviceError]
+syscall 55 dma_domain_create : fn(platform : Platform, budget : MemoryBudget, flags : u32) -> Result[DmaDomain, DeviceError]
+syscall 56 dma_memory_create : fn(domain : DmaDomain, budget : MemoryBudget, size : u64, limit : u64) -> Result[Memory, DeviceError]
+syscall 57 memory_device_address : fn(memory : Memory) -> Result[u64, DeviceError]
+syscall 58 iommu_register : fn(platform : Platform, kind : IommuKind, registers : Memory, first : u32, count : u32, stream : u32) -> Result[u32, DeviceError]
+syscall 59 cpu_budget_create : fn(parent : CpuBudget, budget : MemoryBudget, priority : u32, period : u64, time : u64) -> Result[CpuBudget, HandleError]
+syscall 60 cpu_budget_set : fn(budget : CpuBudget, priority : u32, period : u64, time : u64) -> Result[void, HandleError]
+syscall 61 cpu_budget_info : fn(budget : CpuBudget, info : ptr[mut CpuBudgetInfo]) -> Result[void, HandleError]
+syscall 62 process_set_cpu_budget : fn(process : Process, budget : CpuBudget) -> Result[void, HandleError]
+syscall 63 io_ports_create : fn(platform : Platform, budget : MemoryBudget, first : u32, count : u32) -> Result[IoPortRange, DeviceError]
+syscall 64 io_port_read : fn(ports : IoPortRange, offset : u32, width : u32) -> Result[u32, DeviceError]
+syscall 65 io_port_write : fn(ports : IoPortRange, offset : u32, width : u32, value : u32) -> Result[void, DeviceError]
+syscall 66 memory_create_paged : fn(budget : MemoryBudget, port : Port, key : u64, size : u64) -> Result[Memory, MemoryError]
+syscall 67 memory_page_wanted : fn(memory : Memory) -> Result[u64, MemoryError]
+syscall 68 memory_supply : fn(memory : Memory, offset : u64, source : Memory, source_offset : u64) -> Result[void, MemoryError]
+syscall 69 memory_read : fn(memory : Memory, offset : u64, buffer : u8[]) -> Result[void, MemoryError]
+syscall 70 memory_write : fn(memory : Memory, offset : u64, bytes : u8[]) -> Result[void, MemoryError]
+syscall 71 cpu_budget_set_cpus : fn(budget : CpuBudget, cpus : u64[]) -> Result[void, HandleError]
+syscall 72 irq_set_cpu : fn(irq : Irq, cpu : u32) -> Result[void, DeviceError]
+syscall 73 memory_budget_set_threshold : fn(budget : MemoryBudget, threshold : u64) -> Result[void, HandleError]
+syscall 74 memory_evict : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
+syscall 75 memory_page_accessed : fn(memory : Memory, offset : u64) -> Result[bool, MemoryError]
+syscall 76 thread_use_cpu_budget : fn(budget : CpuBudget) -> Result[void, HandleError]
+syscall 77 memory_holders : fn(memory : Memory) -> Result[u64, MemoryError]
+syscall 78 power_set_off : fn(platform : Platform, control_a : u32, control_b : u32, sleep_a : u32, sleep_b : u32) -> Result[void, DeviceError]
+syscall 79 power_set_reset : fn(platform : Platform, port : u32, value : u32) -> Result[void, DeviceError]
+syscall 80 power_end_with : fn(platform : Platform, action : PowerAction) -> Result[void, DeviceError]
+syscall 81 controller_set_source : fn(platform : Platform, controller : u32, source : u32) -> Result[void, DeviceError]
+syscall 82 thread_set_debug : fn(process : Process, thread : u64, debug : ptr[ThreadDebug]) -> Result[void, ControlError]
+syscall 83 intercept_set : fn(intercept : Intercept, calls : u64[], points : u32) -> Result[void, ControlError]
+syscall 84 process_set_traps : fn(process : Process, traps : u32) -> Result[void, ControlError]
+syscall 85 trace_set : fn(log : DebugLog, on : bool) -> Result[void, DeviceError]
+syscall 86 trace_read : fn(log : DebugLog, events : TraceEvent[]) -> Result[u32, DeviceError]
+syscall 87 intercept_sample : fn(intercept : Intercept, on : bool) -> Result[void, ControlError]
+syscall 88 intercept_samples : fn(intercept : Intercept, samples : Sample[]) -> Result[u32, ControlError]
+syscall 89 process_set_debug : fn(process : Process, debug : ptr[ThreadDebug]) -> Result[void, ControlError]
+syscall 90 process_cpu_info : fn(process : Process) -> Result[ProcessCpu, ControlError]
+syscall 91 memory_budget_others : fn(budget : MemoryBudget) -> Result[u64, HandleError]
+syscall 92 thread_set_page : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
+syscall 93 process_set_control_flow : fn(process : Process, features : u32, region : u64, size : u64) -> Result[void, ControlError]
+syscall 94 coverage_take : fn(log : DebugLog, counters : u8[]) -> Result[u64, CoverageError]
+syscall 95 memory_kind : fn(memory : Memory) -> Result[MemoryKind, HandleError]
+syscall 96 handle_same : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
+syscall 97 handle_restrict : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]
+syscall 98 channel_peer_owned_by : fn(end : Channel, process : Process) -> Result[bool, ControlError]
+syscall 99 thread_set_pointer : fn(value : u64) -> Result[void, MemoryError]
+syscall 100 cpu_budget_cpus : fn(budget : CpuBudget, cpus : u64[]) -> Result[u32, HandleError]
+const ABI_VERSION : u32 = 16
+const ARGUMENTS_MAGIC : u32 = 1196573000
+const CALLING_CONVENTION_VERSION : u32 = 1
+const CHANNEL_DEFAULT_RING : u32 = 1024
+const CHANNEL_MAX_RING : u32 = 131072
+const CHANNEL_MIN_RING : u32 = 1024
+const CHANNEL_RINGS_OFFSET : u32 = 256
+const CONTROL_FLOW_LANDING_PADS : u32 = 1
+const CONTROL_FLOW_SHADOW_STACK : u32 = 2
+const CONTROL_FLOW_SIGNED_RETURNS : u32 = 4
+const CPU_BUDGET_INFO_SIZE : u32 = 64
+const DEBUG_LOG_LINE : u64 = 200
+const DEBUG_SLOTS : u32 = 4
+const DMA_DOMAIN_TRUSTED : u32 = 1
+const EXIT_KILLED : u64 = 4294967296
+const EXIT_MISSING_GRANT : u32 = 257
+const EXIT_WRONG_ABI : u32 = 256
+const FAULT_ALIGNMENT : u32 = 7
+const FAULT_ARITHMETIC : u32 = 6
+const FAULT_AUTHENTICATION : u32 = 14
+const FAULT_BREAKPOINT : u32 = 4
+const FAULT_COUNTER : u32 = 11
+const FAULT_EXECUTE : u32 = 2
+const FAULT_FLOATING_POINT : u32 = 9
+const FAULT_INVALID_INSTRUCTION : u32 = 3
+const FAULT_LANDING_PAD : u32 = 13
+const FAULT_PROTECTION : u32 = 8
+const FAULT_READ : u32 = 0
+const FAULT_SHADOW_STACK : u32 = 12
+const FAULT_SINGLE_STEP : u32 = 5
+const FAULT_WATCHPOINT : u32 = 10
+const FAULT_WRITE : u32 = 1
+const FIRMWARE_MAGIC : u64 = 6000285925988652870
+const GRANT_LABEL_SIZE : u32 = 32
+const HANDLE_BATCHES : u32 = 16
+const IRQ_ACTIVE_LOW : u32 = 2
+const IRQ_LEVEL : u32 = 1
+const MAX_EVICT_SPACES : u32 = 16
+const MAX_HANDLES_PER_BATCH : u32 = 64
+const MAX_PACKETS_PER_WAIT : u32 = 64
+const MESSAGE_HAS_HANDLES : u16 = 1
+const NO_BATCH : u32 = 65535
+const NO_DEADLINE : u64 = 18446744073709551615
+const NO_HANDLE : Handle = 0
+const NO_HANDLE_INDEX : u32 = 4294967295
+const PACKAGE_TIER : Tier = Freestanding
+const PROTECTION_EXECUTE : Protection = 4
+const PROTECTION_GUARDED : Protection = 8
+const PROTECTION_READ : Protection = 1
+const PROTECTION_WRITE : Protection = 2
+const REGISTER_FP : u32 = 29
+const REGISTER_LR : u32 = 30
+const REGISTER_PC : u32 = 32
+const REGISTER_PSTATE : u32 = 33
+const REGISTER_SP : u32 = 31
+const REGISTER_X0 : u32 = 0
+const RIGHTS_ALL : Rights = 4294967295
+const RIGHT_BUDGET_CHARGE : Rights = 256
+const RIGHT_BUDGET_WATCH : Rights = 512
+const RIGHT_CHANNEL_MAP : Rights = 256
+const RIGHT_CPU_BUDGET_BIND : Rights = 1024
+const RIGHT_CPU_BUDGET_SET : Rights = 512
+const RIGHT_CPU_BUDGET_SPLIT : Rights = 256
+const RIGHT_DEBUG_LOG_TRACE : Rights = 512
+const RIGHT_DEBUG_LOG_WRITE : Rights = 256
+const RIGHT_DUPLICATE : Rights = 1
+const RIGHT_INTERCEPT_STEER : Rights = 256
+const RIGHT_IO_PORTS_ACCESS : Rights = 256
+const RIGHT_IRQ_ACK : Rights = 256
+const RIGHT_MEMORY_EXECUTE : Rights = 1024
+const RIGHT_MEMORY_READ : Rights = 256
+const RIGHT_MEMORY_WRITE : Rights = 512
+const RIGHT_PLATFORM_DEVICES : Rights = 256
+const RIGHT_PLATFORM_DUPLICATE : Rights = 1024
+const RIGHT_PLATFORM_POWER : Rights = 512
+const RIGHT_PORT_BIND : Rights = 512
+const RIGHT_PORT_WAIT : Rights = 256
+const RIGHT_PORT_WAKE : Rights = 1024
+const RIGHT_PROCESS_INSPECT : Rights = 256
+const RIGHT_PROCESS_INTERCEPT : Rights = 2048
+const RIGHT_PROCESS_KILL : Rights = 4096
+const RIGHT_PROCESS_READ_MEMORY : Rights = 512
+const RIGHT_PROCESS_THREADS : Rights = 8192
+const RIGHT_PROCESS_WRITE_STATE : Rights = 1024
+const RIGHT_SPACE_MAP : Rights = 512
+const RIGHT_SPACE_THREADS : Rights = 256
+const RIGHT_TRANSFER : Rights = 2
+const SAMPLES : u32 = 1024
+const SAMPLE_FRAMES : u32 = 8
+const SHADOW_STACK_BYTES : u64 = 65536
+const SIGNAL_DMA_FAULT : Signals = 16
+const SIGNAL_PEER_CLOSED : Signals = 4
+const SIGNAL_PRESSURE : Signals = 32
+const SIGNAL_READABLE : Signals = 1
+const SIGNAL_TERMINATED : Signals = 8
+const SIGNAL_UNHELD : Signals = 64
+const SIGNAL_WRITABLE : Signals = 2
+const STOP_ALL_CALLS : u32 = 16
+const STOP_FAULT : u32 = 4
+const STOP_FAULT_LIMITED : u32 = 8
+const STOP_INFO_SIZE : u32 = 32
+const STOP_SYSCALL_ENTRY : u32 = 1
+const STOP_SYSCALL_EXIT : u32 = 2
+const STOP_THREAD_START : u32 = 32
+const SYSCALL_ADDRESS_SPACE_CREATE : u32 = 6
+const SYSCALL_ARGUMENT_WORDS : u32 = 6
+const SYSCALL_CHANNEL_CREATE : u32 = 14
+const SYSCALL_CHANNEL_MAP : u32 = 15
+const SYSCALL_CHANNEL_NOTIFY : u32 = 17
+const SYSCALL_CHANNEL_NOTIFY_AND_WAIT : u32 = 22
+const SYSCALL_CHANNEL_PEER_OWNED_BY : u32 = 98
+const SYSCALL_CHANNEL_READ : u32 = 19
+const SYSCALL_CHANNEL_SEND_HANDLES : u32 = 20
+const SYSCALL_CHANNEL_TAG : u32 = 50
+const SYSCALL_CHANNEL_TAKE_HANDLES : u32 = 21
+const SYSCALL_CHANNEL_UNMAP : u32 = 16
+const SYSCALL_CHANNEL_WRITE : u32 = 18
+const SYSCALL_CLOCK_MONOTONIC : u32 = 7
+const SYSCALL_CONTROLLER_REGISTER : u32 = 29
+const SYSCALL_CONTROLLER_SET_SOURCE : u32 = 81
+const SYSCALL_COVERAGE_TAKE : u32 = 94
+const SYSCALL_CPU_BUDGET_CPUS : u32 = 100
+const SYSCALL_CPU_BUDGET_CREATE : u32 = 59
+const SYSCALL_CPU_BUDGET_INFO : u32 = 61
+const SYSCALL_CPU_BUDGET_SET : u32 = 60
+const SYSCALL_CPU_BUDGET_SET_CPUS : u32 = 71
+const SYSCALL_DEBUG_LOG : u32 = 46
+const SYSCALL_DEVICE_ATTACH : u32 = 52
+const SYSCALL_DEVICE_CREATE : u32 = 51
+const SYSCALL_DMA_DOMAIN_CREATE : u32 = 55
+const SYSCALL_DMA_MEMORY_CREATE : u32 = 56
+const SYSCALL_HANDLE_CLOSE : u32 = 0
+const SYSCALL_HANDLE_DUPLICATE : u32 = 1
+const SYSCALL_HANDLE_INFO : u32 = 2
+const SYSCALL_HANDLE_RESTRICT : u32 = 97
+const SYSCALL_HANDLE_SAME : u32 = 96
+const SYSCALL_INTERCEPT_ATTACH : u32 = 41
+const SYSCALL_INTERCEPT_NEXT : u32 = 42
+const SYSCALL_INTERCEPT_RESUME : u32 = 43
+const SYSCALL_INTERCEPT_SAMPLE : u32 = 87
+const SYSCALL_INTERCEPT_SAMPLES : u32 = 88
+const SYSCALL_INTERCEPT_SET : u32 = 83
+const SYSCALL_IOMMU_REGISTER : u32 = 58
+const SYSCALL_IO_PORTS_CREATE : u32 = 63
+const SYSCALL_IO_PORT_READ : u32 = 64
+const SYSCALL_IO_PORT_WRITE : u32 = 65
+const SYSCALL_IRQ_ACK : u32 = 31
+const SYSCALL_IRQ_CREATE : u32 = 30
+const SYSCALL_IRQ_CREATE_MSI : u32 = 53
+const SYSCALL_IRQ_MESSAGE : u32 = 54
+const SYSCALL_IRQ_SET_CPU : u32 = 72
+const SYSCALL_MEMORY_BUDGET_CREATE : u32 = 24
+const SYSCALL_MEMORY_BUDGET_INFO : u32 = 25
+const SYSCALL_MEMORY_BUDGET_OTHERS : u32 = 91
+const SYSCALL_MEMORY_BUDGET_SET_THRESHOLD : u32 = 73
+const SYSCALL_MEMORY_CREATE : u32 = 26
+const SYSCALL_MEMORY_CREATE_PAGED : u32 = 66
+const SYSCALL_MEMORY_CREATE_PHYSICAL : u32 = 32
+const SYSCALL_MEMORY_CREATE_WINDOW : u32 = 33
+const SYSCALL_MEMORY_DEVICE_ADDRESS : u32 = 57
+const SYSCALL_MEMORY_EVICT : u32 = 74
+const SYSCALL_MEMORY_HOLDERS : u32 = 77
+const SYSCALL_MEMORY_KIND : u32 = 95
+const SYSCALL_MEMORY_MAP : u32 = 27
+const SYSCALL_MEMORY_PAGE_ACCESSED : u32 = 75
+const SYSCALL_MEMORY_PAGE_WANTED : u32 = 67
+const SYSCALL_MEMORY_READ : u32 = 69
+const SYSCALL_MEMORY_SIZE : u32 = 49
+const SYSCALL_MEMORY_SUPPLY : u32 = 68
+const SYSCALL_MEMORY_UNMAP : u32 = 28
+const SYSCALL_MEMORY_WRITE : u32 = 70
+const SYSCALL_PORT_BIND : u32 = 23
+const SYSCALL_PORT_BIND_WAKE : u32 = 9
+const SYSCALL_PORT_CREATE : u32 = 8
+const SYSCALL_PORT_SET_TIMER : u32 = 11
+const SYSCALL_PORT_UNBIND : u32 = 12
+const SYSCALL_PORT_WAIT : u32 = 13
+const SYSCALL_PORT_WAKE : u32 = 10
+const SYSCALL_POWER_END_WITH : u32 = 80
+const SYSCALL_POWER_SET_OFF : u32 = 78
+const SYSCALL_POWER_SET_RESET : u32 = 79
+const SYSCALL_PROCESS_CPU_INFO : u32 = 90
+const SYSCALL_PROCESS_CREATE : u32 = 5
+const SYSCALL_PROCESS_EXIT : u32 = 45
+const SYSCALL_PROCESS_GIVE_HANDLES : u32 = 48
+const SYSCALL_PROCESS_KILL : u32 = 44
+const SYSCALL_PROCESS_READ_MEMORY : u32 = 35
+const SYSCALL_PROCESS_SET_CONTROL_FLOW : u32 = 93
+const SYSCALL_PROCESS_SET_CPU_BUDGET : u32 = 62
+const SYSCALL_PROCESS_SET_DEBUG : u32 = 89
+const SYSCALL_PROCESS_SET_TRAPS : u32 = 84
+const SYSCALL_PROCESS_THREADS : u32 = 34
+const SYSCALL_PROCESS_WRITE_MEMORY : u32 = 36
+const SYSCALL_THREAD_CREATE : u32 = 4
+const SYSCALL_THREAD_CREATE_IN : u32 = 47
+const SYSCALL_THREAD_EXIT : u32 = 3
+const SYSCALL_THREAD_READ_REGISTERS : u32 = 39
+const SYSCALL_THREAD_RESUME : u32 = 38
+const SYSCALL_THREAD_SET_DEBUG : u32 = 82
+const SYSCALL_THREAD_SET_PAGE : u32 = 92
+const SYSCALL_THREAD_SET_POINTER : u32 = 99
+const SYSCALL_THREAD_SUSPEND : u32 = 37
+const SYSCALL_THREAD_USE_CPU_BUDGET : u32 = 76
+const SYSCALL_THREAD_WRITE_REGISTERS : u32 = 40
+const SYSCALL_TRACE_READ : u32 = 86
+const SYSCALL_TRACE_SET : u32 = 85
+const THREAD_REGISTERS : u32 = 34
+const TRACE_EVENTS : u32 = 1024
+const TRAP_COUNTER : u32 = 1
+type AddressSpace = distinct Handle
+type Handle = distinct u32
+type ArgumentHeader : struct size 40 align 4
+type ArgumentHeader field 0000 name_bytes offset 0 : u32
+type ArgumentHeader field 0001 value_bytes offset 4 : u32
+type ArgumentHeader field 0002 hash offset 8 : u8[32]
+type ArgumentsHeader : struct size 16 align 8
+type ArgumentsHeader field 0000 magic offset 0 : u32
+type ArgumentsHeader field 0001 count offset 4 : u32
+type ArgumentsHeader field 0002 total offset 8 : u64
+type BindMode : enum u32
+type BindMode member Once = 0x1
+type BindMode member Persistent = 0x2
+type BudgetInfo : struct size 16 align 8
+type BudgetInfo field 0000 limit offset 0 : u64
+type BudgetInfo field 0001 used offset 8 : u64
+type CacheMode : enum u32
+type CacheMode member WriteBack = 0x1
+type CacheMode member WriteCombining = 0x2
+type CacheMode member Device = 0x3
+type Channel = distinct Handle
+type ChannelError : enum u32
+type ChannelError member InvalidHandle = 0x1
+type ChannelError member ObjectGone = 0x2
+type ChannelError member MissingRight = 0x3
+type ChannelError member WrongKind = 0x4
+type ChannelError member TableFull = 0x5
+type ChannelError member OutOfMemory = 0x6
+type ChannelError member NoSuchCall = 0x7
+type ChannelError member BadBuffer = 0xa
+type ChannelError member PeerClosed = 0xc
+type ChannelError member Full = 0xd
+type ChannelError member Empty = 0xe
+type ChannelError member TooBig = 0xf
+type ChannelError member BufferTooSmall = 0x10
+type ChannelError member Mapped = 0x11
+type ChannelError member BadAddress = 0x12
+type ChannelError member BatchInUse = 0x13
+type ChannelError member NoSuchBatch = 0x14
+type ChannelError member Corrupt = 0x15
+type ChannelError member NotTransferable = 0x16
+type ChannelError member InFlight = 0x17
+type ChannelError member InvalidSize = 0x18
+type ChannelError member BudgetExceeded = 0x19
+type ChannelPair : struct size 8 align 4
+type ChannelPair field 0000 a offset 0 : Channel
+type ChannelPair field 0001 b offset 4 : Channel
+type ControlError : enum u32
+type ControlError member InvalidHandle = 0x1
+type ControlError member ObjectGone = 0x2
+type ControlError member MissingRight = 0x3
+type ControlError member WrongKind = 0x4
+type ControlError member TableFull = 0x5
+type ControlError member OutOfMemory = 0x6
+type ControlError member NoSuchCall = 0x7
+type ControlError member BadBuffer = 0xa
+type ControlError member Empty = 0xe
+type ControlError member TooBig = 0xf
+type ControlError member BadAddress = 0x12
+type ControlError member NotTransferable = 0x16
+type ControlError member BudgetExceeded = 0x19
+type ControlError member NoSuchThread = 0x22
+type ControlError member NotStopped = 0x23
+type ControlError member AlreadyIntercepted = 0x24
+type ControlError member BadRegisters = 0x25
+type ControllerInfo : struct size 8 align 4
+type ControllerInfo field 0000 number offset 0 : u32
+type ControllerInfo field 0001 lines offset 4 : u32
+type ControllerKind : enum u32
+type ControllerKind member IoApic = 0x1
+type ControllerKind member GicDistributor = 0x2
+type ControllerKind member Plic = 0x3
+type ControllerKind member Aplic = 0x4
+type CoverageError : enum u32
+type CoverageError member InvalidHandle = 0x1
+type CoverageError member ObjectGone = 0x2
+type CoverageError member MissingRight = 0x3
+type CoverageError member WrongKind = 0x4
+type CoverageError member NoSuchCall = 0x7
+type CoverageError member BadBuffer = 0xa
+type CoverageError member NotCounted = 0x30
+type CpuBudget = distinct Handle
+type CpuBudgetInfo : struct size 64 align 8
+type CpuBudgetInfo field 0000 size offset 0 : u32
+type CpuBudgetInfo field 0001 reserved offset 4 : u32
+type CpuBudgetInfo field 0002 priority offset 8 : u64
+type CpuBudgetInfo field 0003 period offset 16 : u64
+type CpuBudgetInfo field 0004 time offset 24 : u64
+type CpuBudgetInfo field 0005 share offset 32 : u64
+type CpuBudgetInfo field 0006 children_share offset 40 : u64
+type CpuBudgetInfo field 0007 lent offset 48 : u64
+type CpuBudgetInfo field 0008 ran offset 56 : u64
+type CpuFeature : enum u16
+type CpuFeature member X86Cx16 = 0x0
+type CpuFeature member X86LahfSahf = 0x1
+type CpuFeature member X86Popcnt = 0x2
+type CpuFeature member X86Sse3 = 0x3
+type CpuFeature member X86Ssse3 = 0x4
+type CpuFeature member X86Sse41 = 0x5
+type CpuFeature member X86Sse42 = 0x6
+type CpuFeature member X86Avx = 0x7
+type CpuFeature member X86Avx2 = 0x8
+type CpuFeature member X86Bmi1 = 0x9
+type CpuFeature member X86Bmi2 = 0xa
+type CpuFeature member X86F16c = 0xb
+type CpuFeature member X86Fma = 0xc
+type CpuFeature member X86Lzcnt = 0xd
+type CpuFeature member X86Movbe = 0xe
+type CpuFeature member X86Xsave = 0xf
+type CpuFeature member X86Avx512F = 0x10
+type CpuFeature member X86Avx512Bw = 0x11
+type CpuFeature member X86Avx512Cd = 0x12
+type CpuFeature member X86Avx512Dq = 0x13
+type CpuFeature member X86Avx512Vl = 0x14
+type CpuFeature member X86AesNi = 0x15
+type CpuFeature member X86Pclmulqdq = 0x16
+type CpuFeature member X86Vaes = 0x17
+type CpuFeature member X86Vpclmulqdq = 0x18
+type CpuFeature member X86Sha = 0x19
+type CpuFeature member X86Rdrand = 0x1a
+type CpuFeature member X86Rdseed = 0x1b
+type CpuFeature member X86NoExecute = 0x1c
+type CpuFeature member X86Syscall = 0x1d
+type CpuFeature member X86Apic = 0x1e
+type CpuFeature member X86X2Apic = 0x1f
+type CpuFeature member X86InvariantTsc = 0x20
+type CpuFeature member X86TscDeadline = 0x21
+type CpuFeature member X86Pcid = 0x22
+type CpuFeature member X86Invpcid = 0x23
+type CpuFeature member X86Smep = 0x24
+type CpuFeature member X86Smap = 0x25
+type CpuFeature member X86FsGsBase = 0x26
+type CpuFeature member X86Pages1G = 0x27
+type CpuFeature member X86Pat = 0x28
+type CpuFeature member X86Xsavec = 0x29
+type CpuFeature member X86Xsaveopt = 0x2a
+type CpuFeature member X86FiveLevelPaging = 0x2b
+type CpuFeature member X86ShadowStack = 0x2c
+type CpuFeature member X86Ibt = 0x2d
+type CpuFeature member Aarch64Fp = 0x100
+type CpuFeature member Aarch64AdvSimd = 0x101
+type CpuFeature member Aarch64Atomics = 0x102
+type CpuFeature member Aarch64Rdm = 0x103
+type CpuFeature member Aarch64DotProduct = 0x104
+type CpuFeature member Aarch64Fp16 = 0x105
+type CpuFeature member Aarch64Sve = 0x106
+type CpuFeature member Aarch64Aes = 0x107
+type CpuFeature member Aarch64Pmull = 0x108
+type CpuFeature member Aarch64Sha1 = 0x109
+type CpuFeature member Aarch64Sha256 = 0x10a
+type CpuFeature member Aarch64Sha512 = 0x10b
+type CpuFeature member Aarch64Sha3 = 0x10c
+type CpuFeature member Aarch64Crc32 = 0x10d
+type CpuFeature member Aarch64Rng = 0x10e
+type CpuFeature member Aarch64PointerAuthentication = 0x10f
+type CpuFeature member Aarch64Bti = 0x110
+type CpuFeature member Aarch64Pan = 0x111
+type CpuFeature member Aarch64Asid16 = 0x112
+type CpuFeature member Aarch64Pages1G = 0x113
+type CpuFeature member Aarch64HardwareAccessFlag = 0x114
+type CpuFeature member Aarch64Gcs = 0x115
+type CpuFeature member RiscvM = 0x200
+type CpuFeature member RiscvA = 0x201
+type CpuFeature member RiscvF = 0x202
+type CpuFeature member RiscvD = 0x203
+type CpuFeature member RiscvC = 0x204
+type CpuFeature member RiscvV = 0x205
+type CpuFeature member RiscvZba = 0x206
+type CpuFeature member RiscvZbb = 0x207
+type CpuFeature member RiscvZbs = 0x208
+type CpuFeature member RiscvZicond = 0x209
+type CpuFeature member RiscvZcb = 0x20a
+type CpuFeature member RiscvZfa = 0x20b
+type CpuFeature member RiscvZfhmin = 0x20c
+type CpuFeature member RiscvZicboz = 0x20d
+type CpuFeature member RiscvZihintpause = 0x20e
+type CpuFeature member RiscvZawrs = 0x20f
+type CpuFeature member RiscvZimop = 0x210
+type CpuFeature member RiscvZacas = 0x211
+type CpuFeature member RiscvZbc = 0x212
+type CpuFeature member RiscvZbkb = 0x213
+type CpuFeature member RiscvZknd = 0x214
+type CpuFeature member RiscvZkne = 0x215
+type CpuFeature member RiscvZknh = 0x216
+type CpuFeature member RiscvZvbb = 0x217
+type CpuFeature member RiscvZvbc = 0x218
+type CpuFeature member RiscvZvkned = 0x219
+type CpuFeature member RiscvZvknhb = 0x21a
+type CpuFeature member RiscvZvkg = 0x21b
+type CpuFeature member RiscvZkt = 0x21c
+type CpuFeature member RiscvZkr = 0x21d
+type CpuFeature member RiscvZicfilp = 0x21e
+type CpuFeature member RiscvZicfiss = 0x21f
+type CpuFeature member RiscvSv48 = 0x220
+type CpuFeature member RiscvSv57 = 0x221
+type CpuFeature member RiscvSvpbmt = 0x222
+type CpuFeature member RiscvSvnapot = 0x223
+type CpuFeature member RiscvSvinval = 0x224
+type CpuFeature member RiscvSvadu = 0x225
+type CpuFeature member RiscvSstc = 0x226
+type CpuFeature member RiscvSscofpmf = 0x227
+type CpuFeature member RiscvSsaia = 0x228
+type CpuFeatures : struct size 128 align 8
+type CpuFeatures field 0000 bits offset 0 : u64[16]
+type DebugLog = distinct Handle
+type DebugSlot : struct size 16 align 8
+type DebugSlot field 0000 address offset 0 : u64
+type DebugSlot field 0001 kind offset 8 : DebugSlotKind
+type DebugSlot field 0002 size offset 9 : u8
+type DebugSlot field 0003 reserved offset 10 : u8[6]
+type DebugSlotKind : enum u8
+type DebugSlotKind member Off = 0x0
+type DebugSlotKind member Execute = 0x1
+type DebugSlotKind member Write = 0x2
+type DebugSlotKind member ReadWrite = 0x3
+type Device = distinct Handle
+type DeviceError : enum u32
+type DeviceError member InvalidHandle = 0x1
+type DeviceError member ObjectGone = 0x2
+type DeviceError member MissingRight = 0x3
+type DeviceError member WrongKind = 0x4
+type DeviceError member TableFull = 0x5
+type DeviceError member OutOfMemory = 0x6
+type DeviceError member NoSuchCall = 0x7
+type DeviceError member BadAddress = 0x12
+type DeviceError member InvalidSize = 0x18
+type DeviceError member BudgetExceeded = 0x19
+type DeviceError member NoController = 0x1c
+type DeviceError member TooManyControllers = 0x1d
+type DeviceError member NoSuchController = 0x1e
+type DeviceError member NoSuchLine = 0x1f
+type DeviceError member LineInUse = 0x20
+type DeviceError member NoFreeInterrupt = 0x21
+type DeviceError member NotDmaMemory = 0x26
+type DeviceError member NoMsi = 0x27
+type DeviceError member TooManyVectors = 0x28
+type DeviceError member DeviceExists = 0x29
+type DeviceError member NoIommu = 0x2a
+type DeviceError member TooManyIommus = 0x2b
+type DeviceError member WrongIommu = 0x2c
+type DeviceError member Untrusted = 0x2d
+type DeviceError member InvalidArgument = 0x2e
+type DeviceError member NoPowerOff = 0x2f
+type DmaDomain = distinct Handle
+type FirmwareKind : enum u32
+type FirmwareKind member Acpi = 0x1
+type FirmwareKind member DeviceTree = 0x2
+type FirmwareTable : struct size 24 align 8
+type FirmwareTable field 0000 signature offset 0 : u8[4]
+type FirmwareTable field 0001 size offset 4 : u32
+type FirmwareTable field 0002 offset offset 8 : u64
+type FirmwareTable field 0003 physical offset 16 : u64
+type FirmwareTables : struct size 16 align 8
+type FirmwareTables field 0000 magic offset 0 : u64
+type FirmwareTables field 0001 kind offset 8 : FirmwareKind
+type FirmwareTables field 0002 count offset 12 : u32
+type FramebufferLayout : struct size 20 align 4
+type FramebufferLayout field 0000 width offset 0 : u32
+type FramebufferLayout field 0001 height offset 4 : u32
+type FramebufferLayout field 0002 pitch offset 8 : u32
+type FramebufferLayout field 0003 bits_per_pixel offset 12 : u16
+type FramebufferLayout field 0004 red_size offset 14 : u8
+type FramebufferLayout field 0005 red_shift offset 15 : u8
+type FramebufferLayout field 0006 green_size offset 16 : u8
+type FramebufferLayout field 0007 green_shift offset 17 : u8
+type FramebufferLayout field 0008 blue_size offset 18 : u8
+type FramebufferLayout field 0009 blue_shift offset 19 : u8
+type Grant : struct size 40 align 4
+type Grant field 0000 label offset 0 : u8[32]
+type Grant field 0001 kind offset 32 : ObjectKind
+type Grant field 0002 reserved offset 33 : u8[3]
+type Grant field 0003 handle offset 36 : Handle
+type ObjectKind : enum u8
+type ObjectKind member MemoryBudget = 0x1
+type ObjectKind member CpuBudget = 0x2
+type ObjectKind member Memory = 0x3
+type ObjectKind member AddressSpace = 0x4
+type ObjectKind member Thread = 0x5
+type ObjectKind member Process = 0x6
+type ObjectKind member Channel = 0x7
+type ObjectKind member Port = 0x8
+type ObjectKind member Irq = 0x9
+type ObjectKind member IoPortRange = 0xa
+type ObjectKind member DmaDomain = 0xb
+type ObjectKind member Platform = 0xc
+type ObjectKind member Intercept = 0xd
+type ObjectKind member DebugLog = 0xe
+type ObjectKind member Device = 0xf
+type HandleError : enum u32
+type HandleError member InvalidHandle = 0x1
+type HandleError member ObjectGone = 0x2
+type HandleError member MissingRight = 0x3
+type HandleError member WrongKind = 0x4
+type HandleError member TableFull = 0x5
+type HandleError member OutOfMemory = 0x6
+type HandleError member NoSuchCall = 0x7
+type HandleError member BadBuffer = 0xa
+type HandleError member BudgetExceeded = 0x19
+type HandleError member InvalidArgument = 0x2e
+type HandleInfo : struct size 8 align 4
+type HandleInfo field 0000 rights offset 0 : Rights
+type HandleInfo field 0001 kind offset 4 : ObjectKind
+type HandleInfo field 0002 reserved offset 5 : u8[3]
+type Rights = distinct u32
+type Intercept = distinct Handle
+type InterceptAction : enum u32
+type InterceptAction member Continue = 0x1
+type InterceptAction member Skip = 0x2
+type InterceptAction member Kill = 0x3
+type IoPortRange = distinct Handle
+type IommuKind : enum u32
+type IommuKind member VtD = 0x1
+type IommuKind member AmdVi = 0x2
+type IommuKind member Smmuv3 = 0x3
+type IommuKind member RiscV = 0x4
+type Irq = distinct Handle
+type Memory = distinct Handle
+type MemoryBudget = distinct Handle
+type MemoryError : enum u32
+type MemoryError member InvalidHandle = 0x1
+type MemoryError member ObjectGone = 0x2
+type MemoryError member MissingRight = 0x3
+type MemoryError member WrongKind = 0x4
+type MemoryError member TableFull = 0x5
+type MemoryError member OutOfMemory = 0x6
+type MemoryError member NoSuchCall = 0x7
+type MemoryError member BadAddress = 0x12
+type MemoryError member InvalidSize = 0x18
+type MemoryError member BudgetExceeded = 0x19
+type MemoryError member NotMapped = 0x1a
+type MemoryError member BadProtection = 0x1b
+type MemoryError member NoPager = 0x31
+type MemoryError member NothingWanted = 0x32
+type MemoryError member NotPaged = 0x33
+type MemoryError member NotSupplied = 0x34
+type MemoryError member MappedWidely = 0x35
+type MemoryKind : enum u8
+type MemoryKind member Anonymous = 0x1
+type MemoryKind member Paged = 0x2
+type MemoryKind member Window = 0x3
+type MemoryKind member Dma = 0x4
+type MemoryKind member Contiguous = 0x5
+type MemoryKind member BootModule = 0x6
+type MemoryKind member Device = 0x7
+type MessageHeader : struct size 8 align 4
+type MessageHeader field 0000 size offset 0 : u32
+type MessageHeader field 0001 flags offset 4 : u16
+type MessageHeader field 0002 handle_batch offset 6 : u16
+type MessageInfo : struct size 8 align 4
+type MessageInfo field 0000 size offset 0 : u32
+type MessageInfo field 0001 flags_and_batch offset 4 : u32
+type MsiMessage : struct size 16 align 8
+type MsiMessage field 0000 address offset 0 : u64
+type MsiMessage field 0001 data offset 8 : u32
+type MsiMessage field 0002 reserved offset 12 : u32
+type Packet : struct size 32 align 8
+type Packet field 0000 key offset 0 : u64
+type Packet field 0001 kind offset 8 : PacketKind
+type Packet field 0002 reserved offset 12 : u32
+type Packet field 0003 data offset 16 : u64[2]
+type PacketKind : enum u32
+type PacketKind member Signal = 0x1
+type PacketKind member Timer = 0x2
+type PacketKind member User = 0x3
+type PacketKind member Irq = 0x4
+type PacketKind member Stop = 0x5
+type PhysicalRange : struct size 16 align 8
+type PhysicalRange field 0000 base offset 0 : u64
+type PhysicalRange field 0001 size offset 8 : u64
+type Platform = distinct Handle
+type Port = distinct Handle
+type PortError : enum u32
+type PortError member InvalidHandle = 0x1
+type PortError member ObjectGone = 0x2
+type PortError member MissingRight = 0x3
+type PortError member WrongKind = 0x4
+type PortError member OutOfMemory = 0x6
+type PortError member NoSuchCall = 0x7
+type PortError member KeyInUse = 0x8
+type PortError member NoSuchKey = 0x9
+type PortError member BadBuffer = 0xa
+type PortError member TooManyBindings = 0xb
+type PortError member BufferTooSmall = 0x10
+type PortError member BudgetExceeded = 0x19
+type PowerAction : enum u32
+type PowerAction member Halt = 0x1
+type PowerAction member Off = 0x2
+type PowerAction member Restart = 0x3
+type Process = distinct Handle
+type ProcessCpu : struct size 16 align 8
+type ProcessCpu field 0000 run_ns offset 0 : u64
+type ProcessCpu field 0001 lent_ns offset 8 : u64
+type Protection = distinct u32
+type RingIndices : struct size 128 align 64
+type RingIndices field 0000 tail offset 0 : u32
+type RingIndices field 0001 producer_waiting offset 4 : u32
+type RingIndices field 0002 reserved0 offset 8 : u8[56]
+type RingIndices field 0003 head offset 64 : u32
+type RingIndices field 0004 consumer_waiting offset 68 : u32
+type RingIndices field 0005 reserved1 offset 72 : u8[56]
+type Sample : struct size 88 align 8
+type Sample field 0000 thread offset 0 : u64
+type Sample field 0001 fiber offset 8 : u64
+type Sample field 0002 count offset 16 : u32
+type Sample field 0003 reserved offset 20 : u32
+type Sample field 0004 frames offset 24 : u64[8]
+type Signals = distinct u32
+type StartupBlock : struct size 240 align 8
+type StartupBlock field 0000 abi_version offset 0 : u32
+type StartupBlock field 0001 size offset 4 : u32
+type StartupBlock field 0002 process offset 8 : Process
+type StartupBlock field 0003 space offset 12 : AddressSpace
+type StartupBlock field 0004 budget offset 16 : MemoryBudget
+type StartupBlock field 0005 grant_count offset 20 : u32
+type StartupBlock field 0006 free_base offset 24 : u64
+type StartupBlock field 0007 free_size offset 32 : u64
+type StartupBlock field 0008 stack_base offset 40 : u64
+type StartupBlock field 0009 stack_size offset 48 : u64
+type StartupBlock field 0010 grants offset 56 : u64
+type StartupBlock field 0011 seed offset 64 : u8[32]
+type StartupBlock field 0012 cpu_features offset 96 : CpuFeatures
+type StartupBlock field 0013 max_memory_size offset 224 : u64
+type StartupBlock field 0014 max_device_msis offset 232 : u32
+type StartupBlock field 0015 cpu_count offset 236 : u32
+type StopInfo : struct size 32 align 8
+type StopInfo field 0000 size offset 0 : u32
+type StopInfo field 0001 point offset 4 : StopPoint
+type StopInfo field 0002 thread offset 8 : u64
+type StopInfo field 0003 number offset 16 : u32
+type StopInfo field 0004 reserved offset 20 : u32
+type StopInfo field 0005 address offset 24 : u64
+type StopPoint : enum u32
+type StopPoint member SyscallEntry = 0x1
+type StopPoint member SyscallExit = 0x2
+type StopPoint member Fault = 0x3
+type StopPoint member ThreadStart = 0x4
+type SyscallAnswer : struct size 24 align 8
+type SyscallAnswer field 0000 tag offset 0 : u64
+type SyscallAnswer field 0001 first offset 8 : u64
+type SyscallAnswer field 0002 second offset 16 : u64
+type Syscalls : struct size 808 align 8
+type Syscalls field 0000 handle_close offset 0 : fn(handle : Handle) -> Result[void, HandleError]
+type Syscalls field 0001 handle_duplicate offset 8 : fn(handle : Handle, rights : Rights) -> Result[Handle, HandleError]
+type Syscalls field 0002 handle_info offset 16 : fn(handle : Handle) -> Result[HandleInfo, HandleError]
+type Syscalls field 0003 thread_exit offset 24 : fn() #never_returns
+type Syscalls field 0004 thread_create offset 32 : fn(budget : MemoryBudget, space : AddressSpace, entry : u64, stack : u64, argument : u64) -> Result[Thread, HandleError]
+type Syscalls field 0005 process_create offset 40 : fn(budget : MemoryBudget) -> Result[Process, HandleError]
+type Syscalls field 0006 address_space_create offset 48 : fn(budget : MemoryBudget) -> Result[AddressSpace, HandleError]
+type Syscalls field 0007 clock_monotonic offset 56 : fn() -> Result[u64, HandleError]
+type Syscalls field 0008 port_create offset 64 : fn(budget : MemoryBudget) -> Result[Port, HandleError]
+type Syscalls field 0009 port_bind_wake offset 72 : fn(port : Port, key : u64) -> Result[void, PortError]
+type Syscalls field 0010 port_wake offset 80 : fn(port : Port, key : u64, bits : u64) -> Result[void, PortError]
+type Syscalls field 0011 port_set_timer offset 88 : fn(port : Port, key : u64, deadline : u64) -> Result[void, PortError]
+type Syscalls field 0012 port_unbind offset 96 : fn(port : Port, key : u64) -> Result[void, PortError]
+type Syscalls field 0013 port_wait offset 104 : fn(port : Port, packets : Packet[], deadline : u64) -> Result[u32, PortError]
+type Syscalls field 0014 channel_create offset 112 : fn(budget : MemoryBudget, ring_bytes : u32, tag : u64) -> Result[ChannelPair, ChannelError]
+type Syscalls field 0015 channel_map offset 120 : fn(end : Channel, space : AddressSpace, address : u64) -> Result[void, ChannelError]
+type Syscalls field 0016 channel_unmap offset 128 : fn(end : Channel) -> Result[void, ChannelError]
+type Syscalls field 0017 channel_notify offset 136 : fn(end : Channel, signals : Signals) -> Result[void, ChannelError]
+type Syscalls field 0018 channel_write offset 144 : fn(end : Channel, bytes : u8[], batch : u32) -> Result[void, ChannelError]
+type Syscalls field 0019 channel_read offset 152 : fn(end : Channel, buffer : u8[], size : ptr[mut u32]) -> Result[MessageInfo, ChannelError]
+type Syscalls field 0020 channel_send_handles offset 160 : fn(end : Channel, handles : Handle[], batch : u32) -> Result[void, ChannelError]
+type Syscalls field 0021 channel_take_handles offset 168 : fn(end : Channel, batch : u32, handles : Handle[], count : ptr[mut u32]) -> Result[u32, ChannelError]
+type Syscalls field 0022 channel_notify_and_wait offset 176 : fn(end : Channel, signals : Signals, port : Port, packets : Packet[], deadline : u64) -> Result[u32, ChannelError]
+type Syscalls field 0023 port_bind offset 184 : fn(port : Port, key : u64, object : Handle, signals : Signals, mode : BindMode) -> Result[void, PortError]
+type Syscalls field 0024 memory_budget_create offset 192 : fn(budget : MemoryBudget, limit : u64) -> Result[MemoryBudget, HandleError]
+type Syscalls field 0025 memory_budget_info offset 200 : fn(budget : MemoryBudget) -> Result[BudgetInfo, HandleError]
+type Syscalls field 0026 memory_create offset 208 : fn(budget : MemoryBudget, size : u64) -> Result[Memory, MemoryError]
+type Syscalls field 0027 memory_map offset 216 : fn(memory : Memory, space : AddressSpace, address : u64, offset : u64, size : u64, protection : Protection) -> Result[void, MemoryError]
+type Syscalls field 0028 memory_unmap offset 224 : fn(space : AddressSpace, address : u64) -> Result[void, MemoryError]
+type Syscalls field 0029 controller_register offset 232 : fn(platform : Platform, kind : ControllerKind, registers : u64) -> Result[ControllerInfo, DeviceError]
+type Syscalls field 0030 irq_create offset 240 : fn(platform : Platform, budget : MemoryBudget, controller : u32, line : u32, flags : u32) -> Result[Irq, DeviceError]
+type Syscalls field 0031 irq_ack offset 248 : fn(irq : Irq) -> Result[void, HandleError]
+type Syscalls field 0032 memory_create_physical offset 256 : fn(platform : Platform, budget : MemoryBudget, address : u64, size : u64, cache : CacheMode) -> Result[Memory, DeviceError]
+type Syscalls field 0033 memory_create_window offset 264 : fn(memory : Memory, budget : MemoryBudget, offset : u64, size : u64) -> Result[Memory, MemoryError]
+type Syscalls field 0034 process_threads offset 272 : fn(process : Process, from : u64, ids : u64[]) -> Result[u32, ControlError]
+type Syscalls field 0035 process_read_memory offset 280 : fn(process : Process, space : AddressSpace, address : u64, buffer : u8[]) -> Result[void, ControlError]
+type Syscalls field 0036 process_write_memory offset 288 : fn(process : Process, space : AddressSpace, address : u64, bytes : u8[]) -> Result[void, ControlError]
+type Syscalls field 0037 thread_suspend offset 296 : fn(process : Process, thread : u64) -> Result[void, ControlError]
+type Syscalls field 0038 thread_resume offset 304 : fn(process : Process, thread : u64) -> Result[void, ControlError]
+type Syscalls field 0039 thread_read_registers offset 312 : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
+type Syscalls field 0040 thread_write_registers offset 320 : fn(process : Process, thread : u64, registers : u64[]) -> Result[void, ControlError]
+type Syscalls field 0041 intercept_attach offset 328 : fn(process : Process, port : Port, key : u64, calls : u64[], points : u32) -> Result[Intercept, ControlError]
+type Syscalls field 0042 intercept_next offset 336 : fn(intercept : Intercept, stop : ptr[mut StopInfo]) -> Result[void, ControlError]
+type Syscalls field 0043 intercept_resume offset 344 : fn(intercept : Intercept, thread : u64, action : InterceptAction) -> Result[void, ControlError]
+type Syscalls field 0044 process_kill offset 352 : fn(process : Process) -> Result[void, ControlError]
+type Syscalls field 0045 process_exit offset 360 : fn(code : u32) #never_returns
+type Syscalls field 0046 debug_log offset 368 : fn(log : DebugLog, text : u8[]) -> Result[void, HandleError]
+type Syscalls field 0047 thread_create_in offset 376 : fn(process : Process, budget : MemoryBudget, space : AddressSpace, entry : u64, stack : u64, argument : u64) -> Result[u64, ControlError]
+type Syscalls field 0048 process_give_handles offset 384 : fn(process : Process, handles : Handle[], given : Handle[]) -> Result[void, ControlError]
+type Syscalls field 0049 memory_size offset 392 : fn(memory : Memory) -> Result[u64, HandleError]
+type Syscalls field 0050 channel_tag offset 400 : fn(end : Channel) -> Result[u64, ChannelError]
+type Syscalls field 0051 device_create offset 408 : fn(platform : Platform, budget : MemoryBudget, address : u32, msi_source : u32, config : u64) -> Result[Device, DeviceError]
+type Syscalls field 0052 device_attach offset 416 : fn(platform : Platform, device : Device, domain : DmaDomain) -> Result[void, DeviceError]
+type Syscalls field 0053 irq_create_msi offset 424 : fn(device : Device, budget : MemoryBudget) -> Result[Irq, DeviceError]
+type Syscalls field 0054 irq_message offset 432 : fn(irq : Irq) -> Result[MsiMessage, DeviceError]
+type Syscalls field 0055 dma_domain_create offset 440 : fn(platform : Platform, budget : MemoryBudget, flags : u32) -> Result[DmaDomain, DeviceError]
+type Syscalls field 0056 dma_memory_create offset 448 : fn(domain : DmaDomain, budget : MemoryBudget, size : u64, limit : u64) -> Result[Memory, DeviceError]
+type Syscalls field 0057 memory_device_address offset 456 : fn(memory : Memory) -> Result[u64, DeviceError]
+type Syscalls field 0058 iommu_register offset 464 : fn(platform : Platform, kind : IommuKind, registers : Memory, first : u32, count : u32, stream : u32) -> Result[u32, DeviceError]
+type Syscalls field 0059 cpu_budget_create offset 472 : fn(parent : CpuBudget, budget : MemoryBudget, priority : u32, period : u64, time : u64) -> Result[CpuBudget, HandleError]
+type Syscalls field 0060 cpu_budget_set offset 480 : fn(budget : CpuBudget, priority : u32, period : u64, time : u64) -> Result[void, HandleError]
+type Syscalls field 0061 cpu_budget_info offset 488 : fn(budget : CpuBudget, info : ptr[mut CpuBudgetInfo]) -> Result[void, HandleError]
+type Syscalls field 0062 process_set_cpu_budget offset 496 : fn(process : Process, budget : CpuBudget) -> Result[void, HandleError]
+type Syscalls field 0063 io_ports_create offset 504 : fn(platform : Platform, budget : MemoryBudget, first : u32, count : u32) -> Result[IoPortRange, DeviceError]
+type Syscalls field 0064 io_port_read offset 512 : fn(ports : IoPortRange, offset : u32, width : u32) -> Result[u32, DeviceError]
+type Syscalls field 0065 io_port_write offset 520 : fn(ports : IoPortRange, offset : u32, width : u32, value : u32) -> Result[void, DeviceError]
+type Syscalls field 0066 memory_create_paged offset 528 : fn(budget : MemoryBudget, port : Port, key : u64, size : u64) -> Result[Memory, MemoryError]
+type Syscalls field 0067 memory_page_wanted offset 536 : fn(memory : Memory) -> Result[u64, MemoryError]
+type Syscalls field 0068 memory_supply offset 544 : fn(memory : Memory, offset : u64, source : Memory, source_offset : u64) -> Result[void, MemoryError]
+type Syscalls field 0069 memory_read offset 552 : fn(memory : Memory, offset : u64, buffer : u8[]) -> Result[void, MemoryError]
+type Syscalls field 0070 memory_write offset 560 : fn(memory : Memory, offset : u64, bytes : u8[]) -> Result[void, MemoryError]
+type Syscalls field 0071 cpu_budget_set_cpus offset 568 : fn(budget : CpuBudget, cpus : u64[]) -> Result[void, HandleError]
+type Syscalls field 0072 irq_set_cpu offset 576 : fn(irq : Irq, cpu : u32) -> Result[void, DeviceError]
+type Syscalls field 0073 memory_budget_set_threshold offset 584 : fn(budget : MemoryBudget, threshold : u64) -> Result[void, HandleError]
+type Syscalls field 0074 memory_evict offset 592 : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
+type Syscalls field 0075 memory_page_accessed offset 600 : fn(memory : Memory, offset : u64) -> Result[bool, MemoryError]
+type Syscalls field 0076 thread_use_cpu_budget offset 608 : fn(budget : CpuBudget) -> Result[void, HandleError]
+type Syscalls field 0077 memory_holders offset 616 : fn(memory : Memory) -> Result[u64, MemoryError]
+type Syscalls field 0078 power_set_off offset 624 : fn(platform : Platform, control_a : u32, control_b : u32, sleep_a : u32, sleep_b : u32) -> Result[void, DeviceError]
+type Syscalls field 0079 power_set_reset offset 632 : fn(platform : Platform, port : u32, value : u32) -> Result[void, DeviceError]
+type Syscalls field 0080 power_end_with offset 640 : fn(platform : Platform, action : PowerAction) -> Result[void, DeviceError]
+type Syscalls field 0081 controller_set_source offset 648 : fn(platform : Platform, controller : u32, source : u32) -> Result[void, DeviceError]
+type Syscalls field 0082 thread_set_debug offset 656 : fn(process : Process, thread : u64, debug : ptr[ThreadDebug]) -> Result[void, ControlError]
+type Syscalls field 0083 intercept_set offset 664 : fn(intercept : Intercept, calls : u64[], points : u32) -> Result[void, ControlError]
+type Syscalls field 0084 process_set_traps offset 672 : fn(process : Process, traps : u32) -> Result[void, ControlError]
+type Syscalls field 0085 trace_set offset 680 : fn(log : DebugLog, on : bool) -> Result[void, DeviceError]
+type Syscalls field 0086 trace_read offset 688 : fn(log : DebugLog, events : TraceEvent[]) -> Result[u32, DeviceError]
+type Syscalls field 0087 intercept_sample offset 696 : fn(intercept : Intercept, on : bool) -> Result[void, ControlError]
+type Syscalls field 0088 intercept_samples offset 704 : fn(intercept : Intercept, samples : Sample[]) -> Result[u32, ControlError]
+type Syscalls field 0089 process_set_debug offset 712 : fn(process : Process, debug : ptr[ThreadDebug]) -> Result[void, ControlError]
+type Syscalls field 0090 process_cpu_info offset 720 : fn(process : Process) -> Result[ProcessCpu, ControlError]
+type Syscalls field 0091 memory_budget_others offset 728 : fn(budget : MemoryBudget) -> Result[u64, HandleError]
+type Syscalls field 0092 thread_set_page offset 736 : fn(memory : Memory, offset : u64) -> Result[void, MemoryError]
+type Syscalls field 0093 process_set_control_flow offset 744 : fn(process : Process, features : u32, region : u64, size : u64) -> Result[void, ControlError]
+type Syscalls field 0094 coverage_take offset 752 : fn(log : DebugLog, counters : u8[]) -> Result[u64, CoverageError]
+type Syscalls field 0095 memory_kind offset 760 : fn(memory : Memory) -> Result[MemoryKind, HandleError]
+type Syscalls field 0096 handle_same offset 768 : fn(a : Handle, b : Handle) -> Result[bool, HandleError]
+type Syscalls field 0097 handle_restrict offset 776 : fn(handle : Handle, rights : Rights) -> Result[void, HandleError]
+type Syscalls field 0098 channel_peer_owned_by offset 784 : fn(end : Channel, process : Process) -> Result[bool, ControlError]
+type Syscalls field 0099 thread_set_pointer offset 792 : fn(value : u64) -> Result[void, MemoryError]
+type Syscalls field 0100 cpu_budget_cpus offset 800 : fn(budget : CpuBudget, cpus : u64[]) -> Result[u32, HandleError]
+type Result[void, HandleError] : union size 8 tag u8
+type Result[void, HandleError] variant 0000 Ok:
+type Result[void, HandleError] variant 0001 Error: HandleError@4
+type Result[Handle, HandleError] : union size 8 tag u8
+type Result[Handle, HandleError] variant 0000 Ok: Handle@4
+type Result[Handle, HandleError] variant 0001 Error: HandleError@4
+type Result[HandleInfo, HandleError] : union size 12 tag u8
+type Result[HandleInfo, HandleError] variant 0000 Ok: HandleInfo@4
+type Result[HandleInfo, HandleError] variant 0001 Error: HandleError@4
+type Result[Thread, HandleError] : union size 8 tag u8
+type Result[Thread, HandleError] variant 0000 Ok: Thread@4
+type Result[Thread, HandleError] variant 0001 Error: HandleError@4
+type Thread = distinct Handle
+type Result[Process, HandleError] : union size 8 tag u8
+type Result[Process, HandleError] variant 0000 Ok: Process@4
+type Result[Process, HandleError] variant 0001 Error: HandleError@4
+type Result[AddressSpace, HandleError] : union size 8 tag u8
+type Result[AddressSpace, HandleError] variant 0000 Ok: AddressSpace@4
+type Result[AddressSpace, HandleError] variant 0001 Error: HandleError@4
+type Result[u64, HandleError] : union size 16 tag u8
+type Result[u64, HandleError] variant 0000 Ok: u64@8
+type Result[u64, HandleError] variant 0001 Error: HandleError@4
+type Result[Port, HandleError] : union size 8 tag u8
+type Result[Port, HandleError] variant 0000 Ok: Port@4
+type Result[Port, HandleError] variant 0001 Error: HandleError@4
+type Result[void, PortError] : union size 8 tag u8
+type Result[void, PortError] variant 0000 Ok:
+type Result[void, PortError] variant 0001 Error: PortError@4
+type Result[u32, PortError] : union size 8 tag u8
+type Result[u32, PortError] variant 0000 Ok: u32@4
+type Result[u32, PortError] variant 0001 Error: PortError@4
+type Result[ChannelPair, ChannelError] : union size 12 tag u8
+type Result[ChannelPair, ChannelError] variant 0000 Ok: ChannelPair@4
+type Result[ChannelPair, ChannelError] variant 0001 Error: ChannelError@4
+type Result[void, ChannelError] : union size 8 tag u8
+type Result[void, ChannelError] variant 0000 Ok:
+type Result[void, ChannelError] variant 0001 Error: ChannelError@4
+type Result[MessageInfo, ChannelError] : union size 12 tag u8
+type Result[MessageInfo, ChannelError] variant 0000 Ok: MessageInfo@4
+type Result[MessageInfo, ChannelError] variant 0001 Error: ChannelError@4
+type Result[u32, ChannelError] : union size 8 tag u8
+type Result[u32, ChannelError] variant 0000 Ok: u32@4
+type Result[u32, ChannelError] variant 0001 Error: ChannelError@4
+type Result[MemoryBudget, HandleError] : union size 8 tag u8
+type Result[MemoryBudget, HandleError] variant 0000 Ok: MemoryBudget@4
+type Result[MemoryBudget, HandleError] variant 0001 Error: HandleError@4
+type Result[BudgetInfo, HandleError] : union size 24 tag u8
+type Result[BudgetInfo, HandleError] variant 0000 Ok: BudgetInfo@8
+type Result[BudgetInfo, HandleError] variant 0001 Error: HandleError@4
+type Result[Memory, MemoryError] : union size 8 tag u8
+type Result[Memory, MemoryError] variant 0000 Ok: Memory@4
+type Result[Memory, MemoryError] variant 0001 Error: MemoryError@4
+type Result[void, MemoryError] : union size 8 tag u8
+type Result[void, MemoryError] variant 0000 Ok:
+type Result[void, MemoryError] variant 0001 Error: MemoryError@4
+type Result[ControllerInfo, DeviceError] : union size 12 tag u8
+type Result[ControllerInfo, DeviceError] variant 0000 Ok: ControllerInfo@4
+type Result[ControllerInfo, DeviceError] variant 0001 Error: DeviceError@4
+type Result[Irq, DeviceError] : union size 8 tag u8
+type Result[Irq, DeviceError] variant 0000 Ok: Irq@4
+type Result[Irq, DeviceError] variant 0001 Error: DeviceError@4
+type Result[Memory, DeviceError] : union size 8 tag u8
+type Result[Memory, DeviceError] variant 0000 Ok: Memory@4
+type Result[Memory, DeviceError] variant 0001 Error: DeviceError@4
+type Result[u32, ControlError] : union size 8 tag u8
+type Result[u32, ControlError] variant 0000 Ok: u32@4
+type Result[u32, ControlError] variant 0001 Error: ControlError@4
+type Result[void, ControlError] : union size 8 tag u8
+type Result[void, ControlError] variant 0000 Ok:
+type Result[void, ControlError] variant 0001 Error: ControlError@4
+type Result[Intercept, ControlError] : union size 8 tag u8
+type Result[Intercept, ControlError] variant 0000 Ok: Intercept@4
+type Result[Intercept, ControlError] variant 0001 Error: ControlError@4
+type Result[u64, ControlError] : union size 16 tag u8
+type Result[u64, ControlError] variant 0000 Ok: u64@8
+type Result[u64, ControlError] variant 0001 Error: ControlError@4
+type Result[u64, ChannelError] : union size 16 tag u8
+type Result[u64, ChannelError] variant 0000 Ok: u64@8
+type Result[u64, ChannelError] variant 0001 Error: ChannelError@4
+type Result[Device, DeviceError] : union size 8 tag u8
+type Result[Device, DeviceError] variant 0000 Ok: Device@4
+type Result[Device, DeviceError] variant 0001 Error: DeviceError@4
+type Result[void, DeviceError] : union size 8 tag u8
+type Result[void, DeviceError] variant 0000 Ok:
+type Result[void, DeviceError] variant 0001 Error: DeviceError@4
+type Result[MsiMessage, DeviceError] : union size 24 tag u8
+type Result[MsiMessage, DeviceError] variant 0000 Ok: MsiMessage@8
+type Result[MsiMessage, DeviceError] variant 0001 Error: DeviceError@4
+type Result[DmaDomain, DeviceError] : union size 8 tag u8
+type Result[DmaDomain, DeviceError] variant 0000 Ok: DmaDomain@4
+type Result[DmaDomain, DeviceError] variant 0001 Error: DeviceError@4
+type Result[u64, DeviceError] : union size 16 tag u8
+type Result[u64, DeviceError] variant 0000 Ok: u64@8
+type Result[u64, DeviceError] variant 0001 Error: DeviceError@4
+type Result[u32, DeviceError] : union size 8 tag u8
+type Result[u32, DeviceError] variant 0000 Ok: u32@4
+type Result[u32, DeviceError] variant 0001 Error: DeviceError@4
+type Result[CpuBudget, HandleError] : union size 8 tag u8
+type Result[CpuBudget, HandleError] variant 0000 Ok: CpuBudget@4
+type Result[CpuBudget, HandleError] variant 0001 Error: HandleError@4
+type Result[IoPortRange, DeviceError] : union size 8 tag u8
+type Result[IoPortRange, DeviceError] variant 0000 Ok: IoPortRange@4
+type Result[IoPortRange, DeviceError] variant 0001 Error: DeviceError@4
+type Result[u64, MemoryError] : union size 16 tag u8
+type Result[u64, MemoryError] variant 0000 Ok: u64@8
+type Result[u64, MemoryError] variant 0001 Error: MemoryError@4
+type Result[bool, MemoryError] : union size 8 tag u8
+type Result[bool, MemoryError] variant 0000 Ok: bool@1
+type Result[bool, MemoryError] variant 0001 Error: MemoryError@4
+type ThreadDebug : struct size 80 align 8
+type ThreadDebug field 0000 size offset 0 : u32
+type ThreadDebug field 0001 slot_count offset 4 : u32
+type ThreadDebug field 0002 step offset 8 : bool
+type ThreadDebug field 0003 reserved offset 9 : u8[7]
+type ThreadDebug field 0004 slots offset 16 : DebugSlot[4]
+type TraceEvent : struct size 32 align 8
+type TraceEvent field 0000 time offset 0 : u64
+type TraceEvent field 0001 kind offset 8 : TraceKind
+type TraceEvent field 0002 cpu offset 12 : u32
+type TraceEvent field 0003 thread offset 16 : u64
+type TraceEvent field 0004 other offset 24 : u64
+type TraceKind : enum u32
+type TraceKind member Switch = 0x1
+type TraceKind member Wake = 0x2
+type Result[ProcessCpu, ControlError] : union size 24 tag u8
+type Result[ProcessCpu, ControlError] variant 0000 Ok: ProcessCpu@8
+type Result[ProcessCpu, ControlError] variant 0001 Error: ControlError@4
+type Result[u64, CoverageError] : union size 16 tag u8
+type Result[u64, CoverageError] variant 0000 Ok: u64@8
+type Result[u64, CoverageError] variant 0001 Error: CoverageError@4
+type Result[MemoryKind, HandleError] : union size 8 tag u8
+type Result[MemoryKind, HandleError] variant 0000 Ok: MemoryKind@1
+type Result[MemoryKind, HandleError] variant 0001 Error: HandleError@4
+type Result[bool, HandleError] : union size 8 tag u8
+type Result[bool, HandleError] variant 0000 Ok: bool@1
+type Result[bool, HandleError] variant 0001 Error: HandleError@4
+type Result[bool, ControlError] : union size 8 tag u8
+type Result[bool, ControlError] variant 0000 Ok: bool@1
+type Result[bool, ControlError] variant 0001 Error: ControlError@4
+type Result[u32, HandleError] : union size 8 tag u8
+type Result[u32, HandleError] variant 0000 Ok: u32@4
+type Result[u32, HandleError] variant 0001 Error: HandleError@4
+type ThreadPage : struct size 16 align 8
+type ThreadPage field 0000 budget offset 0 : u64
+type ThreadPage field 0001 fiber offset 8 : u64
+type UserBuffer : struct size 16 align 8
+type UserBuffer field 0000 address offset 0 : u64
+type UserBuffer field 0001 count offset 8 : u64

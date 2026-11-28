@@ -12,7 +12,8 @@ their model checks explore their threads' schedules.
 The ABI descriptions (src/abi_describe and src/tools/abi_description, decisions/0201's 20a and 20n) are checked
 too, as one more test: the ABI package's description for each architecture, which the tools' build writes beside them,
 against ABI_DESCRIPTIONS' file for it, exactly, so a change to the ABI is made on purpose, by copying the built
-descriptions over those files (and, from ABI v1, only as decisions/0025 allows).
+descriptions over those files; and against ABI v1's, abi_v1.<arch>.txt beside them (decisions/0203), written once and
+never again, by decisions/0025's rules, so a change v1 doesn't allow fails however the first files are rewritten.
 
 With --robustness it sweeps the tests in SWEPT instead (knowledge/decisions/0096, 0104): built with robustness=on, each
 runs once counting its allocations and failure points (SLOPOS_FAIL=count, src/robustness/hosted), then once for each
@@ -27,7 +28,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# The ABI package's description for each architecture as it's meant to be, abi_description.<arch>.txt
+# The ABI package's description for each architecture as it's meant to be, abi_description.<arch>.txt, and as ABI v1
+# froze it, abi_v1.<arch>.txt
 ABI_DESCRIPTIONS = ROOT / "docs" / "specs"
 # The architectures the tools' build writes an ABI description for (src/build's ABI_ARCHITECTURES)
 ABI_ARCHITECTURES = ["x86_64", "aarch64", "riscv64"]
@@ -93,7 +95,8 @@ def main() -> int:
 
 def abi_matches(hemera: str, temporary: Path) -> bool:
     """Builds the tools, with each architecture's ABI description, and compares each with its file in
-    ABI_DESCRIPTIONS, exactly: whether every one is the same."""
+    ABI_DESCRIPTIONS, exactly, and with ABI v1's there by 0025's rules: whether every one is the same as the first and
+    allowed by the second."""
     tools = temporary / "tools"
     tools.mkdir(exist_ok=True)
     if not build(hemera, f"targets=tools,tools_output={tools.as_posix()}"):
@@ -112,6 +115,12 @@ def abi_matches(hemera: str, temporary: Path) -> bool:
         if compared.returncode != 0:
             print(f"FAILED: abi_description, the ABI package on {architecture} differs from {kept.relative_to(ROOT)}: "
                   f"copy the tools' build's {built.name} over it if that's meant")
+            same = False
+        frozen = ABI_DESCRIPTIONS / f"abi_v1.{architecture}.txt"
+        compared = subprocess.run([str(tools / f"abi_description{suffix}"), "--compare", str(frozen), str(built)])
+        if compared.returncode != 0:
+            print(f"FAILED: abi_description, the ABI package on {architecture} breaks ABI v1's promises, "
+                  f"{frozen.relative_to(ROOT)}: a change it calls forbidden needs a new call or struct instead")
             same = False
     if same:
         print("passed: abi_description")

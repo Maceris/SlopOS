@@ -8,15 +8,16 @@
  *
  * Without a new file, --compare compares the old with this machine's description. The build (src/build, targets=tools)
  * writes each architecture's beside the tools, abi_description.<arch>.txt for x86_64, aarch64 and riscv64, as the
- * package differs by architecture; tools/unit_tests.py compares each with docs/specs/abi_description.<arch>.txt.
+ * package differs by architecture; tools/unit_tests.py compares each with docs/specs/abi_description.<arch>.txt,
+ * exactly, and with v1's, docs/specs/abi_v1.<arch>.txt, by 0025's rules.
  *
- * Compared, a call, a constant or a type that's gone, a call whose name or signature changed, an enum member whose value
- * changed, or a type whose layout changed is forbidden. Allowed are a call appended, a new constant, type or enum
- * member, and a growable struct (GROWABLE: a size-prefixed struct its readers take as long as its size says) growing:
- * past its old fields, or its last field, an array, longer; never one used as an array's element or a field of another
- * struct, whose growing would move what's after it. With --exact, as before v1, any difference fails, so every change
- * to the ABI is one the descriptions are written again for. Exits 0 if what's compared passes, 1 if not, 2 for a file
- * it can't read or write, 3 for wrong arguments.
+ * Compared, a call, a constant or a type that's gone, a call whose name or signature changed, an enum member whose
+ * value changed, or a type whose layout changed is forbidden. Allowed are a call appended, a new constant, type or enum
+ * member, ABI_VERSION (VERSION_CONSTANT) larger, and a growable struct (GROWABLE: a size-prefixed struct its readers
+ * take as long as its size says) growing: past its old fields, or its last field, an array, longer; never one used as
+ * an array's element or a field of another struct, whose growing would move what's after it. With --exact, any
+ * difference fails, so every change to the ABI is one the descriptions are written again for. Exits 0 if what's
+ * compared passes, 1 if not, 2 for a file it can't read or write, 3 for wrong arguments.
  */
 package abi_description
 
@@ -33,6 +34,9 @@ import abi_describe from "../../abi_describe"
  * CpuBudgetInfo, which the kernel writes, say how much the caller has room for, and how much it wrote.
  */
 GROWABLE :: string.["StartupBlock", "ThreadDebug", "StopInfo", "CpuBudgetInfo"]
+
+/** The line of ABI_VERSION, the ABI's version, which only grows, as a later version keeps the earlier's promises. */
+VERSION_CONSTANT :: "const ABI_VERSION : u32 = "
 
 /** The struct whose members are the system calls, which grows by a field for each call appended. */
 CALL_TABLE :: "Syscalls"
@@ -125,7 +129,8 @@ compare :: fn(old #escaping : string, new #escaping : string, exact : bool) -> i
                 failed = true
             }
             else {
-                allowed :: grown(after_lines, each, replaced) || lengthened(after_lines, each, replaced)
+                allowed :: grown(after_lines, each, replaced) || lengthened(after_lines, each, replaced) ||
+                    raised(each, replaced)
                 verdict :: if allowed { "allowed" } else { "forbidden" }
                 io.println(line("changed, %1: %2\n    now: %3", verdict, each, replaced))
                 failed = failed || !allowed
@@ -302,6 +307,21 @@ grown :: fn(after_lines : string[..], was : string, now : string) -> bool {
         return false
     }
     return growable(after_lines, type_named(was))
+}
+
+/**
+ * Tell whether a changed line is the ABI's version made larger (VERSION_CONSTANT), as a later version is.
+ *
+ * @param was The changed line, as it was.
+ * @param now The line now.
+ * @return True if both are ABI_VERSION's line and now's number is larger; false for a smaller or equal one, or any
+ *     other line.
+ */
+raised :: fn(was : string, now : string) -> bool {
+    if !strings.starts_with(was, VERSION_CONSTANT) || !strings.starts_with(now, VERSION_CONSTANT) {
+        return false
+    }
+    return number_after(now, VERSION_CONSTANT) > number_after(was, VERSION_CONSTANT)
 }
 
 /**
