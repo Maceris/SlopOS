@@ -32,7 +32,9 @@ size-prefixed, the register order declared), and 21i's review of them.
   version is older than its own with `EXIT_WRONG_ABI` (256); a newer kernel starts it.
 - **What stays unstable** is what §1 leaves out: kernel internals, `std`'s own API, and the Hemera calling convention
   between separately compiled libraries, which stays pinned by version rather than frozen (§7), so a library built for
-  another convention is another hash.
+  another convention is another hash. Only the system calls' convention (`CALLING_CONVENTION_VERSION`) is frozen;
+  freezing the libraries' too would hold Hemera's code generation to v1 for no gain to programs, which talk to the
+  kernel only through system calls. The owner left this to our recommendation (2026-11-27).
 
 ## Alternatives considered
 - **v1 at 1, numbered afresh**: tidier, but 1 to 15 already numbered earlier layouts, and a count that only grows
